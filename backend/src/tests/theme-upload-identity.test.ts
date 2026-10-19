@@ -115,8 +115,9 @@ describe('POST /themes/upload — the zip\'s root folder is the theme, not the u
         // found nothing, and extractAllTo(…, true) clobbered themes/plain-theme.
         const zip = makeZip('decoy-name.zip', themeEntries('plain-theme', 'REPLACED'));
         const res = await asAdmin(request(app).post('/api/v1/themes/upload')).attach('theme', zip);
-        assert.strictEqual(res.status, 400, JSON.stringify(res.body));
-        assert.match(res.body.error, /already exists/);
+        assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+        assert.strictEqual(res.body.code, 'theme_exists');
+        assert.match(res.body.error, /already installed/);
         const css = fs.readFileSync(path.join(THEMES_DIR, 'plain-theme', 'style.css'), 'utf8');
         assert.ok(css.includes('original'), 'the installed theme must be byte-intact');
         assert.ok(!css.includes('REPLACED'), 'the upload must not have overwritten it');

@@ -1,9 +1,8 @@
-import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
-import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
 // The site's hottest route serves from the Full-Route Cache: no request-header/searchParams reads
@@ -36,6 +35,7 @@ export async function generateMetadata(
     const settings = await getSettings();
     return buildPostMetadata(post, {
         siteName: settings?.blogname,
+        mediaBase: settings?.media_public_base,
         canonicalPath: `/${post.slug || post.id}`,
     });
 }
@@ -49,12 +49,12 @@ export default async function SinglePostPage(
         getSettings(),
         resolveSiteBase(),
     ]);
-    if (!post) notFound();
+    if (!post) contentNotFound();
     // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
     const withBlocks = await withResolvedBlocks(post);
     return (
         <>
-            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
+            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname, settings?.media_public_base)} />
             {/* The hierarchy needs what this route knows: single-<type>-<slug> → single-<type> →
                 single → page. The post's own slug, not the URL param, so /42 and /hello-world (the
                 numeric-id fallback) resolve to the same template. */}

@@ -25,6 +25,7 @@ const {
     deleteTheme,
     createThemeZip,
     installThemeFromDir,
+    updateThemeFromZip,
     invalidateThemeScanCache,
     getActiveTheme,
     THEMES_DIR
@@ -36,8 +37,12 @@ const { compileTheme, writeCompiled } = require('../core/theme-compile');
 const { analyzeTheme } = require('../core/theme-doctor');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler, offStack } = require('../middleware/errorHandler');
+const { asyncHandler, offStack, UploadRejectedError } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+// Theme files are network-wide (multisite): every handler that writes them is the main site's. The
+// mount-level guard in routes/index.ts already allows only what another site may do; this keeps each
+// writer refusing on its own as well (a no-op on a single site and on the main site).
+const { mainSiteWrites: networkThemeFiles } = require('../core/multisite-guards');
 const { isThemeAssetName, resolveThemeDir, resolveWithin } = require('../core/safe-path');
 
 /**
@@ -75,7 +80,7 @@ const upload = multer({
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
-            cb(new Error('Only .zip files are allowed'));
+            cb(new UploadRejectedError(415, 'rest_upload_invalid_type', 'Only .zip files are allowed'));
         }
     }
 });
@@ -176,7 +181,7 @@ function writeJsonAtomic(target: string, text: string): void {
  *       400:
  *         description: Invalid file or zip slip
  */
-router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/upload', authenticate, isAdmin, networkThemeFiles, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -259,9 +264,16 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
         }
 
         // Check if theme already exists — now against the directory extraction will actually create.
+        // 409 with the way forward: the Themes screen offers the in-place update from `code`, which
+        // keeps the theme active and its customizer settings (POST /themes/:slug/update).
         if (fs.existsSync(targetDir)) {
             fs.unlinkSync(zipPath);
-            return res.status(400).json({ error: `Theme "${zipName}" already exists` });
+            return res.status(409).json({
+                error: `Theme "${zipName}" is already installed. To replace it with this zip, update it instead `
+                    + `(Appearance → Themes → Install Theme offers it; API: POST /api/v1/themes/${zipName}/update).`,
+                code: 'theme_exists',
+                slug: zipName,
+            });
         }
 
         // SECURITY: Verify EVERY entry resolves inside the theme's OWN directory before extracting
@@ -297,6 +309,59 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
         if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
         throw error;
     }
+}));
+
+/**
+ * @swagger
+ * /themes/{slug}/update:
+ *   post:
+ *     summary: Update an installed theme from a new zip (in place)
+ *     description: >-
+ *       Every entry of the zip must live under `<slug>/` (what `wordjs.js pack theme <slug>` produces).
+ *       The new version is extracted to a private staging directory and checked there first (a style.css
+ *       or theme.json; a theme.json must compile without errors), so a zip that fails leaves the installed
+ *       theme untouched. Then the directories are swapped. The theme stays active if it was, its
+ *       customizer settings are kept, and the cached public pages are expired at once.
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               theme:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Updated ({ updated, slug, fromVersion, toVersion, active })
+ *       400:
+ *         description: Invalid zip, or it does not name this theme (nothing was changed)
+ *       404:
+ *         description: The theme is not installed
+ */
+router.post('/:slug/update', authenticate, isAdmin, networkThemeFiles, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    // Update only an INSTALLED theme, by the directory's own name (read off the disk, not the request's
+    // copy). updateThemeFromZip proves the temp file sits in os-tmp and deletes it on every path, this
+    // refusal included.
+    let installed: string | undefined;
+    try { installed = fs.readdirSync(THEMES_DIR).find((d: string) => d === req.params.slug); } catch { /* no themes dir */ }
+    const result = await updateThemeFromZip(req.file.path, installed || '');
+    if (result.ok) {
+        await recordAudit(req.user && req.user.id, 'theme.update', 'theme', result.body.slug, {
+            via: 'upload', fromVersion: result.body.fromVersion, toVersion: result.body.toVersion,
+        });
+    }
+    res.status(result.status).json(result.body);
 }));
 
 /**
@@ -349,7 +414,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
  *       409:
  *         description: Theme already exists
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     const body = isPlainObject(req.body) ? req.body : {};
     // SECURITY: Validate slug (same gate as the sibling routes; typeof first — the regex
     // would stringify a missing slug into the literal "undefined", which passes the charset)
@@ -457,7 +522,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: R
  *       409:
  *         description: Theme was not created by the WordJS writer
  */
-router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.put('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: the slug picks the directory this handler WRITES theme.json and style.css into, so it
     // uses the resolved-and-contained path the gate returns rather than re-joining the raw param.
     const themeDir = resolveThemeDirOr400(req.params.slug);
@@ -579,7 +644,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *       200:
  *         description: Default theme restored
  */
-router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/default', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     // Admin explicitly asked to restore the default theme → force overwrite. This is the ONLY path
     // that clobbers files inside themes/: boot no longer scaffolds anything (it verifies and warns —
     // see index.ts), and the install wizard provisions once, without force. A plain
@@ -614,7 +679,7 @@ router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request,
  *       200:
  *         description: Theme deleted
  */
-router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });

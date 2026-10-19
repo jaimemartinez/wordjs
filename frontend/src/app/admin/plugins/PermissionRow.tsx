@@ -16,13 +16,24 @@ export const RISK_CLASSES: Record<PermissionRisk, string> = {
 /** A row the activation leaves OFF (grantState.ts "stays-off"): neutral, not the risk tint of a grant. */
 export const STAYS_OFF_CLASSES = 'bg-slate-50 text-slate-700 border-slate-200';
 
-/** The risk badge of a permission token, in the admin's language. */
-export function RiskBadge({ risk }: { risk: PermissionRisk }) {
+/**
+ * The risk badge of a permission token, in the admin's language — followed by an explicit
+ * "administrator-level" badge for a grant that is as good as making the plugin an administrator
+ * (permissionMeta adminEquivalent: it can take over accounts).
+ */
+export function RiskBadge({ risk, adminEquivalent = false }: { risk: PermissionRisk; adminEquivalent?: boolean }) {
     const { t } = useI18n();
     return (
-        <span className={`text-[8px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full border shadow-sm ${RISK_CLASSES[risk]}`}>
-            {t(`plugins.risk.${risk}`)}
-        </span>
+        <>
+            <span className={`text-[8px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full border shadow-sm ${RISK_CLASSES[risk]}`}>
+                {t(`plugins.risk.${risk}`)}
+            </span>
+            {adminEquivalent && (
+                <span data-admin-equivalent="" className="text-[8px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full border shadow-sm bg-rose-600 text-white border-rose-700">
+                    <i className="fas fa-user-shield mr-1" aria-hidden="true" />{t('plugins.risk.adminEquivalent')}
+                </span>
+            )}
+        </>
     );
 }
 
@@ -76,7 +87,7 @@ export function PermissionRow({ token, reason, platformNote = false, roles, role
             <div className="min-w-0">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span className="font-extrabold text-sm text-slate-800">{meta.label}</span>
-                    <RiskBadge risk={meta.risk} />
+                    <RiskBadge risk={meta.risk} adminEquivalent={meta.adminEquivalent} />
                     <span className={TOKEN_CLASS}><BreakableToken text={token} /></span>
                 </div>
                 {meta.description && <p className="text-xs text-slate-600 font-medium leading-relaxed">{meta.description}</p>}

@@ -29,6 +29,7 @@ const mysql = require('mysql2/promise');
 // SQL-injection barriers, used for the dynamic identifiers (user, table) in the role-isolation DDL below.
 const mysqlSync = require('mysql2');
 const config = require('../config/app');
+const { dbTlsOptions, isCertificateError, DB_TLS_VERIFY_HINT, DB_TLS_UNVERIFIED_WARNING } = require('./db-tls');
 // THE rule for TEXT → LONGTEXT / VARCHAR(255). Lives in its own dependency-free module so this driver
 // and core/db-admin/migration.js consume ONE implementation and cannot drift apart again.
 const {
@@ -39,6 +40,7 @@ const {
     // over a definition here is the defect that module exists to close.
     codeMask, codeMatch, replaceInCode, firstParenGroup
 } = require('./mysql-text-rule');
+const log = require('../core/module-logger').moduleLogger('drivers/mysql');
 
 /**
  * The session SQL mode EVERY connection runs with — the main pool AND every per-plugin scoped pool.
@@ -497,7 +499,7 @@ type SqlExecutor = (sql: string, params?: any[]) => Promise<any>;
 const CORE_TABLE_NAMES = new Set([
     'posts', 'post_meta', 'users', 'user_meta', 'comments', 'comment_meta',
     'terms', 'term_taxonomy', 'term_relationships', 'options', 'links', 'notifications',
-    'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries', 'content_outbox',
+    'schema_migrations', 'api_tokens', 'agent_connections', 'audit_log', 'webhooks', 'webhook_deliveries', 'content_outbox',
     'form_submissions', 'collab_docs', 'collab_members', 'collab_ops'
 ]);
 
@@ -611,8 +613,10 @@ class MysqlDriver extends DatabaseDriverInterface {
 
     async connect() {
         const dbConfig = this.config || config.db;
-        console.log(`🔌 MySQL: Connecting to ${dbConfig.host}:${dbConfig.port || 3306}/${dbConfig.name}...`);
+        log.info(`🔌 MySQL: Connecting to ${dbConfig.host}:${dbConfig.port || 3306}/${dbConfig.name}...`);
         try {
+            const ssl = dbTlsOptions(dbConfig);
+            if (ssl && !ssl.rejectUnauthorized) log.warn(DB_TLS_UNVERIFIED_WARNING);
             this.pool = mysql.createPool({
                 host: dbConfig.host,
                 port: dbConfig.port || 3306,
@@ -624,7 +628,7 @@ class MysqlDriver extends DatabaseDriverInterface {
                 multipleStatements: true, // migrations/exec may ship several statements at once
                 charset: 'utf8mb4_unicode_ci',
                 dateStrings: true,        // WordJS stores/reads timestamps as TEXT, not JS Date
-                ssl: dbConfig.ssl ? { rejectUnauthorized: false } : undefined
+                ssl
             });
 
             // Every physical connection speaks the same dialect as SQLite/Postgres. The mode itself is
@@ -640,7 +644,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             await conn.query(SET_SESSION_SQL_MODE);
             const [rows] = await conn.query('SELECT VERSION() AS v');
             conn.release();
-            console.log('✅ MySQL: Connected successfully to', rows[0].v);
+            log.info({ serverVersion: rows[0].v }, '✅ MySQL: Connected successfully');
             // A database created by the OLD name-list rule still holds VARCHAR(255) columns that this
             // session's STRICT mode would now REJECT instead of truncating. Widen them once, here,
             // where the schema is finally reachable. Never fatal — it warns and boots.
@@ -649,9 +653,10 @@ class MysqlDriver extends DatabaseDriverInterface {
             // one information_schema query (no candidates ⇒ no locks, no ALTERs, no SHOW CREATE).
             // Its scope, cost and concurrency bounds are documented on the method itself.
             try { await this.widenLegacyCappedTextColumns(); }
-            catch (e: any) { console.warn('⚠️  MySQL: legacy TEXT widening pass failed:', e && e.message); }
+            catch (e: any) { log.warn({ err: e }, '⚠️  MySQL: legacy TEXT widening pass failed'); }
         } catch (err: any) {
-            console.error('❌ MySQL: Connection failed:', err.message);
+            log.error({ err }, '❌ MySQL: Connection failed');
+            if (isCertificateError(err)) log.error(DB_TLS_VERIFY_HINT);
             throw err;
         }
     }
@@ -661,7 +666,24 @@ class MysqlDriver extends DatabaseDriverInterface {
             const [rows] = await this.pool.query(translateSql(sql), params);
             return Array.isArray(rows) ? rows[0] : undefined;
         } catch (err: any) {
-            console.error('❌ MySQL Query Error (get):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ MySQL Query Error (get)');
+            throw err;
+        }
+    }
+
+    /**
+     * get() under a statement timeout, for the readiness probe: the server-side MAX_EXECUTION_TIME hint
+     * on a SELECT (MySQL; other servers read it as a comment) plus mysql2's client-side `timeout`, which
+     * gives up on the query and discards its connection.
+     */
+    async getWithTimeout(sql: string, params: any[] = [], timeoutMs: number = 3000) {
+        const ms = Math.max(1, Math.floor(Number(timeoutMs) || 3000));
+        const text = translateSql(sql).replace(/^\s*SELECT\b/i, `SELECT /*+ MAX_EXECUTION_TIME(${ms}) */`);
+        try {
+            const [rows] = await this.pool.query({ sql: text, timeout: ms }, params);
+            return Array.isArray(rows) ? rows[0] : undefined;
+        } catch (err: any) {
+            log.warn({ err }, 'MySQL: timed query failed');
             throw err;
         }
     }
@@ -671,7 +693,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             const [rows] = await this.pool.query(translateSql(sql), params);
             return Array.isArray(rows) ? rows : [];
         } catch (err: any) {
-            console.error('❌ MySQL Query Error (all):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ MySQL Query Error (all)');
             throw err;
         }
     }
@@ -712,7 +734,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             await alterOn(`ALTER TABLE ${qt} MODIFY COLUMN ${narrowed}`);
             return true;
         } catch (err: any) {
-            console.warn(`⚠️  MySQL: could not narrow ${table}.${column} for indexing:`, err && err.message);
+            log.warn({ table, column, err }, `⚠️  MySQL: could not narrow ${table}.${column} for indexing`);
             return false;
         }
     }
@@ -836,7 +858,7 @@ class MysqlDriver extends DatabaseDriverInterface {
                 const [rows] = await lockConn.query(`SELECT GET_LOCK(${mysqlSync.escape(WIDEN_LOCK_NAME)}, 0) AS ok`);
                 const got = Array.isArray(rows) && rows[0] && Number(rows[0].ok ?? rows[0].OK) === 1;
                 if (!got) {
-                    console.log('   ↷ MySQL: another node is running the legacy TEXT widening pass — skipping.');
+                    log.info('   ↷ MySQL: another node is running the legacy TEXT widening pass — skipping.');
                     try { lockConn.release(); } catch { /* pool may already be gone */ }
                     return widened;
                 }
@@ -867,7 +889,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             );
             candidates = Array.isArray(rows) ? rows : [];
         } catch (err: any) {
-            console.warn('⚠️  MySQL: could not scan for legacy VARCHAR(255) text columns:', err && err.message);
+            log.warn({ err }, '⚠️  MySQL: could not scan for legacy VARCHAR(255) text columns');
             return widened;
         }
         if (candidates.length === 0) return widened;
@@ -885,7 +907,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             (byTable.get(t) as string[]).push(c);
         }
         if (foreign.size) {
-            console.log(`   ↷ MySQL: ${foreign.size} table(s) in this schema are not WordJS's and were not touched: ${[...foreign].slice(0, 10).join(', ')}${foreign.size > 10 ? ', …' : ''}`);
+            log.info({ foreignTables: foreign.size }, `   ↷ MySQL: ${foreign.size} table(s) in this schema are not WordJS's and were not touched: ${[...foreign].slice(0, 10).join(', ')}${foreign.size > 10 ? ', …' : ''}`);
         }
 
         for (const [table, columns] of byTable) {
@@ -896,7 +918,7 @@ class MysqlDriver extends DatabaseDriverInterface {
                 const row = Array.isArray(ddlRows) ? ddlRows[0] : null;
                 ddl = row ? String(row['Create Table'] || row['Create View'] || '') : '';
             } catch (err: any) {
-                console.warn(`⚠️  MySQL: could not read the definition of ${table}:`, err && err.message);
+                log.warn({ table, err }, `⚠️  MySQL: could not read the definition of ${table}`);
                 continue;
             }
             const body = createTableBody(ddl);
@@ -930,11 +952,11 @@ class MysqlDriver extends DatabaseDriverInterface {
                 await this.pool.query(`ALTER TABLE ${qt} ${clauses.join(', ')}`);
                 widened.push(...named);
             } catch (err: any) {
-                console.warn(`⚠️  MySQL: could not widen ${named.length} legacy column(s) of ${table} to LONGTEXT:`, err && err.message);
+                log.warn({ table, err }, `⚠️  MySQL: could not widen ${named.length} legacy column(s) of ${table} to LONGTEXT`);
             }
         }
         if (widened.length) {
-            console.log(`   ✓ MySQL: widened ${widened.length} legacy VARCHAR(255) column(s) to LONGTEXT: ${widened.join(', ')}`);
+            log.info(`   ✓ MySQL: widened ${widened.length} legacy VARCHAR(255) column(s) to LONGTEXT: ${widened.join(', ')}`);
         }
         return widened;
     }
@@ -949,7 +971,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             return { lastID: result.insertId || 0, changes: result.affectedRows || 0 };
         } catch (err: any) {
             if (isBenignDup(err, translated)) return { lastID: 0, changes: 0 };
-            console.error('❌ MySQL Query Error (run):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ MySQL Query Error (run)');
             throw err;
         }
     }
@@ -960,7 +982,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             await this.pool.query(translated);
         } catch (err: any) {
             if (isBenignDup(err, translated)) return;
-            console.error('❌ MySQL Exec Error:', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ MySQL Exec Error');
             throw err;
         }
     }
@@ -1017,7 +1039,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             return result;
         } catch (err: any) {
             try { await conn.rollback(); }
-            catch (rbErr: any) { console.error('❌ MySQL ROLLBACK failed:', rbErr && rbErr.message); }
+            catch (rbErr: any) { log.error({ err: rbErr }, '❌ MySQL ROLLBACK failed'); }
             throw err;
         } finally {
             conn.release();
@@ -1031,7 +1053,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             );
             return rows.map((r: any) => r.name || r.NAME || r.table_name);
         } catch (err: any) {
-            console.error('❌ MySQL getTables Error:', err.message);
+            log.error({ err }, '❌ MySQL getTables Error');
             throw err;
         }
     }
@@ -1055,7 +1077,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             });
             return { sql: null, columns };
         } catch (err: any) {
-            console.error('❌ MySQL getTableSchema Error:', err.message);
+            log.error({ err }, '❌ MySQL getTableSchema Error');
             throw err;
         }
     }
@@ -1129,7 +1151,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             multipleStatements: false, // a sandboxed plugin never runs stacked statements
             charset: 'utf8mb4_unicode_ci',
             dateStrings: true,
-            ssl: dbConfig.ssl ? { rejectUnauthorized: false } : undefined
+            ssl: dbTlsOptions(dbConfig)
         });
         // SAME session mode as the main pool — one constant, so the two can never drift again. This
         // pool used to re-enable NO_BACKSLASH_ESCAPES that the main pool had deliberately removed,
@@ -1168,7 +1190,7 @@ class MysqlDriver extends DatabaseDriverInterface {
         if (this.pool) {
             await this.pool.end();
             this.pool = null;
-            console.log('🔌 MySQL: Pool Closed.');
+            log.info('🔌 MySQL: Pool Closed.');
         }
     }
 }

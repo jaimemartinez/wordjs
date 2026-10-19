@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import DashboardLayoutClient from "./DashboardLayoutClient";
-import { getSettings } from "@/lib/server-api";
+import { declareSiteFromRequest, getSettings } from "@/lib/server-api";
 import { inter } from "../fonts";
 import "./admin-globals.css";
 
@@ -22,12 +22,15 @@ export async function generateMetadata(): Promise<Metadata> {
         // Use the shared mono/split-aware server data layer (same as root layout) instead of a
         // manual fetch to hardcoded http://localhost:3000 — in monolith mode port 3000 serves
         // HTTPS, so the plain-HTTP fetch failed silently and caused route resolution issues in dev.
+        // Multisite: another site's admin is titled with that site's name, not the main site's — and
+        // absolutely, since the root layout's title template carries the main site's name.
+        const site = await declareSiteFromRequest();
         const settings = await getSettings();
         const baseTitle = settings?.blogname || "WordJS";
         const icon = settings?.site_icon ? `${settings.site_icon}?t=${Date.now()}` : "/favicon.ico";
 
         return {
-            title: `${baseTitle} | Admin`,
+            title: site ? { absolute: `${baseTitle} | Admin` } : `${baseTitle} | Admin`,
             icons: {
                 icon: icon,
                 apple: icon,

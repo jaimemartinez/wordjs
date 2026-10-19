@@ -22,6 +22,7 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 
 const cache = require('../core/cache');
 
@@ -66,13 +67,12 @@ describe('bus de clúster: la política de reconexión no puede rendirse', () =>
         // bus: quien lo leía en un multinodo se quedaba tranquilo mientras el tiempo real entre
         // nodos estaba muerto. El aviso tiene que nombrar lo que de verdad se ha roto.
         const retry = cache._busRetryStrategy;
-        const realWarn = console.warn;
         const avisos: string[] = [];
-        console.warn = (...a: any[]) => { avisos.push(a.join(' ')); };
+        const captura = captureLogLines('warn');
         try {
             for (let i = 1; i <= 8; i++) retry(i);
         } finally {
-            console.warn = realWarn;
+            avisos.push(...captura.stop());
         }
         assert.equal(avisos.length, 1, `el aviso se emite UNA vez por corte, no en cada intento: ${avisos.length}`);
         assert.match(avisos[0], /CLUSTER BUS/,

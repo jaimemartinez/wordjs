@@ -102,6 +102,51 @@ function ipv6ToBytes(input: string): number[] | null {
 }
 
 /**
+ * The IPv4 address(es) an IPv6 address embeds and that a translator, relay or tunnel routes to:
+ * IPv4-mapped / IPv4-compatible, NAT64 (64:ff9b::/96), 6to4 (2002::/16), ISATAP and Teredo (client and
+ * server). Null when the address embeds none. The ONE reading of these forms, shared by isBlockedIp and
+ * isNeverExemptIp, so a form recognised by one is recognised by the other.
+ */
+function embeddedIpv4(b: number[]): string[] | null {
+    const first10Zero = b.slice(0, 10).every((x) => x === 0);
+    // ::/96 (IPv4-compatible + ::/::1) and ::ffff:0:0/96 (IPv4-mapped) — apply the IPv4 rules to the
+    // embedded address. This catches EVERY spelling of ::1 (→0.0.0.1, blocked by 0/8) and of
+    // ::ffff:169.254.169.254 (→link-local), plus :: (→0.0.0.0), regardless of textual form.
+    if (first10Zero && ((b[10] === 0xff && b[11] === 0xff) || (b[10] === 0 && b[11] === 0))) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
+    // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 address a translator routes to — on an
+    // IPv6-only cloud VPC this reaches v4 metadata/loopback (64:ff9b::a9fe:a9fe = 169.254.169.254).
+    // Block only when the embedded v4 is itself private (public NAT64 targets stay allowed).
+    if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
+    // 6to4 prefix 2002::/16 (RFC 3056) embeds the site's IPv4 in bytes 2-5 (2002:V4V4:V4V4::/48) which
+    // a 6to4 relay routes to that v4 address — so a 6to4 address wrapping an RFC1918/loopback/link-local
+    // v4 reaches the internal host the same way NAT64 does. Extract + classify the embedded v4; block only
+    // when it is itself private (public 6to4 targets stay allowed). (Finding #8, low)
+    if (b[0] === 0x20 && b[1] === 0x02) {
+        return [`${b[2]}.${b[3]}.${b[4]}.${b[5]}`];
+    }
+    // ISATAP (RFC 5214): the interface identifier 0000:5efe:V4V4 / 0200:5efe:V4V4 (bytes 8-11 =
+    // 00|02,00,5e,fe) embeds an IPv4 in the last 4 bytes, under ANY prefix (link-local OR a global one),
+    // which an ISATAP router tunnels to that v4. Same internal-reach as 6to4/NAT64; block when the
+    // embedded v4 is private. (twin of the 6to4/NAT64 branches above)
+    if ((b[8] === 0x00 || b[8] === 0x02) && b[9] === 0x00 && b[10] === 0x5e && b[11] === 0xfe) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
+    // Teredo (RFC 4380) 2001:0000::/32: the client IPv4 is the last 32 bits XORed with 0xffffffff and the
+    // Teredo server IPv4 is bytes 4-7. Either can be an internal target reached through the tunnel — block
+    // when the deobfuscated client OR the server v4 is private.
+    if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) {
+        const client = `${b[12] ^ 0xff}.${b[13] ^ 0xff}.${b[14] ^ 0xff}.${b[15] ^ 0xff}`;
+        const server = `${b[4]}.${b[5]}.${b[6]}.${b[7]}`;
+        return [client, server];
+    }
+    return null;
+}
+
+/**
  * True if an IP (literal) must NOT be reached by plugin egress. Callers pass RESOLVED IPs (the
  * validating lookup) or IP literals from connect args. Anything that isn't a parseable public IP is
  * blocked (fail closed).
@@ -115,41 +160,8 @@ export function isBlockedIp(ip: string): boolean {
     if (fam === 6) {
         const b = ipv6ToBytes(a);
         if (!b) return true;                                       // unparseable → fail closed
-        const first10Zero = b.slice(0, 10).every((x) => x === 0);
-        // ::/96 (IPv4-compatible + ::/::1) and ::ffff:0:0/96 (IPv4-mapped) — apply the IPv4 rules to the
-        // embedded address. This catches EVERY spelling of ::1 (→0.0.0.1, blocked by 0/8) and of
-        // ::ffff:169.254.169.254 (→link-local), plus :: (→0.0.0.0), regardless of textual form.
-        if (first10Zero && ((b[10] === 0xff && b[11] === 0xff) || (b[10] === 0 && b[11] === 0))) {
-            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-        }
-        // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 address a translator routes to — on an
-        // IPv6-only cloud VPC this reaches v4 metadata/loopback (64:ff9b::a9fe:a9fe = 169.254.169.254).
-        // Block only when the embedded v4 is itself private (public NAT64 targets stay allowed).
-        if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
-            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-        }
-        // 6to4 prefix 2002::/16 (RFC 3056) embeds the site's IPv4 in bytes 2-5 (2002:V4V4:V4V4::/48) which
-        // a 6to4 relay routes to that v4 address — so a 6to4 address wrapping an RFC1918/loopback/link-local
-        // v4 reaches the internal host the same way NAT64 does. Extract + classify the embedded v4; block only
-        // when it is itself private (public 6to4 targets stay allowed). (Finding #8, low)
-        if (b[0] === 0x20 && b[1] === 0x02) {
-            return isBlockedV4(`${b[2]}.${b[3]}.${b[4]}.${b[5]}`);
-        }
-        // ISATAP (RFC 5214): the interface identifier 0000:5efe:V4V4 / 0200:5efe:V4V4 (bytes 8-11 =
-        // 00|02,00,5e,fe) embeds an IPv4 in the last 4 bytes, under ANY prefix (link-local OR a global one),
-        // which an ISATAP router tunnels to that v4. Same internal-reach as 6to4/NAT64; block when the
-        // embedded v4 is private. (twin of the 6to4/NAT64 branches above)
-        if ((b[8] === 0x00 || b[8] === 0x02) && b[9] === 0x00 && b[10] === 0x5e && b[11] === 0xfe) {
-            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-        }
-        // Teredo (RFC 4380) 2001:0000::/32: the client IPv4 is the last 32 bits XORed with 0xffffffff and the
-        // Teredo server IPv4 is bytes 4-7. Either can be an internal target reached through the tunnel — block
-        // when the deobfuscated client OR the server v4 is private.
-        if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) {
-            const client = `${b[12] ^ 0xff}.${b[13] ^ 0xff}.${b[14] ^ 0xff}.${b[15] ^ 0xff}`;
-            const server = `${b[4]}.${b[5]}.${b[6]}.${b[7]}`;
-            return isBlockedV4(client) || isBlockedV4(server);
-        }
+        const embedded = embeddedIpv4(b);
+        if (embedded) return embedded.some((v4) => isBlockedV4(v4));
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;  // fec0::/10 deprecated site-local (RFC 3879)
         if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 unique-local (ULA)
@@ -183,9 +195,14 @@ let denyAllEgress = false;
 export function setDenyAllEgress(): void { denyAllEgress = true; }
 export function setAllowedHosts(list: any): void {
     if (!Array.isArray(list)) { allowedHosts = null; return; }
+    // `host:port` entries are the administrator-approved PRIVATE destinations, which the host ships in the
+    // same list (plugin-isolate getEgressAllowlistFor). They are installed separately and never count as
+    // allowlist entries, so a list holding only approvals still means "every public host".
+    setPrivateDestinations(list.filter((h) => parsePrivateDestination(h) !== null));
+    list = list.filter((h) => parsePrivateDestination(h) === null);
     // Normalize each entry to a bare host: lowercase, trim, strip a leading '*.'/'.' and a trailing dot.
     const clean = list
-        .map((h) => String(h).toLowerCase().trim().replace(/^\*?\./, '').replace(/\.$/, ''))
+        .map((h: any) => String(h).toLowerCase().trim().replace(/^\*?\./, '').replace(/\.$/, ''))
         .filter(Boolean);
     allowedHosts = clean.length ? Array.from(new Set(clean)) : null;
 }
@@ -197,6 +214,132 @@ function canonIp(s: string): string | null {
     if (fam === 4) return 'v4:' + a;
     if (fam === 6) { const b = ipv6ToBytes(a); return b ? 'v6:' + b.join('.') : null; }
     return null;
+}
+
+// ---- admin-approved PRIVATE destinations (exact host:port) ---------------------------------------
+// The one way a plugin reaches a non-public address: an administrator approved that EXACT destination —
+// one host and one port — for that plugin (plugin-permissions getPrivateDestinations, POST
+// /plugins/:slug/private-egress). The case it exists for is an operator's own SMTP smarthost on the LAN
+// (`192.168.1.20:587`), which the public-only rule otherwise refuses. It is not a range and not a host on
+// every port: `10.0.0.5:587` approves nothing on 10.0.0.5:22 or 10.0.0.6:587. Link-local (169.254/16 —
+// the cloud metadata endpoint — and fe80::/10), unspecified and multicast addresses can never be approved,
+// whatever the list says (isNeverExemptIp). Deny-all (policy failed to load) still wins.
+//
+// A HOSTNAME entry approves that name on that port: a connect by that name resolves through this module's
+// own lookup, and the addresses it returned for the name — recorded here, never supplied by the plugin —
+// are approved for that port, so a client library that resolves the name itself and connects to the IP
+// (nodemailer does) is matched too.
+interface PrivateDestination { host: string; ip: string | null; port: number }
+let privateDestinations: PrivateDestination[] = [];
+// canonIp|port pairs this module resolved for a hostname entry (bounded; refreshed on every resolution).
+const resolvedPrivate = new Set<string>();
+
+/** True for an address no approval can open: unspecified, link-local (incl. cloud metadata), multicast/reserved. */
+export function isNeverExemptIp(ip: string): boolean {
+    let a = String(ip || '').replace(/^\[|\]$/g, '');
+    const z = a.indexOf('%'); if (z >= 0) a = a.slice(0, z);
+    const v4 = (s: string) => {
+        const p = s.split('.').map((n) => parseInt(n, 10));
+        if (p.length !== 4 || p.some((n) => isNaN(n) || n < 0 || n > 255)) return true;
+        return p[0] === 0 || (p[0] === 169 && p[1] === 254) || p[0] >= 224;
+    };
+    const fam = realIsIP(a);
+    if (fam === 4) return v4(a);
+    if (fam === 6) {
+        const b = ipv6ToBytes(a);
+        if (!b) return true;
+        if (b.slice(0, 15).every((x) => x === 0) && b[15] === 1) return false; // ::1 loopback
+        // Every IPv4 the address embeds (mapped/compatible, NAT64, 6to4, ISATAP, Teredo): a translator or
+        // relay routes to it, so a NAT64 or 6to4 spelling of 169.254.169.254 is the metadata endpoint too.
+        const embedded = embeddedIpv4(b);
+        if (embedded && embedded.some((x) => v4(x))) return true;
+        if (embedded && b.slice(0, 10).every((x) => x === 0)) return false; // plain mapped/compatible v4
+        // The AWS instance metadata service's IPv6 address (Nitro): fd00:ec2::254.
+        if (b[0] === 0xfd && b[1] === 0x00 && b[2] === 0x0e && b[3] === 0xc2 && b.slice(4, 14).every((x) => x === 0) && b[14] === 0x02 && b[15] === 0x54) return true;
+        if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
+        if (b[0] === 0xff) return true;                           // ff00::/8 multicast
+        return false;
+    }
+    return true;
+}
+
+/** Parse one `host:port` / `[v6]:port` entry; null when malformed. Hostnames are lowercased. */
+export function parsePrivateDestination(entry: any): PrivateDestination | null {
+    const s = String(entry == null ? '' : entry).trim().toLowerCase();
+    const m = /^\[([0-9a-f:.]+)\]:(\d{1,5})$/.exec(s) || /^([a-z0-9_.-]+):(\d{1,5})$/.exec(s);
+    if (!m) return null;
+    const host = m[1].replace(/\.$/, '');
+    const port = Number(m[2]);
+    if (!host || host.length > 253 || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    const ip = canonIp(host);
+    if (ip) { if (isNeverExemptIp(host)) return null; return { host, ip, port }; }
+    if (realIsIP(host) || !ALLOWLIST_HOSTNAME_RE.test(host) || host.startsWith('.') || host.includes('..')) return null;
+    return { host, ip: null, port };
+}
+
+/** Install this plugin's approved private destinations (child only — the host pushes them in cfg). */
+export function setPrivateDestinations(list: any): void {
+    const out: PrivateDestination[] = [];
+    for (const e of Array.isArray(list) ? list : []) {
+        const d = parsePrivateDestination(e);
+        if (d && !out.some((o) => o.host === d.host && o.port === d.port)) out.push(d);
+    }
+    privateDestinations = out;
+    resolvedPrivate.clear();
+}
+
+function notePrivateResolution(hostname: string, addresses: any): void {
+    const name = String(hostname || '').toLowerCase().replace(/\.$/, '');
+    const ports = privateDestinations.filter((d) => !d.ip && d.host === name).map((d) => d.port);
+    if (!ports.length) return;
+    const list = Array.isArray(addresses) ? addresses : [{ address: addresses }];
+    if (resolvedPrivate.size > 1024) resolvedPrivate.clear();
+    for (const a of list) {
+        const c = a && canonIp(String(a.address || a));
+        if (c && !isNeverExemptIp(String(a.address || a))) for (const p of ports) resolvedPrivate.add(c + '|' + p);
+    }
+}
+
+/** Is (host, port) an approved private destination? Deny-all wins. */
+function isApprovedPrivate(host: string | undefined, port: any): boolean {
+    if (denyAllEgress || !privateDestinations.length || !host) return false;
+    const p = Number(port);
+    if (!Number.isInteger(p)) return false;
+    const raw = String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    const c = canonIp(raw);
+    if (c) {
+        if (isNeverExemptIp(raw)) return false;
+        return privateDestinations.some((d) => d.ip === c && d.port === p) || resolvedPrivate.has(c + '|' + p);
+    }
+    return privateDestinations.some((d) => !d.ip && d.host === raw && d.port === p);
+}
+
+/** Whether a NAME is an approved private destination's hostname (on any port) — it may be resolved. */
+function isApprovedPrivateName(host: string | undefined): boolean {
+    if (denyAllEgress || !host) return false;
+    const raw = String(host).toLowerCase().replace(/\.$/, '');
+    return privateDestinations.some((d) => !d.ip && d.host === raw);
+}
+
+/** A name may be RESOLVED when the egress policy allows it or it names an approved private destination. */
+function isNameAllowed(host: string | undefined): boolean {
+    return isHostAllowed(host) || isApprovedPrivateName(host);
+}
+
+/** The lookup for a connect to an approved hostname destination: any address but the never-exempt ones. */
+function approvedPrivateLookup(hostname: string, options: any, callback?: any): void {
+    if (typeof options === 'function') { callback = options; options = {}; }
+    options = options || {};
+    realDns.lookup(hostname, { ...options, all: true, verbatim: true }, (err: any, addresses: any) => {
+        if (err) return callback(err);
+        const list = Array.isArray(addresses) ? addresses : [{ address: addresses, family: options.family || 4 }];
+        for (const a of list) {
+            if (isNeverExemptIp(a.address)) return callback(blockErr(a.address, hostname));
+        }
+        notePrivateResolution(hostname, list);
+        if (options.all) return callback(null, list);
+        return callback(null, list[0].address, list[0].family);
+    });
 }
 /**
  * The egress POLICY verdict for one destination host, in all three states: deny-all (policy unavailable)
@@ -298,7 +441,7 @@ export function installChildResolverGate(): void {
         if (typeof rawLookup !== 'function' || rawLookup.__wjGuarded) return;
         const gated: any = function (this: any, ...args: any[]) {
             const hostname = args[0];
-            if (typeof hostname === 'string' && hostname !== '' && !realIsIP(hostname) && !isHostAllowed(hostname)) {
+            if (typeof hostname === 'string' && hostname !== '' && !realIsIP(hostname) && !isNameAllowed(hostname)) {
                 const err = blockErr(hostname);
                 const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
                 if (!cb) throw err;
@@ -361,18 +504,24 @@ function secureConnect(orig: any, thisArg: any, args: any[]): any {
         const hostVal = options.host;
         const hostnameVal = options.hostname;
         const pathVal = options.path;
+        const portVal = options.port;
         // IPC / unix-socket / named-pipe targets are NOT public-internet egress (e.g. /var/run/docker.sock
         // = container/host RCE, a postgres/redis socket). Deny outright. (EG-2)
         if (pathVal !== undefined && pathVal !== null && pathVal !== '') throw blockErr('local IPC/unix-socket path');
-        assertHostLiteral(hostVal || hostnameVal); // blocks an explicit private/loopback IP literal up-front
+        // An administrator-approved private destination (exact host AND port) skips the public-only rule;
+        // everything else is judged as before. Port is snapshotted with the host so the pair that was
+        // approved is the pair Node connects to.
+        const approved = isApprovedPrivate(hostVal || hostnameVal, portVal);
+        if (!approved) assertHostLiteral(hostVal || hostnameVal); // blocks an explicit private/loopback IP literal up-front
         // Freeze the snapshots back as own data-properties (replacing any getter). ALWAYS (even undefined)
-        // so no getter survives for host/hostname/path.
-        for (const [k, val] of [['host', hostVal], ['hostname', hostnameVal], ['path', pathVal]] as const) {
+        // so no getter survives for host/hostname/path/port.
+        for (const [k, val] of [['host', hostVal], ['hostname', hostnameVal], ['path', pathVal], ['port', portVal]] as const) {
             try { Object.defineProperty(options, k, { value: val, writable: true, configurable: true, enumerable: true }); } catch { /* non-configurable: best-effort */ }
         }
         // Route resolution through the validating lookup (covers the NO-HOST default-localhost case and
-        // hostnames — validated + IP-checked at connect, anti-rebinding).
-        options.lookup = validatingLookup;
+        // hostnames — validated + IP-checked at connect, anti-rebinding). An approved hostname destination
+        // resolves through approvedPrivateLookup, which still refuses the never-exempt addresses.
+        options.lookup = approved ? approvedPrivateLookup : validatingLookup;
     }
     return orig.apply(thisArg, rewrite || args);
 }
@@ -785,17 +934,34 @@ function dnsDenied(name: string): never {
 const DNS_GOVERNED_MEMBERS = new Set<string>(['lookup', 'lookupService']);
 function governedDnsMember(t: any, prop: string, promises: boolean): any {
     if (typeof Reflect.get(t, prop) !== 'function') return Reflect.get(t, prop);
-    const refused = (args: any[]): Error | null => (isHostAllowed(args[0] == null ? '' : String(args[0])) ? null : blockErr(String(args[0] || '(no host)')));
+    // lookup of an approved private destination's NAME is allowed (it is the connect's own first step), and
+    // what it returns is recorded as approved for that destination's port (notePrivateResolution).
+    const isLookup = prop === 'lookup';
+    const judge = isLookup ? isNameAllowed : isHostAllowed;
+    const refused = (args: any[]): Error | null => (judge(args[0] == null ? '' : String(args[0])) ? null : blockErr(String(args[0] || '(no host)')));
+    const recordsFor = (args: any[]): boolean => isLookup && typeof args[0] === 'string' && isApprovedPrivateName(args[0]);
     // The builtin is read at CALL time, like every other member the proxy forwards.
     const real = (): any => Reflect.get(t, prop);
     if (promises) {
         return function (...args: any[]) {
             const err = refused(args);
-            return err ? Promise.reject(err) : real().apply(t, args);
+            if (err) return Promise.reject(err);
+            const p = real().apply(t, args);
+            return recordsFor(args) && p && typeof p.then === 'function'
+                ? p.then((r: any) => { notePrivateResolution(args[0], r); return r; })
+                : p;
         };
     }
     const wrapped: any = function (...args: any[]) {
         const err = refused(args);
+        if (!err && recordsFor(args) && typeof args[args.length - 1] === 'function') {
+            const cb = args[args.length - 1];
+            const name = args[0];
+            args[args.length - 1] = (e: any, address: any, family: any) => {
+                if (!e && address) notePrivateResolution(name, Array.isArray(address) ? address : [{ address, family }]);
+                cb(e, address, family);
+            };
+        }
         if (!err) return real().apply(t, args);
         const cb = args.length && typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
         if (!cb) throw err;

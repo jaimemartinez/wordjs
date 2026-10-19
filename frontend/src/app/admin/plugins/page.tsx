@@ -5,14 +5,17 @@ import { pluginsApi, themesApi, Plugin, PluginPortConflict, PluginRuntime } from
 import DeclaredRolesList, { ROLES_TOKEN } from "./DeclaredRolesList";
 import BreakableToken, { TOKEN_WRAP_CLASS } from "./BreakableToken";
 import { PermissionRow, RiskBadge, RISK_CLASSES, TOKEN_CLASS, REASON_LABEL_CLASS, PERMISSION_TOGGLE_CLASS, PERMISSION_DETAILS_CLASS } from "./PermissionRow";
-import { activationGrant, activationLeavesSomeOff, rolesHeldState } from "./grantState";
+import { activationGrant, activationLeavesSomeOff, ceilingAllows, rolesHeldState } from "./grantState";
 import DialogLayer from "@/components/DialogLayer";
 import { permMeta } from "@/lib/permissionMeta";
 import { reloadActivePlugins } from "@/lib/plugins";
 import { deepLinkedPlugin, withoutPermissionsDeepLink } from "@/lib/pluginPermissionsLink";
 import { useMenu } from "@/contexts/MenuContext";
+import { useOptionalAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
-import { useI18n } from "@/contexts/I18nContext";
+import { useModal } from "@/contexts/ModalContext";
+import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
+import { t as translate } from "@/lib/i18n";
 import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import MarketplaceTab from "./MarketplaceTab";
@@ -71,15 +74,18 @@ function fmtMB(bytes?: number | null) {
  * Exported for the unit test — the page itself is a fetch-on-mount client tree.
  */
 export const BROKEN_REASON_COPY: Record<string, string> = {
-    'missing': 'Instalación incompleta — faltan los archivos del plugin',
-    'no-manifest': 'Instalación incompleta — faltan los archivos del plugin',
-    'unreadable-manifest': 'Instalación dañada — su manifest.json no se puede leer',
+    'missing': 'plugins.broken.reason.missing',
+    'no-manifest': 'plugins.broken.reason.missing',
+    'unreadable-manifest': 'plugins.broken.reason.unreadable',
 };
 
-export function brokenReasonText(plugin: Pick<Plugin, 'brokenReason'>): string {
+/** Outside the admin's I18nProvider (unit tests) the copy falls back to the default admin language. */
+const defaultLanguage = (key: string) => translate(key);
+
+export function brokenReasonText(plugin: Pick<Plugin, 'brokenReason'>, t: (key: string) => string = defaultLanguage): string {
     // An unknown/absent reason must still read as broken, never as healthy: the fallback is the
     // generic incomplete-install copy, not an empty string.
-    return BROKEN_REASON_COPY[plugin.brokenReason || ''] || BROKEN_REASON_COPY['no-manifest'];
+    return t(BROKEN_REASON_COPY[plugin.brokenReason || ''] || BROKEN_REASON_COPY['no-manifest']);
 }
 
 /**
@@ -193,6 +199,7 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
     onCleanup: (plugin: Plugin) => void;
     busy?: boolean;
 }) {
+    const t = useOptionalI18n()?.t ?? defaultLanguage;
     return (
         <div
             data-testid="broken-plugin-card"
@@ -203,16 +210,14 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
                     <FaExclamationTriangle className="text-lg" />
                 </div>
                 <span className="text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full border bg-amber-50 border-amber-200/60 text-amber-700">
-                    Roto
+                    {t('plugins.broken.badge')}
                 </span>
             </div>
 
             <h3 className="font-extrabold text-slate-900 text-lg mb-1 break-words"><BreakableToken text={plugin.slug} /></h3>
-            <p className="text-xs text-amber-700 font-semibold leading-relaxed mb-2">{brokenReasonText(plugin)}</p>
+            <p className="text-xs text-amber-700 font-semibold leading-relaxed mb-2">{brokenReasonText(plugin, t)}</p>
             <p className="text-xs text-slate-500 leading-relaxed mb-5">
-                {plugin.wasActive
-                    ? 'Estaba marcado como activo, pero no hay nada que cargar. Se ha quitado de la lista de activos.'
-                    : 'Quedan restos de este plugin en el servidor, pero no hay nada que cargar.'}
+                {t(plugin.wasActive ? 'plugins.broken.wasActive' : 'plugins.broken.leftovers')}
             </p>
 
             <div className="flex flex-wrap gap-2">
@@ -220,14 +225,14 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
                     onClick={() => onReinstall(plugin)}
                     className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-sm flex items-center gap-2"
                 >
-                    <FaStore className="text-[10px]" /> Reinstalar desde el Marketplace
+                    <FaStore className="text-[10px]" /> {t('plugins.broken.reinstall')}
                 </button>
                 <button
                     onClick={() => onCleanup(plugin)}
                     disabled={busy}
                     className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 active:scale-95 transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
                 >
-                    <FaTrash className="text-[10px]" /> Quitar restos
+                    <FaTrash className="text-[10px]" /> {t('plugins.broken.cleanup')}
                 </button>
             </div>
         </div>
@@ -237,6 +242,15 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
 export default function PluginsPage() {
     const { t } = useI18n();
     const [plugins, setPlugins] = useState<Plugin[]>([]);
+    // Multisite: on a site other than the main one, GET /plugins carries each plugin's grant ceiling. The
+    // code is the network's there: no upload, marketplace, download, build or delete — only activation and
+    // grants, bounded by what the network administrator offers.
+    const siteScoped = plugins.some((p) => Array.isArray(p.grantCeiling));
+    // ...and on the main site, the same code actions are a NETWORK administrator's: an administrator of
+    // the main site who is not one activates and grants, nothing more (the server refuses the rest).
+    const user = useOptionalAuth()?.user ?? null;
+    const mainSiteNonNetworkAdmin = !!(user && user.network && user.network.mainSite && !user.network.networkAdmin);
+    const codeLocked = siteScoped || mainSiteNonNetworkAdmin;
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const { refreshMenus } = useMenu();
@@ -301,6 +315,7 @@ export default function PluginsPage() {
         !!(plugin.permissions || []).find(p => permToken(p) === token)?.undeclared;
 
     const { addToast } = useToast();
+    const { confirm } = useModal();
 
     useEffect(() => {
         loadPlugins();
@@ -349,14 +364,14 @@ export default function PluginsPage() {
         setCleaningUp((m) => ({ ...m, [plugin.slug]: true }));
         try {
             const res = await pluginsApi.deactivate(plugin.slug);
-            addToast(res.message || `Restos de "${plugin.slug}" eliminados.`, "success");
+            addToast(res.message || t('plugins.broken.cleaned').replace('{slug}', plugin.slug), "success");
             loadPlugins();
             refreshMenus();
             // The stored active list just changed — the runtime loader's memo would otherwise stay stale.
             reloadActivePlugins();
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Error desconocido";
-            addToast("No se pudieron quitar los restos: " + message, "error", 0);
+            const message = error instanceof Error ? error.message : t('plugins.broken.unknownError');
+            addToast(t('plugins.broken.cleanupFailed').replace('{message}', message), "error", 0);
         } finally {
             setCleaningUp((m) => ({ ...m, [plugin.slug]: false }));
         }
@@ -387,7 +402,10 @@ export default function PluginsPage() {
         if (!permsModalPlugin) return;
         setSavingPerms(true);
         try {
-            const res = await pluginsApi.setPermissions(permsModalPlugin.slug, Array.from(grantDraft), grantDraft.has('network'));
+            // What the network's ceiling does not allow is never sent (the server would refuse it with 403).
+            const ceiling = permsModalPlugin.grantCeiling;
+            const draft = Array.from(grantDraft).filter((token) => !Array.isArray(ceiling) || ceilingAllows(ceiling, token));
+            const res = await pluginsApi.setPermissions(permsModalPlugin.slug, draft, draft.includes('network'));
             setPermsModalPlugin(null);
             loadPlugins();
             refreshMenus();
@@ -621,6 +639,46 @@ export default function PluginsPage() {
         }
     };
 
+    // The zip is a version of an installed plugin: confirm, then update it in place. The backend stages
+    // and validates the new code before touching the installed one, keeps data/tables/grants, and reports
+    // the permissions the new version declares that are not granted — the permissions dialog then opens
+    // on that plugin so the admin decides about exactly those (they stay off until granted).
+    const offerPluginUpdate = async (file: File, refusal: { data?: Record<string, unknown> }) => {
+        const info = refusal.data || {};
+        const slug = typeof info.slug === "string" ? info.slug : "";
+        if (!slug) return;
+        const installed = plugins.find((p) => p.slug === slug);
+        const name = installed?.name || slug;
+        const version = (v: unknown) => (typeof v === "string" && v ? `v${v}` : "?");
+        const body = t('plugins.update.body')
+            .replace('{name}', name)
+            .replace('{from}', version(info.installedVersion))
+            .replace('{to}', version(info.incomingVersion));
+        if (!await confirm(body, t('plugins.update.title'), false, { confirmText: t('plugins.update.confirm') })) return;
+        const formData = new FormData();
+        formData.append('plugin', file);
+        try {
+            const res = await pluginsApi.update(slug, formData);
+            addToast(t('plugins.update.success').replace('{name}', name).replace('{to}', version(res.toVersion)), "success");
+            refreshMenus();
+            if (res.reactivated) reloadActivePlugins();
+            const fresh = await pluginsApi.list();
+            setPlugins(fresh);
+            if (res.ungrantedPermissions && res.ungrantedPermissions.length) {
+                const updated = fresh.find((p) => p.slug === slug);
+                if (updated) {
+                    addToast(t('plugins.update.newPermissions'), "info", 0);
+                    openPermissions(updated);
+                }
+            }
+        } catch (error: any) {
+            const sandbox = sandboxRefusalFrom(error);
+            loadPlugins();
+            if (sandbox) setRejection({ pluginName: name, message: sandbox.message, sandbox });
+            else addToast(t('plugins.update.failed') + ": " + (error.message || "Unknown error"), "error", 0);
+        }
+    };
+
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -640,8 +698,14 @@ export default function PluginsPage() {
             loadPlugins();
             refreshMenus();
         } catch (error: any) {
-            console.error("Upload failed:", error);
-            addToast(t('plugins.upload.failed') + ": " + (error.message || "Unknown error"), "error");
+            // 409 plugin_exists: the zip is a version of an installed plugin. Offer the in-place update
+            // (POST /plugins/:slug/update) instead of the old dead end ("deactivate", then "uninstall").
+            if (error?.status === 409 && error?.code === 'plugin_exists') {
+                await offerPluginUpdate(file, error);
+            } else {
+                console.error("Upload failed:", error);
+                addToast(t('plugins.upload.failed') + ": " + (error.message || "Unknown error"), "error");
+            }
         } finally {
             setUploading(false);
             e.target.value = "";
@@ -782,7 +846,11 @@ export default function PluginsPage() {
                         </div>
 
                         <p className="mb-6 text-slate-600 text-xs font-semibold leading-relaxed">
-                            {t('plugins.delete.message')} <strong className="text-slate-900 font-extrabold">{pluginToDelete?.name}</strong>?
+                            {(() => {
+                                // The plugin's name sits inside the sentence, wherever the language puts it.
+                                const [before, after = ''] = t('plugins.delete.message').split('{name}');
+                                return <>{before}<strong className="text-slate-900 font-extrabold">{pluginToDelete?.name}</strong>{after}</>;
+                            })()}
                         </p>
 
                         <div className="mb-6 space-y-2">
@@ -1008,7 +1076,7 @@ export default function PluginsPage() {
                                                         <div className="flex items-center gap-2 flex-wrap">
                                                             <i className={`fas ${meta.icon || 'fa-key'} text-xs opacity-75`} />
                                                             <span className="text-xs font-extrabold text-slate-800">{meta.label}</span>
-                                                            <RiskBadge risk={meta.risk} />
+                                                            <RiskBadge risk={meta.risk} adminEquivalent={meta.adminEquivalent} />
                                                         </div>
                                                         <span className={`text-[9px] font-mono text-slate-600 font-bold mt-0.5 ${TOKEN_WRAP_CLASS}`}><BreakableToken text={token} /></span>
                                                     </div>
@@ -1124,7 +1192,9 @@ export default function PluginsPage() {
                                 {declaredTokens(permsModalPlugin).length === 0 ? (
                                     <div className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-slate-600 text-xs font-semibold text-center">{t('plugins.permissions.none')}</div>
                                 ) : declaredTokens(permsModalPlugin).map((token) => {
-                                    const on = grantDraft.has(token);
+                                    // Multisite: a permission beyond the network's ceiling cannot be granted on this site.
+                                    const beyondCeiling = Array.isArray(permsModalPlugin.grantCeiling) && !ceilingAllows(permsModalPlugin.grantCeiling, token);
+                                    const on = grantDraft.has(token) && !beyondCeiling;
                                     const meta = permMeta(token, t);
                                     const highRisk = meta.risk === 'high';
                                     const activeClasses = highRisk ? 'bg-rose-50/80 border-rose-200/70 shadow-sm' : meta.risk === 'med' ? 'bg-amber-50/80 border-amber-200/70 shadow-sm' : 'bg-emerald-50/85 border-emerald-200/70 shadow-sm';
@@ -1137,20 +1207,23 @@ export default function PluginsPage() {
                                                 (PERMISSION_DETAILS_CLASS). In one column beside the switch they stopped ~75 px
                                                 short of the card's edge on an iPhone. */}
                                             <button
-                                                onClick={() => toggleGrant(token)}
+                                                onClick={() => { if (!beyondCeiling) toggleGrant(token); }}
+                                                disabled={beyondCeiling}
                                                 className={PERMISSION_TOGGLE_CLASS}
                                                 data-permission-toggle={token}
+                                                style={beyondCeiling ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
                                             >
                                                 <span className="flex items-center gap-2 flex-wrap min-w-0">
                                                     <i className={`fas ${meta.icon || 'fa-key'} text-xs opacity-75`} />
                                                     <span className="font-extrabold text-sm text-slate-800">{meta.label}</span>
-                                                    <RiskBadge risk={meta.risk} />
+                                                    <RiskBadge risk={meta.risk} adminEquivalent={meta.adminEquivalent} />
                                                     <span className={TOKEN_CLASS}><BreakableToken text={token} /></span>
                                                 </span>
                                                 <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 shrink-0 mt-0.5 col-start-2 row-start-1 ${on ? knobOn.split(' ')[0] : 'bg-slate-300'}`}>
                                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${on ? 'translate-x-6' : 'translate-x-1'} shadow-sm`} />
                                                 </span>
                                                 <span className={PERMISSION_DETAILS_CLASS} data-permission-details="">
+                                                    {beyondCeiling && <span className="block text-xs text-slate-700 font-bold leading-relaxed mt-1.5" data-permission-beyond-ceiling={token}>{t('plugins.network.beyondCeiling')}</span>}
                                                     {meta.description && <span className="block text-xs text-slate-600 font-medium leading-relaxed mt-1.5">{meta.description}</span>}
                                                     {reason && <span className="block text-xs text-slate-600 font-semibold leading-relaxed mt-1.5 italic"><span className={REASON_LABEL_CLASS}>{isUndeclared(permsModalPlugin, token) ? t('plugins.permission.wordjsNote') : t('plugins.permission.pluginSays')} </span>{reason}</span>}
                                                     {token === ROLES_TOKEN && <DeclaredRolesList roles={permsModalPlugin.roles} heading={t('plugins.declaredRoles')} state={rolesHeldState(permsModalPlugin, 'permissions')} capabilitiesLabel={t('plugins.declaredRoles.capabilities')} heldTemplate={t('plugins.declaredRoles.held')} heldGrantedTemplate={t('plugins.declaredRoles.heldGranted')} heldStaysOffTemplate={t('plugins.declaredRoles.heldStaysOff')} />}
@@ -1177,7 +1250,7 @@ export default function PluginsPage() {
                     title={t('plugins.title')}
                     subtitle={t('plugins.extend.functionality')}
                     icon="fa-plug"
-                    actions={
+                    actions={codeLocked ? undefined : (
                         <div className="relative">
                             <Button
                                 icon={uploading ? "fa-spinner fa-spin" : "fa-upload"}
@@ -1195,8 +1268,14 @@ export default function PluginsPage() {
                                 disabled={uploading}
                             />
                         </div>
-                    }
+                    )}
                 />
+                {siteScoped && (
+                    <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="">{t('plugins.network.siteNote')}</p>
+                )}
+                {!siteScoped && mainSiteNonNetworkAdmin && (
+                    <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="main">{t('plugins.network.mainSiteNote')}</p>
+                )}
             </div>
 
             {/* Installed | Marketplace tabs */}
@@ -1207,12 +1286,12 @@ export default function PluginsPage() {
                 >
                     <FaPlug className="text-xs" /> {t('plugins.tab.installed')}
                 </button>
-                <button
+                {!codeLocked && <button
                     onClick={() => setTab('marketplace')}
                     className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${tab === 'marketplace' ? 'bg-white text-slate-900 shadow-md border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
                 >
                     <FaStore className="text-xs" /> {t('plugins.tab.marketplace')}
-                </button>
+                </button>}
             </div>
 
             {/* Marketplace view */}
@@ -1308,8 +1387,8 @@ export default function PluginsPage() {
                                         >
                                             <FaInfoCircle className="text-sm" />
                                         </button>
-                                        <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />
-                                        {!plugin.active && (
+                                        {!codeLocked && <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />}
+                                        {!plugin.active && !codeLocked && (
                                             <>
                                                 <button
                                                     onClick={() => pluginsApi.download(plugin.slug)}
@@ -1419,13 +1498,13 @@ export default function PluginsPage() {
                                         <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">
                                             v{plugin.version}
                                         </span>
-                                        <button
+                                        {!(siteScoped && !plugin.offered) && <button
                                             onClick={() => openPermissions(plugin)}
                                             title="Manage what this plugin can access (per-permission grants)"
                                             className="text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-blue-50 hover:text-blue-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95"
                                         >
                                             <FaSlidersH className="text-[10px]" /> {t('plugins.permissions.manage')}
-                                        </button>
+                                        </button>}
                                         {plugin.hasTheme && (
                                             <button
                                                 onClick={() => handleInstallTheme(plugin)}
@@ -1444,6 +1523,15 @@ export default function PluginsPage() {
                                         )}
                                     </div>
 
+                                    {siteScoped && !plugin.offered && !plugin.active ? (
+                                        <span
+                                            className="px-3 py-2 rounded-xl text-[10px] font-extrabold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200/60"
+                                            title={t('plugins.network.notOfferedHint')}
+                                            data-plugin-not-offered={plugin.slug}
+                                        >
+                                            {t('plugins.network.notOffered')}
+                                        </span>
+                                    ) : (
                                     <button
                                         onClick={() => togglePlugin(plugin)}
                                         className={`
@@ -1463,6 +1551,7 @@ export default function PluginsPage() {
                                             </>
                                         )}
                                     </button>
+                                    )}
                                 </div>
                             </div>
                             );

@@ -18,15 +18,26 @@
  * has granted (default-deny). No plugin bypasses DB scoping, io-guard, or these grants.
  */
 
-// slug -> set of granted tokens: "scope:access" (e.g. "database:write") and/or the literal "network".
-const grants = new Map<string, Set<string>>();
-let loaded = false;
+const log = require('./module-logger').moduleLogger('core/plugin-permissions');
+
+// MULTISITE: grants are options, and options are per site — so is this mirror. Each site keeps its own
+// maps and load flags (core/site-context perSite), read and written only from that site's context: a
+// plugin's worker on site A is checked against site A's grants, never site B's. Site 1 / single site:
+// the one set of maps it always had.
+const siteContext = require('./site-context');
+const policyState = siteContext.perSite(() => ({
+    // slug -> set of granted tokens: "scope:access" (e.g. "database:write") and/or the literal "network".
+    grants: new Map<string, Set<string>>(),
+    loaded: false,
+    // slug -> egress allowlist (see below).
+    egressHosts: new Map<string, string[]>(),
+    egressPolicyLoaded: false,
+}));
 
 // slug -> list of egress hosts a NETWORK-granted plugin may reach (bare hostname or IP literal). EMPTY /
 // absent = allow-all-public (today's behavior, so a granted plugin with no list does NOT regress); a
 // non-empty list flips that plugin to default-DENY at the egress-guard (only listed hosts + subdomains).
 // Manifest-independent, admin-set, stored SERVER-SIDE in the `plugin_egress_hosts` option.
-const egressHosts = new Map<string, string[]>();
 
 // A valid egress-host entry: a bare hostname (optionally a leading '*.'/'.'), or an IP literal. NEVER a
 // scheme, path, port, query, or whitespace — those are rejected so a poisoned option can't smuggle a URL.
@@ -36,6 +47,33 @@ function isValidEgressHost(h: string): boolean {
     if (require('net').isIP(h)) return true;
     return VALID_EGRESS_HOST.test(h);
 }
+
+// A PRIVATE DESTINATION entry, stored in the same `plugin_egress_hosts` list: one exact `host:port`
+// (`[v6]:port` for IPv6) an administrator approved even though it is not public — an SMTP smarthost on
+// the LAN is the case it exists for (POST /plugins/:slug/private-egress). It never narrows or widens the
+// allowlist: getEgressAllowlist() leaves these out, getPrivateDestinations() returns only these. The two
+// spellings cannot be confused: a bare host or IP literal never carries a port, and an IPv6 literal with a
+// port is bracketed. Parsed by egress-guard's parsePrivateDestination — the same function the child
+// enforces with — so what is stored is exactly what is enforced. Link-local (cloud metadata),
+// unspecified and multicast addresses are refused there.
+const MAX_PRIVATE_DESTINATIONS = 4;
+function privateDestinationOf(h: string): string | null {
+    if (isValidEgressHost(h)) return null;
+    let d: any;
+    try { d = require('./egress-guard').parsePrivateDestination(h); } catch { return null; }
+    if (!d) return null;
+    return (d.host.includes(':') ? `[${d.host}]` : d.host) + ':' + d.port;
+}
+/** Normalize an approved-destination list: canonical `host:port`, valid entries only, de-duplicated, capped. */
+function normalizePrivateDestinations(entries: string[]): string[] {
+    const out: string[] = [];
+    for (const raw of entries || []) {
+        const d = privateDestinationOf(String(raw).toLowerCase().trim());
+        if (d && !out.includes(d)) out.push(d);
+    }
+    return out.slice(0, MAX_PRIVATE_DESTINATIONS);
+}
+const isPrivateDestinationEntry = (h: string): boolean => privateDestinationOf(h) !== null;
 
 /** The literal token used for the network grant (no access level). */
 const NETWORK_TOKEN = 'network';
@@ -169,7 +207,7 @@ function cleanGrantTokens(slug: string, tokens: string[]): string[] {
     const clean = requested.filter(isValidGrantToken);
     if (clean.length !== requested.length) {
         const dropped = requested.filter(t => !isValidGrantToken(t));
-        console.warn("[PluginPermissions] Not storing malformed grant token(s) %s for plugin '%s' (a grant is 'network' or 'scope:access').", JSON.stringify(dropped), logSafeKey(slug));
+        log.warn({ grantTokens: JSON.stringify(dropped), slug: logSafeKey(slug) }, `[PluginPermissions] Not storing malformed grant token(s) ${logSafeKey(JSON.stringify(dropped))} for plugin '${logSafeKey(slug)}' (a grant is 'network' or 'scope:access').`);
     }
     return clean;
 }
@@ -183,11 +221,11 @@ function normalizeEgressHosts(hosts: string[]): string[] {
 // repeat the same warning forever. Report each distinct one once per process. Capped: the blobs are
 // admin-written and small, but a set that only ever grows is not something to leave in a server.
 const reportedMalformed = new Set<string>();
-function warnMalformedOnce(key: string, message: string, ...args: unknown[]): void {
+function warnMalformedOnce(key: string, fields: Record<string, unknown>, message: string): void {
     if (reportedMalformed.has(key)) return;
     if (reportedMalformed.size >= 1000) reportedMalformed.clear();
     reportedMalformed.add(key);
-    console.warn(message, ...args);
+    log.warn(fields, message);
 }
 
 /**
@@ -201,7 +239,7 @@ function grantRecordOf(slug: string, list: unknown): string[] | null {
     for (const raw of list) {
         const t = String(raw).toLowerCase().trim();
         if (isValidGrantToken(t)) clean.push(t);
-        else warnMalformedOnce(`grants\u0000${slug}\u0000${String(raw)}`, "[PluginPermissions] Dropping malformed grant token %s for plugin '%s' from plugin_grants.", JSON.stringify(String(raw)), slug);
+        else warnMalformedOnce(`grants\u0000${slug}\u0000${String(raw)}`, { grantToken: JSON.stringify(String(raw)), slug: logSafeKey(slug) }, `[PluginPermissions] Dropping malformed grant token ${logSafeKey(JSON.stringify(String(raw)))} for plugin '${logSafeKey(slug)}' from plugin_grants.`);
     }
     return clean;
 }
@@ -254,7 +292,7 @@ function withoutForeignExclusive(stored: any, slug: string, tokens: string[]): s
     const conflicts = exclusiveConflictsIn(stored, slug, tokens);
     if (!conflicts.length) return tokens;
     for (const c of conflicts) {
-        console.warn("[PluginPermissions] Not granting '%s' to plugin '%s': plugin '%s' already holds it (an exclusive capability).", c.token, logSafeKey(slug), logSafeKey(c.holder));
+        log.warn({ token: c.token, slug: logSafeKey(slug), holder: logSafeKey(c.holder) }, `[PluginPermissions] Not granting '${c.token}' to plugin '${logSafeKey(slug)}': plugin '${logSafeKey(c.holder)}' already holds it (an exclusive capability).`);
     }
     const drop = new Set(conflicts.map(c => c.token));
     return tokens.filter(t => !drop.has(t));
@@ -269,9 +307,9 @@ function exclusiveGrantError(conflicts: Array<{ token: string; holder: string }>
     return err;
 }
 
-/** Which plugin holds an exclusive token right now (this node's mirror), or null. For the admin UI/API. */
+/** Which plugin holds an exclusive token right now (this node's mirror of the current site), or null. For the admin UI/API. */
 function getExclusiveHolder(token: string): string | null {
-    for (const [slug, set] of grants) if (set.has(token)) return slug;
+    for (const [slug, set] of policyState.get().grants) if (set.has(token)) return slug;
     return null;
 }
 
@@ -281,8 +319,10 @@ function egressRecordOf(slug: string, list: unknown): string[] | null {
     const clean: string[] = [];
     for (const raw of list) {
         const h = String(raw).toLowerCase().trim();
+        const d = isValidEgressHost(h) ? null : privateDestinationOf(h);
         if (isValidEgressHost(h)) clean.push(h);
-        else warnMalformedOnce(`egress\u0000${slug}\u0000${String(raw)}`, "[PluginPermissions] Dropping malformed egress host %s for plugin '%s' from plugin_egress_hosts.", JSON.stringify(String(raw)), slug);
+        else if (d) clean.push(d);
+        else warnMalformedOnce(`egress\u0000${slug}\u0000${String(raw)}`, { egressHost: JSON.stringify(String(raw)), slug: logSafeKey(slug) }, `[PluginPermissions] Dropping malformed egress host ${logSafeKey(JSON.stringify(String(raw)))} for plugin '${logSafeKey(slug)}' from plugin_egress_hosts.`);
     }
     return clean;
 }
@@ -522,29 +562,94 @@ async function loadGrantsUnlocked(): Promise<void> {
         // place. getOption answered it with `{}`, which this function then applied — dropping EVERY
         // plugin's grants on a transient database error.
         const { stored } = await readPolicyOption('plugin_grants');
-        grants.clear();
+        policyState.get().grants.clear();
         for (const [slug, list] of Object.entries(stored)) {
             if (slug === HOST_RECORD_KEY) continue; // the host's bookkeeping, not a plugin's grants
             // The KEY is validated too, not just the values: a blob written before this guard (or by
             // any path other than setGrants) must not be able to install a grant record under a magic
             // name. Unsafe key ⇒ the plugin simply has no grants — default-deny, fail closed.
             if (!isSafeSlugKey(slug)) {
-                warnMalformedOnce(`grants-key\u0000${String(slug)}`, "[PluginPermissions] Dropping grant record under an unsafe plugin key '%s' from plugin_grants.", logSafeKey(slug));
+                warnMalformedOnce(`grants-key\u0000${String(slug)}`, { slug: logSafeKey(slug) }, `[PluginPermissions] Dropping grant record under an unsafe plugin key '${logSafeKey(slug)}' from plugin_grants.`);
                 continue;
             }
             const record = grantRecordOf(slug, list);
-            if (record) grants.set(slug, new Set(record));
+            if (record) policyState.get().grants.set(slug, new Set(record));
         }
-        loaded = true;
+        policyState.get().loaded = true;
     } catch (e: any) {
-        console.warn('[PluginPermissions] Failed to load plugin_grants option (the grants already in memory stay in force):', e && e.message);
+        log.warn({ err: e }, '[PluginPermissions] Failed to load plugin_grants option (the grants already in memory stay in force)');
     }
+}
+
+// ── MULTISITE: THE NETWORK GRANT CEILING ─────────────────────────────────────────────────────────────
+//
+// Plugin code is installed once per network, by a network administrator; each site activates it and
+// grants it permissions on its own. What a site may grant is bounded by the network's CEILING for that
+// plugin (core/network pluginCeiling, set only by a network administrator): a site administrator cannot
+// raise their own plugin's privileges beyond the network's decision (isolation guarantee I8). No ceiling
+// recorded = the plugin is not offered to the other sites at all (it cannot be activated there).
+//
+// The ceiling is enforced twice: on every WRITE (a grant beyond it is refused with 403; a seed or an
+// upgrade step is clipped to it) and on every READ (isGranted / isNetworkGranted answer false for a
+// token outside it), so lowering a ceiling takes effect at once on every site, before any site's stored
+// grants are rewritten. The main site, and every single-site install, has no ceiling: its administrators
+// are the network's.
+
+/** The ceiling that bounds the current site's grants for `slug`, or null when none applies (main site / single site). */
+function ceilingFor(slug: string): Set<string> | null {
+    if (!siteContext.multisiteEnabled()) return null;
+    if (siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID) return null;
+    let tokens: string[] | null;
+    try { tokens = require('./network').pluginCeiling(slug); } catch { tokens = null; } // unreadable store: nothing allowed
+    return new Set(tokens || []);
+}
+
+/** Does the ceiling (when one applies) allow `token` ("scope:access" or "network")? */
+function ceilingAllowsToken(slug: string, token: string, ceiling: Set<string> | null = ceilingFor(slug)): boolean {
+    if (!ceiling) return true;
+    if (ceiling.has(token)) return true;
+    const i = token.indexOf(':');
+    if (i <= 0) return false;
+    const scope = token.slice(0, i);
+    const access = token.slice(i + 1);
+    // `scope:admin` in the ceiling covers the ordinary read+write verbs, exactly as a grant of it does.
+    return (access === 'read' || access === 'write') && ceiling.has(`${scope}:admin`);
+}
+
+/** The tokens of `tokens` that the current site's ceiling does not allow (empty on the main site). */
+function tokensBeyondCeiling(slug: string, tokens: string[]): string[] {
+    const ceiling = ceilingFor(slug);
+    if (!ceiling) return [];
+    return tokens.filter((t) => !ceilingAllowsToken(slug, t, ceiling));
+}
+
+/** `tokens` clipped to the current site's ceiling (unchanged on the main site). */
+function clipToCeiling(slug: string, tokens: string[]): string[] {
+    const ceiling = ceilingFor(slug);
+    if (!ceiling) return tokens;
+    return tokens.filter((t) => ceilingAllowsToken(slug, t, ceiling));
+}
+
+/** Is `slug` offered to the current site? Always true on the main site and on a single site. */
+function isOfferedHere(slug: string): boolean {
+    if (!siteContext.multisiteEnabled() || siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID) return true;
+    try { return require('./network').pluginCeiling(slug) !== null; } catch { return false; }
+}
+
+/** The error a grant beyond the ceiling throws (routes answer it 403). */
+function beyondCeilingError(slug: string, beyond: string[]): Error & { code: string; status: number; beyond: string[] } {
+    const e = new Error(`The network allows '${logSafeKey(slug)}' at most what its network administrator set; refused: ${beyond.join(', ')}.`) as Error & { code: string; status: number; beyond: string[] };
+    e.code = 'plugin_grant_beyond_ceiling';
+    e.status = 403;
+    e.beyond = beyond;
+    return e;
 }
 
 /** Synchronous grant check used by the host security gates (default-deny). */
 function isGranted(slug: string, scope: string, access = 'read'): boolean {
     if (!slug) return false;
-    const s = grants.get(slug);
+    if (!ceilingAllowsToken(slug, `${scope}:${access}`)) return false;
+    const s = policyState.get().grants.get(slug);
     if (!s) return false;
     if (s.has(`${scope}:${access}`)) return true;
     // `admin` implies ONLY the ordinary read+write verbs — NOT the high-power special verbs (provider =
@@ -556,13 +661,18 @@ function isGranted(slug: string, scope: string, access = 'read'): boolean {
 
 /** Whether the operator granted this (untrusted) plugin outbound network access. */
 function isNetworkGranted(slug: string): boolean {
-    const s = grants.get(slug);
-    return !!(s && s.has(NETWORK_TOKEN));
+    const s = policyState.get().grants.get(slug);
+    return !!(s && s.has(NETWORK_TOKEN)) && ceilingAllowsToken(slug, NETWORK_TOKEN);
 }
 
 /** The raw granted-token list for a plugin (for the admin UI / API). */
 function getGrants(slug: string): string[] {
-    return Array.from(grants.get(slug) || []);
+    return Array.from(policyState.get().grants.get(slug) || []);
+}
+
+/** The grants in force: the stored ones the current site's ceiling allows (all of them on the main site). */
+function getEffectiveGrants(slug: string): string[] {
+    return clipToCeiling(slug, getGrants(slug));
 }
 
 /**
@@ -570,7 +680,7 @@ function getGrants(slug: string): string[] {
  * tell the two apart.
  */
 function hasGrantRecord(slug: string): boolean {
-    return grants.has(slug);
+    return policyState.get().grants.has(slug);
 }
 
 // ── WIDENING vs NARROWING — what a write would ADD ───────────────────────────────────────────────────
@@ -651,6 +761,9 @@ async function applyGrants(slug: string, tokens: string[], opts: { adminDecision
     // non-slug shape, so a bad key can never reach either the mirror or the option.
     if (!isSafeSlugKey(slug)) writeSlugKey({}, slug, []); // throws the descriptive error
     const clean = cleanGrantTokens(slug, tokens);
+    // Multisite: a site administrator cannot grant beyond the network's ceiling (I8) — refused, not clipped.
+    const beyond = tokensBeyondCeiling(slug, clean);
+    if (beyond.length) throw beyondCeilingError(slug, beyond);
     let refused: string[] = [];
     const { announced } = await serializePolicy(() => writePolicyBlob('plugin_grants',
         (stored) => {
@@ -661,7 +774,7 @@ async function applyGrants(slug: string, tokens: string[], opts: { adminDecision
             if (conflicts.length) throw exclusiveGrantError(conflicts);
             return { changed: true, next: grantStoreWith(stored, slug, clean, opts) };
         },
-        () => { if (!refused.length) grants.set(slug, new Set(clean)); }));
+        () => { if (!refused.length) policyState.get().grants.set(slug, new Set(clean)); }));
     return { announced, refused };
 }
 
@@ -695,7 +808,8 @@ function shouldSeedDeclaredGrants(_slug: string, stored: string[] | null, adminD
 async function seedGrants(slug: string, tokens: string[], opts: { adminDecision?: boolean } = {}): Promise<boolean> {
     assertHostContext('seedGrants');
     if (!isSafeSlugKey(slug)) writeSlugKey({}, slug, []); // throws the descriptive error
-    const clean = cleanGrantTokens(slug, tokens);
+    // Multisite: what the manifest declares is seeded only up to the network's ceiling.
+    const clean = clipToCeiling(slug, cleanGrantTokens(slug, tokens));
     let seeded = false;
     let existing: string[] | null = null;
     let seed: string[] = clean;
@@ -709,9 +823,9 @@ async function seedGrants(slug: string, tokens: string[], opts: { adminDecision?
         },
         // Memory mirrors the row this decision was made on: the seed, or the record as stored (none ⇒ none).
         () => {
-            if (seeded) grants.set(slug, new Set(seed));
-            else if (existing) grants.set(slug, new Set(existing));
-            else grants.delete(slug);
+            if (seeded) policyState.get().grants.set(slug, new Set(seed));
+            else if (existing) policyState.get().grants.set(slug, new Set(existing));
+            else policyState.get().grants.delete(slug);
         }));
     return seeded;
 }
@@ -726,7 +840,7 @@ async function clearGrants(slug: string): Promise<void> {
     assertHostContext('clearGrants');
     return writePolicy(() => writePolicyBlob('plugin_grants',
         (stored) => grantStoreWithout(stored, slug),
-        () => { grants.delete(slug); }));
+        () => { policyState.get().grants.delete(slug); }));
 }
 
 /**
@@ -759,7 +873,7 @@ async function ensureGrantRecord(slug: string): Promise<boolean> {
             if (!created) return { changed: false };
             return { changed: true, next: writeSlugKey(stored, slug, []) };
         },
-        () => { grants.set(slug, new Set(existing || [])); }));
+        () => { policyState.get().grants.set(slug, new Set(existing || [])); }));
     return created;
 }
 
@@ -775,17 +889,17 @@ async function ensureGrantRecord(slug: string): Promise<boolean> {
  */
 async function backfillActive(entries: Array<{ slug: string; requested: string[] }>): Promise<string[]> {
     assertHostContext('backfillActive');
-    if (!loaded) await loadGrants();
+    if (!policyState.get().loaded) await loadGrants();
     // "No record in memory" only means "no record" once the store has been read: with the policy still
     // unread (a database error at boot) every plugin would look unrecorded, and the declared sets would
     // be written over what administrators stored.
-    if (!loaded) {
-        console.warn('[PluginPermissions] Grant backfill skipped: plugin_grants could not be read.');
+    if (!policyState.get().loaded) {
+        log.warn('[PluginPermissions] Grant backfill skipped: plugin_grants could not be read.');
         return [];
     }
     const done: string[] = [];
     for (const { slug, requested } of entries || []) {
-        if (grants.has(slug)) continue; // already has an explicit grant record — respect the admin
+        if (policyState.get().grants.has(slug)) continue; // already has an explicit grant record — respect the admin
         // Nothing declared ⇒ nothing to grandfather, and NO record either: memory mirrors the store. An
         // empty record made up here in memory alone would differ from what every node re-reads (the next
         // re-sync drops it again) and from what hasGrantRecord reports.
@@ -794,7 +908,7 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
         // Grandfather what the manifest declared (admin can revoke) — INSERT-IF-ABSENT, decided on the row
         // read under the lease like every other policy write: a record stored since this node's load (an
         // administrator's decision on another node, an update's empty record) is kept, never replaced.
-        const clean = cleanGrantTokens(slug, requested);
+        const clean = clipToCeiling(slug, cleanGrantTokens(slug, requested));
         let existing: string[] | null = null;
         let record: string[] = clean;
         await writePolicy(() => writePolicyBlob('plugin_grants',
@@ -804,10 +918,10 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
                 record = withoutForeignExclusive(stored, slug, clean);
                 return { changed: true, next: grantStoreWith(stored, slug, record) };
             },
-            () => { grants.set(slug, new Set(existing !== null ? existing : record)); }));
+            () => { policyState.get().grants.set(slug, new Set(existing !== null ? existing : record)); }));
         if (existing === null) done.push(slug);
     }
-    if (done.length) console.log(`[PluginPermissions] Backfilled manifest grants for already-active plugins: ${done.join(', ')} (default-deny applies to new activations).`);
+    if (done.length) log.info(`[PluginPermissions] Backfilled manifest grants for already-active plugins: ${done.join(', ')} (default-deny applies to new activations).`);
     return done;
 }
 
@@ -816,7 +930,7 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
  * memory" says nothing about the store — and the boot backfill, which runs first, has skipped.
  */
 function isGrantsLoaded(): boolean {
-    return loaded;
+    return policyState.get().loaded;
 }
 
 /**
@@ -835,6 +949,7 @@ async function addUpgradeGrant(slug: string, token: string): Promise<boolean> {
     if (!isSafeSlugKey(slug)) writeSlugKey({}, slug, []); // throws the descriptive error
     const clean = cleanGrantTokens(slug, [token]);
     if (clean.length !== 1) throw new Error(`Refusing to grant a malformed token to '${logSafeKey(slug)}'.`);
+    if (tokensBeyondCeiling(slug, clean).length) return false; // multisite: never past the network's ceiling
     let added = false;
     let record: string[] | null = null;
     await writePolicy(() => writePolicyBlob('plugin_grants',
@@ -847,8 +962,8 @@ async function addUpgradeGrant(slug: string, token: string): Promise<boolean> {
             return { changed: true, next: grantStoreWith(stored, slug, record as string[]) };
         },
         () => {
-            if (record) grants.set(slug, new Set(record));
-            else grants.delete(slug);
+            if (record) policyState.get().grants.set(slug, new Set(record));
+            else policyState.get().grants.delete(slug);
         }));
     return added;
 }
@@ -863,8 +978,8 @@ async function removeGrants(slug: string): Promise<void> {
     // Persist first, then drop the mirror (see "ONE ORDER"). Also clears the egress allowlist so
     // re-uploading the same slug can't silently inherit an old policy.
     const fanOuts = await serializePolicy(async () => {
-        const g = await writePolicyBlob('plugin_grants', (stored) => grantStoreWithout(stored, slug), () => { grants.delete(slug); });
-        const e = await writePolicyBlob('plugin_egress_hosts', (stored) => deleteSlugKey(stored, slug), () => { egressHosts.delete(slug); });
+        const g = await writePolicyBlob('plugin_grants', (stored) => grantStoreWithout(stored, slug), () => { policyState.get().grants.delete(slug); });
+        const e = await writePolicyBlob('plugin_egress_hosts', (stored) => deleteSlugKey(stored, slug), () => { policyState.get().egressHosts.delete(slug); });
         return [g.announced, e.announced];
     });
     await Promise.all(fanOuts);
@@ -920,7 +1035,6 @@ async function activationSeedsDeclaredGrants(slugs: string[]): Promise<Record<st
 // deny-all egress signal so the plugin reaches ZERO public hosts (private/loopback are blocked regardless)
 // — fail CLOSED — instead of the whole internet. A genuinely-empty policy ({}) is a SUCCESSFUL load and
 // keeps today's allow-all-public behavior, so no regression for plugins that never configured a list.
-let egressPolicyLoaded = false;
 
 /**
  * Load the persisted per-plugin egress allowlists into memory. Runs at boot, after the DB is up, and again
@@ -941,31 +1055,64 @@ async function loadEgressHosts(): Promise<void> {
 async function loadEgressHostsUnlocked(): Promise<void> {
     try {
         const { stored } = await readPolicyOption('plugin_egress_hosts');
-        egressHosts.clear();
+        policyState.get().egressHosts.clear();
         for (const [slug, list] of Object.entries(stored)) {
             if (!isSafeSlugKey(slug)) {
-                warnMalformedOnce(`egress-key\u0000${String(slug)}`, "[PluginPermissions] Dropping egress record under an unsafe plugin key '%s' from plugin_egress_hosts.", logSafeKey(slug));
+                warnMalformedOnce(`egress-key\u0000${String(slug)}`, { slug: logSafeKey(slug) }, `[PluginPermissions] Dropping egress record under an unsafe plugin key '${logSafeKey(slug)}' from plugin_egress_hosts.`);
                 continue;
             }
             const record = egressRecordOf(slug, list);
-            if (record) egressHosts.set(slug, record);
+            if (record) policyState.get().egressHosts.set(slug, record);
         }
-        egressPolicyLoaded = true; // populated cleanly (an empty {} is a valid, successfully-loaded policy)
+        policyState.get().egressPolicyLoaded = true; // populated cleanly (an empty {} is a valid, successfully-loaded policy)
     } catch (e: any) {
         // Not touched here: still FALSE if no load ever succeeded (fail CLOSED — the spawn path denies
         // egress for network plugins until a re-sync loads it), still the last-known-good policy otherwise.
-        console.warn(egressPolicyLoaded
+        log.warn({ err: e }, policyState.get().egressPolicyLoaded
             ? '[PluginPermissions] Failed to re-read plugin_egress_hosts (the allowlists already in memory stay in force):'
-            : '[PluginPermissions] Failed to load plugin_egress_hosts option (egress fails CLOSED for network-granted plugins until it loads):', e && e.message);
+            : '[PluginPermissions] Failed to load plugin_egress_hosts option (egress fails CLOSED for network-granted plugins until it loads):');
     }
 }
 
 /** True once loadEgressHosts() has populated the policy without error. False ⇒ spawn path fails egress CLOSED. */
-function isEgressPolicyLoaded(): boolean { return egressPolicyLoaded; }
+function isEgressPolicyLoaded(): boolean { return policyState.get().egressPolicyLoaded; }
 
 /** The egress allowlist for a plugin (for the admin API and the spawn-time childCfg). Empty = allow-all. */
 function getEgressAllowlist(slug: string): string[] {
-    return Array.from(egressHosts.get(slug) || []);
+    return Array.from<string>(policyState.get().egressHosts.get(slug) || []).filter((h) => !isPrivateDestinationEntry(h));
+}
+
+/** The private destinations (exact `host:port`) an administrator approved for a plugin. Empty = none. */
+function getPrivateDestinations(slug: string): string[] {
+    return Array.from<string>(policyState.get().egressHosts.get(slug) || []).filter(isPrivateDestinationEntry);
+}
+
+/**
+ * Replace a plugin's approved private destinations (admin action), leaving its egress allowlist as it is.
+ * Same storage, lease and fan-out as applyEgressAllowlist. `narrowOnly` (an API token's write): a list that
+ * would add a destination not approved now is not written, and `refused` names it — a token may withdraw
+ * an approval, never make one. Invalid entries are dropped (normalizePrivateDestinations).
+ */
+async function applyPrivateDestinations(slug: string, entries: string[], opts: { narrowOnly?: boolean } = {}): Promise<PolicyWriteResult> {
+    assertHostContext('applyPrivateDestinations');
+    const clean = normalizePrivateDestinations(entries);
+    if (!isSafeSlugKey(slug)) writeSlugKey({}, slug, clean); // key gate first: no silent __proto__ no-op
+    if (opts.narrowOnly && !policyState.get().egressPolicyLoaded) {
+        return { announced: Promise.resolve(), refused: clean };
+    }
+    let refused: string[] = [];
+    let next: string[] = [];
+    const { announced } = await serializePolicy(() => writePolicyBlob('plugin_egress_hosts',
+        (stored) => {
+            const current = egressRecordIn(stored, slug) || [];
+            const approved = current.filter(isPrivateDestinationEntry);
+            refused = opts.narrowOnly ? clean.filter((d) => !approved.includes(d)) : [];
+            if (refused.length) return { changed: false };
+            next = [...current.filter((h) => !isPrivateDestinationEntry(h)), ...clean];
+            return { changed: true, next: writeSlugKey(stored, slug, next) };
+        },
+        () => { if (!refused.length) policyState.get().egressHosts.set(slug, next); }));
+    return { announced, refused };
 }
 
 /**
@@ -993,17 +1140,21 @@ async function applyEgressAllowlist(slug: string, hosts: string[], opts: { narro
     assertHostContext('applyEgressAllowlist');
     const clean = normalizeEgressHosts(hosts);
     if (!isSafeSlugKey(slug)) writeSlugKey({}, slug, clean); // key gate first: no silent __proto__ no-op
-    if (opts.narrowOnly && !egressPolicyLoaded) {
+    if (opts.narrowOnly && !policyState.get().egressPolicyLoaded) {
         return { announced: Promise.resolve(), refused: clean.length ? clean : [EGRESS_EVERY_PUBLIC_HOST] };
     }
     let refused: string[] = [];
+    let next: string[] = clean;
     const { announced } = await serializePolicy(() => writePolicyBlob('plugin_egress_hosts',
         (stored) => {
-            refused = opts.narrowOnly ? egressHostsAddedTo(egressRecordIn(stored, slug) || [], clean) : [];
+            const current = egressRecordIn(stored, slug) || [];
+            refused = opts.narrowOnly ? egressHostsAddedTo(current.filter((h) => !isPrivateDestinationEntry(h)), clean) : [];
             if (refused.length) return { changed: false };
-            return { changed: true, next: writeSlugKey(stored, slug, clean) };
+            // The approved private destinations are not part of the allowlist and survive its replacement.
+            next = [...clean, ...current.filter(isPrivateDestinationEntry)];
+            return { changed: true, next: writeSlugKey(stored, slug, next) };
         },
-        () => { if (!refused.length) egressHosts.set(slug, clean); }));
+        () => { if (!refused.length) policyState.get().egressHosts.set(slug, next); }));
     return { announced, refused };
 }
 
@@ -1027,12 +1178,12 @@ async function adoptStoredPolicy(slug: string): Promise<{ grants: string[]; egre
         const record = grantRecordIn(g.stored, slug);
         const egress = egressRecordIn(e.stored, slug);
         if (isSafeSlugKey(slug)) {
-            if (record) grants.set(slug, new Set(record)); else grants.delete(slug);
-            if (egress) egressHosts.set(slug, egress); else egressHosts.delete(slug);
+            if (record) policyState.get().grants.set(slug, new Set(record)); else policyState.get().grants.delete(slug);
+            if (egress) policyState.get().egressHosts.set(slug, egress); else policyState.get().egressHosts.delete(slug);
         }
         return {
             grants: record ? Array.from(new Set(record)) : [],
-            egress: egress || [],
+            egress: (egress || []).filter((h) => !isPrivateDestinationEntry(h)),
             seedsDeclaredGrants: shouldSeedDeclaredGrants(slug, record, hasAdminDecisionIn(g.stored, slug)),
         };
     });
@@ -1046,11 +1197,13 @@ async function adoptStoredPolicy(slug: string): Promise<{ grants: string[]; egre
  * respawns a running child whose recorded value no longer equals the current one.
  */
 function policyFingerprint(slug: string): string {
-    const g = getGrants(slug).sort();
+    // The grants IN FORCE (a ceiling change on a multisite network changes them, and so respawns the child).
+    const g = getEffectiveGrants(slug).sort();
     const net = isNetworkGranted(slug);
-    const denyAll = net && !egressPolicyLoaded;
+    const denyAll = net && !policyState.get().egressPolicyLoaded;
     const hosts = (net && !denyAll) ? getEgressAllowlist(slug).sort() : [];
-    return JSON.stringify([g, hosts, denyAll]);
+    const priv = (net && !denyAll) ? getPrivateDestinations(slug).sort() : [];
+    return JSON.stringify(priv.length ? [g, hosts, denyAll, priv] : [g, hosts, denyAll]);
 }
 
 // Test-only: set a plugin's grants in memory WITHOUT persisting, so unit tests can grant the
@@ -1059,23 +1212,25 @@ function _setGrantsInMemory(slug: string, tokens: string[]): void {
     // Same escalation vector as setGrants: ungated in-memory grant. Never callable from plugin/theme
     // context (test/host only) — an in-process theme could otherwise silently grant itself any cap (#9).
     assertHostContext('_setGrantsInMemory');
-    grants.set(slug, new Set(requestedGrantTokens(tokens)));
+    policyState.get().grants.set(slug, new Set(requestedGrantTokens(tokens)));
 }
 
 // Test-only: install a plugin's egress allowlist in memory (no DB) AND mark the policy as loaded, so
 // unit tests can exercise allowlist-governed bridges. Same plugin-context guard as _setGrantsInMemory.
 function _setEgressAllowlistInMemory(slug: string, hosts: string[]): void {
     assertHostContext('_setEgressAllowlistInMemory');
-    egressHosts.set(slug, normalizeEgressHosts(hosts));
-    egressPolicyLoaded = true;
+    policyState.get().egressHosts.set(slug, normalizeEgressHosts(hosts));
+    policyState.get().egressPolicyLoaded = true;
 }
 
 module.exports = {
-    loadGrants, isGranted, isNetworkGranted, getGrants, hasGrantRecord,
+    loadGrants, isGranted, isNetworkGranted, getGrants, getEffectiveGrants, hasGrantRecord,
+    ceilingFor, tokensBeyondCeiling, clipToCeiling, isOfferedHere,
     setGrants, applyGrants, shouldSeedDeclaredGrants, seedGrants, clearGrants, ensureGrantRecord, removeGrants, backfillActive,
     isGrantsLoaded, addUpgradeGrant,
     adoptStoredPolicy, policyFingerprint, NETWORK_TOKEN, _setGrantsInMemory, _setEgressAllowlistInMemory,
     loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist, applyEgressAllowlist,
+    getPrivateDestinations, applyPrivateDestinations, normalizePrivateDestinations,
     PLUGIN_SLUG, FORBIDDEN_KEYS, isSafeSlugKey, writeSlugKey,
     getHostMarker, setHostMarker, HOST_RECORD_KEY, hasAdminGrantDecision, activationSeedsDeclaredGrants, ADMIN_DECISIONS_MARKER,
     grantsAddedTo, egressHostsAddedTo, EGRESS_EVERY_PUBLIC_HOST,

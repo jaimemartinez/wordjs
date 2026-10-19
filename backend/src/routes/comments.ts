@@ -31,6 +31,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params. A parameter this router declares scalar arrives
 // once, as a string, or the request is a 400 (the same answer routes/posts.ts already gives).
 const { scalarQueryParam, requireScalarQuery, requireRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 const { stripTags, escUrl, sanitizeContent, currentTime, currentTimeGMT } = require('../core/formatting');
 // THE COMMENT ABUSE POSTURE (see the block below the query-field table) needs three more things: the
 // limiter constructor, the one honest per-request IP every limiter on this server keys on, and the
@@ -53,6 +54,23 @@ router.param('id', requireRouteId({ code: 'rest_comment_invalid_id', message: 'I
 
 // Shared, length-capped email validator (the one shape rule) — guards against ReDoS on unbounded input.
 const { isValidAddress } = require('../core/mailbox');
+const { recordAudit } = require('../core/audit');
+const { publicDisplayName } = require('../core/public-identity');
+
+/**
+ * One audit row per moderation write, naming the most specific transition — `comment.approve`,
+ * `comment.spam`, `comment.trash` — or `comment.update` for an edit that is none of those (a content
+ * edit, or a move back to pending). Statuses only: never the comment body or the commenter's personal
+ * data. Outgoing webhooks derive comment.approved / .spam / .trashed / .updated from these rows.
+ */
+async function recordCommentAudit(actorId: any, commentId: number, from: any, to: any): Promise<void> {
+    const detail = { from: from == null ? null : String(from), to: to == null ? null : String(to) };
+    const changed = detail.from !== detail.to;
+    if (changed && detail.to === '1') return recordAudit(actorId, 'comment.approve', 'comment', commentId, detail);
+    if (changed && detail.to === 'spam') return recordAudit(actorId, 'comment.spam', 'comment', commentId, detail);
+    if (changed && detail.to === 'trash') return recordAudit(actorId, 'comment.trash', 'comment', commentId, detail);
+    return recordAudit(actorId, 'comment.update', 'comment', commentId, detail);
+}
 
 /**
  * Validate a guest-supplied author URL: only http/https are permitted, and the value must be a
@@ -292,7 +310,7 @@ const DISCARD_MEMORY_MAX = 1000;
 function discardMemoryKey(draft: any, storedContent: string): string {
     const who = draft.userId ? `u:${draft.userId}` : `ip:${draft.authorIp || ''}`;
     return crypto.createHash('sha256')
-        .update(JSON.stringify([draft.postId, who, storedContent]))
+        .update(JSON.stringify([require('../core/site-context').siteKeyPrefix(), draft.postId, who, storedContent]))
         .digest('hex');
 }
 
@@ -530,8 +548,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // A query value is never plainly a string: `?per_page[]=5` makes it an Array and `?per_page[x]=5`
     // an object. parseInt already ToString()s its argument, so String() here is that same coercion
     // written where the compiler can see it - identical result for every shape, junk included.
-    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 10);
+    const offset = pageOffset(page, limit);
 
     // Only comment moderators can see non-approved comments AND the private commenter PII (email/IP
     // are gated in toJSON(canModerate) below).
@@ -869,7 +887,9 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     let userId = 0;
 
     if (req.user) {
-        author = req.user.displayName;
+        // The name a signed-in commenter is stored (and publicly shown) under is their PUBLIC identity,
+        // never the login — core/public-identity's rule, the same one every byline follows.
+        author = publicDisplayName(req.user.id, req.user.displayName, req.user.userLogin);
         email = req.user.userEmail;
         // SECURITY: a logged-in user's stored profile URL is also rendered as a clickable comment-author
         // link (admin moderation UI + public post page), so hold it to the SAME http(s)-only rule the
@@ -1105,6 +1125,7 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: 
         status
     });
 
+    await recordCommentAudit(req.user.id, commentId, comment.commentApproved, updated.commentApproved);
     res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
 
@@ -1179,6 +1200,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
     await Comment.delete(commentId, force);
 
     if (force) {
+        await recordAudit(req.user.id, 'comment.delete', 'comment', commentId, { from: String(comment.commentApproved) });
         res.json({ deleted: true, previous: comment.toJSON(true) });
     } else {
         const fresh = await Comment.findById(commentId);
@@ -1189,6 +1211,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
                 data: { status: 404 }
             });
         }
+        await recordCommentAudit(req.user.id, commentId, comment.commentApproved, fresh.commentApproved);
         res.json(fresh.toJSON(true)); // moderation route — moderator sees full PII
     }
 }));
@@ -1245,6 +1268,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
  */
 router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
     const commentId = parseInt(String(req.params.id), 10);
+    const before = await Comment.findById(commentId);
     const updated = await Comment.approve(commentId);
 
     if (!updated) {
@@ -1254,6 +1278,7 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
             data: { status: 404 }
         });
     }
+    await recordCommentAudit(req.user.id, commentId, before && before.commentApproved, updated.commentApproved);
 
     res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
@@ -1309,6 +1334,7 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
  */
 router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
     const commentId = parseInt(String(req.params.id), 10);
+    const before = await Comment.findById(commentId);
     const updated = await Comment.spam(commentId);
 
     if (!updated) {
@@ -1318,6 +1344,7 @@ router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(as
             data: { status: 404 }
         });
     }
+    await recordCommentAudit(req.user.id, commentId, before && before.commentApproved, updated.commentApproved);
 
     res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));

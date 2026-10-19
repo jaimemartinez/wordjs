@@ -83,6 +83,28 @@ The DB Manager (`loadDriver` in `config/database.ts`) falls back to `sqlite-lega
 *   A failed **SQLite** driver (default path, or any `sqlite*` name) → silently falls back to pure-JS `sqlite-legacy` (same file format).
 *   A failed **non-SQLite** name passed as an explicit **override** — `loadDriver('postgres')`, the path re-init, tests and the migration tool take — is **not** downgraded to SQLite; the error propagates. The guard keys on that override, and the boot path passes none, so a `postgres`/`mysql` named only in `wordjs-config.json` whose module fails to load (a missing `pg`/`mysql2`, say) *does* fall back and comes up on an empty local SQLite file.
 
+#### Strict driver mode (`dbStrictDriver` / `WORDJS_DB_STRICT`)
+
+The fallback keeps a site up, at the cost of ranked search (`sqlite-legacy` has no FTS5). An operator who would rather not serve at all than serve degraded — a fleet behind a health check, an image built by CI, a host nobody watches the admin panel of — can turn every fallback above into a **boot error**:
+
+```json
+{
+  "dbDriver": "sqlite-native",
+  "dbStrictDriver": true
+}
+```
+
+or set **`WORDJS_DB_STRICT=1`** in the backend's environment. The environment variable wins over the file in both directions (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`; any other value is reported and ignored), so a container can switch it without editing a config file on a volume. Only a JSON `true` in the file turns it on.
+
+With strict mode on:
+
+*   A SQLite driver that fails to load stops the boot (`init()` throws an error with code `WORDJS_DB_STRICT_DRIVER`) whose message names the driver, the load error, what the fallback would have cost, and the fix: `npm rebuild better-sqlite3` in `backend/` for `sqlite-native` (the usual cause is a Node.js upgrade or an install made with `--ignore-scripts`). Nothing is recorded as a downgrade and no admin notice is written.
+*   The same applies to a non-SQLite driver named only in `wordjs-config.json` (the case above that would come up on an empty SQLite file).
+*   Migration `0008_posts_fts5` fails instead of skipping when a SQLite build has no FTS5 — see [the FTS5 section](#sqlite--fts5-0008_posts_fts5).
+*   An explicitly configured `sqlite-legacy` still boots: having no FTS5 is a property of the driver you chose, not a degradation of it.
+
+Strict mode is **off by default**, including when `dbDriver` names `sqlite-native` explicitly. The install wizard and the Docker entrypoint write `"dbDriver"` into every config they create, so an explicit driver name does not tell an operator's deliberate choice apart from a default install, and failing on it would turn the documented recovery from a Node.js upgrade into a site that does not start. To recover a strict site in a hurry, boot once with `WORDJS_DB_STRICT=0`.
+
 ### 1.4 Live Data Migration
 
 WordJS includes a **Zero Data Loss** migration tool for switching drivers without losing users or posts.
@@ -107,11 +129,13 @@ The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` 
 
 Full-site backups (logical DB export + a physical DB snapshot for SQLite + the `uploads/`, `plugins/`, `themes/` content roots) are produced by `backend/src/core/backup.ts` (`createBackup()`) and stored **on-host** under `backend/backups/`. An **optional off-host S3 offload** (`backend/src/core/s3-offload.ts`) runs right after: it is config-gated on an `s3` block in `wordjs-config.json` or the `WORDJS_S3_*` / `AWS_*` env vars, and a partial config (a bucket with no keys) counts as *not configured* rather than a half-attempt. The upload is a single SigV4-signed `PUT` over Node's built-in `https` — the AWS SDK is not a dependency — so an S3-compatible endpoint such as MinIO works by setting `s3.endpoint`. A failed upload never fails the backup: the local copy is kept and the outcome is reported in the result's `s3` field.
 
+> This `s3` block offloads **backups** only. Serving the **media library** from an S3-compatible bucket or CDN is a separate feature with its own configuration (the `mediaStorage` block) — see [media-storage.md](./media-storage.md).
+
 After every backup, retention pruning runs automatically (`pruneBackups()` in `backend/src/core/backup.ts`): only the newest **N** backups are kept and older ones are deleted, so scheduled/auto backups can no longer fill the disk unbounded. **N** comes from the `backup_retention` option (**default 7**); set it to `0` (or a negative value) to keep all backups and disable pruning.
 
 ### 1.6 Configuration
 
-To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`dbDriver`, `dbHost`, `dbUser`, `dbPassword`, `dbName`, `dbPort`, `dbSsl`, `dbPath`) and a nested `db: { … }` object are both accepted; the config layer normalizes them into a single `db` connection object (`backend/src/config/app.ts`).
+To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`dbDriver`, `dbHost`, `dbUser`, `dbPassword`, `dbName`, `dbPort`, `dbSsl`, `dbSslCa`, `dbSslRejectUnauthorized`, `dbPath`) and a nested `db: { … }` object are both accepted; the config layer normalizes them into a single `db` connection object (`backend/src/config/app.ts`).
 
 **Example — external Postgres:**
 ```json
@@ -138,6 +162,85 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
 > text-guard (`assertSqlAllowed`), it just loses the second, database-enforced layer. Grant `CREATEROLE`
 > to the WordJS role if you want that layer; do **not** reach for the superuser to get it.
 
+**TLS to the database (`dbSsl`).** With `"dbSsl": true` the Postgres and MySQL connections use TLS and
+**verify the server certificate** (chain and host name) — the same as any HTTPS client. A server whose
+certificate is signed by a public CA needs nothing else. For a private CA, a managed database's own CA
+or a self-signed server, point `dbSslCa` at the CA certificate:
+
+```json
+{
+  "dbSsl": true,
+  "dbSslCa": "./certs/db-ca.pem"
+}
+```
+
+`dbSslCa` is a path to a PEM file (relative paths resolve against `backend/`) or the PEM text itself.
+If verification fails, the backend logs `The database server's TLS certificate could not be verified`
+at boot with these instructions and does not start. Only when you knowingly accept an encrypted but
+**unauthenticated** connection, set `"dbSslRejectUnauthorized": false`; every connect then logs a
+warning. Both keys also exist nested (`db.sslCa`, `db.sslRejectUnauthorized`).
+
+The same two settings are offered everywhere a server database is configured:
+
+- **Install wizard** — tick *Use SSL* under PostgreSQL/MySQL: paste the CA certificate (PEM) or tick
+  *Skip certificate verification* (shown with a warning). *Test connection* uses them, and the install
+  saves them as `db.sslCa` / `db.sslRejectUnauthorized`.
+- **Admin → Database migration** — the same fields in the target-connection dialog; the migration
+  connects with them and saves them with the new connection.
+- **Docker / Helm** (`WORDJS_PRESEED_CONFIG=1`) — `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` (a path inside the
+  container, e.g. a mounted secret) and `WORDJS_DB_SSL_REJECT_UNAUTHORIZED` (see
+  [docker/README.md](../docker/README.md)).
+
+The wizard and the migration screen take the CA as **PEM text** only; a file path is set in
+`wordjs-config.json` (or via `WORDJS_DB_SSL_CA`) on the server itself.
+
+#### Upgrade note: database TLS is verified by default
+
+> ⚠️ **Read this before upgrading a site with `"dbSsl": true`.** Releases up to and including 2.7.0 did
+> not verify the database server's certificate. From this release on they do, and a backend whose
+> database presents a certificate signed by a CA that is **not in Node.js's built-in trust store** stops
+> at boot. Most managed databases are in that case: Amazon RDS / Aurora, DigitalOcean Managed Databases,
+> and Azure Database for PostgreSQL / MySQL (depending on server generation and region) sign their
+> server certificates with their own or a regional CA. The boot log then reads:
+>
+> `The database server's TLS certificate could not be verified. … See documentation/database.md#upgrade-note-database-tls-is-verified-by-default`
+>
+> Before you upgrade, download your provider's CA bundle and point `dbSslCa` at it.
+
+| Provider | CA bundle to download | Setting |
+|---|---|---|
+| **Amazon RDS / Aurora** (PostgreSQL, MySQL, MariaDB) | `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` (every region; region bundles are also published by AWS) | `"dbSslCa": "./certs/rds-global-bundle.pem"` |
+| **DigitalOcean Managed Databases** | Control panel → your cluster → **Connection details** → **Download CA certificate** (`ca-certificate.crt`) | `"dbSslCa": "./certs/do-ca-certificate.crt"` |
+| **Azure Database for PostgreSQL / MySQL** | The root CA(s) Azure's documentation lists for your server (flexible servers: *DigiCert Global Root G2* and *Microsoft RSA Root Certificate Authority 2017*; concatenate both into one PEM file during Azure's CA rotation) | `"dbSslCa": "./certs/azure-db-ca.pem"` |
+| **Any other private / self-signed CA** | The CA certificate that signed the server certificate (PEM) | `"dbSslCa": "./certs/db-ca.pem"` |
+
+Step by step (on every backend node):
+
+```bash
+mkdir -p backend/certs
+curl -fsSL -o backend/certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+```
+
+```json
+{
+  "dbSsl": true,
+  "dbSslCa": "./certs/rds-global-bundle.pem"
+}
+```
+
+- Relative paths resolve against `backend/`; the PEM text itself is accepted too. A file with several
+  certificates (a bundle) is fine.
+- **Docker / Helm:** mount the bundle (a Secret or ConfigMap) and set
+  `WORDJS_DB_SSL_CA=/run/secrets/db-ca.pem` (with `WORDJS_DB_SSL=true`).
+- **Connect by the host name the certificate names** (the endpoint your provider gives you), not by an IP
+  address: the host name is verified as well. A connection through a provider's local proxy (for example
+  the Cloud SQL Auth Proxy) does not use `dbSsl` at all.
+- `NODE_EXTRA_CA_CERTS=/path/to/bundle.pem` in the backend's environment also works (it extends Node's
+  trust store for the whole process) as long as `dbSslCa` is not set.
+- **Last resort — encrypted but unauthenticated:** `"dbSslRejectUnauthorized": false` (or
+  `WORDJS_DB_SSL_REJECT_UNAUTHORIZED=false`) restores the old behaviour. Every connect logs a warning;
+  use it only for a provider that publishes no CA, and only while you obtain one.
+
 **Example — SQLite (default):**
 ```json
 {
@@ -145,6 +248,7 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
   "dbPath": "./data/wordjs-native.db"
 }
 ```
+> Add `"dbStrictDriver": true` (or set `WORDJS_DB_STRICT=1`) to refuse to boot rather than fall back to `sqlite-legacy` when the native driver cannot load — see [Strict driver mode](#strict-driver-mode-dbstrictdriver--wordjs_db_strict).
 > Each SQLite driver defaults to its **own** file (`sqlite-native` → `data/wordjs-native.db`, `sqlite-legacy` → `data/wordjs.db`). If you set `dbPath` explicitly, point it at the file for the driver you selected. See [§1.7](#17-sqlite-drivers-use-different-files).
 
 > **Secrets:** on boot the config layer auto-generates and persists a secure `jwtSecret` and `dbPassword` if `wordjs-config.json` already exists and the value is **missing** or is the known-insecure literal (`wordjs-default-secret-change-me` / `password`). A `jwtSecret` that is not a string is also treated as missing. On a config that has **not been installed yet** (no `installedAt` or `dbDriver`), the boot also replaces a `jwtSecret` shorter than 64 characters or one of the placeholders printed in this repository, because the install wizard keeps the secret the backend booted with. The new value is written back into the file. An installed site's secret is never rotated: if it is one of the published placeholders, the backend **refuses to start** with an error telling you to set a real one (`openssl rand -hex 64`, the same value on every node), because anyone can sign an administrator session with it. Operators should still review these.
@@ -160,9 +264,9 @@ The two SQLite drivers do **not** share a data file by default — each maps to 
 | `sqlite-native`   | `better-sqlite3`       | `backend/data/wordjs-native.db` |
 | `sqlite-legacy`   | `sql.js` (WASM)        | `backend/data/wordjs.db`     |
 
-PostgreSQL (via `pg`) is a **separate engine** entirely, not a file under `data/`.
+PostgreSQL (via `pg`) and MySQL / MariaDB (via `mysql2`) are **separate engines** entirely, not files under `data/`.
 
-> ⚠️ **Switching `dbDriver` points the app at a different file/engine.** Data written under one driver is **not** visible under another until it is migrated. Flipping `dbDriver` in `backend/wordjs-config.json` alone makes your existing data look **"missing"** — nothing is lost, the app is just reading a different file (or engine). The same applies when switching between SQLite and PostgreSQL.
+> ⚠️ **Switching `dbDriver` points the app at a different file/engine.** Data written under one driver is **not** visible under another until it is migrated. Flipping `dbDriver` in `backend/wordjs-config.json` alone makes your existing data look **"missing"** — nothing is lost, the app is just reading a different file (or engine). The same applies when switching between SQLite and PostgreSQL or MySQL.
 
 To actually **move your data between drivers/engines** (e.g. `sqlite-legacy` → `sqlite-native`, or SQLite → Postgres), use the admin **DB Migration** route described in [§1.4](#14-live-data-migration) — it streams the data into the target driver and, for a file-based SQLite target, moves a fully-written temporary file onto the new driver's filename (see the note in [§1.4](#14-live-data-migration)). Do **not** edit `dbDriver` by hand for this.
 
@@ -315,7 +419,7 @@ High-volume event logging table for the internal analytics engine. Its schema li
 | `metadata`   | TEXT (JSON) | Extra payload                                        |
 | `created_at` | DATETIME    | Timestamp                                            |
 
-> Other core tables created by `initializeSchema` but not detailed above include `comment_meta`, `links`, and `notifications`.
+> Other core tables created by `initializeSchema` but not detailed above include `comment_meta`, `links`, and `notifications`. Created outside it: `schema_migrations` (one row per applied migration id, `core/schema-migrations.ts`), `wordjs_locks` (the distributed-lock leases, created on first use by `core/dist-lock.ts`), the migration-created platform tables listed under §2.9 (`api_tokens`, `webhooks`, `webhook_deliveries`, `form_submissions`, `audit_log`, `collab_*`, `content_outbox`, `agent_connections`), and on SQLite the `posts_fts` full-text index (§2.10).
 
 ---
 
@@ -360,6 +464,10 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 
 > **Migrations `0009`–`0015`.** `0009_create_audit_log` creates the append-only `audit_log` (+ `idx_audit_log_actor`) that `core/audit.recordAudit` writes and the admin `GET /audit` reads. `0010_posts_fts_pg_mysql` gives Postgres and MySQL their own inverted index — see [§2.10](#210-full-text-search). `0011_posts_multilingual` adds the two NULLABLE columns `posts.post_language` / `posts.translation_group` (+ `idx_posts_translation_group`); a monolingual site keeps NULL/NULL and is unchanged. `0012_create_collab` creates `collab_docs` + `collab_ops` for real-time editing **session** state (the canonical content stays in `_puck_data`), and `0013_collab_epoch_and_liveness` adds `collab_docs.truncated` / `base_hash` / `updated_ms`, the `collab_members` liveness table, and an epoch-bearing replacement for the dot UNIQUE index. `0014_create_content_outbox` creates the durable `content_outbox` the transactional content path writes its events into, plus `webhook_deliveries.source_event_id` and a UNIQUE index on `(webhook_id, source_event_id, event)` so a retried event is not fanned out twice. `0015_backfill_user_nicename` fills the empty `users.user_nicename` of existing accounts with a public author slug derived from the display name (the same rule as `User.create`); it never rewrites an existing value and never throws.
 
+> **Migration `0016`.** `0016_create_agent_connections` creates `agent_connections`, the store of [AI agent connections](./ai-agents.md) (`models/AgentConnection.ts`): the bound `user_id`, a `name`, the sha256 `token_hash` and a display `token_prefix` (the raw `wja_` token is never stored), the `requested_caps` / `granted_caps` comma lists, `status` (`pending` → `active` → `revoked`, which is terminal), who created and granted it, and `granted_at` / `last_used_at` / `expires_at` in epoch seconds. It adds the UNIQUE `idx_agent_connections_hash` on `token_hash` and `idx_agent_connections_user` on `user_id`. The table is on the core table lists, so a site export never dumps its hashes. It runs under the normal fail-closed policy.
+>
+> **Migration `0018`.** `0018_account_mail_provider_allowance` keeps password recovery working across the upgrade that moved account email (reset and verification links) to the built-in transport (`core/account-mail`): on a site that has no `account_mail_provider_allowed` option yet, the plugins holding the `email:provider` grant at that moment are recorded in it, so they keep carrying those links until an administrator changes it in Settings → Account email. A new site has no grants then and records nothing. Never fatal.
+
 ### Batched Meta Loading (N+1 avoidance)
 
 Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the whole result set in a single query rather than issuing one query per post, eliminating the previous N+1 pattern on listing pages.
@@ -375,7 +483,7 @@ Post search used to be `post_title LIKE '%q%' OR post_content LIKE '%q%'` — a 
 *   **`posts_fts`** is a **virtual table**, created `USING fts5(post_title, post_content, content='posts', content_rowid='id', tokenize='unicode61')`. Because it is an **external-content** table it stores only the inverted terms and reads the columns back from `posts` — post bodies are **not** duplicated on disk.
 *   Three triggers keep it in sync: `posts_fts_ai` (AFTER INSERT), `posts_fts_ad` (AFTER DELETE) and `posts_fts_au` (AFTER UPDATE); the delete/update triggers write the `'delete'` command row carrying the OLD values, which is how an external-content index retracts a document. Existing rows are backfilled once with `INSERT INTO posts_fts(posts_fts) VALUES('rebuild')`.
 *   **Engine-scoped.** The migration returns early on Postgres (`ctx.isPostgres`) and on MySQL (`ctx.driverName === 'mysql'`), which get their own index from `0010`. This is what the `driverName` field on the migration context exists for.
-*   **Degrades, never fails.** The `CREATE VIRTUAL TABLE` is wrapped in a `try/catch`, so a SQLite build with FTS5 compiled out logs a warning and leaves the database untouched. At query time `Post` probes `sqlite_master` for `posts_fts`: present → `id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)` ordered by `bm25()` ascending; absent → the original `LIKE` scan, byte-identical to before. User text is never passed to FTS5 raw — each token is stripped of FTS5 syntax and re-quoted as a literal phrase (the last one gets a `*` for type-ahead), and if nothing usable survives the caller falls back to `LIKE`.
+*   **Degrades, never fails — unless strict driver mode is on.** The `CREATE VIRTUAL TABLE` is wrapped in a `try/catch`, so a SQLite build with FTS5 compiled out logs a warning and leaves the database untouched. With [`dbStrictDriver` / `WORDJS_DB_STRICT`](#strict-driver-mode-dbstrictdriver--wordjs_db_strict) on, the migration fails instead (on any driver but an explicitly configured `sqlite-legacy`), and the failed migration stops the boot. At query time `Post` probes `sqlite_master` for `posts_fts`: present → `id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)` ordered by `bm25()` ascending; absent → the original `LIKE` scan, byte-identical to before. User text is never passed to FTS5 raw — each token is stripped of FTS5 syntax and re-quoted as a literal phrase (the last one gets a `*` for type-ahead), and if nothing usable survives the caller falls back to `LIKE`.
 
 ### Postgres and MySQL (`0010_posts_fts_pg_mysql`)
 
@@ -421,3 +529,22 @@ Dialect differences are confined to a few spots:
 *   **`RETURNING`:** auto-injected by the Postgres driver on `INSERT`; the MySQL driver reports `insertId` instead; stripped by the legacy WASM driver.
 *   **`TEXT` / defaults / upserts (MySQL):** the MySQL driver maps `TEXT`→`LONGTEXT` (→`VARCHAR(255)` only for a column the DDL makes part of a key) with parenthesised expression defaults, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, and runs `sql_mode=ANSI_QUOTES,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION` — so `"col"` is an identifier and an overlong value errors instead of truncating.
 *   **Clearing tables:** `TRUNCATE … RESTART IDENTITY CASCADE` (Postgres) vs `DELETE FROM …` plus a `sqlite_sequence` reset (SQLite), in `clearDatabase`.
+
+## 5. Multisite Storage
+
+A [multisite](./multisite.md) network keeps every site's data apart by giving each site **its own database file**, plus one small database for the network itself ([design](./multisite-design.md)).
+
+*   **Driver requirement.** Multisite needs the `sqlite-native` driver: `npm run network -- enable` refuses any other, and `openSiteDatabase()` in `config/database.ts` throws before creating a file when the server runs a different driver. Postgres and MySQL site databases are not supported yet, so a network and all its sites live on one backend host.
+*   **The network store — `<data dir>/network.db`.** A separate SQLite file next to the main database (`config.multisite.networkDbPath` overrides it), written only by `core/network.ts` and never reachable through `dbAsync`, so no site's export, backup or wipe carries it. Its tables:
+
+    | Table | Holds |
+    | :---- | :---- |
+    | `network_meta` | Key/value records about the network |
+    | `network_sites` | One row per site: `id`, unique `slug`, `main_url`, `status` (`active` by default), `db_path`, timestamps |
+    | `network_site_hosts` | Every address a site answers (`host` primary key → `site_id`, `kind`) |
+    | `network_admins` | The main-site user ids listed as network administrators |
+    | `network_plugin_ceilings` | Per plugin, the grant tokens any other site may grant it (no row = not offered) |
+    | `network_audit_log` | Network-level actions: who, what, which site, when |
+
+*   **Site 1** is the install that existed before multisite was enabled: its database stays at the configured `dbPath`, unchanged.
+*   **Every other site** owns one directory, `<data dir>/sites/<id>/`, holding its database (`wordjs-native.db`) and its public and private uploads. Each site database has the full core schema and runs the same migrations; models, migrations and plugin queries keep their literal table names and simply run against the current site's database. A site whose database is not open is an error, never a fall-through to site 1's.

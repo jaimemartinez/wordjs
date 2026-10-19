@@ -6,6 +6,7 @@
 const config = require('./app');
 const path = require('path');
 const { AsyncLocalStorage } = require('async_hooks');
+const log = require('../core/module-logger').moduleLogger('config/database');
 
 // 1. Load the Configured Driver
 // 1. Driver State
@@ -44,6 +45,41 @@ function getDriverDegradation(): DriverDegradation | null {
 // one row on /admin/notices, and the first boot that loads the native driver retires it.
 const DEGRADED_DRIVER_NOTICE_ID = 'db.sqlite-legacy-fallback';
 
+// STRICT DRIVER MODE (config "dbStrictDriver" / env WORDJS_DB_STRICT, resolved in config/app.ts).
+//
+// The downgrade above keeps a site up, which is the right default for a self-hosted CMS whose usual
+// way of losing better-sqlite3 is a Node.js upgrade. It is the wrong one for an operator who would
+// rather not serve at all than serve with ranked search quietly gone — a fleet behind a health check, a
+// CI image, a host provisioned by automation that nobody watches the admin panel of. Strict mode turns
+// every fallback into a boot error that says what failed, what the fallback would have cost, and how to
+// fix it. Read at call time (not captured at module load) so a test can flip it on the config object.
+function isStrictDriverMode(): boolean {
+  return config.dbStrictDriver === true;
+}
+
+/** The boot error strict mode raises where the manager would otherwise fall back to 'sqlite-legacy'. */
+function strictDriverError(requested: string, cause: any): Error {
+  const fix = requested === 'sqlite-native'
+    ? 'restore the native driver: run `npm rebuild better-sqlite3` in backend/ (it is needed after a Node.js ' +
+      'upgrade or an install made with --ignore-scripts), then restart'
+    : `make the '${requested}' driver loadable (run \`npm ci\` in backend/ to restore its dependencies), then restart`;
+  const err: any = new Error(
+    `Strict database driver mode is on (WORDJS_DB_STRICT / "dbStrictDriver"), and the '${requested}' driver ` +
+    `failed to load: ${(cause && cause.message) || cause}. Without strict mode WordJS would fall back to the ` +
+    `pure-JS 'sqlite-legacy' driver, which has no FTS5: ranked full-text search would be disabled and site ` +
+    `search would fall back to LIKE matching. To fix it, ${fix}. To accept the fallback instead, unset ` +
+    `WORDJS_DB_STRICT and remove "dbStrictDriver" from backend/wordjs-config.json.`
+  );
+  err.code = 'WORDJS_DB_STRICT_DRIVER';
+  err.cause = cause;
+  return err;
+}
+
+// The failure of the most recent loadDriver(), kept because the boot-time load runs at module scope
+// where nobody can await it: init() rethrows it, so a strict-mode refusal (or any other driver that
+// cannot load) stops the boot at the point that opens the database, with the message above.
+let driverLoadError: Error | null = null;
+
 type TransactionQuery = {
   get: (...args: any[]) => Promise<any>;
   all: (...args: any[]) => Promise<any>;
@@ -53,6 +89,9 @@ type TransactionQuery = {
 
 type TransactionScope = {
   query: TransactionQuery;
+  // The site whose database this transaction is pinned to (null: site 1). A pinned connection is never
+  // handed to work running for another site.
+  siteId: number | null;
   afterCommit: Array<() => any | Promise<any>>;
   active: boolean;
   rollbackOnly?: any;
@@ -66,6 +105,12 @@ const transactionScope: {
   getStore: () => TransactionScope | undefined;
   run: <T>(store: TransactionScope, callback: () => T) => T;
 } = new AsyncLocalStorage();
+
+function assertSameSite(scope: TransactionScope): void {
+  if (scope.siteId !== routedSiteId()) {
+    throw new Error('A database transaction of one site was used by work running for another site.');
+  }
+}
 
 function hasActiveTransaction(): boolean {
   return transactionScope.getStore()?.active === true;
@@ -82,6 +127,7 @@ function afterCommit(callback: () => any | Promise<any>): boolean {
 async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Promise<T> {
   const active = transactionScope.getStore();
   if (active?.active) {
+    assertSameSite(active);
     try { return await fn(active.query); }
     catch (error) {
       // There are no cross-driver savepoints in the public contract. If a joined nested unit fails,
@@ -99,7 +145,7 @@ async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Prom
 
   let committedScope: TransactionScope | null = null;
   const result = await current.transaction(async (query: TransactionQuery) => {
-    const scope: TransactionScope = { query, afterCommit: [], active: true };
+    const scope: TransactionScope = { query, afterCommit: [], active: true, siteId: routedSiteId() };
     committedScope = scope;
     return await transactionScope.run(scope, async () => {
       try {
@@ -123,7 +169,7 @@ async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Prom
   for (const callback of committedCallbacks) {
     try { await callback(); }
     catch (error: any) {
-      console.warn(`[database] after-commit effect failed (non-fatal): ${error?.message || error}`);
+      log.warn({ err: error }, '[database] after-commit effect failed (non-fatal)');
     }
   }
   return result;
@@ -163,9 +209,10 @@ async function loadDriver(overrideName: string | null = null) {
   // (tests, migrations, or simply the next boot after `npm rebuild better-sqlite3`) clears the state
   // instead of inheriting a stale downgrade from the previous attempt.
   driverDegradation = null;
+  driverLoadError = null;
 
   try {
-    console.log(`🔌 DB Manager: Loading driver '${name}'...`);
+    log.info(`🔌 DB Manager: Loading driver '${name}'...`);
     driver = require(`../drivers/${name}`);
     driverAsync = null; // Reset
 
@@ -173,10 +220,10 @@ async function loadDriver(overrideName: string | null = null) {
     try {
       if (name === 'sqlite-native') {
         driverAsync = require('../drivers/sqlite-native-async');
-        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+        log.info(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
       } else if (name === 'postgres') {
         driverAsync = require('../drivers/postgres');
-        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+        log.info(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
 
         // Mock sync driver for Postgres
         driver = {
@@ -186,7 +233,7 @@ async function loadDriver(overrideName: string | null = null) {
         };
       } else if (name === 'mysql' || name === 'mariadb') {
         driverAsync = require('../drivers/mysql');
-        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+        log.info(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
 
         // Mock sync driver for MySQL (async-only, like Postgres).
         driver = {
@@ -202,19 +249,29 @@ async function loadDriver(overrideName: string | null = null) {
       // host without a working binary got a warning here and then died later in init(). Rethrow for
       // exactly that case so the recoverable path below runs; other drivers keep the warn-only behaviour.
       if (name === 'sqlite-native') throw e;
-      console.warn(`⚠️  Async driver not found for '${name}': ${e.message}`);
+      log.warn({ err: e }, `⚠️  Async driver not found for '${name}'`);
     }
 
   } catch (e) {
-    console.error(`❌ Failed to load driver '${name}':`, e.message);
+    log.error({ err: e }, `❌ Failed to load driver '${name}'`);
     // SQLite is always recoverable: 'sqlite-native' (better-sqlite3) needs a native binary that may
     // be missing, while 'sqlite-legacy' (sql.js / pure-JS WASM) reads the SAME file format. Fall back
     // to it whenever ANY sqlite driver fails (even an explicit one) or on the default path. A failed
     // NON-sqlite override (e.g. an explicit 'postgres') is NOT silently downgraded to SQLite.
+    //
+    // Strict mode (dbStrictDriver / WORDJS_DB_STRICT) refuses every such fallback with an explanatory
+    // error instead — the operator opted out of running degraded.
     const recoverable = (!overrideName || /^sqlite/.test(name)) && name !== 'sqlite-legacy';
+    if (recoverable && isStrictDriverMode()) {
+      driver = null;
+      driverAsync = null;
+      driverLoadError = strictDriverError(name, e);
+      log.error(`❌ DB Manager: ${driverLoadError.message}`);
+      throw driverLoadError;
+    }
     if (recoverable) {
-      console.warn(`⚠️  DB Manager: '${name}' unavailable — falling back to pure-JS 'sqlite-legacy'.`);
-      console.warn(`⚠️  DB Manager: 'sqlite-legacy' has no FTS5 — ranked full-text search is DISABLED and site search falls back to LIKE matching.`);
+      log.warn(`⚠️  DB Manager: '${name}' unavailable — falling back to pure-JS 'sqlite-legacy'.`);
+      log.warn('⚠️  DB Manager: \'sqlite-legacy\' has no FTS5 — ranked full-text search is DISABLED and site search falls back to LIKE matching.');
       driver = require('../drivers/sqlite-legacy');
       driverName = 'sqlite-legacy';
       driverAsync = null;
@@ -227,6 +284,7 @@ async function loadDriver(overrideName: string | null = null) {
         at: new Date().toISOString(),
       };
     } else {
+      driverLoadError = e;
       throw e;
     }
   }
@@ -234,7 +292,8 @@ async function loadDriver(overrideName: string | null = null) {
 
 // Initial Load (Default). loadDriver is async to close any prior async driver before
 // swapping; the very first load has none, so this resolves synchronously in practice.
-loadDriver();
+// A failure is recorded in driverLoadError and raised by init(), not left as an unhandled rejection.
+loadDriver().catch(() => { /* surfaced by init() */ });
 
 // 2. Abstraction Proxies
 const init = async (options: any = {}) => {
@@ -242,6 +301,7 @@ const init = async (options: any = {}) => {
   if (options.driver) {
     await loadDriver(options.driver);
   }
+  if (driverLoadError) throw driverLoadError;
 
   // The 'postgres' driver connects to an EXTERNAL Postgres via the pg client (host/port/user/password
   // from wordjs-config.json). WordJS does NOT bundle or spawn a database server.
@@ -255,11 +315,95 @@ const init = async (options: any = {}) => {
   }
 };
 
+// MULTISITE: one database per site (documentation/multisite-design.md). Site 1 is the database above,
+// unchanged. Every other site has its own SQLite file, opened once by openSiteDatabase (the HTTP layer
+// and forEachSite await it before entering the site) and then returned by getDb/getDbAsync whenever the
+// current work belongs to that site. Nothing else changes: every model, migration and plugin query keeps
+// its literal table names, and simply runs against the current site's database. A site whose database
+// is not open is an error, never a fall-through to site 1's.
+const siteContext = require('../core/site-context');
+const siteDrivers = new Map<number, any>();
+const siteDriversOpening = new Map<number, Promise<any>>();
+
+/** The site whose database the current work must use, or null for site 1 (and every single-site install). */
+function routedSiteId(): number | null {
+  if (!siteContext.multisiteEnabled()) return null;
+  const id = siteContext.currentSiteId();
+  return id === siteContext.PRIMARY_SITE_ID ? null : id;
+}
+
+function openSiteDriver(siteId: number): any {
+  const d = siteDrivers.get(siteId);
+  if (!d) throw new siteContext.SiteContextError('site_db_not_open', `The database of site ${siteId} is not open.`);
+  return d;
+}
+
+/**
+ * Open (once) the database of site `siteId` at `dbPath`, bring its schema to the current version, and
+ * keep it for the life of the process. Concurrent callers share one opening. Multisite requires the
+ * native SQLite driver in this phase; any other driver is refused before a file is created.
+ */
+async function openSiteDatabase(siteId: number, dbPath: string): Promise<void> {
+  if (!siteContext.isSiteId(siteId) || siteId === siteContext.PRIMARY_SITE_ID) throw new Error(`Not a secondary site id: ${siteId}`);
+  if (siteDrivers.has(siteId)) return;
+  const pending = siteDriversOpening.get(siteId);
+  if (pending) { await pending; return; }
+  const opening = (async () => {
+    if (driverName !== 'sqlite-native' || !driverAsync) {
+      throw new Error(`Multisite needs the 'sqlite-native' database driver (this server runs '${driverName}').`);
+    }
+    const fs = require('fs');
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const Driver = driverAsync.constructor;
+    const d = new Driver();
+    d.dbPath = path.resolve(dbPath);
+    await d.connect();
+    try {
+      await siteContext.runWithSite(siteId, async () => {
+        await initializeSchema(d, true);
+        await runSchemaMigrations(d, true, driverName);
+        siteDrivers.set(siteId, d);
+        await require('../models/Analytics').init();
+      });
+    } catch (e) {
+      siteDrivers.delete(siteId);
+      try { await d.close(); } catch { /* best-effort */ }
+      throw e;
+    }
+  })();
+  siteDriversOpening.set(siteId, opening);
+  try { await opening; } finally { siteDriversOpening.delete(siteId); }
+}
+
+function isSiteDatabaseOpen(siteId: number): boolean {
+  return siteId === siteContext.PRIMARY_SITE_ID || siteDrivers.has(siteId);
+}
+
+/** Close one secondary site's database (a failed provisioning). */
+async function closeSiteDatabase(siteId: number): Promise<void> {
+  const d = siteDrivers.get(siteId);
+  siteDrivers.delete(siteId);
+  if (d) await d.close();
+}
+
+/** Close every secondary site's database (shutdown, tests). Site 1's is closeDatabase's. */
+async function closeSiteDatabases(): Promise<void> {
+  const all = Array.from(siteDrivers.values());
+  siteDrivers.clear();
+  for (const d of all) {
+    try { await d.close(); } catch { /* best-effort */ }
+  }
+}
+
 const getDb = () => {
+  const sid = routedSiteId();
+  if (sid !== null) return new (require('../drivers/sqlite-native').NativeWrapper)(openSiteDriver(sid).db);
   return driver.get();
 };
 
 const getDbAsync = () => {
+  const sid = routedSiteId();
+  if (sid !== null) return openSiteDriver(sid);
   if (driverAsync) return driverAsync;
   // Fallback for legacy sync drivers (sqlite-legacy)
   // Since we rely on await in the codebase, returning the sync DB object
@@ -285,7 +429,7 @@ const closeDatabase = async () => {
 
 // 3. Schema Management (Core Tables)
 async function initializeSchema(db: any, isAsync = false) {
-  console.log('🏗️  Verifying Database Schema...');
+  log.info('🏗️  Verifying Database Schema...');
 
   // Helper to run exec
   const exec = async (sql: string) => {
@@ -563,11 +707,11 @@ async function initializeSchema(db: any, isAsync = false) {
     } catch (e: any) {
       // Should not happen on a fresh schema, but never let a unique-index hiccup abort boot — the
       // schema-migration path will retry/dedupe on existing data. Log loudly so it's visible.
-      console.warn(`⚠️  Could not create unique index (continuing): ${e && e.message}`);
+      log.warn({ err: e }, '⚠️  Could not create unique index (continuing)');
     }
   }
 
-  console.log('✅ Database Schema verified.');
+  log.info('✅ Database Schema verified.');
 }
 
 const { runSchemaMigrations } = require('../core/schema-migrations');
@@ -587,7 +731,7 @@ async function initializeDatabase() {
   try {
     await require('../models/Analytics').init();
   } catch (e) {
-    console.warn('[DB] Analytics table init skipped:', e.message);
+    log.warn({ err: e }, '[DB] Analytics table init skipped');
   }
   await checkDbDivergence();
   // The options table exists from here on, so this is the first moment a persistent notice can be
@@ -628,7 +772,7 @@ async function reportDriverDegradation(degradation: DriverDegradation | null = d
     }
     await flushPendingAdminNotices();
   } catch (e: any) {
-    console.warn(`[DB] the driver-degradation notice could not be recorded: ${e && e.message}`);
+    log.warn({ err: e }, '[DB] the driver-degradation notice could not be recorded');
   }
 }
 
@@ -663,13 +807,11 @@ async function checkDbDivergence() {
         other.close();
       } catch { /* better-sqlite3 unavailable — best-effort skip */ }
       if (otherUsers > 0) {
-        console.warn('');
-        console.warn('⚠️  ⚠️  DB DIVERGENCE DETECTED ⚠️  ⚠️');
-        console.warn(`   Active driver '${driverName}' is using an EMPTY database (${activePath}),`);
-        console.warn(`   but ${f} contains ${otherUsers} user(s) of real data.`);
-        console.warn(`   You likely switched dbDriver without migrating. To move the data:  npm run migrate`);
-        console.warn(`   (or restore the previous dbDriver/dbPath in backend/wordjs-config.json).`);
-        console.warn('');
+        log.warn('⚠️  ⚠️  DB DIVERGENCE DETECTED ⚠️  ⚠️');
+        log.warn(`   Active driver '${driverName}' is using an EMPTY database (${activePath}),`);
+        log.warn({ otherUsers }, `   but ${f} contains ${otherUsers} user(s) of real data.`);
+        log.warn('   You likely switched dbDriver without migrating. To move the data:  npm run migrate');
+        log.warn('   (or restore the previous dbDriver/dbPath in backend/wordjs-config.json).');
         return;
       }
     }
@@ -718,6 +860,7 @@ const dbAsyncProxy = new Proxy({}, {
 
     const scoped = transactionScope.getStore();
     if (scoped?.active && ['get', 'all', 'run', 'exec'].includes(prop as string)) {
+      assertSameSite(scoped);
       const method = scoped.query[prop as keyof TransactionQuery];
       return async (...args: any[]) => {
         if (['run', 'exec'].includes(prop as string)) verifyPermission('database', 'write');
@@ -853,7 +996,7 @@ function getDbType() {
 
 async function clearDatabase(db: any = null) {
   const targetDb = db || driverAsync || getDb();
-  console.log('🧹 DB Manager: Clearing database content...');
+  log.info('🧹 DB Manager: Clearing database content...');
 
   // Tables to clear (Order matters for foreign keys if enforced, though SQLite usually permissive)
   const tables = [
@@ -897,10 +1040,10 @@ async function clearDatabase(db: any = null) {
       if (table === 'content_outbox' || table === 'webhook_deliveries') {
         throw new Error(`Refusing to clear content while stale external work remains in ${table}: ${message}`, { cause: e });
       }
-      console.warn(`⚠️ Failed to clear table ${table}: ${message}`);
+      log.warn({ table }, `⚠️ Failed to clear table ${table}: ${message}`);
     }
   }
-  console.log('✅ Database cleared.');
+  log.info('✅ Database cleared.');
 }
 
 module.exports = {
@@ -912,12 +1055,19 @@ module.exports = {
   saveDatabase,
   closeDatabase,
   clearDatabase, // Exposed
+  // Multisite: the per-site databases (see openSiteDatabase above).
+  openSiteDatabase,
+  isSiteDatabaseOpen,
+  closeSiteDatabase,
+  closeSiteDatabases,
   createPluginTable,
   getDbType,
   // The silent-downgrade state and its publisher (see DriverDegradation above). routes/health.ts
   // reads the getter so /health/details reports the ACTIVE driver, not the configured one.
   getDriverDegradation,
   reportDriverDegradation,
+  isStrictDriverMode,
+  strictDriverError,
   nativeSqliteLoadError,
   hasActiveTransaction,
   afterCommit,

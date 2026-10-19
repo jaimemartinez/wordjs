@@ -71,16 +71,38 @@ test('network grant: off by default, on after granting', () => {
 // bypass. It only gains a capability once an admin grants it (and the manifest declares it).
 // hasPermission reads the plugin's manifest from backend/plugins/<slug>/, so this fixture must be a
 // plugin that ships there. Real plugins now live under marketplace/plugins/ and are not present until
-// installed; test-schema is a bundled fixture that declares database:admin in its manifest.
+// installed; test-schema is a bundled fixture that declares database:write in its manifest.
 test('no trust tier: even a disk-present plugin needs grants (no bypass)', async () => {
     perms._setGrantsInMemory('test-schema', []); // no grants
     await runWithContext('test-schema', async () => {
-        assert.equal(hasPermission('database', 'admin'), false);
+        assert.equal(hasPermission('database', 'write'), false);
         assert.equal(hasPermission('email', 'admin'), false);
     });
-    perms._setGrantsInMemory('test-schema', ['database:admin']);
+    perms._setGrantsInMemory('test-schema', ['database:write']);
     await runWithContext('test-schema', async () => {
-        assert.equal(hasPermission('database', 'admin'), true);  // granted now
+        assert.equal(hasPermission('database', 'write'), true);  // granted now
         assert.equal(hasPermission('email', 'admin'), false);    // still not granted
+    });
+});
+
+// THEME LOGIC (functions.js runs as the principal `theme:<slug>`). Its default declaration must use the
+// real permission vocabulary (it once named a `content` scope no gate knows), and a declaration stays a
+// request: the grant store is keyed by plugin slug, which `theme:<slug>` never is, so nothing is granted.
+test('theme logic: the default declaration uses known scopes, and a theme principal holds no grant', async () => {
+    const { DEFAULT_THEME_PERMISSIONS } = require('../core/plugin-context');
+    const { KNOWN_PERMISSIONS } = require('../core/plugins');
+    assert.ok(DEFAULT_THEME_PERMISSIONS.length > 0);
+    for (const p of DEFAULT_THEME_PERMISSIONS) {
+        assert.ok(Object.prototype.hasOwnProperty.call(KNOWN_PERMISSIONS, p.scope), `unknown scope ${p.scope}`);
+        assert.ok(KNOWN_PERMISSIONS[p.scope].includes(p.access), `unknown access ${p.scope}:${p.access}`);
+        assert.notStrictEqual(p.access, 'write', 'the default theme declaration is read-only');
+    }
+    const principal = 'theme:no-such-theme-perm-test';
+    assert.strictEqual(perms.isSafeSlugKey(principal), false);
+    await assert.rejects(() => perms.setGrants(principal, ['settings:read']));
+    await runWithContext(principal, async () => {
+        assert.strictEqual(hasPermission('settings', 'read'), false); // declared by default, never granted
+        assert.strictEqual(hasPermission('settings', 'write'), false);
+        assert.strictEqual(hasPermission('content', 'read'), false);
     });
 });

@@ -45,7 +45,11 @@ jobs:
   verify:
     name: Verify before publishing (audit + typecheck + tests)
     if: inputs.publish_tag == ''
-    runs-on: ubuntu-latest
+    # PINNED, not ubuntu-latest: GitHub moves ubuntu-latest to Ubuntu 26.04 on 2026-10-19, and a release
+    # must not be the first job to meet a new image (Node from setup-node is unaffected, but the smoke
+    # gate drives ss, setsid, unzip and native builds from the image). ci.yml stays on ubuntu-latest, so
+    # every pull request tries the new image first; move this pin once ci.yml has been green on it.
+    runs-on: ubuntu-24.04
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
     #
@@ -185,7 +189,7 @@ jobs:
     name: Build & publish compiled bundle
     needs: verify # nothing is built, and nothing is published, unless the gate above is green
     if: inputs.publish_tag == ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: see the verify job
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
     timeout-minutes: 20
@@ -236,6 +240,11 @@ jobs:
           [ -n "$pkg" ] || { echo "::error::no package.json with a start:mono script found in the bundle"; exit 1; }
           app="$(dirname "$pkg")"
           echo "app root: $app"
+          # A bundle never carries a site backup or a database file. Every site `create-wordjs upgrade`
+          # touches would receive it, and a backup in backend/backups/ lists in Admin → Settings → Backups
+          # where restoring it overwrites the site. make-release.js excludes both; this checks the output.
+          stray="$(cd "$app" && find . -name node_modules -prune -o \( -path ./backend/backups -o -path './backend/backups/*' -o -iname '*.db' -o -iname '*.sqlite' -o -iname '*.sqlite3' \) -print)"
+          [ -z "$stray" ] || { echo "::error::the bundle carries site backups or database files:"; echo "$stray"; exit 1; }
           ( cd "$app" && npm run release:install ) || { echo "::error::release:install failed in the extracted bundle"; exit 1; }
           bash "$GITHUB_WORKSPACE/scripts/smoke-deploy.sh" "$app"
 
@@ -377,7 +386,7 @@ jobs:
         (startsWith(github.ref, 'refs/tags/') && needs.build-release.result == 'success') ||
         inputs.publish_tag != ''
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: see the verify job
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
     timeout-minutes: 20

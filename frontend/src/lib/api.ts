@@ -1,4 +1,5 @@
 import { applyCsrfHeader, csrfHeaders } from './csrf';
+import { collabSaveHeaders } from './verso/collab/saveEpoch';
 import { createContentClient } from './generated/content-client.generated';
 import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
 export type {
@@ -56,6 +57,9 @@ const getBaseUrl = () => {
             // which this deliberately mirrors — every SSR path must agree on the base).
             const backendCert = path.resolve(path.dirname(configPath), 'certs', 'backend.crt');
             if (fs.existsSync(backendCert)) {
+                // The gateway on this machine over loopback first, as in lib/server-api.ts.
+                const local = String(process.env.WORDJS_LOCAL_GATEWAY_ORIGIN || '').replace(/\/+$/, '');
+                if (local) return `${local}/api/v1`;
                 const front = String(config.gatewayUrl || config.siteUrl || '').replace(/\/+$/, '');
                 if (front) return `${front}/api/v1`;
             }
@@ -174,6 +178,9 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
         // requests is a mutation — and BEFORE options.headers, so an explicit caller override still
         // wins, exactly like Content-Type.
         ...csrfHeaders(),
+        // A save made from a live collaborative editing session names the room generation it was seeded
+        // from, so the backend can tell it from a write made outside the session (lib/verso/collab/saveEpoch).
+        ...collabSaveHeaders(endpoint, options.method),
         ...options.headers,
     };
 
@@ -376,6 +383,10 @@ export interface Plugin {
     roles?: DeclaredPluginRole[];     // roles the manifest declares (registered only with the roles:declare grant)
     requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
     grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")
+    // Multisite, on a site other than the main one only: does the network offer this plugin here, and the
+    // most this site may grant it (the network administrator's ceiling). Absent on the main site.
+    offered?: boolean;
+    grantCeiling?: string[];
     // Would activating it now grant every permission its manifest declares? (no grant record, or an empty
     // one no administrator decided). false after an administrator revoked every grant: activation grants nothing.
     activationSeedsGrants?: boolean;
@@ -486,6 +497,8 @@ export interface Revision {
     modified: string;
     meta?: Record<string, any>;
     restore?: RevisionRestoreDescriptor;
+    /** Set when the write this revision was taken before was made by an AI agent (backend core/agent-publishing). */
+    source?: { kind: "agent"; agentId: number; agentName: string } | null;
 }
 
 export interface RevisionRestoreField {
@@ -826,6 +839,12 @@ export const pluginsApi = {
         body: formData,
         headers: {} // Let browser set boundary
     }),
+    /** Replace an installed plugin's code with a newer zip (field `plugin`); data, tables and grants are kept. */
+    update: (slug: string, formData: FormData) => api<{ success: boolean; updated: boolean; slug: string; fromVersion: string | null; toVersion: string | null; reactivated: boolean; newPermissions: string[]; ungrantedPermissions: string[] }>(`/plugins/${encodeURIComponent(slug)}/update`, {
+        method: "POST",
+        body: formData,
+        headers: {}
+    }),
 };
 
 // ---------------------------------------------------------------------------
@@ -939,9 +958,53 @@ export interface Theme {
     name: string;
     version: string;
     description: string;
+    /** theme.json `translations`: per-language metadata, e.g. { es: { description } }. */
+    translations?: Record<string, { description?: string }> | null;
     author: string;
     screenshot?: string;
     active: boolean;
+}
+
+/**
+ * POST a theme zip (field `theme`) with upload progress. A refusal rejects with the backend's message,
+ * and its stable `code` and `slug` (e.g. `theme_exists` on a re-upload — the Themes screen offers the
+ * in-place update from it).
+ */
+function uploadThemeZip<T>(url: string, file: File, onProgress?: (percent: number) => void): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const formData = new FormData();
+        formData.append("theme", file);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.withCredentials = true; // Use HttpOnly cookies
+        applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
+
+        if (onProgress) {
+            xhr.upload.onprogress = (event) => {
+                if (event.lengthComputable) {
+                    onProgress((event.loaded / event.total) * 100);
+                }
+            };
+        }
+
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(JSON.parse(xhr.responseText));
+            } else {
+                let err: { error?: string; message?: string; code?: string; slug?: string } | null = null;
+                try { err = JSON.parse(xhr.responseText); } catch { /* non-JSON body */ }
+                const thrown: Error & { code?: string; slug?: string; status?: number } = new Error((err && (err.error || err.message)) || "Upload failed");
+                if (err && typeof err.code === "string") thrown.code = err.code;
+                if (err && typeof err.slug === "string") thrown.slug = err.slug;
+                thrown.status = xhr.status;
+                reject(thrown);
+            }
+        };
+
+        xhr.onerror = () => reject(new Error("Network error"));
+        xhr.send(formData);
+    });
 }
 
 export const themesApi = {
@@ -959,41 +1022,12 @@ export const themesApi = {
      * escape hatch the backend names in its own error messages and boot warnings.
      */
     restoreDefault: () => apiPost<{ success: boolean; message: string }>("/themes/default", {}),
-    upload: (file: File, onProgress?: (percent: number) => void) => {
-        return new Promise<{ success: boolean; message: string; slug: string }>((resolve, reject) => {
-            const formData = new FormData();
-            formData.append("theme", file);
-
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", `${API_URL}/themes/upload`);
-            xhr.withCredentials = true; // Use HttpOnly cookies
-            applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
-
-            if (onProgress) {
-                xhr.upload.onprogress = (event) => {
-                    if (event.lengthComputable) {
-                        onProgress((event.loaded / event.total) * 100);
-                    }
-                };
-            }
-
-            xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    resolve(JSON.parse(xhr.responseText));
-                } else {
-                    try {
-                        const err = JSON.parse(xhr.responseText);
-                        reject(new Error(err.error || err.message || "Upload failed"));
-                    } catch {
-                        reject(new Error("Upload failed"));
-                    }
-                }
-            };
-
-            xhr.onerror = () => reject(new Error("Network error"));
-            xhr.send(formData);
-        });
-    },
+    upload: (file: File, onProgress?: (percent: number) => void) =>
+        uploadThemeZip<{ success: boolean; message: string; slug: string }>(`${API_URL}/themes/upload`, file, onProgress),
+    /** Replace an installed theme with a newer zip (rooted at `<slug>/`); it stays active and keeps its customizer settings. */
+    update: (slug: string, file: File, onProgress?: (percent: number) => void) =>
+        uploadThemeZip<{ success: boolean; updated: boolean; message: string; slug: string; fromVersion: string | null; toVersion: string | null; active: boolean }>(
+            `${API_URL}/themes/${encodeURIComponent(slug)}/update`, file, onProgress),
     delete: (slug: string) => apiDelete(`/themes/${slug}`),
     download: (slug: string) => {
         const baseUrl = getBaseUrl();
@@ -1382,9 +1416,107 @@ export interface ApiTokenCreated {
 }
 export const tokensApi = {
     list: () => apiGet<{ tokens: ApiToken[] }>("/auth/tokens"),
-    create: (data: { name: string; scopes: string; expiresInDays?: number | null }) =>
+    // `mfaCode` is the step-up code: required only when the caller's role requires 2FA and the session was
+    // not signed in with the second factor (the backend answers 403 `rest_mfa_step_up_required` first).
+    // `currentPassword` goes with it once the account is past its invalid-code ceiling (403
+    // `rest_mfa_password_required`). components/MfaStepUp.tsx turns both answers into fields.
+    create: (data: { name: string; scopes: string; expiresInDays?: number | null; mfaCode?: string; currentPassword?: string }) =>
         apiPost<ApiTokenCreated>("/auth/tokens", data),
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/auth/tokens/${id}`),
+};
+
+// ── AI agent connections (MCP) ─────────────────────────────────────────────────────────────────────
+// The connection REQUESTS capabilities, an administrator GRANTS a subset; every call runs as the bound
+// user narrowed by the grant (backend core/agent-capabilities). The `wja_` token is shown once.
+export type AgentCapability =
+    | "content:read" | "content:draft" | "content:publish" | "content:others" | "media:upload"
+    | "taxonomy:write" | "comments:moderate" | "settings:read";
+export interface AgentConnection {
+    id: number;
+    userId: number;
+    name: string;
+    tokenPrefix: string;
+    requested: AgentCapability[];
+    granted: AgentCapability[];
+    /** Granted AND backed by a capability the bound user really holds — the rest is inert. */
+    effective: AgentCapability[];
+    status: "pending" | "active" | "revoked";
+    expired: boolean;
+    createdBy: number | null;
+    grantedBy: number | null;
+    grantedAt: number | null;
+    lastUsedAt: number | null;
+    expiresAt: number | null;
+    createdAt: string | null;
+    user: { id: number; login: string; displayName: string; role: string } | null;
+}
+/** An entry an AI agent asked to publish while the site requires a person to confirm (routes/agents.ts). */
+export interface AgentPublishRequest {
+    id: number;
+    title: string;
+    type: string;
+    modified: string | null;
+    agentId: number | null;
+    agentName: string;
+    requestedAt: string | null;
+}
+export const agentsApi = {
+    list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string; publishConfirmation?: boolean }>("/agents"),
+    setPublishConfirmation: (publishConfirmation: boolean) => apiPut<{ publishConfirmation: boolean }>("/agents/settings", { publishConfirmation }),
+    publishQueue: () => apiGet<{ entries: AgentPublishRequest[] }>("/agents/publish-queue"),
+    dismissPublishRequest: (postId: number) => apiDelete<{ dismissed: boolean; id: number }>(`/agents/publish-queue/${postId}`),
+    // Creating and granting follow the API-token MFA rule: `mfaCode` / `currentPassword` exactly as tokensApi.create.
+    create: (data: { name: string; requested: AgentCapability[]; userId?: number; expiresInDays?: number | null; mfaCode?: string; currentPassword?: string }) =>
+        apiPost<{ token: string; connection: AgentConnection; mcpUrl: string }>("/agents", data),
+    grant: (id: number, granted: AgentCapability[], stepUp: { mfaCode?: string; currentPassword?: string } = {}) =>
+        apiPut<{ connection: AgentConnection }>(`/agents/${id}/grant`, { granted, ...stepUp }),
+    revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/agents/${id}`),
+    audit: (id: number, page = 1) =>
+        apiGet<{ entries: AuditEntry[]; total: number; page: number; perPage: number }>(`/agents/${id}/audit?page=${page}&per_page=50`),
+};
+
+// ── Account email ──────────────────────────────────────────────────────────────────────────────────
+// Backend routes/account-mail.ts: how password-reset and verification email is delivered. The relay
+// password is write-only (`hasPassword`); every write needs the administrator's current password.
+export interface AccountMailStatus {
+    route: "core" | "provider" | "none";
+    smtp: { host: string; port: number; security: "tls" | "starttls" | "none"; username: string; fromAddress: string; fromName: string } | null;
+    hasPassword: boolean;
+    provider: string | null;
+    providerAllowed: boolean;
+    allowedProviders: string[];
+    ready: boolean;
+}
+export const accountMailApi = {
+    status: () => apiGet<AccountMailStatus>("/account-mail"),
+    saveSmtp: (data: { host?: string; port?: number; security?: string; username?: string; password?: string; fromAddress?: string; fromName?: string; clear?: boolean; currentPassword: string }) =>
+        apiPut<AccountMailStatus>("/account-mail/smtp", data),
+    test: (to: string) => apiPost<{ sent: boolean }>("/account-mail/test", { to }),
+    setProvider: (slug: string, allowed: boolean, currentPassword: string) =>
+        apiPut<AccountMailStatus>("/account-mail/provider", { slug, allowed, currentPassword }),
+};
+
+// ── AI provider layer ──────────────────────────────────────────────────────────────────────────────
+// Backend routes/ai.ts. The provider key is write-only: settings come back with `hasKey`/`keyHint` only.
+export type AiProviderId = "" | "anthropic" | "openai-compatible";
+export type AiSuggestTask = "excerpt" | "seo_description" | "alt_text";
+export interface AiSettings {
+    provider: AiProviderId;
+    model: string;
+    baseUrl: string;
+    hasKey: boolean;
+    keyHint: string;
+    providers: Exclude<AiProviderId, "">[];
+    anthropicModels: string[];
+}
+export const aiApi = {
+    status: () => apiGet<{ enabled: boolean; tasks: AiSuggestTask[] }>("/ai/status"),
+    getSettings: () => apiGet<AiSettings>("/ai/settings"),
+    saveSettings: (data: { provider: AiProviderId; model?: string; baseUrl?: string; apiKey?: string; clearKey?: boolean }) =>
+        apiPut<AiSettings>("/ai/settings", data),
+    test: () => apiPost<{ ok: boolean; provider: string; model: string; ms: number }>("/ai/test", {}),
+    suggest: (data: { task: AiSuggestTask; title?: string; content?: string; mediaId?: number; language?: string }) =>
+        apiPost<{ suggestion: string; model: string }>("/ai/suggest", data),
 };
 
 // ── Outgoing webhooks ──────────────────────────────────────────────────────────────────────────────
@@ -1413,9 +1545,14 @@ export interface WebhookDelivery {
     createdAt: string;
     payload?: string;
 }
+/** The event catalogue grouped by the entity each event concerns (GET /webhooks/events). */
+export interface WebhookEventGroup {
+    entity: string;
+    events: string[];
+}
 export const webhooksApi = {
     list: () => apiGet<{ webhooks: Webhook[] }>("/webhooks"),
-    events: () => apiGet<{ events: string[] }>("/webhooks/events"),
+    events: () => apiGet<{ events: string[]; groups?: WebhookEventGroup[]; optIn?: string[] }>("/webhooks/events"),
     create: (data: { name?: string; url: string; events?: string[]; active?: boolean }) =>
         apiPost<Webhook & { secret: string; message: string }>("/webhooks", data),
     update: (id: number, data: { name?: string; url?: string; events?: string[]; active?: boolean }) =>
@@ -1426,6 +1563,60 @@ export const webhooksApi = {
     deliveries: (id: number) => apiGet<{ deliveries: WebhookDelivery[] }>(`/webhooks/${id}/deliveries`),
     redeliver: (deliveryId: number) =>
         apiPost<{ requeued: boolean; id: number }>(`/webhooks/deliveries/${deliveryId}/redeliver`, {}),
+    /** Send the signed `ping` test delivery to one endpoint; it is attempted at once. */
+    ping: (id: number) =>
+        apiPost<{ delivered: boolean; delivery: WebhookDelivery | null }>(`/webhooks/${id}/ping`, {}),
+};
+
+// ── Network (multisite): the sites of the network, for network administrators ─────────────────────
+export interface NetworkSite {
+    id: number;
+    slug: string;
+    url: string;
+    host: string;
+    status: "active" | "suspended";
+    main: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+/** Media storage quotas of the network (bytes; null = none / no limit). `used` is null when a site cannot be read. */
+export interface NetworkQuotas {
+    defaultQuota: number | null;
+    sites: { id: number; quota: number | null; effectiveQuota: number | null; used: number | null }[];
+}
+export interface NewNetworkSite {
+    slug: string;
+    url: string;
+    title: string;
+    adminUsername: string;
+    adminEmail: string;
+    adminPassword: string;
+    currentPassword: string;
+}
+export interface NetworkPlugin {
+    slug: string;
+    name: string;
+    version: string;
+    requestedPermissions: string[];
+    /** The most any other site may grant it; null = not offered (main site only). */
+    ceiling: string[] | null;
+}
+export const networkApi = {
+    status: () => apiGet<{ enabled: boolean; networkAdmin: boolean }>("/network/status"),
+    plugins: () => apiGet<{ plugins: NetworkPlugin[] }>("/network/plugins"),
+    offerPlugin: (slug: string, tokens: string[], currentPassword: string) =>
+        apiPut<{ slug: string; ceiling: string[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { tokens, currentPassword }),
+    withdrawPlugin: (slug: string, currentPassword: string) =>
+        api<{ slug: string; withdrawn: boolean; deactivatedOn: number[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { method: "DELETE", body: { currentPassword } }),
+    sites: () => apiGet<{ sites: NetworkSite[] }>("/network/sites"),
+    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
+    suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
+    resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+    quotas: () => apiGet<NetworkQuotas>("/network/quotas"),
+    setDefaultQuota: (bytes: number | null, currentPassword: string) =>
+        apiPut<{ defaultQuota: number | null }>("/network/quotas/default", { bytes, currentPassword }),
+    setSiteQuota: (id: number, bytes: number | null, currentPassword: string) =>
+        apiPut<{ id: number; quota: number | null; effectiveQuota: number | null }>(`/network/sites/${id}/quota`, { bytes, currentPassword }),
 };
 
 // ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────
@@ -1551,6 +1742,12 @@ export interface MfaPolicy {
     // predates the field, so headless clients keep working until an admin deliberately turns it on.
     enforceForApiTokens: boolean;
 }
+// What the policy means for EXISTING API tokens (counts only) — returned next to the policy.
+export interface MfaTokenExposure {
+    requiredRoleTokens: number;      // active tokens owned by users whose role requires 2FA
+    unenrolledOwnerTokens: number;   // ...of which the owner has not enrolled
+    unenrolledOwners: number;        // distinct owners behind those
+}
 /**
  * Enrolment is SUDO-GATED on the backend (routes/auth.ts): both /auth/mfa/setup — the call that hands
  * out the TOTP secret — and /auth/mfa/enable — the call that actually locks the account — demand the
@@ -1575,10 +1772,15 @@ export const mfaApi = {
         apiPost<{ secret: string; otpauthUri: string }>("/auth/mfa/setup", { currentPassword: requireCurrentPassword(currentPassword) }),
     enable: async (code: string, currentPassword: string) =>
         apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code, currentPassword: requireCurrentPassword(currentPassword) }),
-    disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
-    regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
-    getPolicy: () => apiGet<{ policy: MfaPolicy }>("/auth/mfa/policy"),
-    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy }>("/auth/mfa/policy", policy),
+    // `currentPassword` only once the account is past its invalid-code ceiling (403 `rest_mfa_password_required`).
+    disable: (code: string, currentPassword?: string) =>
+        apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code, ...(currentPassword ? { currentPassword } : {}) }),
+    regenerateBackupCodes: (code: string, currentPassword?: string) =>
+        apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code, ...(currentPassword ? { currentPassword } : {}) }),
+    // `enforceForApiTokensDefault`: true only on a freshly installed site whose policy has never required a
+    // role — the screen then pre-checks the API-token switch (the admin can still uncheck it).
+    getPolicy: () => apiGet<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy"),
+    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy", policy),
     /**
      * Administrative two-factor reset — the way OUT of a 2FA lockout, and the reason enrolment above can
      * be password-gated without creating an unrecoverable state. It lives under the USERS router

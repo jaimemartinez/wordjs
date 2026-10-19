@@ -13,13 +13,13 @@
  * install from an option row, so this must be a proxy on the same cache window as its upstream, not
  * a build-time object.
  */
-import { proxySeo } from '../_seo/upstream';
+import { proxySeo, siteHostOf } from '../_seo/upstream';
 
 /** The window the upstream advertises (`public, max-age=86400`, backend/src/routes/seo.ts). */
 export const revalidate = 86400;
 
-export async function GET() {
+export async function GET(_req?: Request, ctx?: { params?: Promise<Record<string, string>> }) {
     // `settings` is the tag that matters here — the body is built from `siteurl`, not from content —
     // but a purge of either must refresh it, exactly like the sitemap it advertises.
-    return proxySeo('/seo/robots.txt', { revalidate, tags: ['settings'] });
+    return proxySeo('/seo/robots.txt', { revalidate, tags: ['settings'], siteHost: await siteHostOf(ctx) });
 }

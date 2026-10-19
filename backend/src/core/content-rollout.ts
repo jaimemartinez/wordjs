@@ -30,6 +30,8 @@
  * `config/app` is deliberately inert.
  */
 
+const log = require('./module-logger').moduleLogger('core/content-rollout');
+
 export const CONTENT_VALIDATION_MODES = ['off', 'shadow', 'enforce'] as const;
 
 export type ContentValidationMode = (typeof CONTENT_VALIDATION_MODES)[number];
@@ -554,7 +556,7 @@ export function warnLegacyContentCaller(caller: string, type: string, message: s
     if (deprecationLedger.size >= MAX_DEPRECATION_KEYS) {
         if (!deprecationLedgerFull) {
             deprecationLedgerFull = true;
-            console.warn('[wordjs][deprecation] legacy content-adapter ledger is full; further deprecation notices are suppressed. See contentRolloutReport().');
+            log.warn('[wordjs][deprecation] legacy content-adapter ledger is full; further deprecation notices are suppressed. See contentRolloutReport().');
         }
         return false;
     }
@@ -562,7 +564,7 @@ export function warnLegacyContentCaller(caller: string, type: string, message: s
     deprecationLedger.set(key, { caller, type, firstAt: new Date().toISOString(), emitted: enabled, suppressed: 0 });
     // The ledger entry is created either way: turning the notices off must silence the log, not
     // erase the fact that a legacy caller exists. The report is the durable answer.
-    if (enabled) console.warn(`[wordjs][deprecation] ${message} (${caller})`);
+    if (enabled) log.warn({ caller }, `[wordjs][deprecation] ${message} (${caller})`);
     return enabled;
 }
 

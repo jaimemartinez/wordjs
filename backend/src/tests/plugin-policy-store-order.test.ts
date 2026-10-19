@@ -17,6 +17,7 @@ process.env.NODE_ENV = 'production'; // the routes regenerate frontend registrie
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -101,17 +102,17 @@ function within<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
     return Promise.race([p, new Promise<typeof TIMED_OUT>((r) => setTimeout(() => r(TIMED_OUT), ms))]);
 }
 
-/** The console.warn lines matching `re` printed while `fn` runs. */
+/**
+ * The warnings matching `re` emitted while `fn` runs: what the real logger emitted (core/module-logger)
+ * and anything still printed with console.warn.
+ */
 async function warnsDuring(re: RegExp, fn: () => Promise<void>): Promise<string[]> {
-    const seen: string[] = [];
+    const capture = captureLogLines('warn');
+    const lines: string[] = [];
     const orig = console.warn;
-    console.warn = (...args: any[]) => {
-        const line = require('util').format(...args);
-        if (re.test(line)) seen.push(line);
-        orig.apply(console, args);
-    };
-    try { await fn(); } finally { console.warn = orig; }
-    return seen;
+    console.warn = (...args: any[]) => { lines.push(require('util').format(...args)); };
+    try { await fn(); } finally { console.warn = orig; lines.push(...capture.stop()); }
+    return lines.filter((line) => re.test(line));
 }
 
 /**

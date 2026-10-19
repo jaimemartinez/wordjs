@@ -6,6 +6,8 @@
 const DatabaseDriverInterface = require('./interface');
 const { Pool, escapeIdentifier, escapeLiteral } = require('pg');
 const config = require('../config/app');
+const { dbTlsOptions, isCertificateError, DB_TLS_VERIFY_HINT, DB_TLS_UNVERIFIED_WARNING } = require('./db-tls');
+const log = require('../core/module-logger').moduleLogger('drivers/postgres');
 
 /**
  * ── SQLite/generic DDL → Postgres translation ──────────────────────────────────────────────────
@@ -156,17 +158,19 @@ class PostgresDriver extends DatabaseDriverInterface {
 
     async connect() {
         const dbConfig = this.config || config.db;
-        console.log(`🔌 Postgres: Connecting to ${dbConfig.host}:${dbConfig.port || 5432}/${dbConfig.name}...`);
+        log.info(`🔌 Postgres: Connecting to ${dbConfig.host}:${dbConfig.port || 5432}/${dbConfig.name}...`);
 
         try {
             const num = (v: any, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
+            const ssl = dbTlsOptions(dbConfig);
+            if (ssl && !ssl.rejectUnauthorized) log.warn(DB_TLS_UNVERIFIED_WARNING);
             this.pool = new Pool({
                 host: dbConfig.host,
                 port: dbConfig.port || 5432,
                 user: dbConfig.user,
                 password: dbConfig.password,
                 database: dbConfig.name,
-                ssl: dbConfig.ssl ? { rejectUnauthorized: false } : false,
+                ssl: ssl || false,
                 // Force UTF-8 encoding to prevent errors on Windows servers with WIN1252 defaults
                 connectionString: undefined, // ensure pool uses individual params
                 client_encoding: 'UTF8',
@@ -187,10 +191,11 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await client.query('SELECT NOW()');
             client.release();
 
-            console.log('✅ Postgres: Connected successfully at', res.rows[0].now);
+            log.info({ serverTime: res.rows[0].now }, '✅ Postgres: Connected successfully');
 
         } catch (err) {
-            console.error('❌ Postgres: Connection failed:', err.message);
+            log.error({ err }, '❌ Postgres: Connection failed');
+            if (isCertificateError(err)) log.error(DB_TLS_VERIFY_HINT);
             throw err;
         }
     }
@@ -212,8 +217,31 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await this.pool.query(normalizedSql, params);
             return res.rows[0];
         } catch (err) {
-            console.error('❌ Postgres Query Error (get):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Query Error (get)');
             throw err;
+        }
+    }
+
+    /**
+     * get() under a server-side statement timeout (`SET LOCAL statement_timeout`, scoped to one
+     * transaction so the pooled connection keeps its own setting). Used by the readiness probe. A
+     * connection whose query failed is discarded rather than returned to the pool mid-transaction.
+     */
+    async getWithTimeout(sql: string, params: any[] = [], timeoutMs: number = 3000) {
+        const ms = Math.max(1, Math.floor(Number(timeoutMs) || 3000));
+        const client = await this.pool.connect();
+        let failed = false;
+        try {
+            await client.query(`BEGIN; SET LOCAL statement_timeout = ${ms}`);
+            const res = await client.query(this.normalizeSql(sql), params);
+            await client.query('COMMIT');
+            return res.rows[0];
+        } catch (err) {
+            failed = true;
+            log.warn({ err }, 'Postgres: timed query failed');
+            throw err;
+        } finally {
+            client.release(failed ? true : undefined);
         }
     }
 
@@ -224,7 +252,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await this.pool.query(normalizedSql, params);
             return res.rows;
         } catch (err) {
-            console.error('❌ Postgres Query Error (all):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Query Error (all)');
             throw err;
         }
     }
@@ -253,7 +281,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 changes: res.rowCount
             };
         } catch (err) {
-            console.error('❌ Postgres Query Error (run):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Query Error (run)');
             throw err;
         }
     }
@@ -266,7 +294,7 @@ class PostgresDriver extends DatabaseDriverInterface {
         try {
             await this.pool.query(translateSql(sql));
         } catch (err) {
-            console.error('❌ Postgres Exec Error:', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Exec Error');
             throw err;
         }
     }
@@ -323,7 +351,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             try {
                 await client.query('ROLLBACK');
             } catch (rbErr: any) {
-                console.error('❌ Postgres ROLLBACK failed:', rbErr && rbErr.message);
+                log.error({ err: rbErr }, '❌ Postgres ROLLBACK failed');
             }
             throw err;
         } finally {
@@ -393,7 +421,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             );
             return res.rows.map((r: any) => r.table_name);
         } catch (err) {
-            console.error('❌ Postgres getTables Error:', err.message);
+            log.error({ err }, '❌ Postgres getTables Error');
             throw err;
         }
     }
@@ -447,7 +475,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 columns: columns
             };
         } catch (err) {
-            console.error('❌ Postgres getTableSchema Error:', err.message);
+            log.error({ err }, '❌ Postgres getTableSchema Error');
             throw err;
         }
     }
@@ -455,7 +483,7 @@ class PostgresDriver extends DatabaseDriverInterface {
     async close() {
         if (this.pool) {
             await this.pool.end();
-            console.log('🔌 Postgres: Pool Closed.');
+            log.info('🔌 Postgres: Pool Closed.');
         }
     }
 }

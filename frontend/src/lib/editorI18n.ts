@@ -17,8 +17,9 @@
  */
 
 import type { Language } from './i18n';
+import { VERSO_CHROME_STRINGS } from './editorI18nVerso';
 
-type Tri = { es: string; en: string; pt: string };
+export type Tri = { es: string; en: string; pt: string };
 
 // Block + category names (mirrors the editor.block.* / editor.category.* keys in i18n.ts, which the
 // config resolves once at load — listed here so localizeConfig can re-translate them reactively).
@@ -569,6 +570,8 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Última", en: "Latest", pt: "Mais recente" },
     { es: "Autor", en: "Author", pt: "Autor" },
     { es: "Restaurar", en: "Restore", pt: "Restaurar" },
+    { es: "Antes del cambio de un agente de IA", en: "Before an AI agent's change", pt: "Antes da alteração de um agente de IA" },
+    { es: "Restaura esta versión para deshacer lo que cambió el agente {name}.", en: "Restore this version to undo what the agent {name} changed.", pt: "Restaure esta versão para desfazer o que o agente {name} alterou." },
     { es: "Cambios", en: "Changes", pt: "Alterações" },
     { es: "Restaurar reemplaza el contenido actual y conserva una revisión de su estado presente.", en: "Restoring replaces the current content and preserves a revision of its present state.", pt: "Restaurar substitui o conteúdo atual e preserva uma revisão do seu estado presente." },
     // Symbols (save-block-as-symbol action + toasts)
@@ -719,7 +722,7 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Estado de publicación", en: "Publication status", pt: "Status de publicação" },
 ];
 
-const TRIPLES: Tri[] = [...BLOCKS_CATEGORIES, ...FIELD_STRINGS, ...CHROME_STRINGS];
+const TRIPLES: Tri[] = [...BLOCKS_CATEGORIES, ...FIELD_STRINGS, ...CHROME_STRINGS, ...VERSO_CHROME_STRINGS];
 
 let LOOKUP: Map<string, Tri> | null = null;
 function lookup(): Map<string, Tri> {
@@ -733,6 +736,15 @@ function lookup(): Map<string, Tri> {
 export function trStr(s: string, lang: Language): string {
     const hit = lookup().get(s);
     return hit ? (hit[lang] || s) : s;
+}
+
+/**
+ * trStr for a Spanish source TEMPLATE with `{name}` placeholders: the template is translated whole
+ * (the dictionary holds it with the placeholders in place) and the values are substituted after,
+ * so a number or a block name never has to be part of a dictionary key.
+ */
+export function trFmt(s: string, lang: Language, vars: Record<string, string | number>): string {
+    return trStr(s, lang).replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
 }
 
 /** Every dictionary entry containing `s` in any language (tests: coverage and conflicting duplicates). */

@@ -4,6 +4,7 @@
 
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/notifications');
 const router = express.Router();
 const notificationService = require('../core/notifications');
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
@@ -66,7 +67,7 @@ const { publicErrorText } = require('../middleware/errorHandler');
  *       - in: query
  *         name: token
  *         required: false
- *         description: Session token, for EventSource clients that cannot send an Authorization header.
+ *         description: A query ticket for this path (POST /auth/query-ticket), for EventSource clients that send neither the session cookie nor an Authorization header. A session token is not accepted here.
  *         schema:
  *           type: string
  *     responses:
@@ -81,7 +82,7 @@ const { publicErrorText } = require('../middleware/errorHandler');
  */
 router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
     const startTime = Date.now();
-    console.log(`[SSE] 📥 New Stream Request from User ${req.user.id} (IP: ${req.ip})`);
+    log.info({ ip: req.ip }, `[SSE] 📥 New Stream Request from User ${req.user.id} (IP: ${req.ip})`);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -112,18 +113,18 @@ router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
                 // console.debug(`[SSE] 💓 Ping User ${req.user.id}`); // Optional: Uncomment for extreme debug
                 res.write(': keepalive\n\n');
             } catch (e) {
-                console.error(`[SSE] ❌ Keepalive Failed for User ${req.user.id}: ${e.message}`);
+                log.error({ err: e }, `[SSE] ❌ Keepalive Failed for User ${req.user.id}`);
                 clearInterval(keepAlive);
             }
         } else {
-            console.warn(`[SSE] ⚠️ Socket not writable for User ${req.user.id}. Terminating loop.`);
+            log.warn(`[SSE] ⚠️ Socket not writable for User ${req.user.id}. Terminating loop.`);
             clearInterval(keepAlive);
         }
     }, 5000); // Reduced from 30s to 5s
 
     req.on('close', () => {
         const duration = (Date.now() - startTime) / 1000;
-        console.log(`[SSE] 🛑 Stream Closed for User ${req.user.id} after ${duration}s`);
+        log.info({ duration }, `[SSE] 🛑 Stream Closed for User ${req.user.id} after ${duration}s`);
         clearInterval(keepAlive);
         notificationService.removeClient(req.user.id, res);
     });
@@ -161,7 +162,7 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
         const notifications = await notificationService.getNotifications(userId);
         res.json(notifications);
     } catch (e) {
-        console.error('[notifications] list failed:', e);
+        log.error({ err: e }, '[notifications] list failed');
         res.status(500).json({ error: publicErrorText(e, 'Your notifications could not be loaded.') });
     }
 });
@@ -206,7 +207,7 @@ router.post('/:uuid/read', authenticate, async (req: Request, res: Response) => 
         if (!ok) return res.status(404).json({ error: 'Notification not found' });
         res.json({ success: true });
     } catch (e) {
-        console.error('[notifications] mark-read failed:', e);
+        log.error({ err: e }, '[notifications] mark-read failed');
         res.status(500).json({ error: publicErrorText(e, 'The notification could not be marked as read.') });
     }
 });
@@ -242,7 +243,7 @@ router.post('/read-all', authenticate, async (req: Request, res: Response) => {
         await notificationService.markAllAsRead(req.user.id);
         res.json({ success: true });
     } catch (e) {
-        console.error('[notifications] mark-all-read failed:', e);
+        log.error({ err: e }, '[notifications] mark-all-read failed');
         res.status(500).json({ error: publicErrorText(e, 'Your notifications could not be marked as read.') });
     }
 });
@@ -287,7 +288,7 @@ router.delete('/:uuid', authenticate, async (req: Request, res: Response) => {
         if (!ok) return res.status(404).json({ error: 'Notification not found' });
         res.json({ success: true });
     } catch (e) {
-        console.error('[notifications] delete failed:', e);
+        log.error({ err: e }, '[notifications] delete failed');
         res.status(500).json({ error: publicErrorText(e, 'The notification could not be deleted.') });
     }
 });

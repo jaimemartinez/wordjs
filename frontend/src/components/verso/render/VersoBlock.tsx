@@ -34,6 +34,21 @@ import {
 } from "./context";
 import { NODE_KEY_ATTR } from "./nodeKey";
 import VersoSlot from "./VersoSlot";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
+
+/** Aviso del lienzo para un tipo sin componente registrado (p. ej. el bloque de un plugin desactivado). */
+function MissingBlock({ type }: { type: string }) {
+  const { tr } = useEditorTr();
+  return (
+    <div
+      data-verso-missing={type}
+      role="note"
+      className="rounded border border-dashed border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-3 py-2 text-xs text-[var(--ed-on-surface-variant)]"
+    >
+      {tr("Bloque sin componente registrado:")} <code>{type}</code>
+    </div>
+  );
+}
 
 const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }) {
   const ctx = useVersoRenderContext();
@@ -115,15 +130,7 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
     }
     content = <Component {...passProps} />;
   } else {
-    content = (
-      <div
-        data-verso-missing={node.type}
-        role="note"
-        className="rounded border border-dashed border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-3 py-2 text-xs text-[var(--ed-on-surface-variant)]"
-      >
-        Bloque sin componente registrado: <code>{node.type}</code>
-      </div>
-    );
+    content = <MissingBlock type={node.type} />;
   }
 
   // editorChrome: durante la edición inline se atenúan los DEMÁS bloques para

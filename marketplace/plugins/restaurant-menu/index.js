@@ -26,7 +26,7 @@
 
 exports.metadata = {
     name: 'Restaurant Menu',
-    version: '2.0.1',
+    version: '2.0.2',
     description: 'Menú con modificadores, horarios, pedidos en mesa por QR, reservas, pago en línea (Stripe), cocina en vivo e informes.',
     author: 'WordJS',
 };
@@ -75,6 +75,37 @@ const MAX_PHONE_CHARS = 30;
 const MAX_ADDRESS_CHARS = 300;
 const MAX_ORDER_NOTES_CHARS = 500;
 const TOKEN_RE = /^[a-z0-9]{16,64}$/;
+
+// Stripe zero-decimal currencies take amounts in the WHOLE unit, not the minor unit. Everything in
+// this plugin is stored in integer "cents" (minor units × 100); for these currencies the Stripe
+// amount must be divided by 100 so a ¥1000 order isn't charged ¥100000.
+const STRIPE_ZERO_DECIMAL = new Set([
+    'bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx',
+    'vnd', 'vuv', 'xaf', 'xof', 'xpf',
+]);
+const toStripeAmount = (cents, currencyCode) =>
+    STRIPE_ZERO_DECIMAL.has(String(currencyCode || '').toLowerCase()) ? Math.round((Number(cents) || 0) / 100) : (Number(cents) || 0);
+
+/**
+ * The page a Stripe Checkout returns to: the visitor's page only when it is on this site (same
+ * origin and under the site's path), otherwise the site URL itself. Stripe redirects the payer to
+ * success_url / cancel_url, so an unchecked page_url would turn the checkout into an open redirect.
+ */
+function onSiteReturnUrl(pageUrl, siteUrl) {
+    let site;
+    try { site = new URL(String(siteUrl || '')); } catch (e) { return String(siteUrl || ''); }
+    const sitePath = site.pathname.replace(/\/+$/, '');
+    try {
+        const u = new URL(String(pageUrl || '').trim().slice(0, 1000));
+        if ((u.protocol === 'http:' || u.protocol === 'https:') && u.origin === site.origin
+            && !u.username && !u.password
+            && (sitePath === '' || u.pathname === sitePath || u.pathname.startsWith(sitePath + '/'))) {
+            u.hash = '';
+            return u.toString();
+        }
+    } catch (e) { /* not a URL — fall back to the site */ }
+    return site.toString();
+}
 
 exports.init = async function (wordjs) {
     const { options, http, db, adminMenu, mail, crypto, site, notify } = wordjs;
@@ -927,14 +958,13 @@ exports.init = async function (wordjs) {
             let warning = '';
             if (method === 'stripe') {
                 try {
-                    let pageUrl = String(body.page_url || '').trim().slice(0, 1000);
-                    if (!/^https?:\/\//i.test(pageUrl)) pageUrl = await site.url();
+                    const pageUrl = onSiteReturnUrl(body.page_url, await site.url());
                     const sep = pageUrl.includes('?') ? '&' : '?';
                     const form = new URLSearchParams();
                     form.set('mode', 'payment');
                     form.set('line_items[0][price_data][currency]', cfg.currencyCode);
                     form.set('line_items[0][price_data][product_data][name]', `Pedido restaurante #${orderId}`);
-                    form.set('line_items[0][price_data][unit_amount]', String(totalCents));
+                    form.set('line_items[0][price_data][unit_amount]', String(toStripeAmount(totalCents, cfg.currencyCode)));
                     form.set('line_items[0][quantity]', '1');
                     form.set('success_url', `${pageUrl}${sep}rm_order=${token}&rm_session={CHECKOUT_SESSION_ID}`);
                     form.set('cancel_url', pageUrl);

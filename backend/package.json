@@ -1,6 +1,6 @@
 {
   "name": "wordjs",
-  "version": "2.5.0",
+  "version": "2.7.0",
   "description": "WordPress-like CMS built with Node.js and SQLite",
   "main": "src/index.ts",
   "scripts": {
@@ -40,6 +40,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "acme-client": "^5.4.0",
     "acorn": "^8.19.0",
     "acorn-walk": "^8.3.5",
@@ -56,6 +58,8 @@
     "express-rate-limit": "^8.7.1",
     "fast-xml-parser": "^5.11.2",
     "file-type": "^21.3.4",
+    "graphql": "^16.14.2",
+    "graphql-http": "^1.23.1",
     "handlebars": "^4.7.10",
     "helmet": "^8.3.0",
     "http-proxy": "^1.18.1",
@@ -79,7 +83,8 @@
     "sql.js": "^1.14.2",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "zod": "^4.1.12"
   },
   "overrides": {
     "nodemailer": "$nodemailer",

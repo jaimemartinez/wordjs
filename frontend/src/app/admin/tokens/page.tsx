@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 const fmtDate = (v: number | null | string | undefined) => {
     if (v == null) return "—";
@@ -43,6 +44,8 @@ export default function TokensPage() {
     const [expiry, setExpiry] = useState("");
     const [creating, setCreating] = useState(false);
     const [revealed, setRevealed] = useState<string | null>(null);
+    // Step-up: shown once the backend says this role must prove the second factor to mint a token.
+    const stepUp = useMfaStepUp();
 
     const load = async () => {
         try {
@@ -82,15 +85,19 @@ export default function TokensPage() {
                 name: name.trim() || t("tokens.defaultName"),
                 scopes,
                 expiresInDays: expiry ? Number(expiry) : null,
+                ...stepUp.payload(),
             });
             setRevealed(res.token);
+            stepUp.reset();
             setName("");
             setScopeMode("read");
             setResourceScopes({});
             setExpiry("");
             await load();
         } catch (e: any) {
-            addToast(e?.message || t("tokens.createFailed"), "error");
+            // Not a failure the user caused: ask for the code (or the password) instead of showing an error.
+            if (stepUp.absorb(e)) addToast(e?.code === "rest_mfa_step_up_required" ? t("tokens.stepUpHelp") : t("stepUp.passwordHelp"), "info");
+            else addToast(e?.message || t("tokens.createFailed"), "error");
         } finally {
             setCreating(false);
         }
@@ -183,6 +190,7 @@ export default function TokensPage() {
                                 ]}
                             />
                         </div>
+                        <MfaStepUpFields stepUp={stepUp} codeHelp={t("tokens.stepUpHelp")} />
                         <Button type="submit" icon="fa-plus" className="w-full" loading={creating}>
                             {t("tokens.createToken")}
                         </Button>

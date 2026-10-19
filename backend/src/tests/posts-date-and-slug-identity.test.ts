@@ -333,7 +333,9 @@ describe('posts router: date capability + typed slug identity', () => {
     it('toJSON emits author as {id, displayName, slug} — the shape the content contract declares', async () => {
         const res = await request(app).get(`/api/v1/posts/${pNewsReact}`);
         assert.strictEqual(res.status, 200);
-        assert.deepStrictEqual(res.body.author, { id: author1Id, displayName: 'author1', slug: String(author1Id) },
+        // author1 is seeded raw with display_name = its login: the byline prints the placeholder
+        // (core/public-identity), never the login.
+        assert.deepStrictEqual(res.body.author, { id: author1Id, displayName: `User ${author1Id}`, slug: String(author1Id) },
             'a bare number here is the bug: every consumer reads author.displayName');
         assert.strictEqual(res.body.authorId, author1Id, 'the raw id keeps a name of its own');
 
@@ -426,17 +428,17 @@ describe('posts router: date capability + typed slug identity', () => {
         assert.strictEqual(crossed.total, '0');
     });
 
-    it('?author= resolves a nicename, a login and an id — the public author identity, with no /users', async () => {
+    it('?author= resolves a nicename and an id — the public author identity, with no /users', async () => {
         const byNicename = await listIds('type=post&status=publish&per_page=100&author=nick-name');
         assert.deepStrictEqual(byNicename.ids.slice().sort((a, b) => a - b),
             [pGuidesReact, pUntagged].sort((a, b) => a - b));
         assert.strictEqual(byNicename.total, '2');
 
-        // A LOGIN still resolves — but only for an account that has no nicename, which is the
-        // back-compat case the next test pins from the other side. author1 is seeded raw, so it is one.
-        const byLogin = await listIds('type=post&status=publish&per_page=100&author=author1');
-        assert.ok(byLogin.ids.includes(pNewsReact) && byLogin.ids.includes(pNewsAstro));
-        assert.ok(!byLogin.ids.includes(pGuidesReact), 'the other author must be excluded');
+        // An account with no nicename (author1 is seeded raw) is addressed by its ID — the slug its
+        // byline carries. Its LOGIN resolves nothing; the next test pins that.
+        const byAuthorId = await listIds(`type=post&status=publish&per_page=100&author=${author1Id}`);
+        assert.ok(byAuthorId.ids.includes(pNewsReact) && byAuthorId.ids.includes(pNewsAstro));
+        assert.ok(!byAuthorId.ids.includes(pGuidesReact), 'the other author must be excluded');
 
         const byId = await listIds(`type=post&status=publish&per_page=100&author=${nickId}`);
         assert.deepStrictEqual(byId.ids.slice().sort((a, b) => a - b), byNicename.ids.slice().sort((a, b) => a - b));
@@ -447,7 +449,7 @@ describe('posts router: date capability + typed slug identity', () => {
         assert.strictEqual(nobody.total, '0');
 
         // Two authors OR together, and the author filter composes with a taxonomy one.
-        const both = await listIds(`type=post&status=publish&per_page=100&author=author1,nick-name&tags=react`);
+        const both = await listIds(`type=post&status=publish&per_page=100&author=${author1Id},nick-name&tags=react`);
         assert.deepStrictEqual(both.ids.slice().sort((a, b) => a - b),
             [pNewsReact, pGuidesReact].sort((a, b) => a - b));
         assert.strictEqual(both.total, '2');
@@ -460,8 +462,8 @@ describe('posts router: date capability + typed slug identity', () => {
      * (…)` — unconditionally. On an anonymous endpoint that answers "does this login exist?" for any
      * guess: a hit narrows the list to that account's posts, a miss returns an empty one. It is the
      * same fact the serialiser stopped publishing, confirmable one request at a time, which would
-     * have moved the leak rather than closed it. The login now matches ONLY for an account that has
-     * no nicename — the pre-migration rows the backfill could not name.
+     * have moved the leak rather than closed it. The login now matches NOTHING — not even for an
+     * account that has no nicename, which is addressed by its id.
      *
      * `nick` is the login of an account whose nicename IS set ('nick-name'), and the assertion that
      * makes this test mean something is the pair: the miss must be indistinguishable from a login
@@ -483,15 +485,17 @@ describe('posts router: date capability + typed slug identity', () => {
             [pGuidesReact, pUntagged].sort((a, b) => a - b),
             'closing the oracle must not cost the author their own archive');
 
-        // CONTROL: a login still works where it is the ONLY identity there is (pre-0015 rows).
+        // Nor for an account with NO nicename (a pre-0015 row): it is addressed by its id, and its login
+        // answers like any other miss.
         const legacy = await listIds('type=post&status=publish&per_page=100&author=ada.lovelace.1815');
-        assert.deepStrictEqual(legacy.ids, [pAda], 'an account with no nicename keeps its login as a selector');
+        assert.deepStrictEqual(legacy.ids, invented.ids, 'a nicename-less account must not be reachable by login');
+        assert.deepStrictEqual((await listIds(`type=post&status=publish&per_page=100&author=${adaId}`)).ids, [pAda]);
 
         // The OR list must not launder it either: one named login among real slugs stays inert.
         const mixed = await listIds('type=post&status=publish&per_page=100&author=nick,author1');
         assert.ok(!mixed.ids.includes(pGuidesReact) && !mixed.ids.includes(pUntagged),
             'a named account cannot be reached through its login by hiding it in a list');
-        assert.ok(mixed.ids.includes(pNewsReact), 'while the nicename-less login in the same list still resolves');
+        assert.deepStrictEqual(mixed.ids, [], 'nor can a nicename-less account');
     });
 
     it('pagination is right UNDER a filter (the count shares the WHERE with the rows)', async () => {
@@ -549,7 +553,7 @@ describe('posts router: date capability + typed slug identity', () => {
         });
         await Post.setTerms(hidden.id, [newsId], 'category');
 
-        const anon = await listIds('type=post&status=any&per_page=100&categories=news&author=author1');
+        const anon = await listIds(`type=post&status=any&per_page=100&categories=news&author=${author1Id}`);
         assert.ok(!anon.ids.includes(hidden.id), 'a taxonomy filter is not a way past the visibility gate');
         assert.deepStrictEqual(anon.ids.slice().sort((a, b) => a - b), [pNewsReact, pNewsAstro].sort((a, b) => a - b));
     });

@@ -12,6 +12,7 @@ const { Menu, MenuItem } = require('../models/Menu');
 const { getOption, updateOption } = require('./options');
 // The writable post statuses, which an imported status is folded onto (see canonicalImportedPostStatus).
 const { canonicalImportedPostStatus } = require('./post-capabilities');
+const log = require('./module-logger').moduleLogger('core/import-export');
 
 /**
  * Export all site content
@@ -161,7 +162,7 @@ async function exportSite(options: Record<string, any> = {}) {
         'comments', 'comment_meta',
         'terms', 'term_taxonomy', 'term_relationships',
         'options', 'links', 'notifications',
-        'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries',
+        'schema_migrations', 'api_tokens', 'agent_connections', 'audit_log', 'webhooks', 'webhook_deliveries',
         'form_submissions', 'collab_docs', 'collab_members', 'collab_ops', 'content_outbox',
         'sqlite_sequence', 'migrations' // exclusions
     ];
@@ -187,7 +188,7 @@ async function exportSite(options: Record<string, any> = {}) {
                 });
             }
         } catch (e) {
-            console.warn('⚠️ Failed to export custom tables:', e.message);
+            log.warn({ err: e }, '⚠️ Failed to export custom tables');
         }
     }
 
@@ -258,6 +259,12 @@ async function importSite(data: any, options: Record<string, any> = {}) {
     validateImportData(data);
 
     const {
+        // (userId) => true for an existing account this import may not rewrite (a network administrator
+        // imported by someone who is not one — core/network-auth protectsNetworkAdmin).
+        protectedUser = null,
+        // Option names (canonical) this import may not write (the network-wide settings, for someone
+        // who may not change them — core/network-auth networkSettingsReadOnly).
+        skipSettings = null,
         updateExisting = false,
         importUsers = false
     } = options;
@@ -292,7 +299,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                     existing = await User.findByEmail(user.email);
                 }
 
-                if (existing && !updateExisting) {
+                if (existing && (!updateExisting || (typeof protectedUser === 'function' && protectedUser(existing.id)))) {
                     idMap.users[user.id] = existing.id;
                     results.users.skipped++;
                 } else if (existing && updateExisting) {
@@ -511,7 +518,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
             'comments', 'comment_meta',
             'terms', 'term_taxonomy', 'term_relationships',
             'options', 'links', 'notifications',
-            'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries',
+            'schema_migrations', 'api_tokens', 'agent_connections', 'audit_log', 'webhooks', 'webhook_deliveries',
             'form_submissions', 'collab_docs', 'collab_members', 'collab_ops', 'content_outbox',
             'sqlite_sequence', 'migrations'
         ];
@@ -594,7 +601,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
         const { isProtectedOption } = require('./plugin-api');
         for (const [key, value] of Object.entries(data.settings)) {
             if (value === null || value === undefined) continue;
-            if (isProtectedOption(key)) {
+            if (isProtectedOption(key) || (skipSettings && skipSettings.has(require('./option-names').canonicalOptionName(key)))) {
                 results.settings.skipped.push(key);
                 continue;
             }

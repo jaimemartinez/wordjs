@@ -35,6 +35,7 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -52,10 +53,12 @@ const ANCHORED_CONFIG = path.resolve(__dirname, '..', '..', 'wordjs-config.json'
 const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
 const redirect = (p: any) =>
     (typeof p === 'string' && norm(path.resolve(p)) === norm(ANCHORED_CONFIG) ? SANDBOX_CONFIG : p);
-const realFs = { existsSync: fs.existsSync, readFileSync: fs.readFileSync, writeFileSync: fs.writeFileSync };
+// openSync too: config/app.ts rewrites generated secrets through one descriptor ('r+').
+const realFs = { existsSync: fs.existsSync, readFileSync: fs.readFileSync, writeFileSync: fs.writeFileSync, openSync: fs.openSync };
 fs.existsSync = (p: any, ...rest: any[]) => realFs.existsSync(redirect(p), ...rest);
 fs.readFileSync = (p: any, ...rest: any[]) => realFs.readFileSync(redirect(p), ...rest);
 fs.writeFileSync = (p: any, ...rest: any[]) => realFs.writeFileSync(redirect(p), ...rest);
+fs.openSync = (p: any, ...rest: any[]) => realFs.openSync(redirect(p), ...rest);
 
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
@@ -122,11 +125,16 @@ async function quietly<T>(fn: () => Promise<T> | T): Promise<{ value: T; output:
         saved[m] = (console as any)[m];
         (console as any)[m] = (...args: any[]) => { lines.push(args.map((a) => (a instanceof Error ? a.stack : String(a))).join(' ')); };
     }
+    // Backend modules log through core/module-logger: read what the real logger emitted as well.
+    const logged = captureLogLines(undefined, { raw: true });
+    let value: T;
     try {
-        return { value: await fn(), output: lines.join('\n') };
+        value = await fn();
     } finally {
         for (const m of methods) (console as any)[m] = saved[m];
+        lines.push(...logged.stop());
     }
+    return { value, output: lines.join('\n') };
 }
 
 /** Start a "process": config/app.ts runs its boot-time load against whatever is on disk now. */
@@ -434,5 +442,31 @@ describe('an INSTALLED site whose jwtSecret is a published placeholder refuses t
             assert.doesNotThrow(() => gate({ dbDriver: 'postgres', jwtSecret: 'x'.repeat(128) }));
             assert.throws(() => gate({ dbDriver: 'postgres', jwtSecret: 'wordjs-shared-dev-secret-change-me' }), /refuses to start/);
         });
+    });
+});
+
+describe('the install keeps the ports the config already names', () => {
+    // It wrote port 4000 / frontendPort 3001 / gatewayPort 3000 over whatever was there, so a backend set
+    // up on another port moved back to 4000 at its next restart.
+    //
+    // MUTATION PROOF: put back `port: 4000, frontendPort: 3001, gatewayPort: 3000` in routes/setup.ts and
+    // the first case fails.
+    it('a pre-install config with its own ports keeps them', async () => {
+        freshMachine();
+        realFs.writeFileSync(SANDBOX_CONFIG, JSON.stringify({ port: 4100, frontendPort: 3101, gatewayPort: 8443 }));
+        await boot();
+        const { res } = await install();
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const cfg = persisted();
+        assert.deepStrictEqual([cfg.port, cfg.frontendPort, cfg.gatewayPort], [4100, 3101, 8443]);
+    });
+
+    it('a config without ports records the defaults, as before', async () => {
+        freshMachine();
+        await boot();
+        const { res } = await install();
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const cfg = persisted();
+        assert.deepStrictEqual([cfg.port, cfg.frontendPort, cfg.gatewayPort], [4000, 3001, 3000]);
     });
 });

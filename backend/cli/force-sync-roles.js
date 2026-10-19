@@ -1,35 +1,33 @@
-const { initSqlJsDb, getDb, saveDatabase } = require('../src/config/database');
-const config = require('../src/config/app');
+// Repair helper: reset the built-in roles (administrator, editor, author, contributor, subscriber) in the
+// stored role map to the defaults the server uses (core/roles DEFAULT_ROLES, overridden by config.roles
+// when an operator set it). Roles that are not built in (plugin roles, custom roles) are kept as stored.
+// A running server picks the change up within its roles cache TTL (about 10 seconds).
+// Usage (from backend/): node -r ts-node/register cli/force-sync-roles.js
+const { withDatabase, readStoredRoles, ROLES_OPTION, runMain } = require('./lib/diagnostic-db');
 
-async function run() {
-    try {
-        console.log("Initializing database connection...");
-        await initSqlJsDb();
-        const db = getDb();
+async function main() {
+    const config = require('../src/config/app');
+    const { defaultRoles } = require('../src/core/roles');
+    const effective = { ...defaultRoles(), ...(config.roles || {}) };
 
-        const roles = config.roles;
-        console.log("Syncing roles to database...");
-        const serializedRoles = JSON.stringify(roles);
-
-        // Update or Insert the option
-        const existing = db.prepare('SELECT option_value FROM options WHERE option_name = "wordjs_user_roles"').get();
-
-        if (existing) {
-            console.log("Updating existing roles in DB...");
-            db.prepare('UPDATE options SET option_value = ? WHERE option_name = "wordjs_user_roles"').run(serializedRoles);
+    await withDatabase(async (dbAsync) => {
+        const stored = await readStoredRoles(dbAsync);
+        const current = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+        const next = { ...current, ...effective };
+        const value = JSON.stringify(next);
+        if (stored === null) {
+            console.log('Creating the roles option...');
+            await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [ROLES_OPTION, value, 'yes']);
         } else {
-            console.log("Creating roles option in DB...");
-            db.prepare('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)')
-                .run(['wordjs_user_roles', serializedRoles, 'yes']);
+            console.log('Updating the stored roles...');
+            await dbAsync.run('UPDATE options SET option_value = ? WHERE option_name = ?', [value, ROLES_OPTION]);
         }
-
-        saveDatabase();
-        console.log("Successfully synced roles! Subscribers now have access_admin_panel.");
-        process.exit(0);
-    } catch (e) {
-        console.error("Error:", e);
-        process.exit(1);
-    }
+        console.log(`Built-in roles reset: ${Object.keys(effective).join(', ')}`);
+        const kept = Object.keys(current).filter((slug) => !(slug in effective));
+        if (kept.length) console.log(`Other roles kept: ${kept.join(', ')}`);
+    });
+    return 0;
 }
 
-run();
+module.exports = { main };
+runMain(module, main);

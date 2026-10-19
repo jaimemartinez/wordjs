@@ -483,7 +483,8 @@ describe('install banner — the token is printed only to a terminal', () => {
         assert.match(text, /WordJS is not installed yet/);
         assert.match(text, /\/install$/m);
         assert.ok(text.includes(tokenFilePath), `the banner must name the 0600 file it wrote:\n${text}`);
-        assert.match(text, /WORDJS_PRINT_INSTALL_TOKEN=1/);
+        // "to 1", not "=1": the console bridge scrubs any `…TOKEN=<value>` (deploy-port-proxy-owner.test.ts).
+        assert.match(text, /set WORDJS_PRINT_INSTALL_TOKEN to 1/);
     });
 
     test('WORDJS_PRINT_INSTALL_TOKEN=1 is the escape hatch for an operator who trusts their log sink', () => {

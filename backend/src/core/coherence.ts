@@ -42,6 +42,7 @@
  */
 
 const cache = require('./cache');
+const log = require('./module-logger').moduleLogger('core/coherence');
 
 /** How stale a node's plugin grant/egress policy may get when a broadcast is lost (= ROLES_CACHE_TTL_MS). */
 const POLICY_RESYNC_MS = 10_000;
@@ -99,7 +100,7 @@ function reconcileIsolate(slug: string): Promise<boolean> {
             await iso.awaitIsolateSettled(slug);
             if (!isolateIsStale(slug)) return false;
             await iso.reloadIsolatedPlugin(slug);
-            console.log(`[coherence] '${String(slug).replace(/[\r\n]/g, '')}' respawned: its grant/egress policy changed`);
+            log.info(`[coherence] '${String(slug).replace(/[\r\n]/g, '')}' respawned: its grant/egress policy changed`);
             return true;
         });
     });
@@ -124,7 +125,7 @@ async function refreshPolicyAndReconcile(slugs?: string[]): Promise<Array<{ slug
 }
 
 function respawnFailed(e: any): void {
-    console.warn('[coherence] plugin respawn after a policy change failed:', e && e.message);
+    log.warn({ err: e }, '[coherence] plugin respawn after a policy change failed');
 }
 
 /**
@@ -152,10 +153,10 @@ function scheduledResync(): Promise<unknown> {
     if (resyncInFlight) return resyncInFlight;
     resyncInFlight = Promise.resolve()
         .then(() => require('./plugins').reconcileDeactivatedPlugins())
-        .catch((e: any) => console.warn('[coherence] active-set re-sync failed:', e && e.message))
+        .catch((e: any) => log.warn({ err: e }, '[coherence] active-set re-sync failed'))
         .then(() => refreshPolicyAndReconcile())
         .then((started) => { for (const { done } of started) done.catch(respawnFailed); })
-        .catch((e: any) => console.warn('[coherence] plugin policy re-sync failed:', e && e.message))
+        .catch((e: any) => log.warn({ err: e }, '[coherence] plugin policy re-sync failed'))
         .finally(() => { resyncInFlight = null; });
     return resyncInFlight;
 }
@@ -170,7 +171,7 @@ function handlePluginChange(msg: string): void {
     const plugins = require('./plugins');
     try {
         if (data.action === 'activate') {
-            Promise.resolve(plugins.loadOnePlugin(data.slug)).catch((e: any) => console.warn('[coherence] cross-node activate failed:', e && e.message));
+            Promise.resolve(plugins.loadOnePlugin(data.slug)).catch((e: any) => log.warn({ err: e }, '[coherence] cross-node activate failed'));
         } else if (data.action === 'deactivate') {
             plugins.unloadOnePlugin(data.slug);
         } else if (data.action === 'reload') {
@@ -178,10 +179,10 @@ function handlePluginChange(msg: string): void {
             // slug's child if what it was spawned with is no longer current. (A revoke that CONDEMNS the
             // plugin propagates via 'deactivate' instead.)
             resyncPluginPolicy([String(data.slug)])
-                .catch((e: any) => console.warn('[coherence] cross-node plugin reload failed:', e && e.message));
+                .catch((e: any) => log.warn({ err: e }, '[coherence] cross-node plugin reload failed'));
         }
     } catch (e: any) {
-        console.warn('[coherence] plugin-changed handler error:', e && e.message);
+        log.warn({ err: e }, '[coherence] plugin-changed handler error');
     }
 }
 
@@ -195,16 +196,16 @@ async function handleOptionChange(name: string): Promise<void> {
     try {
         if (name === 'wordjs_user_roles') {
             await require('./roles').loadRoles();
-            console.log('[coherence] roles cache reloaded (cross-node update)');
+            log.info('[coherence] roles cache reloaded (cross-node update)');
         } else if (name === 'redis_cache_enabled') {
             const { getOption } = require('./options');
             cache.setEnabled(await getOption('redis_cache_enabled', 0));
         } else if (name === 'plugin_grants' || name === 'plugin_egress_hosts') {
             await resyncPluginPolicy();
-            console.log(`[coherence] plugin ${name === 'plugin_grants' ? 'grants' : 'egress allowlist'} reloaded (cross-node update)`);
+            log.info(`[coherence] plugin ${name === 'plugin_grants' ? 'grants' : 'egress allowlist'} reloaded (cross-node update)`);
         }
     } catch (e: any) {
-        console.warn('[coherence] handler error:', e && e.message);
+        log.warn({ err: e }, '[coherence] handler error');
     }
 }
 

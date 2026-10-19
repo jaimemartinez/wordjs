@@ -24,7 +24,7 @@
 
 exports.metadata = {
     name: 'Donations',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Donation campaigns with goal thermometer, manual payment + optional Stripe Checkout, donor management and CSV export.',
     author: 'WordJS',
 };
@@ -54,6 +54,37 @@ const CONFIRM_CLIENT_WINDOW_MS = 60 * 1000;
 const LIMITER_MAX_KEYS = 10000;              // bound on each in-memory limiter map
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Stripe zero-decimal currencies take amounts in the WHOLE unit, not the minor unit. Everything in
+// this plugin is stored in integer "cents" (minor units × 100); for these currencies the Stripe
+// amount must be divided by 100 so a ¥1000 order isn't charged ¥100000.
+const STRIPE_ZERO_DECIMAL = new Set([
+    'bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx',
+    'vnd', 'vuv', 'xaf', 'xof', 'xpf',
+]);
+const toStripeAmount = (cents, currencyCode) =>
+    STRIPE_ZERO_DECIMAL.has(String(currencyCode || '').toLowerCase()) ? Math.round((Number(cents) || 0) / 100) : (Number(cents) || 0);
+
+/**
+ * The page a Stripe Checkout returns to: the visitor's page only when it is on this site (same
+ * origin and under the site's path), otherwise the site URL itself. Stripe redirects the payer to
+ * success_url / cancel_url, so an unchecked page_url would turn the checkout into an open redirect.
+ */
+function onSiteReturnUrl(pageUrl, siteUrl) {
+    let site;
+    try { site = new URL(String(siteUrl || '')); } catch (e) { return String(siteUrl || ''); }
+    const sitePath = site.pathname.replace(/\/+$/, '');
+    try {
+        const u = new URL(String(pageUrl || '').trim().slice(0, 1000));
+        if ((u.protocol === 'http:' || u.protocol === 'https:') && u.origin === site.origin
+            && !u.username && !u.password
+            && (sitePath === '' || u.pathname === sitePath || u.pathname.startsWith(sitePath + '/'))) {
+            u.hash = '';
+            return u.toString();
+        }
+    } catch (e) { /* not a URL — fall back to the site */ }
+    return site.toString();
+}
 
 exports.init = async function (wordjs) {
     const { options, http, db, adminMenu } = wordjs;
@@ -238,6 +269,26 @@ exports.init = async function (wordjs) {
         return true;
     };
 
+    // Mails to one donor address are bounded whatever clients ask (rotating clients defeat a
+    // per-client limit): past MAIL_PER_ADDRESS_MAX in the window the donation is still recorded,
+    // but no mail goes to that address.
+    const MAIL_PER_ADDRESS_MAX = 5;
+    const MAIL_PER_ADDRESS_WINDOW_MS = 60 * 60 * 1000;
+    const mailSentTo = new Map(); // lower-cased address -> timestamps[]
+    const mailBudget = (email) => {
+        const key = String(email || '').trim().toLowerCase();
+        const now = Date.now();
+        if (!mailSentTo.has(key) && mailSentTo.size >= LIMITER_MAX_KEYS) {
+            for (const [k, ts] of mailSentTo) if (!ts.length || now - ts[ts.length - 1] >= MAIL_PER_ADDRESS_WINDOW_MS) mailSentTo.delete(k);
+            while (mailSentTo.size >= LIMITER_MAX_KEYS) mailSentTo.delete(mailSentTo.keys().next().value);
+        }
+        const ts = (mailSentTo.get(key) || []).filter((t) => now - t < MAIL_PER_ADDRESS_WINDOW_MS);
+        if (ts.length >= MAIL_PER_ADDRESS_MAX) { mailSentTo.set(key, ts); return false; }
+        ts.push(now);
+        mailSentTo.set(key, ts);
+        return true;
+    };
+
     // ---- Stripe (optional — everything works manually without a key) -----------------------------
     const stripeRequest = async (method, path, key, params) => {
         const res = await fetch('https://api.stripe.com' + path, {
@@ -256,19 +307,12 @@ exports.init = async function (wordjs) {
         return body;
     };
 
-    /** Resolve the page the donor came from into a safe absolute http(s) URL (fallback: site url). */
+    /** Resolve the page the donor came from into an absolute URL on this site (fallback: site url). */
     const resolvePageUrl = async (pageUrl) => {
-        const raw = String(pageUrl || '').slice(0, 2000);
-        try {
-            const u = new URL(raw);
-            if (u.protocol === 'http:' || u.protocol === 'https:') {
-                u.searchParams.delete('session_id');
-                u.searchParams.delete('donation');
-                u.hash = '';
-                return u;
-            }
-        } catch (e) { /* not a URL — fall through */ }
-        return new URL(await wordjs.site.url());
+        const u = new URL(onSiteReturnUrl(pageUrl, await wordjs.site.url()));
+        u.searchParams.delete('session_id');
+        u.searchParams.delete('donation');
+        return u;
     };
 
     const publicCampaignShape = (c) => ({
@@ -347,7 +391,7 @@ exports.init = async function (wordjs) {
         if (!Number.isInteger(campaignId) || campaignId < 1) {
             return res.status(400).json({ error: 'Campaña inválida.' });
         }
-        const amountCents = Number(body.amount_cents);
+        let amountCents = Number(body.amount_cents);
         if (!Number.isInteger(amountCents) || amountCents < MIN_AMOUNT_CENTS || amountCents > MAX_AMOUNT_CENTS) {
             return res.status(400).json({ error: 'Monto inválido — el mínimo es 1.00 y el máximo 1,000,000.00.' });
         }
@@ -367,6 +411,8 @@ exports.init = async function (wordjs) {
         if (!campaign) return res.status(404).json({ error: 'La campaña no existe o no está activa.' });
 
         const cfg = await getConfig();
+        // A zero-decimal currency has no minor unit: record the whole amount actually charged.
+        if (STRIPE_ZERO_DECIMAL.has(String(cfg.currencyCode || '').toLowerCase())) amountCents = Math.round(amountCents / 100) * 100;
         const stripeKey = paymentMethod === 'stripe' ? await getSetting('stripe_sk') : '';
         if (paymentMethod === 'stripe' && !stripeKey) {
             return res.status(400).json({ error: 'El pago con tarjeta no está disponible — usa las instrucciones de pago manual.' });
@@ -394,7 +440,7 @@ exports.init = async function (wordjs) {
                 params.set('mode', 'payment');
                 params.set('line_items[0][price_data][currency]', String(cfg.currencyCode || 'usd').toLowerCase());
                 params.set('line_items[0][price_data][product_data][name]', 'Donación: ' + campaign.title);
-                params.set('line_items[0][price_data][unit_amount]', String(amountCents));
+                params.set('line_items[0][price_data][unit_amount]', String(toStripeAmount(amountCents, cfg.currencyCode)));
                 params.set('line_items[0][quantity]', '1');
                 params.set('success_url', successUrl);
                 params.set('cancel_url', cancelUrl);
@@ -414,15 +460,17 @@ exports.init = async function (wordjs) {
         }
 
         // Manual: thank the donor (with the payment instructions) + notify the admin. Mail failures
-        // never break the flow — the donation is already recorded.
+        // never break the flow — the donation is already recorded. The donor's address is unverified,
+        // so that mail carries only the site's own text (never the name or message typed here) and is
+        // bounded per address (mailBudget).
         const amount = fmtAmount(amountCents, cfg);
-        await tryMail({
+        if (mailBudget(donorEmail)) await tryMail({
             to: donorEmail,
             subject: `¡Gracias por tu donación! — ${campaign.title}`,
-            text: `Gracias ${donorName} por tu donación de ${amount} a "${campaign.title}". Referencia: ${token}. Instrucciones de pago: ${cfg.manualInstructions || 'El administrador se pondrá en contacto contigo.'}`,
+            text: `Gracias por tu donación de ${amount} a "${campaign.title}". Referencia: ${token}. Instrucciones de pago: ${cfg.manualInstructions || 'El administrador se pondrá en contacto contigo.'}`,
             html: `<div style="font-family:sans-serif;max-width:560px">
                 <h2>¡Gracias por tu donación!</h2>
-                <p>Hola ${escHtml(donorName)}, registramos tu donación de <strong>${escHtml(amount)}</strong> a <strong>${escHtml(campaign.title)}</strong>.</p>
+                <p>Hola, registramos tu donación de <strong>${escHtml(amount)}</strong> a <strong>${escHtml(campaign.title)}</strong>.</p>
                 <p>Referencia: <code>${escHtml(token)}</code></p>
                 <h3>Instrucciones de pago</h3>
                 <p style="white-space:pre-wrap">${escHtml(cfg.manualInstructions || 'El administrador se pondrá en contacto contigo.')}</p>

@@ -17,6 +17,7 @@ import type { FSWatcher } from 'fs';
 const fs = require('fs');
 const path = require('path');
 const config = require('../config/app');
+const log = require('./module-logger').moduleLogger('core/plugin-dev-watch');
 
 const DEBOUNCE_MS = 300;
 // Directory names whose changes never trigger a reload (deps, runtime data, built bundles).
@@ -42,12 +43,12 @@ async function reloadNow(slug: string): Promise<void> {
     try {
         const { isIsolated, reloadIsolatedPlugin } = require('./plugin-isolate');
         if (!isIsolated(slug)) return; // deactivated since the watch started — nothing to respawn
-        console.log(`[plugin-dev-watch] change in '${slug}' — reloading isolate...`);
+        log.info({ slug }, `[plugin-dev-watch] change in '${slug}' — reloading isolate...`);
         await reloadIsolatedPlugin(slug);
-        console.log(`[plugin-dev-watch] '${slug}' reloaded`);
+        log.info({ slug }, `[plugin-dev-watch] '${slug}' reloaded`);
     } catch (e: any) {
         // A broken save just logs and waits for the fix — never crash the host over a dev reload.
-        console.error(`[plugin-dev-watch] reload of '${slug}' failed:`, e && e.message);
+        log.error({ slug, err: e }, `[plugin-dev-watch] reload of '${slug}' failed`);
     } finally {
         inFlight.delete(slug);
     }
@@ -71,12 +72,12 @@ function watchPlugin(slug: string, dir: string): boolean {
             scheduleReload(slug);
         });
         watcher.on('error', (e: any) => {
-            console.warn(`[plugin-dev-watch] watcher for '${slug}' errored:`, e && e.message);
+            log.warn({ slug, err: e }, `[plugin-dev-watch] watcher for '${slug}' errored`);
         });
         watchers.set(slug, watcher);
         return true;
     } catch (e: any) {
-        console.warn(`[plugin-dev-watch] cannot watch '${slug}':`, e && e.message);
+        log.warn({ slug, err: e }, `[plugin-dev-watch] cannot watch '${slug}'`);
         return false;
     }
 }
@@ -99,10 +100,10 @@ async function startPluginDevWatch(): Promise<number> {
             if (!fs.existsSync(dir)) continue;
             if (watchPlugin(slug, dir)) count++;
         }
-        if (count > 0) console.log(`👀 [plugin-dev-watch] watching ${count} plugin(s) for changes (dev hot-reload)`);
+        if (count > 0) log.info({ count }, `👀 [plugin-dev-watch] watching ${count} plugin(s) for changes (dev hot-reload)`);
         return count;
     } catch (e: any) {
-        console.warn('[plugin-dev-watch] failed to start (dev hot-reload disabled):', e && e.message);
+        log.warn({ err: e }, '[plugin-dev-watch] failed to start (dev hot-reload disabled)');
         return 0;
     }
 }

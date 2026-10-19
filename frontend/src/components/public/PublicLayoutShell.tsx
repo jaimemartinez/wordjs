@@ -31,6 +31,7 @@ export default function PublicLayoutShell({
     announcementSlot,
     headerSlot,
     footerSlot,
+    stylesheets = true,
 }: {
     children: React.ReactNode;
     layout?: Record<string, unknown>;
@@ -57,6 +58,11 @@ export default function PublicLayoutShell({
     // Optional composable announcement/top bar, rendered full-bleed ABOVE the header. Absent ⇒ nothing
     // emitted (no reserved space, no empty band). The editor preview omits it, unchanged.
     announcementSlot?: React.ReactNode;
+    // false: emit no framework/theme <link>. The Verso canvas passes it: its iframe document
+    // (app/admin/canvas-frame) owns both stylesheets and swaps the theme one by id, and a second
+    // copy from ThemeLoader made that swap compare against the wrong <link> (the sheet ended up
+    // linked three times).
+    stylesheets?: boolean;
 }) {
     // Normalized structure config (defaults ≡ today's chrome; invalid values fall back silently —
     // the theme doctor reports them in its own lane). All from props → deterministic for hydration.
@@ -97,7 +103,7 @@ export default function PublicLayoutShell({
                 >
                     Skip to content
                 </a>
-                <ThemeLoader initialSlug={themeSlug} initialThemeVersion={themeVersion} />
+                {stylesheets && <ThemeLoader initialSlug={themeSlug} initialThemeVersion={themeVersion} />}
                 <ThemeTokenOverlay mods={mods} />
                 {announcementSlot}
                 {headerSlot ?? <Header initialMenu={headerMenu} initialSettings={settings} variant={header.variant} sticky={header.sticky} transparent={header.transparent} />}

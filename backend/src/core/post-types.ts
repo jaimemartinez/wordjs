@@ -14,16 +14,23 @@ const {
 } = require('./content-schema');
 const { getBuiltinContentSchemas } = require('./content-schemas-builtins');
 import type { ContentTypeSchemaV1 } from './content-schema';
+const log = require('./module-logger').moduleLogger('core/post-types');
 
-// Registered post types
-const postTypes = new Map();
-
-// F1 source-of-truth registry. `postTypes` remains the compatibility projection consumed by
-// existing routes, admin menus and plugins; every entry in it has one portable schema here.
-const contentTypeSchemas = new Map<string, ContentTypeSchemaV1>();
-
-// Registered taxonomies (mirrors `postTypes` — an in-memory registry of taxonomy objects).
-const taxonomies = new Map();
+// The registries below are one set per site in a multisite network: each site declares its own custom
+// types and taxonomies (options), so one site's registrations must never appear on another. Site 1's
+// set is the one a single-site install has always had. Read through the three accessors.
+const registriesBySite = require('./site-context').perSite(() => ({
+    // Registered post types
+    postTypes: new Map(),
+    // F1 source-of-truth registry. `postTypes` remains the compatibility projection consumed by
+    // existing routes, admin menus and plugins; every entry in it has one portable schema here.
+    contentTypeSchemas: new Map<string, ContentTypeSchemaV1>(),
+    // Registered taxonomies (mirrors `postTypes` — an in-memory registry of taxonomy objects).
+    taxonomies: new Map(),
+}));
+const postTypesRegistry = (): Map<any, any> => registriesBySite.get().postTypes;
+const contentTypeSchemasRegistry = (): Map<string, ContentTypeSchemaV1> => registriesBySite.get().contentTypeSchemas;
+const taxonomiesRegistry = (): Map<any, any> => registriesBySite.get().taxonomies;
 
 // Built-in taxonomies. WordPress ships 'category' (hierarchical) and 'post_tag' (flat), both
 // attached to the 'post' type. Their terms already live in the terms/term_taxonomy tables.
@@ -70,8 +77,8 @@ const BUILTIN_POST_TYPE_NAMES = new Set(['post', 'page', 'attachment', 'revision
 function registerContentType(schemaValue: unknown) {
     const schema = normalizeContentTypeSchema(schemaValue) as ContentTypeSchemaV1;
     const postType = contentSchemaToPostType(schema);
-    contentTypeSchemas.set(schema.name, schema);
-    postTypes.set(schema.name, postType);
+    contentTypeSchemasRegistry().set(schema.name, schema);
+    postTypesRegistry().set(schema.name, postType);
     doAction('registered_content_type_schema', schema.name, cloneContentTypeSchema(schema));
     doAction('registered_post_type', schema.name, postType);
     return postType;
@@ -84,8 +91,8 @@ function registerContentType(schemaValue: unknown) {
 function registerPostType(name: string, args: Record<string, unknown> = {}) {
     const { schema, runtimeExtensions } = adaptLegacyPostType(name, args);
     const postType = contentSchemaToPostType(schema, runtimeExtensions);
-    contentTypeSchemas.set(schema.name, schema);
-    postTypes.set(schema.name, postType);
+    contentTypeSchemasRegistry().set(schema.name, schema);
+    postTypesRegistry().set(schema.name, postType);
     doAction('registered_content_type_schema', schema.name, cloneContentTypeSchema(schema));
     doAction('registered_post_type', schema.name, postType);
     return postType;
@@ -99,8 +106,8 @@ function unregisterPostType(name: string) {
     if (BUILTIN_POST_TYPE_NAMES.has(name)) {
         return false;
     }
-    contentTypeSchemas.delete(name);
-    return postTypes.delete(name);
+    contentTypeSchemasRegistry().delete(name);
+    return postTypesRegistry().delete(name);
 }
 
 /**
@@ -108,18 +115,18 @@ function unregisterPostType(name: string) {
  * Equivalent to get_post_type_object()
  */
 function getPostType(name: string) {
-    return postTypes.get(name) || null;
+    return postTypesRegistry().get(name) || null;
 }
 
 /** Return a defensive, JSON-serialisable copy of one F1 declaration. */
 function getContentTypeSchema(name: string): ContentTypeSchemaV1 | null {
-    const schema = contentTypeSchemas.get(name);
+    const schema = contentTypeSchemasRegistry().get(name);
     return schema ? cloneContentTypeSchema(schema) : null;
 }
 
 /** List F1 declarations using the same visibility filters as getPostTypes(). */
 function getContentTypeSchemas(args: Record<string, unknown> = {}): ContentTypeSchemaV1[] {
-    return Array.from(contentTypeSchemas.values())
+    return Array.from(contentTypeSchemasRegistry().values())
         .filter((schema) => {
             if (args.public !== undefined && schema.visibility.public !== args.public) return false;
             if (args.showInMenu !== undefined && schema.visibility.showInMenu !== args.showInMenu) return false;
@@ -138,7 +145,7 @@ function getContentTypeSchemas(args: Record<string, unknown> = {}): ContentTypeS
  */
 function getContentTypeCapabilities(): Set<string> {
     const caps = new Set<string>();
-    for (const schema of contentTypeSchemas.values()) {
+    for (const schema of contentTypeSchemasRegistry().values()) {
         const permissions = schema && schema.permissions;
         if (!permissions) continue;
         for (const cap of Object.values(permissions.operations || {})) {
@@ -156,7 +163,7 @@ function getContentTypeCapabilities(): Set<string> {
  * Equivalent to get_post_types()
  */
 function getPostTypes(args: Record<string, any> = {}) {
-    const types = Array.from(postTypes.values());
+    const types = Array.from(postTypesRegistry().values());
 
     // Filter by arguments
     return types.filter(type => {
@@ -172,7 +179,7 @@ function getPostTypes(args: Record<string, any> = {}) {
  * Equivalent to post_type_exists()
  */
 function postTypeExists(name: string) {
-    return postTypes.has(name);
+    return postTypesRegistry().has(name);
 }
 
 /**
@@ -199,12 +206,12 @@ function addPostTypeSupport(name: string, features: string | string[]) {
         }
     });
 
-    const schema = contentTypeSchemas.get(name);
+    const schema = contentTypeSchemasRegistry().get(name);
     if (schema) {
         schema.features = [...new Set<string>(type.supports as string[])];
         schema.fields = { ...schema.fields, ...fieldsForFeatures(schema.features) };
         if (schema.features.includes('revisions')) schema.revisions.enabled = true;
-        contentTypeSchemas.set(name, normalizeContentTypeSchema(schema));
+        contentTypeSchemasRegistry().set(name, normalizeContentTypeSchema(schema));
     }
 
     return true;
@@ -220,11 +227,11 @@ function removePostTypeSupport(name: string, feature: string) {
     const index = type.supports.indexOf(feature);
     if (index > -1) {
         type.supports.splice(index, 1);
-        const schema = contentTypeSchemas.get(name);
+        const schema = contentTypeSchemasRegistry().get(name);
         if (schema) {
             schema.features = [...type.supports];
             if (feature === 'revisions') schema.revisions.enabled = false;
-            contentTypeSchemas.set(name, normalizeContentTypeSchema(schema));
+            contentTypeSchemasRegistry().set(name, normalizeContentTypeSchema(schema));
         }
         return true;
     }
@@ -292,7 +299,7 @@ function registerTaxonomy(name: string, args: Record<string, any> = {}) {
         postTypes: postTypesList
     };
 
-    taxonomies.set(name, taxonomy);
+    taxonomiesRegistry().set(name, taxonomy);
 
     doAction('registered_taxonomy', name, taxonomy);
 
@@ -307,7 +314,7 @@ function unregisterTaxonomy(name: string) {
     if (['category', 'post_tag'].includes(name)) {
         return false;
     }
-    return taxonomies.delete(name);
+    return taxonomiesRegistry().delete(name);
 }
 
 /**
@@ -315,7 +322,7 @@ function unregisterTaxonomy(name: string) {
  * Equivalent to get_taxonomy()
  */
 function getTaxonomy(name: string) {
-    return taxonomies.get(name) || null;
+    return taxonomiesRegistry().get(name) || null;
 }
 
 /**
@@ -323,7 +330,7 @@ function getTaxonomy(name: string) {
  * Equivalent to get_taxonomies()
  */
 function getTaxonomies(args: Record<string, any> = {}) {
-    const list = Array.from(taxonomies.values());
+    const list = Array.from(taxonomiesRegistry().values());
 
     return list.filter(tax => {
         if (args.public !== undefined && tax.public !== args.public) return false;
@@ -340,7 +347,7 @@ function getTaxonomies(args: Record<string, any> = {}) {
  * Equivalent to taxonomy_exists()
  */
 function taxonomyExists(name: string) {
-    return taxonomies.has(name);
+    return taxonomiesRegistry().has(name);
 }
 
 /**
@@ -361,7 +368,7 @@ async function initTaxonomies() {
             try {
                 registerTaxonomy(tax && tax.name, tax);
             } catch (e: any) {
-                console.warn(`Skipping invalid custom taxonomy: ${e && e.message ? e.message : e}`);
+                log.warn({ err: e }, 'Skipping invalid custom taxonomy');
             }
         });
     }
@@ -427,7 +434,7 @@ async function initPostTypes() {
             try {
                 registerContentType(schema);
             } catch (e: any) {
-                console.warn(`Skipping invalid custom content schema: ${e && e.message ? e.message : e}`);
+                log.warn({ err: e }, 'Skipping invalid custom content schema');
             }
         });
     }
@@ -436,11 +443,11 @@ async function initPostTypes() {
     const customTypes = await getOption('custom_post_types', {});
     if (customTypes && typeof customTypes === 'object' && !Array.isArray(customTypes)) {
         Object.values(customTypes).forEach((type: any) => {
-            if (!type || typeof type.name !== 'string' || contentTypeSchemas.has(type.name)) return;
+            if (!type || typeof type.name !== 'string' || contentTypeSchemasRegistry().has(type.name)) return;
             try {
                 registerPostType(type.name, type);
             } catch (e: any) {
-                console.warn(`Skipping invalid legacy custom post type: ${e && e.message ? e.message : e}`);
+                log.warn({ err: e }, 'Skipping invalid legacy custom post type');
             }
         });
     }

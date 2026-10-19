@@ -2,8 +2,8 @@
  * WordJS Plugin: Marketplace — multi-vendor directory (v1 = lead generation).
  *
  * Flow: vendors apply publicly -> the admin approves -> the vendor receives a 6-digit access code
- * for a self-service PORTAL (same pattern as conference-manager: rate-limited code login, expiring
- * base64 token, host-namespaced cookie + x-portal-token header) where they manage their OWN product
+ * for a self-service PORTAL (same pattern as conference-manager: throttled code login, opaque
+ * server-side session id, host-namespaced cookie + x-portal-token header) where they manage their OWN product
  * listings and answer buyer inquiries. The public Puck block lists approved vendors' products with
  * vendor/category/search filtering; buyers contact a vendor through a per-product inquiry form.
  * There is NO centralized checkout in v1 — the marketplace generates leads and each vendor closes
@@ -13,8 +13,8 @@
  *  - All tables live under the plugin prefix (db.tablePrefix) so they pass the host's default-deny
  *    SQL scoping. Schema is created idempotently with the FULL column set; columns added after 1.0.0
  *    are migrated with ALTER ... ADD COLUMN on the plugin's own tables.
- *  - Access codes come from the host CSPRNG (wordjs.crypto.randomInt), NOT Math.random; the per-vendor
- *    login throttle below (bounded attempts per rolling window) is defense-in-depth for the short code.
+ *  - Access codes come from the host CSPRNG (wordjs.crypto.randomInt), NOT Math.random; the login
+ *    throttle below (wrong codes per client, per vendor and site-wide) bounds guessing the short code.
  *  - Money is stored as INTEGER CENTS (price_cents); clients render cents/100 with the configured
  *    currency symbol (a plain setting in the plugin's own table, not a secret).
  *  - Mail is best-effort: approval/inquiry emails are wrapped in try/catch and the operation
@@ -23,7 +23,7 @@
 
 exports.metadata = {
     name: 'Marketplace',
-    version: '1.0.1',
+    version: '1.0.3',
     description: 'Multi-vendor directory: vendor applications, code-protected vendor portal, product listings and buyer inquiries (lead generation).',
     author: 'WordJS',
 };
@@ -40,6 +40,7 @@ exports.init = async function (wordjs) {
         products: `${P}products`,
         inquiries: `${P}inquiries`,
         settings: `${P}settings`,
+        sessions: `${P}portal_sessions`,
     };
 
     // Input length caps (defense against oversized payloads bloating the DB).
@@ -133,6 +134,20 @@ exports.init = async function (wordjs) {
         await createIndex(`${P}idx_products_category`, T.products, 'category');
         await createIndex(`${P}idx_inquiries_vendor`, T.inquiries, 'vendor_id');
         await createIndex(`${P}idx_inquiries_product`, T.inquiries, 'product_id');
+
+        // 1.0.2: server-side portal sessions (see createPortalSession). VARCHAR, not TEXT: MySQL cannot
+        // index TEXT. No FK — the lookup joins the vendor, so a session of a deleted store resolves to none.
+        await db.createTable(T.sessions, [
+            'id INT_PK',
+            'token VARCHAR(64) NOT NULL',
+            'vendor_id INT NOT NULL',
+            'access_code VARCHAR(32) NOT NULL',
+            'expires_at VARCHAR(16) NOT NULL',
+            'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+        ]);
+        try { await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_portal_sessions_token ON ${T.sessions} (token)`); }
+        catch (e) { console.error('[vendor-marketplace] could not create the portal session index:', e.message); }
+        await createIndex(`${P}idx_portal_sessions_expires`, T.sessions, 'expires_at');
     }
     await initSchema();
 
@@ -277,84 +292,123 @@ exports.init = async function (wordjs) {
         return !(Number.isFinite(elapsed) && elapsed >= 3000);
     };
 
-    // Portal-login throttle per vendor (single child process → in-memory is sufficient).
-    const LOGIN_MAX = 6, LOGIN_WINDOW_MS = 10 * 60 * 1000;
-    const loginAttempts = new Map(); // vendor_id -> { count, first }
-    const loginThrottled = (vendorId) => {
-        const rec = loginAttempts.get(String(vendorId));
-        return !!(rec && Date.now() - rec.first < LOGIN_WINDOW_MS && rec.count >= LOGIN_MAX);
+    // ---- portal-login throttle (1.0.3) -----------------------------------------------------------
+    // Only WRONG codes are counted, against three fixed-window budgets:
+    //   - per client + vendor (req.clientKey = the host's HMAC of the caller's address): the ONLY
+    //     budget that refuses. Another client's mistakes never lock this one out, and a right code
+    //     clears only the caller's own count. It is charged synchronously BEFORE the code check is
+    //     awaited (so a parallel burst cannot outrun it) and refunded when the code is right;
+    //   - per vendor, all clients together, and site-wide: bound guessing spread over many addresses
+    //     and many vendors by slowing every attempt down once spent (escalating delay), never by
+    //     refusing — a right code is never turned away for other callers' wrong ones. Only wrong codes
+    //     for a vendor that exists are charged to them.
+    // Signed-in vendors never meet this: the portal session is an opaque server-side id (below), not
+    // something that carries the code. Single child process → in-memory maps are the whole picture;
+    // every map is bounded.
+    const LOGIN_LIMITS = {
+        perClient: 6, clientWindowMs: 10 * 60 * 1000,
+        perVendor: 20, perSite: 100, sharedWindowMs: 60 * 60 * 1000,
+        // Past a shared budget every attempt waits before its code is checked: delayBaseMs, doubling
+        // every delayDoubleEvery further wrong codes, up to delayMaxMs.
+        delayBaseMs: 250, delayDoubleEvery: 10, delayMaxMs: 8000,
     };
-    const LOGIN_MAP_CAP = 1000;
-    const noteLoginFailure = (vendorId) => {
-        const now = Date.now(), key = String(vendorId);
-        // Opportunistic eviction: once the map grows past the cap, drop entries whose window has
-        // expired so spraying unique vendor ids cannot grow the child's memory without bound.
-        if (loginAttempts.size > LOGIN_MAP_CAP) {
-            for (const [k, r] of loginAttempts) {
-                if (now - r.first >= LOGIN_WINDOW_MS) loginAttempts.delete(k);
+    const LOGIN_MAP_CAP = 5000;
+    const loginBuckets = { client: new Map(), vendor: new Map(), site: new Map() };
+    const loginBucket = (map, key, windowMs, now) => {
+        let b = map.get(key);
+        if (!b || now - b.first >= windowMs) {
+            if (!b && map.size >= LOGIN_MAP_CAP) {
+                for (const [k, v] of map) if (now - v.first >= windowMs) map.delete(k);
+                while (map.size >= LOGIN_MAP_CAP) map.delete(map.keys().next().value);
             }
+            b = { count: 0, first: now };
+            map.set(key, b);
         }
-        const rec = loginAttempts.get(key);
-        if (!rec || now - rec.first >= LOGIN_WINDOW_MS) loginAttempts.set(key, { count: 1, first: now });
-        else rec.count++;
+        return b;
     };
-    const clearLoginFailures = (vendorId) => loginAttempts.delete(String(vendorId));
+    /** A bucket's live count, without creating one (an unknown id never becomes a map key). */
+    const loginCount = (map, key, windowMs, now) => {
+        const b = map.get(key);
+        return b && now - b.first < windowMs ? b.count : 0;
+    };
+    /**
+     * Charge one attempt for `vendorId` to the caller's own budget: null when it is spent (the only
+     * refusal), else { delayMs, failed(), succeeded() }. `delayMs` is how long the attempt waits before
+     * its code is checked, from the shared budgets; failed() charges them (call it only for a wrong
+     * code on a vendor that exists); succeeded() refunds the caller's own attempt.
+     */
+    const beginLoginAttempt = (req, vendorId) => {
+        const now = Date.now(), L = LOGIN_LIMITS;
+        const clientKey = `${String((req && req.clientKey) || 'anon').slice(0, 64)}|${vendorId}`;
+        const own = loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now);
+        if (own.count >= L.perClient) return null;
+        own.count++;
+        const excess = Math.max(
+            loginCount(loginBuckets.vendor, String(vendorId), L.sharedWindowMs, now) - L.perVendor,
+            loginCount(loginBuckets.site, '*', L.sharedWindowMs, now) - L.perSite
+        );
+        const delayMs = excess < 0 ? 0
+            : Math.min(L.delayMaxMs, L.delayBaseMs * 2 ** Math.floor(excess / L.delayDoubleEvery));
+        let settled = false;
+        return {
+            delayMs,
+            failed() {
+                if (settled) return;
+                settled = true;
+                const at = Date.now();
+                loginBucket(loginBuckets.vendor, String(vendorId), L.sharedWindowMs, at).count++;
+                loginBucket(loginBuckets.site, '*', L.sharedWindowMs, at).count++;
+            },
+            succeeded() {
+                if (settled) return;
+                settled = true;
+                loginBuckets.client.delete(clientKey); // the caller's own record only
+            },
+        };
+    };
+    const loginPause = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : null);
 
-    // Concurrency backstop (audit AUTH-A3 class): loginThrottled is check-then-arm and the code check
-    // straddles awaited db.get calls, so a BURST of parallel guesses for one vendor would all clear the
-    // throttle before noteLoginFailure arms it. Cap concurrent in-flight code verifications per vendor.
-    const LOGIN_MAX_INFLIGHT = 3;
-    const loginInflight = new Map(); // vendor_id -> count
-    const beginLoginAttempt = (vendorId) => {
-        const k = String(vendorId), n = loginInflight.get(k) || 0;
-        if (n >= LOGIN_MAX_INFLIGHT) return false;
-        loginInflight.set(k, n + 1);
-        return true;
-    };
-    const endLoginAttempt = (vendorId) => {
-        const k = String(vendorId), n = (loginInflight.get(k) || 0) - 1;
-        if (n <= 0) loginInflight.delete(k); else loginInflight.set(k, n);
-    };
-
-    // ---- portal auth (copy of the conference-manager pattern) ------------------------------------
-    // Session = base64 `id:code:expiry`. The host NAMESPACES any cookie the plugin sets — the value
-    // is stored under the namespaced cookie name below — and forwards the `x-portal-token` header
-    // verbatim; accept either. The code is re-checked against the DB on EVERY request, so rotating
-    // or suspending a vendor invalidates any outstanding token immediately.
+    // ---- portal sessions (1.0.2) -------------------------------------------------------------------
+    // A login mints an opaque random id (host CSPRNG, 256 bits) stored server-side with the vendor and
+    // the access code it was opened with. The host NAMESPACES any cookie the plugin sets — the value is
+    // stored under the namespaced cookie name below — and forwards the `x-portal-token` header verbatim;
+    // accept either. Every request re-reads the vendor: a new access code, a suspension or a deletion
+    // ends every session at once. The id carries nothing guessable, so this path needs no throttle.
     const PORTAL_COOKIE = `${db.tablePrefix}wordjs_portal_token`;
     const PORTAL_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-    const makePortalToken = (id, code) => btoa(`${id}:${code}:${Date.now() + PORTAL_TOKEN_TTL_MS}`);
-    async function resolvePortalVendor(req) {
+    const PORTAL_TOKEN_RE = /^[0-9a-f]{64}$/;
+    // Expiry as a fixed-width ms string: compares correctly as text on every engine.
+    const expiryText = (ms) => String(Math.floor(ms)).padStart(15, '0');
+    async function createPortalSession(vendor) {
+        const token = String(await wordjs.crypto.randomToken(32));
+        const now = Date.now();
+        await db.run(`DELETE FROM ${T.sessions} WHERE expires_at < ?`, [expiryText(now)]);
+        await db.run(
+            `INSERT INTO ${T.sessions} (token, vendor_id, access_code, expires_at) VALUES (?, ?, ?, ?)`,
+            [token, vendor.id, String(vendor.access_code), expiryText(now + PORTAL_TOKEN_TTL_MS)]
+        );
+        return token;
+    }
+    const portalTokenOf = (req) => {
         const cookies = req.cookies || {};
         const token = cookies[PORTAL_COOKIE] || cookies.wordjs_portal_token || (req.headers && req.headers['x-portal-token']);
+        return typeof token === 'string' && PORTAL_TOKEN_RE.test(token) ? token : null;
+    };
+    async function resolvePortalVendor(req) {
+        const token = portalTokenOf(req);
         if (!token) return null;
         try {
-            const decoded = atob(token);
-            const parts = decoded.split(':');
-            const id = Number(parts[0]), code = parts[1], exp = parts[2];
-            // Canonicalize the id so "5"/"05"/"005" can't each get a fresh throttle budget (audit MEDIUM).
-            if (!Number.isInteger(id) || id <= 0) return null;
-            if (!exp || Date.now() > Number(exp)) return null;
-            if (!code) return null;
-            // Throttle the token path too — it was an unthrottled brute-force oracle for the 6-digit code
-            // (attacker forges base64(id:guess:far-future) and reads 200-vs-401) (audit MEDIUM).
-            if (loginThrottled(id)) return null;
-            // Concurrency backstop (AUTH-A3 class): cap concurrent in-flight guesses per vendor so a burst
-            // of forged tokens can't clear the throttle before noteLoginFailure arms it.
-            if (!beginLoginAttempt(id)) return null;
-            try {
-                const vendor = await db.get(
-                    `SELECT * FROM ${T.vendors} WHERE id = ? AND access_code = ? AND status = 'approved'`,
-                    [id, code]
-                );
-                if (!vendor) { noteLoginFailure(id); return null; }
-                clearLoginFailures(id);
-                return vendor;
-            } finally { endLoginAttempt(id); }
+            const vendor = await db.get(
+                `SELECT v.* FROM ${T.sessions} s JOIN ${T.vendors} v ON v.id = s.vendor_id
+                 WHERE s.token = ? AND s.expires_at > ? AND v.status = 'approved' AND v.access_code = s.access_code`,
+                [token, expiryText(Date.now())]
+            );
+            return vendor || null;
         } catch (e) {
             return null;
         }
     }
+
     /** Public projection of a vendor for the portal (never echoes the access code). */
     const vendorSafe = (v) => ({
         id: v.id, name: v.name, slug: v.slug, email: v.email, phone: v.phone,
@@ -503,36 +557,33 @@ exports.init = async function (wordjs) {
 
     // ================================ VENDOR PORTAL ===============================================
 
-    // Login with vendor + 6-digit code. Rate-limited per vendor BEFORE touching the DB.
+    // Login with vendor + 6-digit code. The attempt is charged to the caller's budget BEFORE touching the
+    // DB and refunded only when the code is right (beginLoginAttempt).
     http.route('post', '/portal/login', async (req, res) => {
         const body = req.body || {};
         // Validate the id BEFORE it can become a throttle-map key (bounds attacker-chosen keys).
         const vendorId = parseId(body.vendor_id);
         const code = String(body.code == null ? '' : body.code).trim();
-        let acquired = false;
         try {
             if (!vendorId) return res.status(400).json({ error: 'Tienda inválida.' });
-            if (loginThrottled(vendorId)) {
+            const attempt = beginLoginAttempt(req, vendorId);
+            if (!attempt) {
                 return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' });
             }
-            // Concurrency backstop (audit AUTH-A3 class): cap concurrent in-flight guesses per vendor so a
-            // parallel burst can't clear the throttle before noteLoginFailure arms it. Released in finally.
-            if (!(acquired = beginLoginAttempt(vendorId))) {
-                return res.status(429).json({ error: 'Demasiados intentos simultáneos. Inténtalo de nuevo en un momento.' });
-            }
+            await loginPause(attempt.delayMs);
+            // Status before code would tell a stranger which stores are pending/suspended without the
+            // code; the code is checked first (a wrong one stays charged).
             const vendor = await db.get(`SELECT * FROM ${T.vendors} WHERE id = ?`, [vendorId]);
-            if (!vendor) { noteLoginFailure(vendorId); return res.status(404).json({ error: 'Tienda no encontrada.' }); }
-            if (vendor.status === 'pending') return res.status(403).json({ error: 'Tu tienda aún no fue aprobada.' });
-            if (vendor.status !== 'approved') return res.status(403).json({ error: 'Tu tienda está suspendida. Contacta al administrador.' });
-            if (!vendor.access_code || String(vendor.access_code) !== code) {
-                noteLoginFailure(vendorId);
+            if (!vendor || !vendor.access_code || String(vendor.access_code) !== code) {
+                if (vendor) attempt.failed();
                 return res.status(401).json({ error: 'Código incorrecto.' });
             }
-            clearLoginFailures(vendorId);
+            attempt.succeeded();
+            if (vendor.status === 'pending') return res.status(403).json({ error: 'Tu tienda aún no fue aprobada.' });
+            if (vendor.status !== 'approved') return res.status(403).json({ error: 'Tu tienda está suspendida. Contacta al administrador.' });
 
-            // Stateless session token: base64(id:code:expiry). The code is the shared secret and is
-            // re-checked against the DB on every portal request (resolvePortalVendor).
-            const token = makePortalToken(vendor.id, vendor.access_code);
+            // Opaque server-side session (createPortalSession): the token carries no code.
+            const token = await createPortalSession(vendor);
 
             // The host namespaces the cookie to `${tablePrefix}wordjs_portal_token` and clamps its
             // flags; the client ALSO receives the token to send via the x-portal-token header.
@@ -543,7 +594,6 @@ exports.init = async function (wordjs) {
             });
             res.json({ success: true, token, vendor: vendorSafe(vendor) });
         } catch (e) { failQuietly(res, e, 'portal login'); }
-        finally { if (acquired) endLoginAttempt(vendorId); }
     });
 
     http.route('get', '/portal/me', async (req, res) => {
@@ -553,7 +603,13 @@ exports.init = async function (wordjs) {
     });
 
     // Clear the namespaced session cookie so a refresh on a shared device does not re-authenticate.
+    // The session row goes too, so the token is dead everywhere, not just in this browser.
     http.route('post', '/portal/logout', async (req, res) => {
+        const token = portalTokenOf(req);
+        if (token) {
+            try { await db.run(`DELETE FROM ${T.sessions} WHERE token = ?`, [token]); }
+            catch (e) { console.warn('[marketplace] portal logout: session not removed:', e.message); }
+        }
         res.clearCookie('wordjs_portal_token', { path: '/' });
         res.json({ success: true });
     });

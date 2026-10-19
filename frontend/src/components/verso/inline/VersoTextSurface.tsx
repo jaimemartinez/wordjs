@@ -51,6 +51,7 @@ import {
     insertParagraphBreak,
     insertText,
     isCollapsed,
+    isSafeLinkHref,
     normalizeDoc,
     normalizePara,
     parseRichHtml,
@@ -69,6 +70,7 @@ import VersoBubbleMenu, {
     type VersoBubbleMenuHandle,
 } from "./VersoBubbleMenu";
 import { mapOffset, reconcileSelection } from "./remoteReconcile";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 /**
  * Centinela que VersoBlock inyecta como valor de la prop inline: invisible
@@ -163,7 +165,7 @@ function collectInlineInto(entry: ParaEntry, node: Node, marks: Marks): void {
     let m = marks;
     if (tag === "strong" || tag === "b") m = { ...cloneMarks(m), bold: true };
     else if (tag === "em" || tag === "i") m = { ...cloneMarks(m), italic: true };
-    else if (tag === "a" && node.hasAttribute("href")) {
+    else if (tag === "a" && isSafeLinkHref(node.getAttribute("href"))) {
         m = {
             ...cloneMarks(m),
             link: {
@@ -512,6 +514,7 @@ export default function VersoTextSurface({
     onRequestEnd,
     applyRef,
 }: VersoTextSurfaceProps): React.ReactElement {
+    const { tr } = useEditorTr();
     const markerRef = React.useRef<HTMLSpanElement | null>(null);
     const fallbackRef = React.useRef<HTMLDivElement | null>(null);
     const [useFallback, setUseFallback] = React.useState(false);
@@ -1248,9 +1251,9 @@ export default function VersoTextSurface({
                     role="note"
                     className="rounded border border-dashed border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-3 py-2 text-xs text-[var(--ed-on-surface-variant)]"
                 >
-                    Edición inline desactivada: el motor no puede representar este
-                    contenido sin pérdida, así que el bloque queda en solo lectura
-                    para preservarlo. Cierra con Escape o haz click fuera.
+                    {tr(
+                        "Edición inline desactivada: el motor no puede representar este contenido sin pérdida, así que el bloque queda en solo lectura para preservarlo. Cierra con Escape o haz click fuera.",
+                    )}
                 </div>
             )}
             {schema === "rich" && frameDoc && (

@@ -1,20 +1,13 @@
-const { initSqlJsDb, getDb } = require('../src/config/database');
+// Debug helper: print the stored role map (the `wordjs_user_roles` option) as raw JSON.
+// Usage (from backend/): node -r ts-node/register cli/inspect-roles.js
+const { withDatabase, ROLES_OPTION, runMain } = require('./lib/diagnostic-db');
 
-async function run() {
-    try {
-        await initSqlJsDb();
-        const db = getDb();
-        const row = db.prepare('SELECT option_value FROM options WHERE option_name = "wordjs_user_roles"').get();
-        if (row) {
-            console.log("ROLES_DB:", row.option_value);
-        } else {
-            console.log("ROLES_DB: NOT_FOUND");
-        }
-        process.exit(0);
-    } catch (e) {
-        console.error("Error:", e);
-        process.exit(1);
-    }
+async function main() {
+    const row = await withDatabase((dbAsync) =>
+        dbAsync.get('SELECT option_value FROM options WHERE option_name = ?', [ROLES_OPTION]));
+    console.log('ROLES_DB:', row ? row.option_value : 'NOT_FOUND');
+    return 0;
 }
 
-run();
+module.exports = { main };
+runMain(module, main);

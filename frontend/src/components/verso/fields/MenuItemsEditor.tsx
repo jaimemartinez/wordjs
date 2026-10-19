@@ -30,6 +30,7 @@ import React from "react";
 import { menusApi } from "@/lib/api";
 import { buildMenuTree, type ChromeMenuItem } from "@/lib/chromeData";
 import { invalidateEditorMenus } from "@/lib/useEditorMenu";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { VersoEditorState } from "@/lib/verso/types";
 import { useStoreSlice } from "../render/context";
@@ -82,8 +83,9 @@ export function MenuItemsTree({ nodes, depth = 0, readOnly, busy, deletingId, ca
     deletingId: number | null;
     callbacks: MenuTreeCallbacks;
 }) {
+    const { tr, trf } = useEditorTr();
     if (nodes.length === 0 && depth === 0) {
-        return <Notice>El menú no tiene elementos todavía.</Notice>;
+        return <Notice>{tr("El menú no tiene elementos todavía.")}</Notice>;
     }
     return (
         <ul className={depth === 0 ? "space-y-1" : "mt-1 space-y-1"} data-menu-depth={depth}>
@@ -95,54 +97,54 @@ export function MenuItemsTree({ nodes, depth = 0, readOnly, busy, deletingId, ca
                     <li key={String(node.id)} style={{ paddingLeft: depth === 0 ? 0 : 12 }}>
                         <div className="flex items-center gap-1 rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-2 py-1">
                             <span className="min-w-0 flex-1 truncate text-xs text-[var(--ed-on-surface)]" title={node.url}>
-                                {node.title || "(sin título)"}
+                                {node.title || tr("(sin título)")}
                             </span>
                             {!readOnly && deletingId === id && (
                                 <span className="flex shrink-0 items-center gap-1">
                                     <span className="text-[10px] text-[var(--ed-error)]">
-                                        {hasChildren ? "¿Borrar? (sus hijos suben de nivel)" : "¿Borrar?"}
+                                        {tr(hasChildren ? "¿Borrar? (sus hijos suben de nivel)" : "¿Borrar?")}
                                     </span>
                                     <button type="button" className={BTN_CLS} disabled={busy}
-                                        aria-label={`Confirmar borrado de ${node.title}`}
+                                        aria-label={trf("Confirmar borrado de {title}", { title: node.title })}
                                         onClick={() => callbacks.onDeleteConfirm(id)}>
-                                        Sí
+                                        {tr("Sí")}
                                     </button>
                                     <button type="button" className={BTN_CLS} disabled={busy}
-                                        aria-label="Cancelar borrado"
+                                        aria-label={tr("Cancelar borrado")}
                                         onClick={() => callbacks.onDeleteCancel()}>
-                                        No
+                                        {tr("No")}
                                     </button>
                                 </span>
                             )}
                             {!readOnly && deletingId !== id && (
                                 <span className="flex shrink-0 items-center gap-0.5">
                                     <button type="button" className={BTN_CLS} disabled={busy || index === 0}
-                                        title="Subir" aria-label={`Subir ${node.title}`}
+                                        title={tr("Subir")} aria-label={trf("Subir {title}", { title: node.title })}
                                         onClick={() => callbacks.onMove(id, -1)}>
                                         ↑
                                     </button>
                                     <button type="button" className={BTN_CLS} disabled={busy || index === nodes.length - 1}
-                                        title="Bajar" aria-label={`Bajar ${node.title}`}
+                                        title={tr("Bajar")} aria-label={trf("Bajar {title}", { title: node.title })}
                                         onClick={() => callbacks.onMove(id, 1)}>
                                         ↓
                                     </button>
                                     <button type="button" className={BTN_CLS} disabled={busy || index === 0}
-                                        title="Anidar bajo el elemento anterior" aria-label={`Anidar ${node.title}`}
+                                        title={tr("Anidar bajo el elemento anterior")} aria-label={trf("Anidar {title}", { title: node.title })}
                                         onClick={() => callbacks.onIndent(id)}>
                                         →
                                     </button>
                                     <button type="button" className={BTN_CLS} disabled={busy || isRoot}
-                                        title="Sacar un nivel" aria-label={`Desanidar ${node.title}`}
+                                        title={tr("Sacar un nivel")} aria-label={trf("Desanidar {title}", { title: node.title })}
                                         onClick={() => callbacks.onOutdent(id)}>
                                         ←
                                     </button>
                                     <button type="button" className={BTN_CLS} disabled={busy}
-                                        title="Editar" aria-label={`Editar ${node.title}`}
+                                        title={tr("Editar")} aria-label={trf("Editar {title}", { title: node.title })}
                                         onClick={() => callbacks.onEdit(id)}>
                                         ✎
                                     </button>
                                     <button type="button" className={BTN_CLS} disabled={busy}
-                                        title="Borrar" aria-label={`Borrar ${node.title}`}
+                                        title={tr("Borrar")} aria-label={trf("Borrar {title}", { title: node.title })}
                                         onClick={() => callbacks.onDeleteAsk(id)}>
                                         ×
                                     </button>
@@ -184,28 +186,29 @@ function ItemForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy }: {
     submitLabel: string;
     busy: boolean;
 }) {
+    const { tr } = useEditorTr();
     const titleId = React.useId();
     const urlId = React.useId();
     const targetId = React.useId();
     return (
         <div className="mt-2 rounded border border-[var(--ed-outline-variant)] p-2 space-y-2">
             <div>
-                <label htmlFor={titleId} className={LABEL_CLS}>Título</label>
+                <label htmlFor={titleId} className={LABEL_CLS}>{tr("Título")}</label>
                 <input id={titleId} type="text" className={INPUT_CLS} value={draft.title}
                     onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
             </div>
             <div>
                 <label htmlFor={urlId} className={LABEL_CLS}>URL</label>
                 <input id={urlId} type="text" className={INPUT_CLS} value={draft.url}
-                    placeholder="/pagina o https://…"
+                    placeholder={tr("/pagina o https://…")}
                     onChange={(e) => setDraft({ ...draft, url: e.target.value })} />
             </div>
             <div>
-                <label htmlFor={targetId} className={LABEL_CLS}>Abrir en</label>
+                <label htmlFor={targetId} className={LABEL_CLS}>{tr("Abrir en")}</label>
                 <select id={targetId} className={INPUT_CLS} value={draft.target}
                     onChange={(e) => setDraft({ ...draft, target: e.target.value === "_blank" ? "_blank" : "_self" })}>
-                    <option value="_self">Misma pestaña</option>
-                    <option value="_blank">Pestaña nueva</option>
+                    <option value="_self">{tr("Misma pestaña")}</option>
+                    <option value="_blank">{tr("Pestaña nueva")}</option>
                 </select>
             </div>
             <div className="flex gap-1">
@@ -215,7 +218,7 @@ function ItemForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy }: {
                 </button>
                 {onCancel && (
                     <button type="button" className={BTN_CLS} disabled={busy} onClick={onCancel}>
-                        Cancelar
+                        {tr("Cancelar")}
                     </button>
                 )}
             </div>
@@ -390,6 +393,7 @@ export async function createAndAssignMenu(
 }
 
 export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
+    const { tr, trf } = useEditorTr();
     // Estado inicial DERIVADO: una referencia por menú sin menú elegido ya se sabe "unbound" sin
     // esperar a ningún efecto (y el primer render estático no miente con un "Cargando…").
     const [status, setStatus] = React.useState<PanelStatus>(
@@ -574,6 +578,21 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
         });
     };
 
+    // Los mensajes de error se generan en Español (fuente) fuera del render; se traducen al pintarlos.
+    // Un mensaje de la API sin entrada en el diccionario se pinta tal cual (tr es la identidad).
+    const errorText = (message: string): string => {
+        const missing = /^El menú #(\d+) no existe\.$/.exec(message);
+        if (missing) return trf("El menú #{id} no existe.", { id: missing[1] });
+        switch (message) {
+            case "Error inesperado":
+                return tr("Error inesperado");
+            case "La API no devolvió el id del menú creado.":
+                return tr("La API no devolvió el id del menú creado.");
+            default:
+                return tr(message);
+        }
+    };
+
     const editingItem = editingId === null ? null : items.find((it) => it.id === editingId) ?? null;
     const tree = React.useMemo(() => {
         const chrome: ChromeMenuItem[] = items.map((it) => ({
@@ -588,30 +607,30 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
 
     return (
         <div data-menu-items-editor="">
-            <span className={LABEL_CLS}>Elementos del menú</span>
+            <span className={LABEL_CLS}>{tr("Elementos del menú")}</span>
 
             {forbidden && (
                 <div className="mb-2">
-                    <Notice>Necesitas permisos de administrador para editar el menú.</Notice>
+                    <Notice>{tr("Necesitas permisos de administrador para editar el menú.")}</Notice>
                 </div>
             )}
 
-            {status === "loading" && <Notice>Cargando el menú…</Notice>}
+            {status === "loading" && <Notice>{tr("Cargando el menú…")}</Notice>}
 
             {status === "unbound" && (
-                <Notice>Elige un menú en «Menú (si el origen es Menú)» para editar sus elementos.</Notice>
+                <Notice>{tr("Elige un menú en «Menú (si el origen es Menú)» para editar sus elementos.")}</Notice>
             )}
 
             {status === "no-menu-at-location" && (
                 <div className="space-y-2">
-                    <Notice>No hay ningún menú asignado a la ubicación «{location}».</Notice>
-                    {error && <Notice>{error}</Notice>}
+                    <Notice>{trf("No hay ningún menú asignado a la ubicación «{location}».", { location })}</Notice>
+                    {error && <Notice>{errorText(error)}</Notice>}
                     {!forbidden && createdMenuId !== null && (
-                        <Notice>El menú ya se creó; solo falló la asignación — reintenta sin miedo, no se duplica.</Notice>
+                        <Notice>{tr("El menú ya se creó; solo falló la asignación — reintenta sin miedo, no se duplica.")}</Notice>
                     )}
                     {!forbidden && (
                         <button type="button" className={`${BTN_CLS} w-full`} disabled={busy} onClick={createAndAssign}>
-                            {createdMenuId !== null ? "Reintentar la asignación" : "Crear menú y asignarlo"}
+                            {tr(createdMenuId !== null ? "Reintentar la asignación" : "Crear menú y asignarlo")}
                         </button>
                     )}
                 </div>
@@ -619,9 +638,9 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
 
             {status === "error" && (
                 <div className="space-y-2">
-                    <Notice>{error ?? "No se pudo cargar el menú."}</Notice>
+                    <Notice>{error ? errorText(error) : tr("No se pudo cargar el menú.")}</Notice>
                     <button type="button" className={`${BTN_CLS} w-full`} disabled={busy} onClick={() => void load()}>
-                        Reintentar
+                        {tr("Reintentar")}
                     </button>
                 </div>
             )}
@@ -629,9 +648,11 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
             {status === "ready" && (
                 <div className="space-y-2">
                     <p className="text-[10px] text-[var(--ed-outline)]">
-                        Menú «{menu?.name}» — los cambios se guardan al instante en el menú del sitio.
+                        {trf("Menú «{name}» — los cambios se guardan al instante en el menú del sitio.", {
+                            name: menu?.name ?? "",
+                        })}
                     </p>
-                    {error && <Notice>{error}</Notice>}
+                    {error && <Notice>{errorText(error)}</Notice>}
                     <MenuItemsTree
                         nodes={tree}
                         readOnly={forbidden}
@@ -645,7 +666,7 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
                             setDraft={setEditDraft}
                             onSubmit={submitEdit}
                             onCancel={() => setEditingId(null)}
-                            submitLabel="Guardar cambios"
+                            submitLabel={tr("Guardar cambios")}
                             busy={busy}
                         />
                     )}
@@ -654,7 +675,7 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
                             draft={addDraft}
                             setDraft={setAddDraft}
                             onSubmit={submitAdd}
-                            submitLabel="Añadir elemento"
+                            submitLabel={tr("Añadir elemento")}
                             busy={busy}
                         />
                     )}
@@ -673,6 +694,7 @@ const selectSelectedNode = (s: VersoEditorState) =>
     s.selection.nodeId ? s.doc.nodes[s.selection.nodeId] : undefined;
 
 function BoundMenuItemsEditor({ handle }: { handle: EditorHandle }) {
+    const { tr } = useEditorTr();
     const node = useStoreSlice(handle, selectSelectedNode);
     const source = String(node?.props.source ?? "location");
     const rawLocation = node?.props.location;
@@ -687,7 +709,7 @@ function BoundMenuItemsEditor({ handle }: { handle: EditorHandle }) {
 
     if (!node || node.type !== "NavMenu") {
         // El campo `items` solo existe en NavMenu; esto es un cinturón defensivo, no un camino real.
-        return <Notice>Selecciona un bloque de menú de navegación.</Notice>;
+        return <Notice>{tr("Selecciona un bloque de menú de navegación.")}</Notice>;
     }
     // Key = identidad de la vinculación: repuntar REMONTA el panel (estado a estrenar — ni items,
     // ni forbidden, ni el id del menú creado sobreviven de un menú a otro). La guardia de secuencia
@@ -697,11 +719,12 @@ function BoundMenuItemsEditor({ handle }: { handle: EditorHandle }) {
 
 export default function MenuItemsEditor() {
     const handle = useVersoPanelHandle();
+    const { tr } = useEditorTr();
     if (!handle) {
         return (
             <div data-menu-items-editor="">
-                <span className={LABEL_CLS}>Elementos del menú</span>
-                <Notice>Los elementos del menú se editan desde el panel de propiedades del editor Verso.</Notice>
+                <span className={LABEL_CLS}>{tr("Elementos del menú")}</span>
+                <Notice>{tr("Los elementos del menú se editan desde el panel de propiedades del editor Verso.")}</Notice>
             </div>
         );
     }

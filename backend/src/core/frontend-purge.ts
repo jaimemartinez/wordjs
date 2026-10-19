@@ -41,6 +41,7 @@ import * as path from 'path';
 const crypto = require('crypto');
 const { getConfig, saveConfig } = require('./configManager');
 const { addAction } = require('./hooks');
+const log = require('./module-logger').moduleLogger('core/frontend-purge');
 
 const FLUSH_DELAY_MS = 1500;
 const PURGE_TIMEOUT_MS = 3000;
@@ -103,8 +104,43 @@ function ensureSecret(): string | null {
 }
 
 type PurgeTransport =
-    | { mode: 'direct'; origin: string }
+    | { mode: 'direct'; origin: string; local?: boolean }
     | { mode: 'gateway'; host: string; port: number };
+
+/** Is there a frontend installed next to this backend (the single-host layout)? */
+function hasLocalFrontend(): boolean {
+    return fs.existsSync(path.resolve(BACKEND_ROOT, '..', 'frontend', 'package.json'));
+}
+
+/**
+ * Does `frontendUrl` name the frontend of THIS installation — unset, a loopback name, or the site's own
+ * host (what the installer derives it from)? An operator who points it at another machine (a frontend
+ * on 10.0.0.7, say) keeps that target even though a release bundle has a frontend/ tree on every node.
+ */
+function namesThisSitesFrontend(c: any): boolean {
+    const hostOf = (u: unknown): string | null => {
+        try { return new URL(String(u)).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return null; }
+    };
+    if (!c || !c.frontendUrl) return true;
+    const host = hostOf(c.frontendUrl);
+    if (!host) return true;
+    if (host === 'localhost' || host === '::1' || /^127\./.test(host)) return true;
+    return host === hostOf(c.siteUrl);
+}
+
+/**
+ * The port the co-located frontend listens on, chosen exactly as frontend/scripts/start-frontend.js
+ * chooses it: `frontendPort`, else the port of `frontendUrl`, else 3001.
+ */
+function localFrontendPort(c: any): number {
+    const fromConfig = Number(c && c.frontendPort);
+    if (Number.isInteger(fromConfig) && fromConfig > 0 && fromConfig < 65536) return fromConfig;
+    try {
+        const p = Number(new URL(String(c && c.frontendUrl)).port);
+        if (p) return p;
+    } catch { /* no usable frontendUrl */ }
+    return 3001;
+}
 
 /**
  * Is the direct target the monolith's OWN in-process Next server (rather than a co-located frontend
@@ -124,7 +160,8 @@ function isMonolithTarget(env: any = process.env): boolean {
 function purgeTransport(
     cfg: any,
     env: any = process.env,
-    certExists: (p: string) => boolean = fs.existsSync
+    certExists: (p: string) => boolean = fs.existsSync,
+    localFrontend: boolean = hasLocalFrontend()
 ): PurgeTransport {
     // Monolith serves Next itself on its public port (monolith.js exports it as PORT) — the
     // config's frontendUrl is the SPLIT-mode frontend (3001) and would be a dead target here.
@@ -145,6 +182,16 @@ function purgeTransport(
     if (c.advertiseHost && c.mtls && c.mtls.cert && c.gatewayHost && certExists(clusterCertPaths(c).cert)) {
         return { mode: 'gateway', host: String(c.gatewayHost), port: Number(c.gatewayInternalPort) || 3100 };
     }
+    // SINGLE HOST: the frontend is the one installed next to this backend, so it is dialled on loopback
+    // at the port it listens on. `frontendUrl` is the SITE's address for it — the installer derives it
+    // from the site address (`https://example.com`, or `…:3001`) — which behind a proxy or a public name
+    // is not this machine's frontend at all, and since the frontend binds 127.0.0.1 when the gateway is
+    // local (frontend/local-gateway.js) the public name cannot reach it in any case. Only the scheme is
+    // taken from it. `local` lets deliverDirect follow the listener the frontend really opened.
+    if (localFrontend && namesThisSitesFrontend(c)) {
+        const scheme = /^https:/i.test(String(c.frontendUrl || '')) ? 'https' : 'http';
+        return { mode: 'direct', origin: `${scheme}://127.0.0.1:${localFrontendPort(c)}`, local: true };
+    }
     return { mode: 'direct', origin: String(c.frontendUrl || 'http://localhost:3000').replace(/\/+$/, '') };
 }
 
@@ -153,7 +200,7 @@ function purgeTransport(
 function warnOnce(message: string) {
     if (Date.now() - lastFailureLog > 3600_000) {
         lastFailureLog = Date.now();
-        console.warn(`[Purge] ${message} (content stays TTL-fresh)`);
+        log.warn(`[Purge] ${message} (content stays TTL-fresh)`);
     }
 }
 
@@ -172,7 +219,7 @@ function failPermanent(key: string, message: string) {
     // Re-observing the SAME fault refreshes its clock (it is still true) without repeating the line.
     permanentFailures.set(key, { message, at: Date.now() });
     if (known) return;
-    console.error(`[Purge] MISCONFIGURED — on-demand purging is DEAD until this is fixed: ${message}`);
+    log.error(`[Purge] MISCONFIGURED — on-demand purging is DEAD until this is fixed: ${message}`);
 }
 
 /**
@@ -184,7 +231,7 @@ function failPermanent(key: string, message: string) {
  */
 function clearPermanent(key: string) {
     if (permanentFailures.delete(key)) {
-        console.log(`[Purge] recovered — the reported fault is gone (${key}); on-demand purging works again.`);
+        log.info(`[Purge] recovered — the reported fault is gone (${key}); on-demand purging works again.`);
     }
 }
 
@@ -194,7 +241,7 @@ function purgeFailureState(): string[] {
     for (const [key, fault] of permanentFailures) {
         if (fault.at < cutoff) {
             permanentFailures.delete(key);
-            console.log(`[Purge] retiring an unconfirmed fault (${key}): it has not been observed for ` +
+            log.info(`[Purge] retiring an unconfirmed fault (${key}): it has not been observed for ` +
                 `${Math.round(PERMANENT_TTL_MS / 60000)} min. The next purge re-reports it if it is still true.`);
         }
     }
@@ -425,7 +472,7 @@ function send(
  * @param isMono  true when the target is this very process's Next server: then the origin's scheme is
  *                a fact about a listener we own, and nothing about the frontend's certs applies.
  */
-function deliverDirect(origin: string, body: string, secret: string, cfg: any, isMono: boolean) {
+function deliverDirect(origin: string, body: string, secret: string, cfg: any, isMono: boolean, local = false) {
     let url: URL;
     try { url = new URL(origin + '/api/revalidate'); } catch { return; }
 
@@ -437,6 +484,12 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
     const configuredHttps = url.protocol === 'https:';
     const inferredHttps = !isMono && !configuredHttps && frontendServesTls();
     const isHttps = configuredHttps || inferredHttps;
+    // The same first-install transition with an https:// frontendUrl: an HTTPS split install writes one,
+    // while the frontend that booted before the install still listens on plain HTTP until its restart,
+    // so every purge failed and pages changed only on their ISR window. Permitted ONLY for the
+    // co-located frontend on loopback (purgeTransport `local`); an https:// origin on any other host
+    // still never downgrades.
+    const mayRetryCleartext = inferredHttps || (configuredHttps && local && url.hostname === '127.0.0.1');
     const requestOptions = (overTls: boolean): any => ({
         protocol: overTls ? 'https:' : 'http:',
         method: 'POST',
@@ -462,7 +515,7 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
     const onDone = (res: any, _text: string) => {
         if (res.statusCode !== 200) warnOnce(`frontend /api/revalidate answered ${res.statusCode}`);
     };
-    send(options, body, onDone, inferredHttps ? (e: any) => {
+    send(options, body, onDone, mayRetryCleartext ? (e: any) => {
         if (!isTlsAgainstCleartext(e, true)) return false;
         // No TLS attributes are copied. This is the origin's explicitly configured HTTP transport,
         // used only until the co-located frontend restarts and consumes its new certificates.
@@ -543,11 +596,44 @@ function flush() {
     }
     const secret = ensureSecret();
     if (!secret) return;
-    deliverDirect(target.origin, body, secret, cfg, isMonolithTarget());
+    deliverDirect(target.origin, body, secret, cfg, isMonolithTarget(), !!target.local);
 }
 
+/**
+ * MULTISITE: the frontend renders a site other than site 1 under an internal route segment named after
+ * its main hostname (`/wjs-site/<host>/...`, rewritten there by frontend/src/proxy.ts), and tags that
+ * site's data fetches `site:<host>:<tag>` (frontend/src/lib/server-api.ts). A purge queued while working
+ * for such a site is translated to those names, so it invalidates that site's pages and nobody else's.
+ * Site 1's tags and paths are exactly what they always were. Exported for tests.
+ */
+function siteQualifiedPurge(tags: string[], paths: string[]): { tags: string[]; paths: string[] } {
+    const siteContext = require('./site-context');
+    if (!siteContext.multisiteEnabled()) return { tags, paths };
+    const id = siteContext.currentSiteId();
+    if (id === siteContext.PRIMARY_SITE_ID) return { tags, paths };
+    const site = require('./network').getSite(id);
+    if (!site || !site.mainHost) return { tags: [], paths: [] };
+    const host = site.mainHost;
+    return {
+        tags: tags.map((t) => `site:${host}:${t}`),
+        paths: paths.map((p) => (p === '/' ? `/wjs-site/${host}` : `/wjs-site/${host}${p}`)),
+    };
+}
+
+/**
+ * The prefix that asks the frontend's /api/revalidate to EXPIRE a tag now instead of marking it stale.
+ * A plain purge is stale-while-revalidate: the first visit after it still gets the cached page and
+ * triggers the re-render in the background. That is right for content, wrong for a theme switch — the
+ * first visitor to every cached page saw the previous theme. `{ immediate: true }` sends the tag BOTH
+ * plain (so a frontend that predates the prefix still purges) and prefixed. A prefix, not a new body
+ * field, because the gateway's fan-out forwards exactly `{ tags, paths }`.
+ */
+const EXPIRE_NOW_PREFIX = 'now:';
+
 /** Queue tags/paths for the next debounced flush. */
-function purgeFrontend(tags: string[] = [], paths: string[] = []) {
+function purgeFrontend(rawTags: string[] = [], rawPaths: string[] = [], opts: { immediate?: boolean } = {}) {
+    const { tags, paths } = siteQualifiedPurge(rawTags, rawPaths);
+    if (opts.immediate) for (const t of tags) if (t) pendingTags.add(EXPIRE_NOW_PREFIX + String(t));
     for (const t of tags) if (t) pendingTags.add(String(t));
     for (const p of paths) if (p && String(p).startsWith('/')) pendingPaths.add(String(p));
     if (!flushTimer) {
@@ -657,14 +743,17 @@ function initFrontendPurge() {
         // from the importer, plugins) so the option can never change silently under a cached nav.
         if (String(name) === 'nav_menu_locations') purgeFrontend(['menus']);
         if (PLUGIN_ASSET_OPTIONS.has(String(name))) purgeFrontend(['plugin-assets']);
+        // Whether retired author slugs resolve (core/author-aliases) changes what the cached author
+        // archives answer — both ways: switching it OFF must drop pages already rendered under an old slug.
+        if (String(name) === 'author_legacy_slugs') purgeFrontend(['posts'], ['/']);
     });
 }
 
 module.exports = {
-    initFrontendPurge, purgeFrontend, purgeForPost, publicPathsForPost, purgeTransport, gatewayPurgeOptions,
+    initFrontendPurge, purgeFrontend, purgeForPost, siteQualifiedPurge, publicPathsForPost, purgeTransport, gatewayPurgeOptions,
     // Exported for tests and for a future /health/details counter: a purge channel that is permanently
     // broken must be observable, not inferable from a log line an hour old.
-    clusterTlsOptions, frontendServesTls, purgeFailureState,
+    clusterTlsOptions, frontendServesTls, purgeFailureState, localFrontendPort,
     // The installation root every certificate path is resolved against, and the resolver itself:
     // exported so a test can prove they do not depend on the process's cwd.
     clusterCertPaths, BACKEND_ROOT,

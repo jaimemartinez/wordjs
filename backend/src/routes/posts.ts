@@ -12,6 +12,7 @@ import type {
 } from '../generated/content-dtos.generated';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/posts');
 const router = express.Router();
 
 interface ContentRouteUser {
@@ -35,14 +36,16 @@ interface MetaWriteBody { key?: unknown; value?: unknown }
 interface LanguageBody { language?: unknown }
 interface TranslationBody { translationId?: unknown }
 const Post = require('../models/Post');
-const { authenticate, optionalAuth } = require('../middleware/auth');
+const { authenticate, optionalAuth, isHeadless } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE (core/query-params): a parameter declared scalar arrives once, as a string,
 // or the request is a 400. Same rule firstNonStringField()/invalidParamType() below apply to this
 // file's list and body fields — this is that rule for a single value, reusable by the other routers.
 const { scalarQueryParam, requireRouteId, isRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 const { saveRevision, isRevisionableMeta } = require('../core/revisions');
+const { revisionSourceFor } = require('../core/agent-publishing');
 const sanitizeHtml = require('sanitize-html');
 
 // The Puck/meta sanitizer (sanitize, sanitizePuckTree, sanitizeMetaValue, PUCK_*_FIELDS) lives in a
@@ -437,7 +440,7 @@ const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
  * THE IDENTITY-LIST GRAMMAR of `?categories=`, `?tags=` and `?author=`.
  *
  * One comma-separated list per parameter. An element is either a row ID (all digits) or a SLUG — a
- * term's `slug`, or an author's `user_nicename`/`user_login` — split by shape, which is the same rule
+ * term's `slug`, or an author's `user_nicename` (never the login) — split by shape, which is the same rule
  * `routes/seo.ts` applies to the `/author/<segment>/feed.xml` path segment so the two surfaces cannot
  * disagree about what `2` means.
  *
@@ -690,6 +693,10 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *           type: string
  *       - in: query
  *         name: status
+ *         description: >-
+ *           publish (default), draft, pending, private, future, or any. A caller who may not read
+ *           unpublished entries of the type gets only their own; an anonymous caller asking for a
+ *           non-published status gets an empty list (any lists the published entries).
  *         schema:
  *           type: string
  *       - in: query
@@ -731,7 +738,7 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *       - in: query
  *         name: author
  *         description: >-
- *           Comma-separated author IDs and/or slugs (user_nicename; a login matches only an account with no nicename) — the
+ *           Comma-separated author IDs and/or slugs (user_nicename; never a login) — the
  *           same identity the author feed resolves, so a public author archive can be listed without
  *           an authenticated users endpoint. Authorization may still narrow the result to the calling
  *           user's own posts when a non-published status is requested.
@@ -823,8 +830,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         });
     }
 
-    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 10);
+    const offset = pageOffset(page, limit);
 
     // Map orderby to database column.
     //
@@ -886,9 +893,15 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
             // privilege: only the caller's own posts of that status may be returned.
             authorFilter = req.user.id;
         }
-    } else if (status !== 'publish') {
-        // Anonymous callers may only ever list published content, regardless of requested status.
+    } else if (status === 'any') {
+        // `any` includes the published set, which is all an anonymous caller may ever list.
         effectiveStatus = 'publish';
+    } else if (status !== 'publish') {
+        // An anonymous caller asking for drafts (pending, private, future…) gets what a signed-in user
+        // without such entries gets: an empty list. It used to be silently answered with the PUBLISHED
+        // entries — a different question than the one asked, and indistinguishable from a real answer.
+        effectiveStatus = 'publish';
+        authorFilter = -1; // User ids are positive; keeps the normal count/pagination response semantics.
     }
 
     // A search must not match on the hidden body of a password-protected entry (see Post.buildWhere):
@@ -1329,7 +1342,7 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
 
         // Initial history is required state, not fire-and-forget. A failure rolls back the post,
         // terms, metadata and its not-yet-visible outbox event together.
-        await saveRevision(created.id);
+        await saveRevision(created.id, [], revisionSourceFor(req));
         return created;
     });
 
@@ -1360,6 +1373,12 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
  *         required: true
  *         schema:
  *           type: integer
+ *       - in: header
+ *         name: X-Collab-Epoch
+ *         required: false
+ *         description: Sent by the collaborative editor with a save made from a live editing session - the room epoch its document was seeded from. A save that writes meta._puck_data and does not come from the live session (no header, and the caller is not a live member) resets that session so its members reload the saved content.
+ *         schema:
+ *           type: integer
  *     requestBody:
  *       content:
  *         application/json:
@@ -1379,6 +1398,8 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
  *         description: Forbidden
  *       404:
  *         description: Post not found
+ *       409:
+ *         description: X-Collab-Epoch names a live editing session generation that no longer exists (collab_epoch_stale) - the content was changed outside that session after the editor loaded it. Nothing was written.
  */
 router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, ContentUpdateInput>, res: Response) => {
     // The TWIN of the check in POST / — the same table, the same reason, and the field that mattered
@@ -1518,10 +1539,32 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     // AND IT FAILS CLOSED, like the meta route: if the recovery point cannot be created, the
     // destructive write does not happen. Logging and writing anyway is the failure mode the snapshot
     // exists to prevent, performed silently.
+    // A LIVE COLLABORATION ROOM ON THIS POST. The collaborative editor saves through this same route,
+    // and its save IS the room's state; any other write of the page tree resets the room so its members
+    // re-seed from what was written instead of saving their stale copy back over it (core/collab-rooms).
+    // The editor names the room generation it was seeded from in X-Collab-Epoch: a save from a generation
+    // that no longer exists is refused rather than allowed to undo whatever reset the room.
+    let collabSave = false;
+    if (safeMetaEntries.some(([key]) => canonicalMetaKey(key) === '_puck_data') && !isHeadless(req)) {
+        const rawEpoch = req.get('X-Collab-Epoch');
+        const epoch = rawEpoch === undefined ? null : (/^[1-9][0-9]{0,8}$/.test(rawEpoch) ? Number(rawEpoch) : 0);
+        const kind = await require('../core/collab-rooms').classifySave(postId, req.user.id, epoch);
+        if (kind === 'stale') {
+            return res.status(409).json({
+                code: 'collab_epoch_stale',
+                message: 'This content was changed outside the live editing session. Your editor is reloading the saved version; review it and save again.',
+                data: { status: 409 }
+            });
+        }
+        collabSave = kind === 'collab';
+    }
+    const writeAll = (work: () => Promise<void>) =>
+        collabSave ? require('../core/collab-rooms').runAsCollabSave(postId, work) : work();
+
     try {
-        await runContentMutation(async () => {
+        await writeAll(() => runContentMutation(async () => {
             if (autosave !== true) {
-                try { await saveRevision(postId); }
+                try { await saveRevision(postId, [], revisionSourceFor(req)); }
                 catch (error: any) {
                     error.contentRevisionFailure = true;
                     throw error;
@@ -1551,10 +1594,10 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
             for (const [key, value] of safeMetaEntries) {
                 await Post.updateMeta(postId, key, value);
             }
-        });
+        }));
     } catch (error: any) {
         if (!error?.contentRevisionFailure) throw error;
-        console.error('Failed to save revision before update:', error);
+        log.error({ err: error }, 'Failed to save revision before update');
         return res.status(500).json({
             code: 'rest_revision_failed',
             message: 'Could not snapshot the current version; the write was not applied.',
@@ -1845,7 +1888,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
     try {
         await runContentMutation(async () => {
             if (isRevisionableMeta(storageKey, post.postType)) {
-                try { await saveRevision(postId); }
+                try { await saveRevision(postId, [], revisionSourceFor(req)); }
                 catch (error: any) {
                     error.contentRevisionFailure = true;
                     throw error;
@@ -1868,7 +1911,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
         });
     } catch (error: any) {
         if (!error?.contentRevisionFailure) throw error;
-        console.error('Failed to save revision before meta write:', error);
+        log.error({ err: error }, 'Failed to save revision before meta write');
         return res.status(500).json({
             code: 'rest_revision_failed',
             message: 'Could not snapshot the current version; the write was not applied.',

@@ -1,9 +1,8 @@
-import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
-import { getPostBySlugPreview, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getPostBySlugPreview, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
 // Author/editor draft preview, split OUT of the public /[slug] route: preview needs the session
@@ -35,6 +34,7 @@ export async function generateMetadata(
     const settings = await getSettings();
     const meta = buildPostMetadata(post, {
         siteName: settings?.blogname,
+        mediaBase: settings?.media_public_base,
         // canonical points at the LIVE URL — the preview route must never be indexed as the page
         canonicalPath: `/${post.slug || post.id}`,
     });
@@ -52,7 +52,7 @@ export default async function PostPreviewPage(
         getSettings(),
         resolveSiteBase(),
     ]);
-    if (!post) notFound();
+    if (!post) contentNotFound();
     const withBlocks = await withResolvedBlocks(post);
     return (
         <>
@@ -62,7 +62,7 @@ export default async function PostPreviewPage(
                     Draft preview — only you can see this. Publish it to make it public.
                 </div>
             )}
-            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
+            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname, settings?.media_public_base)} />
             {/* Same theme-template wrap as the live /[slug] route (kind follows what was loaded,
                 assignment hoisted): a preview that dropped the template — now author-visible via the
                 template dropdown — would show an arrangement the published page won't have. */}

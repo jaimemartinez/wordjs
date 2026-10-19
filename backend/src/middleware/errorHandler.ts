@@ -4,6 +4,25 @@
 import type { Request, Response, NextFunction } from 'express';
 
 const crypto = require('crypto');
+const log = require('../core/module-logger').moduleLogger('middleware/errorHandler');
+
+/**
+ * An upload refused for something the CLIENT sent — a file type the route does not take, an SVG from a
+ * non-administrator. Multer hands a fileFilter's error straight to `next(err)`, so a plain `new Error`
+ * there reached the handler below with no `status` and was answered as a 500 `rest_internal_error`: a
+ * client mistake reported as a server failure, and its message thrown away. This carries the status and
+ * the stable code the route chose, which makes it an intentional error (isIntentionalApiError).
+ */
+class UploadRejectedError extends Error {
+    status: number;
+    code: string;
+    constructor(status: number, code: string, message: string) {
+        super(message);
+        this.name = 'UploadRejectedError';
+        this.status = status;
+        this.code = code;
+    }
+}
 
 /**
  * Not found handler
@@ -83,7 +102,7 @@ function publicErrorText(err: any, fallback: string): string {
 function errorHandler(err: any, req: Request, res: Response, next: NextFunction) {
     // One id, logged next to the FULL error and echoed in the body of an unexpected failure.
     const errorId = crypto.randomUUID();
-    console.error('Error [%s]:', errorId, err);
+    log.error({ errorId, err }, `Error [${errorId}]`);
 
     // Handle specific error types. Both are recognised BY NAME and given a status here, which is the
     // same act of recognition `status` records — so their messages are contract, not disclosure.
@@ -92,6 +111,18 @@ function errorHandler(err: any, req: Request, res: Response, next: NextFunction)
             code: 'rest_invalid_param',
             message: err.message,
             data: { status: 400 }
+        });
+    }
+
+    // Multer's own refusals (too large, too many files/fields/parts, an unexpected field) are about the
+    // request, never the server. Its messages are fixed library strings ("File too large"), so they are
+    // contract, not disclosure.
+    if (err && err.name === 'MulterError') {
+        const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({
+            code: status === 413 ? 'rest_upload_too_large' : 'rest_upload_invalid',
+            message: err.message || 'Invalid upload.',
+            data: { status }
         });
     }
 
@@ -174,7 +205,7 @@ function asyncHandler(fn: any) {
 function offStack(res: Response, next: NextFunction | null, fn: () => unknown): void {
     const fail = (err: any) => {
         if (next && !res.headersSent) return next(err);
-        console.error('Error after the response was committed:', err);
+        log.error({ err }, 'Error after the response was committed');
     };
     try {
         const settled = fn();
@@ -194,5 +225,6 @@ module.exports = {
     asyncHandler,
     offStack,
     isIntentionalApiError,
-    publicErrorText
+    publicErrorText,
+    UploadRejectedError
 };

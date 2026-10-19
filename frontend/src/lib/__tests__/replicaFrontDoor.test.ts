@@ -57,7 +57,9 @@ function listen(handler: http.RequestListener, onUpgrade?: (...a: any[]) => void
 
 /** Next's rewrite matchers, compiled from the real next.config.ts the way Next compiles them. */
 async function rewriteMatchers(sensitive: boolean | undefined): Promise<Matcher[]> {
-    const rewrites = (await nextConfig.rewrites!()) as Array<{ source: string }>;
+    // The backend-prefix proxy rules (afterFiles). The multisite rules (beforeFiles) are internal
+    // rewrites on a header only src/proxy.ts sets: they never proxy anything (multisite.test.ts).
+    const rewrites = ((await nextConfig.rewrites!()) as any).afterFiles as Array<{ source: string }>;
     return rewrites.map((r) => getPathMatch(r.source, { removeUnnamedParams: true, strict: true, sensitive }));
 }
 

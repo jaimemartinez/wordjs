@@ -8,11 +8,13 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const Term = require('../models/Term');
+const { recordAudit } = require('../core/audit');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 
 const TAXONOMY = 'post_tag';
 
@@ -74,8 +76,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // parseInt() begins by applying ToString to its argument, so String(x) here reproduces the old
     // untyped path EXACTLY for every shape: '3' -> 3, ['3','4'] -> parseInt('3,4') -> 3, an object ->
     // parseInt('[object Object]') -> NaN -> the `||` default.
-    const limit = Math.min(parseInt(String(per_page), 10) || 100, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 100);
+    const offset = pageOffset(page, limit);
 
     const terms = await Term.findAll({
         taxonomy: TAXONOMY,
@@ -184,6 +186,7 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
             description
         });
 
+        await recordAudit(req.user.id, 'term.create', 'term', term.termId, { taxonomy: TAXONOMY });
         res.status(201).json(term.toJSON());
     } catch (error) {
         if (error.message.includes('already exists')) {
@@ -249,6 +252,7 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
         description
     });
 
+    await recordAudit(req.user.id, 'term.update', 'term', termId, { taxonomy: TAXONOMY });
     res.json(updated.toJSON());
 }));
 
@@ -285,6 +289,7 @@ router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async
     }
 
     await Term.delete(termId, TAXONOMY);
+    await recordAudit(req.user.id, 'term.delete', 'term', termId, { taxonomy: TAXONOMY, name: term.name, slug: term.slug });
     res.json({ deleted: true, previous: term.toJSON() });
 }));
 

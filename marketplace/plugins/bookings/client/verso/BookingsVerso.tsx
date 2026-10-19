@@ -82,6 +82,24 @@ const nextDays = (n) => {
 
 // ── module-level sub-components (NEVER define a component inside a component) ──────────────────
 
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
+
 function ServicePicker({ services, selectedId, onPick }) {
     return (
         <div className="wjbk-services">
@@ -214,7 +232,7 @@ export default function BookingsVerso({ serviceId, accentColor, elementId }) {
                     // Link from the confirmation email: confirm first, then show the status.
                     fetch(`${API}/public/confirm`, {
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
+                        headers: { "Content-Type": "application/json", ...csrfHeaders() },
                         body: JSON.stringify({ token: tok }),
                     })
                         .then(async (res) => {
@@ -270,7 +288,7 @@ export default function BookingsVerso({ serviceId, accentColor, elementId }) {
         try {
             const res = await fetch(`${API}/public/book`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({
                     service_id: service.id,
                     date,
@@ -324,7 +342,7 @@ export default function BookingsVerso({ serviceId, accentColor, elementId }) {
         try {
             const res = await fetch(`${API}/public/cancel`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ token: lookupBooking.token }),
             });
             const data = await res.json().catch(() => ({}));

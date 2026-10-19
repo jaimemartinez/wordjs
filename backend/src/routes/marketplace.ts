@@ -24,6 +24,7 @@ import type { Request, Response } from 'express';
 import type { IncomingMessage } from 'http';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/marketplace');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
@@ -456,7 +457,7 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
         const first = sources[0] || {};
         res.json({ source: first.url || '', isLocal: !!first.isLocal, sources, count: annotated.length, plugins: annotated });
     } catch (e: any) {
-        console.error('[marketplace] plugin catalog read failed:', e);
+        log.error({ err: e }, '[marketplace] plugin catalog read failed');
         res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de plugins.') });
     }
 }));
@@ -533,7 +534,7 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
         const { merged } = await getCatalog(false);
         entry = merged.find((e: any) => String(e.id) === id);
     } catch (e: any) {
-        console.error('[marketplace] plugin catalog read failed:', e);
+        log.error({ err: e }, '[marketplace] plugin catalog read failed');
         return res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de plugins.') });
     }
     if (!entry) return res.status(404).json({ error: `El plugin "${id}" no está en el catálogo.` });
@@ -564,7 +565,7 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
             buf = await fetchRemote(`${source}/${file}`, MAX_ZIP_BYTES);
         }
     } catch (e: any) {
-        console.error('[marketplace] plugin download failed:', e);
+        log.error({ err: e }, '[marketplace] plugin download failed');
         return res.status(502).json({ error: publicErrorText(e, 'No se pudo descargar el plugin del catálogo.') });
     }
 
@@ -1032,7 +1033,7 @@ router.get('/themes/catalog', authenticate, isAdmin, asyncHandler(async (req: Re
         const first = sources[0] || {};
         res.json({ source: first.url || '', isLocal: !!first.isLocal, sources, count: annotated.length, themes: annotated });
     } catch (e: any) {
-        console.error('[marketplace] theme catalog read failed:', e);
+        log.error({ err: e }, '[marketplace] theme catalog read failed');
         res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de temas.') });
     }
 }));
@@ -1095,7 +1096,7 @@ router.post('/themes/install', authenticate, isAdmin, asyncHandler(async (req: R
         const { merged } = await getThemesCatalog(false);
         entry = merged.find((e: any) => String(e.id) === id);
     } catch (e: any) {
-        console.error('[marketplace] theme catalog read failed:', e);
+        log.error({ err: e }, '[marketplace] theme catalog read failed');
         return res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de temas.') });
     }
     if (!entry) return res.status(404).json({ error: `El tema "${id}" no está en el catálogo.` });
@@ -1123,7 +1124,7 @@ router.post('/themes/install', authenticate, isAdmin, asyncHandler(async (req: R
             buf = await fetchRemote(`${source}/${file}`, MAX_ZIP_BYTES);
         }
     } catch (e: any) {
-        console.error('[marketplace] theme download failed:', e);
+        log.error({ err: e }, '[marketplace] theme download failed');
         return res.status(502).json({ error: publicErrorText(e, 'No se pudo descargar el tema del catálogo.') });
     }
 

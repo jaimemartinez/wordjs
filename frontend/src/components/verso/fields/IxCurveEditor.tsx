@@ -29,6 +29,7 @@
  * la banda central. `sx`/`sy` son la única traducción easing→viewBox; todo lo demás las usa.
  */
 import React, { useId, useRef, useState } from "react";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 /** Los cuatro números de un `cubic-bezier`: [x1, y1, x2, y2]. */
 export type IxBez = [number, number, number, number];
@@ -149,6 +150,7 @@ const NUM_FIELDS = [
 ] as const;
 
 export default function IxCurveEditor({ id, value, onChange }: IxCurveEditorProps) {
+  const { tr, trf } = useEditorTr();
   const baseId = useId();
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Qué tirador se está arrastrando. Ref y no estado: el arrastre no cambia el markup por sí
@@ -186,11 +188,11 @@ export default function IxCurveEditor({ id, value, onChange }: IxCurveEditorProp
     const nx = clamp(round2(value[i * 2] + dx), 0, 1);
     const ny = clamp(round2(value[i * 2 + 1] + dy), -Y_MAX, Y_MAX);
     setPoint(i, nx, ny);
-    setAnnounce(`Punto de control ${i + 1}: x ${fmt(nx)}, y ${fmt(ny)}`);
+    setAnnounce(trf("Punto de control {n}: x {x}, y {y}", { n: i + 1, x: fmt(nx), y: fmt(ny) }));
   };
 
   return (
-    <div role="group" aria-label="Editor de curva (cubic-bezier)" className="w-full max-w-xs">
+    <div role="group" aria-label={tr("Editor de curva (cubic-bezier)")} className="w-full max-w-xs">
       <svg
         ref={svgRef}
         viewBox={VIEW}
@@ -282,7 +284,7 @@ export default function IxCurveEditor({ id, value, onChange }: IxCurveEditorProp
                 fill="currentColor"
                 tabIndex={0}
                 role="button"
-                aria-label={`Punto de control ${i + 1} (x ${fmt(hx)}, y ${fmt(hy)})`}
+                aria-label={trf("Punto de control {n} (x {x}, y {y})", { n: i + 1, x: fmt(hx), y: fmt(hy) })}
                 style={{ cursor: "grab", touchAction: "none", outline: "none" }}
                 onFocus={() => setFocused(i)}
                 onBlur={() => setFocused(null)}

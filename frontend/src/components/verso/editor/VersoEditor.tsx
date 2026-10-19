@@ -101,6 +101,8 @@ import { remoteSelections } from "./collabModel";
 import EditorHotkeys from "./EditorHotkeys";
 import ShortcutsDialog from "./ShortcutsDialog";
 import SaveStateChip from "./SaveStateChip";
+import { settledPrimaryLabel } from "./saveChipModel";
+import { localizedDefaults } from "@/lib/verso/defaultContent";
 import BlockPalette from "./BlockPalette";
 import OutlineTree from "./OutlineTree";
 import PropertiesPanel from "./PropertiesPanel";
@@ -140,6 +142,18 @@ export interface VersoEditorProps {
     onSave?: OnSave;
     onCancel?: () => void;
     pageId?: number;
+    /**
+     * ¿Tiene el registro un documento de editor PERSISTIDO (`_puck_data`)? Default `true`.
+     *
+     * La sala colaborativa siembra su `base` con el `_puck_data` guardado, y su `welcome` SUSTITUYE el
+     * documento del editor. Un registro sin `_puck_data` (legacy, importado, creado por la API) se
+     * abre con un documento sembrado EN LOCAL —el HTML envuelto en un HTMLEmbed y los campos del
+     * registro en el root—, que la sala no conoce: el `welcome` lo pisaba con `{}` y el lienzo, el
+     * título, el extracto y el SEO se abrían vacíos (y un guardado los habría borrado). Con `false`
+     * el editor no se une a la sala; tras el primer guardado el registro ya tiene documento y la
+     * siguiente apertura colabora con normalidad.
+     */
+    hasStoredDocument?: boolean;
     /** Slug del registro — habilita "Vista Previa" (/preview/slug). */
     previewSlug?: string;
     /** Post type of the entry being edited, sent with the preview (lib/previewHref) so a page that shares the slug does not answer for it. */
@@ -290,6 +304,7 @@ export default function VersoEditor({
     onSave,
     onCancel,
     pageId,
+    hasStoredDocument = true,
     previewSlug,
     previewType,
     breadcrumbRoot,
@@ -435,12 +450,7 @@ export default function VersoEditor({
             const def = registry.get(type);
             if (!def) return;
             const id = crypto.randomUUID();
-            let defaults: Record<string, unknown>;
-            try {
-                defaults = structuredClone(def.defaultProps);
-            } catch {
-                defaults = { ...def.defaultProps };
-            }
+            const defaults = localizedDefaults(def.defaultProps, language);
             const item: VersoItem = { type, props: { ...defaults, id } };
             // Materializa los slots declarados que defaultProps no trae (contenedores recién
             // insertados sin zona de drop) — mismo criterio que el Verso Lab.
@@ -457,7 +467,7 @@ export default function VersoEditor({
                 handle.select(id);
             }
         },
-        [registry, handle],
+        [registry, handle, language],
     );
 
     /* ---------------- chrome UI state + prefs persistidas ---------------- */
@@ -606,6 +616,11 @@ export default function VersoEditor({
 
     /* ---------------- colaboración en vivo (F8.4) ---------------- */
 
+    // `hasStoredDocument` se congela AL MONTAR, igual que `initialData`: el documento sembrado es el
+    // de la carga, y que el primer guardado cree el `_puck_data` no convierte a mitad de sesión el
+    // lienzo local en el de la sala (su `welcome` reemplazaría lo que se está editando).
+    const [collabEligible] = useState(hasStoredDocument);
+
     /**
      * La bandera se lee en un EFECTO, no en el render: mira `localStorage`, que en SSR no existe y
      * que además haría divergir el HTML del servidor del primer render del cliente (hydration
@@ -613,7 +628,7 @@ export default function VersoEditor({
      * de preferencias de este editor (`verso_show_sidebar`).
      */
     const [collabEnabled, setCollabEnabled] = useState(false);
-    useEffect(() => setCollabEnabled(isCollabEnabled()), []);
+    useEffect(() => setCollabEnabled(collabEligible && isCollabEnabled()), [collabEligible]);
 
     /**
      * Los resolutores viajan al hook y ENTRAN en las deps de su sesión: si cambiaran de identidad
@@ -647,6 +662,7 @@ export default function VersoEditor({
     });
 
     const collabLive = collab.status === "live" || collab.status === "degraded";
+    const settledLabel = settledPrimaryLabel({ saving, hasChanges, inlineEditing: state.inlineEditingId !== null, status });
     const sendCollabCommand = collab.sendCommand;
     const setCollabSelection = collab.setSelection;
     const collabFlush = collab.flush;
@@ -758,12 +774,7 @@ export default function VersoEditor({
             setMediaOpen(false);
             const def = registry.get("Image");
             if (!def) return;
-            let defaults: Record<string, unknown>;
-            try {
-                defaults = structuredClone(def.defaultProps);
-            } catch {
-                defaults = { ...def.defaultProps };
-            }
+            const defaults = localizedDefaults(def.defaultProps, language);
             const id = crypto.randomUUID();
             const block: VersoItem = {
                 type: "Image",
@@ -780,7 +791,7 @@ export default function VersoEditor({
                 label: "Insertar Image",
             });
         },
-        [handle, registry],
+        [handle, registry, language],
     );
 
     // Picker inyectado de los campos `external` (VersoFieldControl): el MISMO MediaPickerModal,
@@ -1202,11 +1213,14 @@ export default function VersoEditor({
                                 className="verso-primary-button min-w-[84px] h-10 xl:h-9 px-3.5 xl:px-4 rounded-xl text-[12px] font-semibold text-white active:scale-[0.98] duration-150 transition disabled:opacity-40 disabled:shadow-none flex items-center justify-center gap-2"
                             >
                                 {saving && <MSym name="sync" size={12} className="animate-spin" />}
-                                {status === "draft"
-                                    ? trStr("Guardar", language)
-                                    : status === "future"
-                                        ? trStr("Programar", language)
-                                        : trStr("Publicar", language)}
+                                {!saving && settledLabel && <MSym name="check_circle" size={14} fill />}
+                                {settledLabel
+                                    ? trStr(settledLabel, language)
+                                    : status === "draft"
+                                        ? trStr("Guardar", language)
+                                        : status === "future"
+                                            ? trStr("Programar", language)
+                                            : trStr("Publicar", language)}
                             </button>
                         )}
 
@@ -1426,7 +1440,7 @@ export default function VersoEditor({
                                                 jamás entra en _puck_data). Sin esto el canvas no enseñaba
                                                 header/footer y los espaciados del contenedor público
                                                 divergían (defecto reportado por el usuario). */}
-                                            <PublicLayoutShell>
+                                            <PublicLayoutShell stylesheets={false}>
                                                 <VersoThemeTemplate handle={handle} kind={templateKind} postType={templatePostType}>
                                                     <EditorRenderer
                                                         handle={handle}
@@ -1465,7 +1479,7 @@ export default function VersoEditor({
                                                     <button
                                                         key={p.id}
                                                         type="button"
-                                                        onClick={() => insertVersoPattern(handle, registry, p)}
+                                                        onClick={() => insertVersoPattern(handle, registry, p, language)}
                                                         className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] hover:border-[var(--ed-primary)] text-[11px] font-semibold text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] transition"
                                                     >
                                                         {trStr(p.name, language)}

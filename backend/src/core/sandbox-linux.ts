@@ -53,6 +53,7 @@ const fsl = require('fs');
 const pathl = require('path');
 const osl = require('os');
 const { spawn: spawnl } = require('child_process');
+const log = require('./module-logger').moduleLogger('core/sandbox-linux');
 
 /**
  * The Perl interpreter, an absolute literal and never resolved through PATH.
@@ -493,13 +494,13 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
         if (!fsl.existsSync(PERL_BIN)) {
             zeroConfState = 'unsupported';
             zeroConfNote = `${PERL_BIN} is absent, so the Landlock/seccomp shim cannot run (perl-base is Essential on supported Debian/Ubuntu installs)`;
-            console.warn('[Sandbox] Linux zero-config confinement unavailable: /usr/bin/perl is absent. Isolated plugins keep the Node permission model and the JS guards.');
+            log.warn('[Sandbox] Linux zero-config confinement unavailable: /usr/bin/perl is absent. Isolated plugins keep the Node permission model and the JS guards.');
             return 'unsupported';
         }
         if (!fsl.existsSync(SHIM_PATH)) {
             zeroConfState = 'unsupported';
             zeroConfNote = 'backend/scripts/landlock-seccomp-shim.pl is missing from this install';
-            console.warn(`[Sandbox] Linux zero-config confinement unavailable: the shim script is missing at ${logSafe(SHIM_PATH)}.`);
+            log.warn(`[Sandbox] Linux zero-config confinement unavailable: the shim script is missing at ${logSafe(SHIM_PATH)}.`);
             return 'unsupported';
         }
 
@@ -562,7 +563,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             if (!controlOk) {
                 zeroConfState = 'degraded';
                 zeroConfNote = 'the probe ABORTED: an UNCONFINED control child was itself refused, so a refusal from the confined child would prove nothing (an offline or read-only host does this)';
-                console.warn('[Sandbox] Linux zero-config probe ABORTED: the negative control failed - an UNCONFINED child could not do what the confined child must be refused. '
+                log.warn('[Sandbox] Linux zero-config probe ABORTED: the negative control failed - an UNCONFINED child could not do what the confined child must be refused. '
                     + `write=${control.msg && control.msg.wrote ? 'ok' : 'FAILED'} readSystem=${control.msg && control.msg.readSystem ? 'ok' : 'FAILED'} outOfZoneRead=${logSafe((control.msg && control.msg.readCode) || 'unknown')} outOfZoneWrite=${logSafe((control.msg && control.msg.outCode) || 'unknown')} signal=${logSafe((control.msg && control.msg.signalCode) || 'unknown')} rawIpConnect=${logSafe((control.msg && control.msg.netCode) || 'unknown')}. `
                     + 'Without that control a "refused" verdict is uninterpretable, so the layer stays OFF.');
                 return 'degraded';
@@ -586,7 +587,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 zeroConfShimFailure = confinedFailure ? confinedFailure.line : null;
                 zeroConfNote = 'this kernel has no usable Landlock (or the architecture has no verified syscall table), so the Linux kernel floor cannot be applied'
                     + (zeroConfShimFailure ? ` (${zeroConfShimFailure})` : '');
-                console.warn(`[Sandbox] Linux zero-config confinement unsupported on this kernel: ${logSafe(confined.stderr.trim().slice(0, 200))}`);
+                log.warn(`[Sandbox] Linux zero-config confinement unsupported on this kernel: ${logSafe(confined.stderr.trim().slice(0, 200))}`);
                 return 'unsupported';
             }
 
@@ -628,7 +629,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 zeroConfState = 'active';
                 zeroConfShimFailure = null;
                 zeroConfNote = 'Landlock + seccomp-bpf certified with no host configuration for both network policies: reads/writes are scoped, process creation and dangerous syscalls are refused, all sockets are denied without a grant, and only IP client sockets are admitted with it';
-                console.log('[Sandbox] Linux kernel confinement ACTIVE (Landlock scopes reads/writes and cross-process access; seccomp-bpf refuses process creation and dangerous syscalls, denies all new sockets without a grant, and admits only AF_INET/AF_INET6 clients with it while preserving IPC).');
+                log.info('[Sandbox] Linux kernel confinement ACTIVE (Landlock scopes reads/writes and cross-process access; seccomp-bpf refuses process creation and dangerous syscalls, denies all new sockets without a grant, and admits only AF_INET/AF_INET6 clients with it while preserving IPC).');
                 return 'active';
             }
             zeroConfState = 'degraded';
@@ -640,7 +641,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             zeroConfNote = zeroConfShimFailure
                 ? `the Landlock/seccomp shim refused to start the probe child, so nothing could be certified: ${zeroConfShimFailure}`
                 : 'the Landlock/seccomp shim is available but its probe did NOT certify both network-policy launch shapes';
-            console.warn('[Sandbox] Linux zero-config probe did NOT certify confinement on this host - isolated plugins keep the Node permission model and JS guards. '
+            log.warn('[Sandbox] Linux zero-config probe did NOT certify confinement on this host - isolated plugins keep the Node permission model and JS guards. '
                 + `ipc=${ipcOk ? 'ok' : 'FAILED'} zoneWrite=${positiveWrite ? 'ok' : 'FAILED'} systemRead=${positiveRead ? 'ok' : 'FAILED'} `
                 + `exactFileRead=${exactRead ? 'ok' : 'FAILED'} siblingFile=${siblingRefused ? 'refused' : logSafe((confined.msg && confined.msg.siblingCode) || 'unknown')} `
                 + `outOfZoneRead=${readRefused ? 'refused' : logSafe((confined.msg && confined.msg.readCode) || 'unknown')} `
@@ -657,7 +658,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
         } catch (e: any) {
             zeroConfState = 'degraded';
             zeroConfNote = 'the Linux zero-config probe errored, so the layer stays OFF';
-            console.warn(`[Sandbox] Linux zero-config probe errored: ${logSafe(e && e.message)} - the layer stays OFF.`);
+            log.warn({ err: e }, `[Sandbox] Linux zero-config probe errored: ${logSafe(e && e.message)} - the layer stays OFF.`);
             return 'degraded';
         } finally {
             // Always removed, on every exit path - a probe that leaks one temp dir per failed boot is

@@ -33,7 +33,7 @@
  * point where the value becomes a path, which is where core/safe-path already lives. Keep the two
  * apart explicitly; collapsing them in either direction has now broken something in both directions.
  */
-import { REVISION_SNAPSHOT_META_KEY } from './revision-constants';
+import { REVISION_SNAPSHOT_META_KEY, REVISION_SOURCE_META_KEY } from './revision-constants';
 
 /**
  * Meta keys that only backend code may write.
@@ -69,9 +69,18 @@ const PROTECTED_POST_META: Set<string> = new Set([
     '_wxr_source_url',
     '_wxr_menu_item_id',
     '_wxr_remote_url',
+    // Where an attachment's bytes live (core/media-storage): server-owned, set only by the upload route,
+    // the visibility move and the offload/restore migration.
+    '_wjs_media_storage',
     // F4 snapshot envelopes are executable restore instructions. Allowing a generic meta request to
     // forge one would turn a later restore into an arbitrary core-column/meta write.
     REVISION_SNAPSHOT_META_KEY,
+    // Who made the write a revision was taken before (an AI agent) — the label that makes an agent's
+    // change easy to find and roll back. A forged one would mislabel history.
+    REVISION_SOURCE_META_KEY,
+    // An AI agent's pending request to publish (core/agent-publishing): only the MCP publish tool writes
+    // it, and the Agents screen lists it for a person to confirm.
+    '_wjs_agent_publish_request',
 ]);
 
 /**

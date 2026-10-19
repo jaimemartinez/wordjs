@@ -18,7 +18,15 @@ export const LEGACY_REVISIONABLE_META_KEYS = Object.freeze([
 /** Core-owned post_meta row containing the F4 snapshot envelope. */
 export const REVISION_SNAPSHOT_META_KEY = '_wjs_revision_snapshot';
 
+/**
+ * Core-owned post_meta row on a REVISION naming who made the write that revision was taken before — set
+ * only when it was an AI agent (core/agent-publishing revisionSourceFor). Never part of the snapshot
+ * envelope, so a restore never copies it onto the live entry.
+ */
+export const REVISION_SOURCE_META_KEY = '_wjs_revision_source';
+
 module.exports = {
     LEGACY_REVISIONABLE_META_KEYS,
     REVISION_SNAPSHOT_META_KEY,
+    REVISION_SOURCE_META_KEY,
 };

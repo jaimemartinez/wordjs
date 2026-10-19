@@ -5,6 +5,7 @@
 
 import type { Request, Response, CookieOptions } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/auth');
 const router = express.Router();
 const User = require('../models/User');
 // issueSessionCookie is the ONE door that mints the interactive session cookie: it refuses a request
@@ -17,7 +18,7 @@ const User = require('../models/User');
 // refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
 // sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
 // unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted } = require('../middleware/auth');
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
@@ -90,6 +91,9 @@ function attemptDigest(value: any): string {
 // Redis. The in-memory Map remains the single-node path and the always-on fallback: any Redis error
 // (or no client configured) degrades to in-process exactly as before — a Redis outage NEVER blocks
 // login. Mirrors limiterStore()'s passOnStoreError philosophy.
+const { siteKeyPrefix } = require('../core/site-context');
+// The site segment lockBucket() puts in front of a key (core/site-context siteKeyPrefix).
+const SITE_KEY_PREFIX = /^s[0-9]+:/;
 const LOGIN_MAX_FAILS = 10;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const _loginFails = new Map(); // key -> { count, firstFailAt, lockedUntil }
@@ -168,12 +172,15 @@ type LockPurpose = (typeof LOCK_PURPOSES)[number];
  */
 const LOCKING_PURPOSES: readonly LockPurpose[] = ['login', 'mfa'];
 function lockBucket(purpose: LockPurpose, subject: string | number): string {
-    return `${purpose}:${subject}`;
+    // Multisite: account names repeat across sites, so each site has its own buckets — failing logins
+    // for 'admin' on one site must never lock 'admin' out of another. Site 1's keys are unchanged.
+    return `${siteKeyPrefix()}${purpose}:${subject}`;
 }
 /** The purpose a key was built under, or '' for a key that did not come from lockBucket(). */
 function purposeOf(key: string): string {
-    const i = String(key).indexOf(':');
-    return i < 0 ? '' : String(key).slice(0, i);
+    const k = String(key).replace(SITE_KEY_PREFIX, '');
+    const i = k.indexOf(':');
+    return i < 0 ? '' : k.slice(0, i);
 }
 const isLockingKey = (key: string) => (LOCKING_PURPOSES as readonly string[]).includes(purposeOf(_loginKey(key)));
 
@@ -484,6 +491,29 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
  *           description: Epoch seconds at which enforcement started, or null while no role requires MFA.
  *         enforceForApiTokens:
  *           type: boolean
+ *           description: >-
+ *             Off by default. When off, a `wjt_` API token is exempt from the compliance gate even if its
+ *             owner's role requires 2FA; when on, a token whose owner is past grace and not enrolled is
+ *             refused with mfa_enrollment_required. Independently of this flag, POST /auth/tokens requires
+ *             a required-role user to be enrolled AND to have signed in with the second factor (or send a
+ *             fresh code) before a token can be minted.
+ *     MfaTokenExposure:
+ *       type: object
+ *       description: >-
+ *         Counts (never token data) of ACTIVE API tokens and live AI agent connections the policy
+ *         reaches. All zero while no role requires MFA.
+ *       properties:
+ *         requiredRoleTokens:
+ *           type: integer
+ *           description: Active tokens and live agent connections owned by users whose role requires 2FA.
+ *         unenrolledOwnerTokens:
+ *           type: integer
+ *           description: >-
+ *             Of those, tokens whose owner has NOT enrolled in 2FA. With enforceForApiTokens off these keep
+ *             working without a second factor ever being used.
+ *         unenrolledOwners:
+ *           type: integer
+ *           description: How many distinct un-enrolled owners hold those tokens.
  *     ApiTokenSummary:
  *       type: object
  *       description: API token metadata. The secret itself is returned once, by POST /auth/tokens, and never again.
@@ -725,7 +755,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 // assertNewIdentity checks the username first, so this username is free: the only thing that
                 // collided is the address. Tell its owner, not the caller.
                 const text = `Someone tried to create a new ${siteName} account with this email address. It already has an account, so nothing was created.\n\nIf this was you, sign in instead, or use "Forgot password" if you no longer know your password. If it was not you, you can ignore this message.`;
-                (global as any).wordjs_send_mail({
+                // Account mail (core/account-mail): the built-in transport, or a provider plugin only if an
+                // administrator allowed it. Not awaited — the answer must not wait on (or time) the relay.
+                await sendAccountMailDetached({
                     to: String(email).trim().toLowerCase(),
                     subject: `Sign-up attempt on ${siteName}`,
                     text,
@@ -741,7 +773,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 // The site's link base (core/site-address) — never this request's Host: whoever calls this
                 // endpoint must not be able to choose which host receives the verification token.
                 const link = `${await linkBase()}/verify-email?token=${raw}`;
-                (global as any).wordjs_send_mail({
+                await sendAccountMailDetached({
                     to: String(email).trim().toLowerCase(),
                     subject: `Verify your email for ${siteName}`,
                     text: `Welcome to ${siteName}! Please confirm this email address to create your account (${username}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not ask for this account, you can safely ignore this email: nothing is created until the link is followed.`,
@@ -754,7 +786,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 });
             }
         } catch (error) {
-            console.warn('[register] a registration past the identity checks did not complete:', error && error.message);
+            log.warn({ err: error }, '[register] a registration past the identity checks did not complete');
         }
 
         // No session cookie and no `user`: the body is the one an already-registered address gets.
@@ -779,6 +811,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         await User.hashPassword(password);
         return registrationFailed();
     }
+    // Self-service sign-up is an account creation like the admin path's `user.create` — same row, so
+    // "who joined, and how" is one query (and outgoing webhooks see every new account, not just some).
+    await recordAudit(user.id, 'user.create', 'user', user.id, { via: 'register' });
 
     const token = generateToken(user, req);
     if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
@@ -942,6 +977,8 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     try {
         const user = await User.authenticate(username, password);
         await clearLoginFails(lockId);
+        // The owner proved the password: the account's code ceiling at the session doors starts over.
+        await clearMfaCeiling(user.id);
         // Successful password → reset the escalation ladder for this IP+account.
         await loginThrottle.succeed(throttleKey, lockId);
 
@@ -1069,7 +1106,16 @@ router.get('/me', withSignInEligibility, authenticate, asyncHandler(async (req: 
     // the raw slug (GET /roles, where the names live, is administrator-only).
     const role = require('../core/roles').getRole(req.user.role);
     const roleName = role && typeof role.name === 'string' && role.name.trim() ? role.name.trim() : null;
-    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user), roleName });
+    // Multisite: which part of the network this session is in, so the admin shell offers only what this
+    // site has (another site has no plugin or backup screens) and shows the network screen to network
+    // administrators. Absent on a single site, so its payload is unchanged.
+    const network = require('../core/site-context').multisiteEnabled()
+        ? {
+            mainSite: require('../core/site-context').currentSiteId() === 1,
+            networkAdmin: require('../core/network-auth').isNetworkAdminRequest(req),
+        }
+        : undefined;
+    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user), roleName, ...(network ? { network } : {}) });
 }));
 
 /**
@@ -1322,13 +1368,21 @@ function singleUseTokenValid(given: string, storedHash: string, expiresMs: numbe
 // unloads — so this fails closed on deactivation), and declares itself configured to deliver externally
 // by setting the shared `mail_delivery_ready` option to '1' (a self-hosted MTA sets it once its DNS
 // verifies; an external SMTP/relay would set it once its credentials validate).
+//
+// ACCOUNT MAIL (reset and verification links) has its own rule now — core/account-mail: the built-in SMTP
+// transport, or a provider plugin only when an administrator allowed that plugin by name. "Ready" is that
+// rule's answer, so recovery and verification are offered only when such a message can actually go out.
 async function mailReady(): Promise<boolean> {
     try {
-        if (typeof (global as any).wordjs_send_mail !== 'function') return false;
-        return String(await getOption('mail_delivery_ready', '0')) === '1';
+        return await require('../core/account-mail').accountMailReady();
     } catch {
         return false;
     }
+}
+
+/** Hand an account message to its transport (core/account-mail) without waiting for delivery. */
+async function sendAccountMailDetached(msg: { to: string; subject: string; text: string; html?: string }): Promise<void> {
+    await require('../core/account-mail').handOffAccountMail(msg);
 }
 
 // EMAIL VERIFICATION on self-registration is OPT-IN and FAIL-CLOSED. It can only be *required* when a
@@ -1468,7 +1522,10 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
     const siteName = await getOption('blogname', 'WordJS');
 
     try {
-        (global as any).wordjs_send_mail({
+        // A reset link is the account: it goes through account mail (core/account-mail), never to a plugin
+        // provider an administrator did not allow by name. Detached, so the answer's timing is the same
+        // whether or not an account matched.
+        await sendAccountMailDetached({
             to,
             subject: `Password reset for ${siteName}`,
             text: `Someone requested a password reset for your ${siteName} account (${user.userLogin}).\n\nReset your password (this link is valid for 30 minutes):\n${link}\n\nIf you did not request this, you can safely ignore this email — your password will not change.`,
@@ -1576,6 +1633,9 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
     await recordAudit(uid, 'auth.password.reset', 'user', uid, {
         username: auditText(user.userLogin), via: 'recovery_link', ip: auditText(clientIp(req), 45)
     });
+    // Every OTHER administrator hears about it in-app: a reset link reached whoever reads that mailbox (or
+    // the transport that carried it), and an unexpected reset is the moment to look. Best-effort.
+    require('../core/account-mail').notifyAdminsOfReset(user, clientIp(req)).catch(() => { /* never fails the reset */ });
 
     res.json({ ok: true, message: 'Your password has been reset. You can now log in with your new password.' });
 }));
@@ -1662,13 +1722,14 @@ router.post('/verify-email', asyncHandler(async (req: Request, res: Response) =>
     const pending = await consumePendingRegistration(token);
     if (pending) {
         try {
-            await User.create({
+            const created = await User.create({
                 username: pending.username,
                 email: pending.email,
                 passwordHash: pending.passwordHash,
                 displayName: pending.displayName,
                 role: await getOption('default_role', 'subscriber')
             });
+            await recordAudit(created.id, 'user.create', 'user', created.id, { via: 'register' });
         } catch (error) {
             const taken = error && (error.code === 'username_taken' || error.code === 'email_taken'
                 || String(error.message).includes('already exists'));
@@ -1718,6 +1779,50 @@ const MAX_ACTIVE_TOKENS_PER_USER = 100;
  * GET /auth/tokens
  * List the current user's API tokens (metadata only — the secret is never returned after creation).
  */
+/**
+ * @swagger
+ * /auth/query-ticket:
+ *   post:
+ *     summary: Issue a short-lived ticket for one route opened from the query string
+ *     description: >-
+ *       For a client that must open an EventSource stream or a download by plain navigation and cannot
+ *       send the session cookie or an Authorization header. The ticket goes in `?token=` of exactly the
+ *       path it names, is valid for 60 seconds, and authenticates nothing else. Only these paths take one:
+ *       `/api/v1/notifications/stream` and `/api/v1/plugins/{slug}/download`. A session JWT or an API
+ *       token in `?token=` is refused. Session-only.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [path]
+ *             properties:
+ *               path:
+ *                 type: string
+ *                 example: /api/v1/notifications/stream
+ *     responses:
+ *       200:
+ *         description: "{ ticket, path, expiresIn }"
+ *       400:
+ *         description: rest_invalid_param (no ticket is issued for that path)
+ *       401:
+ *         description: rest_not_logged_in
+ *       403:
+ *         description: An API token cannot request a ticket (rest_token_management_forbidden).
+ */
+router.post('/query-ticket', authenticate, sessionOnly, (req: Request, res: Response) => {
+    const path = (req.body || {}).path;
+    if (!isQueryTicketPath(path)) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'No ticket can be issued for that path.', data: { status: 400, params: ['path'] } });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ ticket: issueQueryTicket(req, path), path, expiresIn: QUERY_TICKET_TTL_SECONDS });
+});
+
 /**
  * @swagger
  * /auth/tokens:
@@ -1770,6 +1875,173 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *   'posts:write','media:read' (comma-string or array). write implies read; a token holding only
  *   resource scopes is confined to those resources. Unrecognized scopes are REJECTED (400).
  */
+// ─── THE SECOND FACTOR AT THE DOORS A SESSION CAN REACH ──────────────────────────────────────────
+/**
+ * Past this many wrong codes on one ACCOUNT inside the failure window, a code alone no longer opens the
+ * code-checking account doors (POST /mfa/disable, POST /mfa/backup-codes, and the `mfaCode` step-up when
+ * minting a machine credential): the request must also carry the account password (`currentPassword`).
+ *
+ * WHY a ceiling on top of the wait. payFailureDelay is a per-request wait, and the in-flight slot is per
+ * (account, address) on purpose — an account-wide slot is a refusal anyone could inflict on the owner.
+ * Together they leave throughput proportional to the number of source addresses. The failure COUNTER is
+ * account-wide, so it is the one thing more addresses cannot multiply, and asking for the password once
+ * it passes the ceiling stops the guessing without taking a hostage: the owner knows the password and
+ * keeps every door, while a session alone stops at the ceiling. The password check is routes/users.ts's
+ * sudo gate itself (its own ladder, its own account-wide counter). The 'mfa_manage' bucket stays
+ * count-only: sign-in (POST /auth/mfa) never reads it.
+ */
+const MFA_MANAGE_PASSWORD_AFTER = 10;
+
+/**
+ * THE CEILING HAS ITS OWN, LONG-LIVED COUNTER. The 'mfa_manage' failure counter is the WAIT's: it forgets
+ * after LOGIN_LOCK_MS of quiet, so a ceiling read from it reopened every quarter of an hour (ten more
+ * guesses per idle window, around the clock). This one lasts MFA_CEILING_WINDOW_MS from the last wrong
+ * code and is cleared only by a correct code at these doors or by a password sign-in (clearMfaCeiling).
+ *
+ * It is CHARGED BEFORE the code is checked (chargeMfaCeiling returns the attempt's own number), so
+ * concurrent requests from many addresses cannot all read "9" and all get through: each attempt gets a
+ * distinct count from one atomic increment (Redis INCR, or one synchronous step in memory), and only the
+ * first MFA_MANAGE_PASSWORD_AFTER ever run without the password. Same store precedence as the rest:
+ * Redis when configured, this process's map otherwise (and on a Redis hiccup).
+ */
+const MFA_CEILING_WINDOW_MS = 24 * 60 * 60 * 1000;
+const _mfaCeilingMem = new Map<string, { count: number; lastAt: number }>();
+const _mfaCeilingRedisKey = (userId: unknown) => `wjlock:mfaceil:${lockBucket('mfa_manage', String(userId))}`;
+const _mfaCeilingMemKey = (userId: unknown) => lockBucket('mfa_manage', String(userId));
+
+function _chargeMfaCeilingMem(key: string): number {
+    const now = Date.now();
+    let e = _mfaCeilingMem.get(key);
+    if (!e || now - e.lastAt > MFA_CEILING_WINDOW_MS) e = { count: 0, lastAt: now };
+    e.count++;
+    e.lastAt = now;
+    _mfaCeilingMem.set(key, e);
+    if (_mfaCeilingMem.size > LOGIN_FAILS_SOFT_CAP) {
+        for (const [k, v] of _mfaCeilingMem) if (now - v.lastAt > MFA_CEILING_WINDOW_MS) _mfaCeilingMem.delete(k);
+    }
+    return e.count;
+}
+
+/** Count this attempt against the account's ceiling and return its number (1 = the first since the last clear). */
+async function chargeMfaCeiling(userId: unknown): Promise<number> {
+    const client = _lockStore();
+    if (client) {
+        try {
+            const key = _mfaCeilingRedisKey(userId);
+            const n = Number(await client.incr(key));
+            await client.expire(key, Math.ceil(MFA_CEILING_WINDOW_MS / 1000));
+            return n;
+        } catch {
+            // Redis hiccup → this node's own count, so it still holds a ceiling.
+        }
+    }
+    return _chargeMfaCeilingMem(_mfaCeilingMemKey(userId));
+}
+
+/** A correct code at these doors, or a password sign-in, ends the ceiling. */
+async function clearMfaCeiling(userId: unknown): Promise<void> {
+    const client = _lockStore();
+    if (client) {
+        try { await client.del(_mfaCeilingRedisKey(userId)); } catch { /* best-effort; the TTL ends it anyway */ }
+    }
+    _mfaCeilingMem.delete(_mfaCeilingMemKey(userId));
+}
+
+/**
+ * Check a TOTP/backup code on one of the session-reachable account doors: the in-flight slot, the
+ * account-wide password ceiling above, the bounded wait, the check, and the failure count — in that
+ * order, the ONE implementation all of them share. Returns true when the code is good; otherwise it has
+ * answered the request (429 / 403 / 400) and returns false. `onFail` runs on a wrong code, before the 400.
+ *
+ * 'mfa_manage' (count-only), never 'mfa': these doors need `authenticate` + `sessionOnly`, and while they
+ * wrote the 'mfa' bucket, wrong codes here answered the owner's CORRECT code at POST /auth/mfa with 429.
+ */
+async function verifyManagedMfaCode(req: Request, res: Response, code: unknown, onFail?: () => Promise<void>): Promise<boolean> {
+    const lk = lockBucket('mfa_manage', req.user.id);
+    const slot = inflightBucket('mfa_manage', req.user.id, req);
+    if (!(await beginLoginAttempt(slot))) {
+        res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+        return false;
+    }
+    try {
+        if ((await chargeMfaCeiling(req.user.id)) > MFA_MANAGE_PASSWORD_AFTER) {
+            const pw = (req.body || {}).currentPassword;
+            if (typeof pw !== 'string' || !pw) {
+                res.status(403).json({
+                    code: 'rest_mfa_password_required',
+                    message: 'Too many invalid authentication codes for this account. Enter your current password together with the code.',
+                    data: { status: 403 }
+                });
+                return false;
+            }
+            if (await require('./users').requireSudoPassword(req, res, pw)) return false;
+        }
+        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
+        if (!(await mfa.verifyLoginCode(req.user.id, code))) {
+            await recordLoginFail(lk);
+            if (onFail) await onFail();
+            res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+            return false;
+        }
+        await clearLoginFails(lk);
+        await clearMfaCeiling(req.user.id);
+        return true;
+    } finally {
+        await endLoginAttempt(slot);
+    }
+}
+
+type MfaAssurance = 'not_required' | 'session' | 'step_up';
+interface MachineCredentialKind {
+    /** "…Enable 2FA on your account before <before>." */
+    before: string;
+    /** "…Enter a current authentication code to <action>." */
+    action: string;
+    /** Extra detail on the 'auth.token.create_refused' row written when the step-up code is wrong. */
+    auditDetail?: Record<string, string>;
+}
+const MFA_CREDENTIAL_API_TOKEN: MachineCredentialKind = { before: 'creating API tokens', action: 'create an API token' };
+
+/**
+ * The MFA-by-role rule for anything that hands out a HEADLESS credential — an API token (POST /tokens), an
+ * AI agent connection (POST /agents) or authority for one (PUT /agents/:id/grant). Such credentials are
+ * exempt from the compliance gate unless the admin opted in, and they outlive the session that made them,
+ * so for a role the policy covers:
+ *   · ENROLLMENT, even during the grace window — otherwise a required-role user mints the credential while
+ *     still in grace and keeps using it forever, permanently sidestepping the policy;
+ *   · STEP-UP — being enrolled is not having USED the second factor. A session signed in before the
+ *     account enrolled (or before its role came under the policy) never answered a code, so the request
+ *     must come from a session that signed in WITH the second factor (`amr`), or carry a fresh TOTP/backup
+ *     code in `mfaCode` (checked through verifyManagedMfaCode, with its throttle and ceiling).
+ * Users outside the policy are unchanged. Returns how the second factor was proven, or null when it has
+ * already answered the request.
+ */
+async function requireMfaForMachineCredential(req: Request, res: Response, kind: MachineCredentialKind): Promise<MfaAssurance | null> {
+    const mfaStatus = await mfa.evaluate(req.user);
+    if (!mfaStatus.required) return 'not_required';
+    if (!mfaStatus.enabled) {
+        res.status(403).json({
+            code: 'rest_mfa_required_for_tokens',
+            message: `Your role requires two-factor authentication. Enable 2FA on your account before ${kind.before}.`,
+            data: { status: 403 }
+        });
+        return null;
+    }
+    if (sessionMfaVerified(req)) return 'session';
+    const mfaCode = req.body && req.body.mfaCode;
+    if (typeof mfaCode !== 'string' || !mfaCode.trim()) {
+        res.status(403).json({
+            code: 'rest_mfa_step_up_required',
+            message: `Your role requires two-factor authentication. Enter a current authentication code to ${kind.action}.`,
+            data: { status: 403 }
+        });
+        return null;
+    }
+    const ok = await verifyManagedMfaCode(req, res, mfaCode, () =>
+        recordAudit(req.user.id, 'auth.token.create_refused', 'user', req.user.id, { reason: 'mfa_step_up_failed', ...(kind.auditDetail || {}) }));
+    return ok ? 'step_up' : null;
+}
+
 /**
  * @swagger
  * /auth/tokens:
@@ -1811,6 +2083,19 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *               expiresInDays:
  *                 type: number
  *                 description: Positive number of days until expiry; omit for a token that never expires.
+ *               mfaCode:
+ *                 type: string
+ *                 description: >-
+ *                   Step-up code (current TOTP or an unused backup code). Only consulted when the caller's
+ *                   role requires 2FA under the MFA policy AND the session was not signed in with the second
+ *                   factor; a session signed in through POST /auth/mfa does not need it. The outcome is
+ *                   recorded on the `auth.token.create` audit row as `mfa` (session, step_up or
+ *                   not_required).
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   The account password. Required, together with the code, once the account has collected
+ *                   too many invalid codes across the code-checking account doors (answered 403 rest_mfa_password_required).
  *     responses:
  *       201:
  *         description: Token created — this is the only time the secret is disclosed
@@ -1829,7 +2114,8 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *       400:
  *         description: >-
  *           rest_token_limit (100 active tokens already), rest_invalid_param (expiresInDays is not a
- *           positive number) or rest_invalid_scope.
+ *           positive number), rest_invalid_scope, or rest_mfa_invalid (the step-up `mfaCode` was wrong;
+ *           recorded as an `auth.token.create_refused` audit row).
  *         content:
  *           application/json:
  *             schema:
@@ -1844,9 +2130,19 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *         description: >-
  *           The caller is headless, rest_forbidden (no manage_api_tokens), rest_csrf_token /
  *           rest_csrf_invalid, mfa_enrollment_required, or rest_mfa_required_for_tokens — the account's
- *           role requires 2FA and it has not enrolled, so it may not mint a token even during grace — or
- *           rest_token_bound_session: the session was started at an address other than the main one (an
- *           alias, an IP, a tunnel name); API tokens can only be created from a main-address session.
+ *           role requires 2FA and it has not enrolled, so it may not mint a token even during grace —
+ *           rest_mfa_step_up_required: the role requires 2FA, the account is enrolled, but this session was
+ *           not signed in with the second factor and no `mfaCode` was sent — or rest_token_bound_session:
+ *           the session was started at an address other than the main one (an alias, an IP, a tunnel
+ *           name); API tokens can only be created from a main-address session. Also
+ *           rest_mfa_password_required / rest_bad_current_password when the account is past its
+ *           invalid-code ceiling (send `currentPassword` with `mfaCode`).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous step-up code attempts."
  *         content:
  *           application/json:
  *             schema:
@@ -1897,18 +2193,9 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
         });
     }
 
-    // If the account is subject to the enforced-MFA-by-role policy but hasn't enrolled, refuse to mint a
-    // token — even DURING the grace window. Otherwise a required-role user could mint a `wjt_` token while
-    // still in grace and keep using it forever (API tokens are exempt from the compliance gate), permanently
-    // sidestepping the policy. They must enable 2FA first.
-    const mfaStatus = await mfa.evaluate(req.user);
-    if (mfaStatus.required && !mfaStatus.enabled) {
-        return res.status(403).json({
-            code: 'rest_mfa_required_for_tokens',
-            message: 'Your role requires two-factor authentication. Enable 2FA on your account before creating API tokens.',
-            data: { status: 403 }
-        });
-    }
+    // Enrollment + step-up for a role the MFA policy covers — see requireMfaForMachineCredential.
+    const mfaAssurance = await requireMfaForMachineCredential(req, res, MFA_CREDENTIAL_API_TOKEN);
+    if (!mfaAssurance) return;
 
     const created = await ApiToken.generate({
         userId: req.user.id,
@@ -1920,7 +2207,10 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
     // A new long-lived credential exists. The plaintext and the `tokenPrefix` are deliberately NOT in
     // the detail — what an investigator needs is WHICH token id, minted by whom, with what reach.
     await recordAudit(req.user.id, 'auth.token.create', 'api_token', created.id, {
-        label: auditText(created.name), scopes: created.scopes, expiresAt: created.expiresAt
+        label: auditText(created.name), scopes: created.scopes, expiresAt: created.expiresAt,
+        // How the creator proved the second factor: 'session' (signed in with it), 'step_up' (a fresh
+        // code on this request) or 'not_required' (the role is outside the MFA policy).
+        mfa: mfaAssurance
     });
 
     // `token` is the plaintext — surface it now; it can never be shown again.
@@ -2147,7 +2437,9 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
         await recordAudit(user.id, 'auth.login.success', 'user', user.id, {
             username: auditText(user.userLogin), method: 'mfa', ip: auditText(clientIp(req), 45)
         });
-        const token = generateToken(user, req);
+        // `mfa: true` stamps the session as second-factor verified (`amr`), which is what lets a user whose
+        // role requires 2FA mint an API token from it without typing a fresh code (POST /auth/tokens).
+        const token = generateToken(user, req, { mfa: true });
         if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } finally {
@@ -2426,6 +2718,11 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: R
  *               code:
  *                 type: string
  *                 description: A current TOTP code, or one of the account's backup codes.
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   The account password. Required, together with the code, once the account has collected
+ *                   too many invalid codes across these doors (answered 403 rest_mfa_password_required).
  *     responses:
  *       200:
  *         description: Two-factor disabled
@@ -2449,7 +2746,7 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: R
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: "The caller is headless, or rest_csrf_token / rest_csrf_invalid."
+ *         description: "The caller is headless, rest_csrf_token / rest_csrf_invalid, rest_mfa_password_required (too many invalid codes on this account: send currentPassword too), or rest_bad_current_password."
  *         content:
  *           application/json:
  *             schema:
@@ -2467,25 +2764,14 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
     // sudo password, so it is the cheapest door in the file to reach with a hijacked session — and while
     // it wrote the 'mfa' bucket, twelve wrong codes here answered the owner's CORRECT code at POST
     // /auth/mfa with 429, renewably and with no recovery path.
-    const lk = lockBucket('mfa_manage', req.user.id);
-    const slot = inflightBucket('mfa_manage', req.user.id, req);
-    // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to turn MFA OFF.
-    if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
-    try {
-        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
-        if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
-            await recordLoginFail(lk);
-            return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
-        }
-        await clearLoginFails(lk);
-        await mfa.disable(req.user.id);
-        // Turning the second factor OFF is the direction that weakens the account — and this is the
-        // cheapest door in the file to reach with a hijacked session (no sudo password). It leaves a row.
-        await recordAudit(req.user.id, 'auth.mfa.disable', 'user', req.user.id, {});
-        res.json({ disabled: true });
-    } finally {
-        await endLoginAttempt(slot);
-    }
+    // Concurrency backstop (AUTH-A3 class), bounded wait and account-wide ceiling: a hijacked session must
+    // not brute-force the code to turn MFA OFF — see verifyManagedMfaCode.
+    if (!(await verifyManagedMfaCode(req, res, (req.body || {}).code))) return;
+    await mfa.disable(req.user.id);
+    // Turning the second factor OFF is the direction that weakens the account — and this is the
+    // cheapest door in the file to reach with a hijacked session (no sudo password). It leaves a row.
+    await recordAudit(req.user.id, 'auth.mfa.disable', 'user', req.user.id, {});
+    res.json({ disabled: true });
 }));
 
 /** POST /auth/mfa/backup-codes — regenerate backup codes (requires a current code); returns them once. */
@@ -2518,6 +2804,11 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
  *             properties:
  *               code:
  *                 type: string
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   The account password. Required, together with the code, once the account has collected
+ *                   too many invalid codes across these doors (answered 403 rest_mfa_password_required).
  *     responses:
  *       200:
  *         description: A fresh set of backup codes, shown once
@@ -2545,7 +2836,7 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: "The caller is headless, or rest_csrf_token / rest_csrf_invalid."
+ *         description: "The caller is headless, rest_csrf_token / rest_csrf_invalid, rest_mfa_password_required (too many invalid codes on this account: send currentPassword too), or rest_bad_current_password."
  *         content:
  *           application/json:
  *             schema:
@@ -2561,29 +2852,16 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
     if (!(await mfa.isEnabled(req.user.id))) {
         return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
     }
-    // 'mfa_manage' (count-only), never 'mfa' — see POST /auth/mfa/disable above.
-    const lk = lockBucket('mfa_manage', req.user.id);
-    const slot = inflightBucket('mfa_manage', req.user.id, req);
-    // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to regenerate
-    // backup codes (which would grant persistent 2FA access).
-    if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
-    try {
-        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
-        if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
-            await recordLoginFail(lk);
-            return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
-        }
-        await clearLoginFails(lk);
-        const backupCodes = await mfa.regenerateBackupCodes(req.user.id);
-        // Regenerating backup codes grants a fresh set of second factors — persistence, in an attacker's
-        // hands. The codes are never passed to the log; only the fact and the count.
-        await recordAudit(req.user.id, 'auth.mfa.backup_codes', 'user', req.user.id, {
-            count: Array.isArray(backupCodes) ? backupCodes.length : 0
-        });
-        res.json({ backupCodes, message: 'Save these backup codes now — they replace your previous set.' });
-    } finally {
-        await endLoginAttempt(slot);
-    }
+    // 'mfa_manage' (count-only), never 'mfa' — see POST /auth/mfa/disable above. A hijacked session must
+    // not brute-force the code to regenerate backup codes (which would grant persistent 2FA access).
+    if (!(await verifyManagedMfaCode(req, res, (req.body || {}).code))) return;
+    const backupCodes = await mfa.regenerateBackupCodes(req.user.id);
+    // Regenerating backup codes grants a fresh set of second factors — persistence, in an attacker's
+    // hands. The codes are never passed to the log; only the fact and the count.
+    await recordAudit(req.user.id, 'auth.mfa.backup_codes', 'user', req.user.id, {
+        count: Array.isArray(backupCodes) ? backupCodes.length : 0
+    });
+    res.json({ backupCodes, message: 'Save these backup codes now — they replace your previous set.' });
 }));
 
 // ─── Admin-enforced MFA-by-role policy ─────────────────────────────────────────────────────────────
@@ -2615,6 +2893,15 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
  *               properties:
  *                 policy:
  *                   $ref: '#/components/schemas/MfaPolicy'
+ *                 tokenExposure:
+ *                   $ref: '#/components/schemas/MfaTokenExposure'
+ *                 enforceForApiTokensDefault:
+ *                   type: boolean
+ *                   description: >-
+ *                     True only on a site created by the install wizard whose policy has not yet required
+ *                     any role: the first PUT that requires a role then turns enforceForApiTokens ON unless
+ *                     the body says false explicitly. Always false on a site upgraded from an earlier
+ *                     version. The admin screen pre-checks the switch when this is true.
  *       401:
  *         description: "rest_not_logged_in — no valid credential."
  *         content:
@@ -2630,7 +2917,9 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
  *               $ref: '#/components/schemas/RestError'
  */
 router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
-    res.json({ policy: await mfa.getPolicy() });
+    // The exposure counts let the policy screen say how many existing tokens the policy does NOT reach
+    // while API tokens are exempt — the trade-off the admin is choosing when they leave the flag off.
+    res.json({ policy: await mfa.getPolicy(), tokenExposure: await mfa.tokenExposure(), enforceForApiTokensDefault: await mfa.tokenEnforcementDefault() });
 }));
 
 /**
@@ -2643,8 +2932,11 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *   put:
  *     summary: Set the MFA-by-role enforcement policy
  *     description: >-
- *       FULL REPLACE — an omitted field means "off", not "unchanged". Role slugs are validated against
- *       the live role map and unknown ones are dropped. Administrator only, interactive-session only, and
+ *       FULL REPLACE — an omitted field means "off", not "unchanged". One exception: on a site created
+ *       by the install wizard, the FIRST save that requires a role treats an omitted enforceForApiTokens
+ *       as true (see enforceForApiTokensDefault on GET); an explicit false is stored as false, and that
+ *       first save spends the default either way. A site upgraded from an earlier version never gets it.
+ *       Role slugs are validated against the live role map and unknown ones are dropped. Administrator only, interactive-session only, and
  *       not on the enrollment allowlist.
  *     tags: [Auth]
  *     security:
@@ -2675,7 +2967,8 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *                 type: boolean
  *                 description: >-
  *                   Must be a real boolean — "false", 0 and "on" are REJECTED rather than coerced,
- *                   because this flag can start refusing existing headless clients.
+ *                   because this flag can start refusing existing headless clients. Omitted means false,
+ *                   except on a fresh install's first policy that requires a role (true).
  *     responses:
  *       200:
  *         description: The stored policy
@@ -2686,6 +2979,12 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *               properties:
  *                 policy:
  *                   $ref: '#/components/schemas/MfaPolicy'
+ *                 tokenExposure:
+ *                   $ref: '#/components/schemas/MfaTokenExposure'
+ *                 enforceForApiTokensDefault:
+ *                   type: boolean
+ *                   description: >-
+ *                     Same as on GET — false once a policy requiring a role has been saved.
  *       400:
  *         description: >-
  *           rest_invalid_param — requiredRoles is not an array, graceDays is negative or not a number, or
@@ -2724,7 +3023,15 @@ router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, unboundSessionOnly
         return res.status(400).json({ code: 'rest_invalid_param', message: 'enforceForApiTokens must be a boolean.', data: { status: 400 } });
     }
     // setPolicy validates role slugs against the live role map + manages enforcedAt.
-    res.json({ policy: await mfa.setPolicy({ requiredRoles, graceDays, enforceForApiTokens }) });
+    const policy = await mfa.setPolicy({ requiredRoles, graceDays, enforceForApiTokens });
+    // Who changed which roles need a second factor, and whether API tokens were brought under it, is a
+    // security-policy decision an investigator needs to see.
+    // (`apiClientsEnforced`, not the field's own name: a detail key containing "token" is dropped whole
+    // by the audit sanitizer as a would-be secret.)
+    await recordAudit(req.user.id, 'auth.mfa.policy_update', 'settings', '', {
+        requiredRoles: policy.requiredRoles, graceDays: policy.graceDays, apiClientsEnforced: policy.enforceForApiTokens
+    });
+    res.json({ policy, tokenExposure: await mfa.tokenExposure(), enforceForApiTokensDefault: await mfa.tokenEnforcementDefault() });
 }));
 
 module.exports = router;
@@ -2752,6 +3059,14 @@ module.exports.LOCK_PURPOSES = LOCK_PURPOSES;
 // isLoginLocked readers it finds in the source, instead of restating either half.
 module.exports.LOCKING_PURPOSES = LOCKING_PURPOSES;
 module.exports.loginFailCount = loginFailCount;
+// The code ceiling's own counter (see MFA_CEILING_WINDOW_MS), so a gate can put an account past the ceiling
+// without spending real wrong codes through the bounded waits.
+module.exports.chargeMfaCeiling = chargeMfaCeiling;
+module.exports.clearMfaCeiling = clearMfaCeiling;
 // The bounded wait itself, so a credential door in another module throttles with the SAME primitive
 // instead of the check-then-refuse that makes a door a hostage. See payFailureDelay.
 module.exports.payFailureDelay = payFailureDelay;
+// The MFA rule for minting a headless credential, shared with routes/agents.ts so an agent connection
+// cannot be created or granted under a looser rule than an API token. See requireMfaForMachineCredential.
+module.exports.requireMfaForMachineCredential = requireMfaForMachineCredential;
+module.exports.MFA_MANAGE_PASSWORD_AFTER = MFA_MANAGE_PASSWORD_AFTER;

@@ -7,6 +7,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { Menu, MenuItem } = require('../models/Menu');
+const { recordAudit } = require('../core/audit');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -231,6 +232,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: R
 
     const menu = await Menu.create({ name, slug, description });
     purgeFrontend(['menus']);
+    await recordAudit(req.user.id, 'menu.create', 'menu', menu.id, { change: 'created' });
     res.status(201).json(menu.toJSON());
 }));
 
@@ -279,6 +281,7 @@ router.put('/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res:
 
     const menu = await Menu.update(menuId, { name, slug, description });
     purgeFrontend(['menus']);
+    await recordAudit(req.user.id, 'menu.update', 'menu', menuId, { change: 'renamed' });
     res.json(menu.toJSON());
 }));
 
@@ -316,6 +319,7 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req: Request, r
 
     await Menu.delete(menuId);
     purgeFrontend(['menus']);
+    await recordAudit(req.user.id, 'menu.delete', 'menu', menuId, { change: 'deleted', name: menu.name, slug: menu.slug });
     res.json({ deleted: true, previous: menu.toJSON() });
 }));
 
@@ -363,6 +367,7 @@ router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req: Req
     // Also purged by the updated_option('nav_menu_locations') hook once wired; the explicit call keeps
     // the route correct on its own and the debounced flush coalesces the two into one request.
     purgeFrontend(['menus']);
+    await recordAudit(req.user.id, 'menu.update', 'menu', menuId, { change: 'location', location });
     res.json({ success: true, location, menuId });
 }));
 
@@ -450,6 +455,7 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req: Reques
     });
 
     purgeFrontend(['menus']);
+    await recordAudit(req.user.id, 'menu.update', 'menu', menuId, { change: 'item_added', itemId: item.id });
     res.status(201).json(item.toJSON());
 }));
 
@@ -526,6 +532,7 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Req
 
     const item = await MenuItem.update(itemId, updateData);
     purgeFrontend(['menus']);
+    await recordAudit(req.user.id, 'menu.update', 'menu', item.menuId, { change: 'item_updated', itemId });
     res.json(item.toJSON());
 }));
 
@@ -580,6 +587,7 @@ router.delete('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: 
 
     await MenuItem.delete(itemId);
     purgeFrontend(['menus']);
+    await recordAudit(req.user.id, 'menu.update', 'menu', item.menuId, { change: 'item_deleted', itemId });
     res.json({ deleted: true, previous: item.toJSON() });
 }));
 

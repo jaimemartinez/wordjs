@@ -1,7 +1,6 @@
-import { cache } from "react";
 import type { Metadata } from "next";
 import type { Post } from "@/lib/api";
-import { getSettings, serverFetch } from "@/lib/server-api";
+import { getSettings, serverFetch, siteCache } from "@/lib/server-api";
 
 /**
  * ARCHIVE DATA ACCESS — the query layer behind /category, /tag, /author, /archive/{yyyy}/{mm} and
@@ -121,7 +120,7 @@ export type PostFilterField = "categories" | "tags" | "author";
  * Cached on the PRIMITIVE arguments so `generateMetadata()` and the page body share one walk — an
  * object argument would be a new identity per call and defeat `cache()` entirely.
  */
-export const getPostsBy = cache(async (field: PostFilterField, selector: string, type = "post"): Promise<Post[]> => {
+export const getPostsBy = siteCache(async (field: PostFilterField, selector: string, type = "post"): Promise<Post[]> => {
     const value = String(selector ?? "").trim();
     if (!value || value.includes(",") || value.length > MAX_FILTER_SELECTOR) return [];
     const query = `type=${encodeURIComponent(type)}&status=publish&${field}=${encodeURIComponent(value)}`;
@@ -135,7 +134,7 @@ export const getPostsBy = cache(async (field: PostFilterField, selector: string,
  * read the set and narrow on the date string. Every other archive asks the backend (`getPostsBy`) and
  * is bounded by its own size rather than by the site's.
  */
-export const getAllPublishedPosts = cache((type = "post"): Promise<Post[]> =>
+export const getAllPublishedPosts = siteCache((type = "post"): Promise<Post[]> =>
     walkPublishedPosts(`type=${encodeURIComponent(type)}&status=publish`, type),
 );
 
@@ -151,7 +150,7 @@ export const getAllPublishedPosts = cache((type = "post"): Promise<Post[]> =>
  * term tag, so riding the (very frequently purged) content tag plus a 5-minute window is strictly
  * fresher than a time window alone.
  */
-export const getTerms = cache(async (taxonomy: ArchiveTaxonomy): Promise<ArchiveTerm[]> => {
+export const getTerms = siteCache(async (taxonomy: ArchiveTaxonomy): Promise<ArchiveTerm[]> => {
     const endpoint = taxonomy === "category" ? "categories" : "tags";
     const out: ArchiveTerm[] = [];
     for (let page = 1; page <= MAX_TERM_PAGES; page++) {
@@ -182,7 +181,7 @@ export interface TaxonomyInfo {
  * This is the ONLY part of the custom-taxonomy story the public API can answer. See the header of
  * `(public)/taxonomy/[taxonomy]/[term]/[[...paged]]/page.tsx` for what is missing on either side of it.
  */
-export const getTaxonomy = cache((name: string): Promise<TaxonomyInfo | null> =>
+export const getTaxonomy = siteCache((name: string): Promise<TaxonomyInfo | null> =>
     serverFetch<TaxonomyInfo>(`/taxonomies/${encodeURIComponent(name)}`, {
         revalidate: TERMS_REVALIDATE,
         tags: ["taxonomies", "settings"],

@@ -68,6 +68,21 @@ const readableOn = (colour: string, bg: string, min = 4.5): string => {
 };
 
 /**
+ * Secondary text that can still be read. The muted ink is the body text washed 38% toward the page —
+ * and on some valid palettes that lands just under AA (#2b211c on #fbf7f2 gave 4.42:1, which the doctor
+ * then flagged in a theme the CLI itself had generated). Wash less until it clears 4.5:1: same hue, as
+ * close to the 38% look as the contrast allows. Returns the 38% mix untouched when it already passes
+ * (the common case) and the text colour itself when no wash clears the bar.
+ */
+const mutedOn = (text: string, bg: string, min = 4.5): string => {
+  for (let i = 19; i >= 1; i--) {
+    const c = mix(text, bg, i * 0.02);
+    if (contrast(c, bg) >= min) return c;
+  }
+  return text;
+};
+
+/**
  * Full canonical --wjs-* palette from the four seeds. Mirrors canonicalAliases() in
  * the generator: same token set, same derivation, same insertion order as the emitted
  * :root block.
@@ -85,7 +100,7 @@ function deriveTokens(seeds: ThemeSeeds): Record<string, string> {
     '--wjs-color-accent': seeds.secondary,
     '--wjs-color-on-accent': onColor(seeds.secondary),
     '--wjs-color-text-main': seeds.text,
-    '--wjs-color-text-muted': mix(seeds.text, seeds.bg, 0.38),
+    '--wjs-color-text-muted': mutedOn(seeds.text, seeds.bg),
     '--wjs-color-heading': seeds.text,
     '--wjs-color-link': readableOn(seeds.primary, seeds.bg),
     '--wjs-color-link-hover': readableOn(seeds.secondary, seeds.bg),
@@ -123,4 +138,4 @@ const ARCHETYPE_NAMES: string[] = ['cyber', 'brutalist', 'editorial', 'glassmorp
 // not match the design it was built from.
 // archetypeCss is GONE, not merely unexported: it returned the retired preset stylesheets, and
 // leaving it callable would keep 526 lines of CSS that nothing renders one require() away.
-module.exports = { deriveTokens, ARCHETYPE_NAMES, lum, onColor, contrast, readableOn };
+module.exports = { deriveTokens, ARCHETYPE_NAMES, lum, onColor, contrast, readableOn, mutedOn };

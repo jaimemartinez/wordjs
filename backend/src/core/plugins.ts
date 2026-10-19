@@ -5,6 +5,7 @@
 
 const { execSync, execFile } = require('child_process'); // execSync retained for parity; execFile used async below
 const { promisify } = require('util');
+const log = require('./module-logger').moduleLogger('core/plugins');
 // Async execFile so npm install/uninstall does NOT block the event loop on the request path.
 const execFileAsync = promisify(execFile);
 // npm is npm.cmd on Windows; execFile needs the exact binary name.
@@ -50,6 +51,25 @@ function logSafe(v: any): string {
  * install → activation failed with e.g. "Cannot find module 'smtp-server'". Frontend-bundle detection
  * belongs to the loader, not to dependency management.
  */
+/**
+ * MULTISITE. Plugin CODE is network-wide — installed, updated and removed by a network administrator on
+ * the main site, with one shared node_modules. ACTIVATION and GRANTS are per site (they are options, and
+ * options are per site), and each site runs its own worker of each plugin it activates (core/plugin-isolate).
+ * A site other than the main one can activate only a plugin the network OFFERS it (a ceiling recorded by a
+ * network administrator, core/network pluginCeiling), and never installs or prunes dependencies: that is
+ * code installation, the network's job, done when the plugin is offered (offerPluginToSites).
+ */
+const siteContext = require('./site-context');
+function onSecondarySite(): boolean {
+    return siteContext.multisiteEnabled() && siteContext.currentSiteId() !== siteContext.PRIMARY_SITE_ID;
+}
+function notOfferedError(slug: string): Error & { code: string; status: number } {
+    const e = new Error(`Plugin ${slug} is not available on this site: the network administrator has not offered it to the sites of the network.`) as Error & { code: string; status: number };
+    e.code = 'plugin_not_offered';
+    e.status = 403;
+    return e;
+}
+
 function isBundledPlugin(pluginPath: string, manifest: any = {}) {
     // 1. Explicit flag in manifest
     if (manifest.bundled === true) {
@@ -196,7 +216,7 @@ async function checkDependencyConflicts(slug: string, manifest: any) {
                 }
             }
         } catch (e) {
-            console.warn(`[Plugins] Error reading manifest for ${logSafe(activeSlug)}: ${logSafe(e.message)}`);
+            log.warn({ err: e }, `[Plugins] Error reading manifest for ${logSafe(activeSlug)}`);
         }
     }
 
@@ -270,7 +290,7 @@ function semverRangesIntersect(range1: any, range2: any) {
         return false;
     } catch {
         // If parsing fails, assume compatible (fail open for edge cases)
-        console.warn(`⚠️ Could not parse semver ranges: ${logSafe(range1)}, ${logSafe(range2)}`);
+        log.warn(`⚠️ Could not parse semver ranges: ${logSafe(range1)}, ${logSafe(range2)}`);
         return true;
     }
 }
@@ -328,7 +348,7 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
 
     // Skip bundled plugins - they have their own dependencies
     if (pluginPath && isBundledPlugin(pluginPath, manifest)) {
-        console.log(`📦 Plugin '${logSafe(slug)}' is bundled - skipping shared dependency installation.`);
+        log.info({ slug: logSafe(slug) }, `📦 Plugin '${logSafe(slug)}' is bundled - skipping shared dependency installation.`);
         return;
     }
 
@@ -344,7 +364,7 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
     try {
         rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
     } catch (e) {
-        console.error('⚠️ Could not read root package.json', e.message);
+        log.error({ err: e }, '⚠️ Could not read root package.json');
     }
     const declared = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
 
@@ -370,8 +390,8 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
     }
 
     if (toInstall.length > 0) {
-        console.log(`📦 Plugin '${logSafe(slug)}' requires: ${logSafe(toInstall.join(', '))}`);
-        console.log(`   ⏳ Installing dependencies... (server may restart)`);
+        log.info({ slug: logSafe(slug) }, `📦 Plugin '${logSafe(slug)}' requires: ${logSafe(toInstall.join(', '))}`);
+        log.info('   ⏳ Installing dependencies... (server may restart)');
         try {
             // SECURITY: execFile with an argument array (no shell) so dependency names from
             // the plugin manifest cannot inject shell commands. Async so we don't block the event loop.
@@ -383,7 +403,7 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
                 cwd: ROOT_DIR,
                 env: { ...process.env, npm_config_ignore_scripts: 'true' },
             });
-            console.log(`   ✅ Dependencies installed successfully.`);
+            log.info('   ✅ Dependencies installed successfully.');
         } catch (error) {
             throw new Error(`Failed to install dependencies for ${slug}: ${error.message}`, { cause: error });
         }
@@ -417,7 +437,7 @@ async function prunePluginDependencies(slug: string, manifest: any) {
                         }
                     }
                 } catch (e) {
-                    console.warn(`[Plugins] Error reading manifest during cleanup for ${logSafe(activeSlug)}: ${logSafe(e.message)}`);
+                    log.warn({ err: e }, `[Plugins] Error reading manifest during cleanup for ${logSafe(activeSlug)}`);
                 }
             }
         }
@@ -432,7 +452,7 @@ async function prunePluginDependencies(slug: string, manifest: any) {
             const isLikelyCore = ['express', 'cors', 'dotenv', 'helmet', 'multer', 'nodemailer', 'sql.js', 'mongoose', 'pg', 'sqlite3', 'jsonwebtoken', 'bcryptjs'].includes(dep);
 
             if (isLikelyCore) {
-                console.log(`🛡️ Persisting core dependency: ${logSafe(dep)}`);
+                log.info({ dep: logSafe(dep) }, `🛡️ Persisting core dependency: ${logSafe(dep)}`);
             } else {
                 toRemove.push(dep);
             }
@@ -440,13 +460,13 @@ async function prunePluginDependencies(slug: string, manifest: any) {
     }
 
     if (toRemove.length > 0) {
-        console.log(`♻️ Garbage Collector: Removing unused dependencies for ${logSafe(slug)}: ${logSafe(toRemove.join(', '))}`);
+        log.info({ slug: logSafe(slug) }, `♻️ Garbage Collector: Removing unused dependencies for ${logSafe(slug)}: ${logSafe(toRemove.join(', '))}`);
         try {
             // Async so pruning on the deactivate request path doesn't block the event loop.
             await execFileAsync(NPM_BIN, ['uninstall', ...toRemove, '--save'], { cwd: ROOT_DIR });
-            console.log(`   ✅ Dependencies removed successfully.`);
+            log.info('   ✅ Dependencies removed successfully.');
         } catch (e) {
-            console.error(`   ⚠️ Failed to prune dependencies: ${logSafe(e.message)}`);
+            log.error({ err: e }, '   ⚠️ Failed to prune dependencies');
         }
     }
 }
@@ -554,6 +574,9 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     // message (core/inbound-smtp.ts). EXCLUSIVE: at most one plugin may hold it (core/plugin-permissions
     // EXCLUSIVE_GRANTS). A special verb — nothing implies it.
     smtp: ['inbound'],
+    // ai:use — ask the site's AI provider (core/ai-provider) for a text completion through wordjs.ai.complete.
+    // The plugin gets text back, never the provider's key or settings. A special verb: `admin` never implies it.
+    ai: ['use'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
 
@@ -691,7 +714,7 @@ const BROWSER_CAPABILITY_MIGRATION_MARKER = 'browserCapabilityMigrated';
 async function migrateBrowserCapabilityGrants(): Promise<string[]> {
     const perms = require('./plugin-permissions');
     if (!perms.isGrantsLoaded()) {
-        console.warn(`[PluginPermissions] The one-time "${BROWSER_SCRIPT_TOKEN}" upgrade did not run: plugin_grants could not be read. It runs at the next boot.`);
+        log.warn(`[PluginPermissions] The one-time "${BROWSER_SCRIPT_TOKEN}" upgrade did not run: plugin_grants could not be read. It runs at the next boot.`);
         return [];
     }
     if (await perms.getHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER)) return [];
@@ -714,7 +737,7 @@ async function migrateBrowserCapabilityGrants(): Promise<string[]> {
     }
     await perms.setHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER, new Date().toISOString());
     if (granted.length) {
-        console.log(`[PluginPermissions] One-time upgrade: granted "${BROWSER_SCRIPT_TOKEN}" to already-active plugins that ship browser code: ${logSafe(granted.join(', '))}. Review it in Admin → Plugins → Permissions.`);
+        log.info(`[PluginPermissions] One-time upgrade: granted "${BROWSER_SCRIPT_TOKEN}" to already-active plugins that ship browser code: ${logSafe(granted.join(', '))}. Review it in Admin → Plugins → Permissions.`);
     }
     return granted;
 }
@@ -1258,7 +1281,7 @@ function validatePluginPermissions(
         } catch (e) {
             // FAIL-CLOSED: a file that is actually loaded but cannot be parsed is treated as
             // a violation, so an attacker cannot hide a payload behind a deliberate parse-buster.
-            console.warn(`[Security] Could not parse ${logSafe(file)} for AST analysis — treating as a violation (fail-closed).`);
+            log.warn({ file: logSafe(file) }, `[Security] Could not parse ${logSafe(file)} for AST analysis — treating as a violation (fail-closed).`);
             // A DEPENDENCY file that will not parse is still a violation, but it is reported through the
             // ONE aggregated "tree could not be scanned in full" finding rather than as N separate lines:
             // a package shipping a Flow-typed or otherwise exotic .js would otherwise bury the real hits.
@@ -2015,7 +2038,7 @@ function scanPlugins() {
                 };
                 // We don't load init/deactivate here to avoid requiring the file before deps match
             } catch (e) {
-                console.error(`Error parsing manifest for ${logSafe(entry.name)}: ${logSafe(e.message)}`);
+                log.error({ err: e }, `Error parsing manifest for ${logSafe(entry.name)}`);
                 continue;
             }
         }
@@ -2204,7 +2227,7 @@ async function pruneOrphanedActivePlugins(): Promise<OrphanedPlugin[]> {
     });
 
     for (const o of pruned) {
-        console.warn(`[plugins] '${logSafe(o.slug)}' was listed active but is not loadable (${logSafe(o.reason)}) — removed from active_plugins.`);
+        log.warn({ slug: logSafe(o.slug), reason: logSafe(o.reason) }, `[plugins] '${logSafe(o.slug)}' was listed active but is not loadable (${logSafe(o.reason)}) — removed from active_plugins.`);
         try {
             await require('./admin-notices').pushAdminNotice({
                 id: orphanNoticeId(o.slug),
@@ -2213,7 +2236,7 @@ async function pruneOrphanedActivePlugins(): Promise<OrphanedPlugin[]> {
                 since: Date.now(),
             });
         } catch (e: any) {
-            console.warn(`[plugins] the orphan notice for '${logSafe(o.slug)}' could not be raised: ${logSafe(e && e.message)}`);
+            log.warn({ slug: logSafe(o.slug), err: e }, `[plugins] the orphan notice for '${logSafe(o.slug)}' could not be raised`);
         }
     }
     return pruned;
@@ -2222,7 +2245,7 @@ async function pruneOrphanedActivePlugins(): Promise<OrphanedPlugin[]> {
 /** Retire ONE slug's orphan notice — the administrator has dealt with it. Never throws. */
 async function clearOrphanNotice(slug: string): Promise<boolean> {
     try { return await require('./admin-notices').clearAdminNotice(orphanNoticeId(slug)); }
-    catch (e: any) { console.warn(`[plugins] the orphan notice for '${logSafe(slug)}' could not be retired: ${logSafe(e && e.message)}`); return false; }
+    catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugins] the orphan notice for '${logSafe(slug)}' could not be retired`); return false; }
 }
 
 /**
@@ -2244,7 +2267,7 @@ async function retireResolvedOrphanNotices(): Promise<string[]> {
             if (await clearOrphanNotice(slug)) retired.push(slug);
         }
     } catch (e: any) {
-        console.warn(`[plugins] resolved orphan notices could not be retired: ${logSafe(e && e.message)}`);
+        log.warn({ err: e }, '[plugins] resolved orphan notices could not be retired');
     }
     return retired;
 }
@@ -2269,7 +2292,7 @@ async function reclaimOrphanedPlugin(slug: string): Promise<(OrphanedPlugin & { 
     const found = box.found;
     if (!found) return null;
     if (box.dropped) {
-        console.warn(`[plugins] '${logSafe(slug)}' was listed active with no loadable files (${logSafe(found.reason)}) — stale entry dropped so the slug can be reinstalled.`);
+        log.warn({ slug: logSafe(slug), reason: logSafe(found.reason) }, `[plugins] '${logSafe(slug)}' was listed active with no loadable files (${logSafe(found.reason)}) — stale entry dropped so the slug can be reinstalled.`);
         // A pending supervised restart can still hold the slug even though nothing is registered
         // (see the DELETE handler's note); unloadIsolatedPlugin cancels it and is idempotent.
         try { unloadIsolatedPlugin(slug); } catch { /* nothing of ours is running for an orphan */ }
@@ -2431,6 +2454,10 @@ async function _activatePluginUnlocked(slug: string) {
         return { success: true, message: 'Plugin already active' };
     }
 
+    // Multisite: another site activates only what the network offers it.
+    const secondary = onSecondarySite();
+    if (secondary && !require('./plugin-permissions').isOfferedHere(slug)) throw notOfferedError(slug);
+
     // 1. Dependency Check & Auto-Install
     const manifestPath = path.join(plugin.path, 'manifest.json');
     if (fs.existsSync(manifestPath)) {
@@ -2462,14 +2489,17 @@ async function _activatePluginUnlocked(slug: string) {
             const isBundled = isBundledPlugin(plugin.path, manifest);
 
             if (isBundled) {
-                console.log(`📦 Plugin '${logSafe(slug)}' detected as bundled - no shared dependencies.`);
+                log.info({ slug: logSafe(slug) }, `📦 Plugin '${logSafe(slug)}' detected as bundled - no shared dependencies.`);
+            } else if (secondary) {
+                // Multisite: the shared node_modules is the network's — its dependencies were installed when
+                // the network offered it (offerPluginToSites). A site never installs code.
             } else {
                 // 1b. HARD LOCK: Check for dependency conflicts with active plugins
                 const conflictResult = await checkDependencyConflicts(slug, manifest);
 
                 if (!conflictResult.compatible) {
                     const errorMessage = formatDependencyConflictError(slug, conflictResult.conflicts);
-                    console.error(errorMessage);
+                    log.error(errorMessage);
                     throw new Error(errorMessage);
                 }
 
@@ -2478,20 +2508,21 @@ async function _activatePluginUnlocked(slug: string) {
             }
         } catch (e) {
             // CRITICAL: Must throw to stop execution if security block or other failure occurs
-            console.error(`🛡️ Protection Active: Blocking ${logSafe(slug)} activation due to: ${logSafe(e.message)}`);
+            log.error({ slug: logSafe(slug), err: e }, `🛡️ Protection Active: Blocking ${logSafe(slug)} activation (see err)`);
             throw e;
         }
     }
 
-    // 2. Run Plugin Tests (if present)
+    // 2. Run Plugin Tests (if present) — once per network: on another site the code is the one the
+    // network already verified when it was installed and offered.
     const { verifyPluginTests } = require('./plugin-test-runner');
     try {
-        const testResult = await verifyPluginTests(slug);
+        const testResult = secondary ? { skipped: true } as any : await verifyPluginTests(slug);
         if (!testResult.skipped) {
-            console.log(`   🧪 Tests verified: ${logSafe(testResult.passed)}/${logSafe(testResult.tests)} passed`);
+            log.info(`   🧪 Tests verified: ${logSafe(testResult.passed)}/${logSafe(testResult.tests)} passed`);
         }
     } catch (testError) {
-        console.error(`🧪 Test Failure: Plugin '${logSafe(slug)}' blocked due to failing tests.`);
+        log.error({ slug: logSafe(slug) }, `🧪 Test Failure: Plugin '${logSafe(slug)}' blocked due to failing tests.`);
         throw testError;
     }
 
@@ -2567,7 +2598,10 @@ async function deactivatePlugin(slug: string, opts: { prune?: boolean } = {}) {
     // code is only moving aside for a moment and the new version reinstalls its deps immediately; a
     // prune-then-reinstall round trip strands a plugin whose declared range no longer resolves (and the
     // update's rollback can't rescue that). Normal deactivation still prunes (default).
-    if (opts.prune !== false) {
+    // Multisite: never on another site (the shared node_modules is the network's), and not on the main
+    // site while the network offers the plugin to the other sites — their workers still need it.
+    const offered = siteContext.multisiteEnabled() && (() => { try { return require('./network').pluginCeiling(slug) !== null; } catch { return true; } })();
+    if (opts.prune !== false && !onSecondarySite() && !offered) {
         const plugins = scanPlugins();
         const plugin = plugins.find(p => p.slug === slug);
         if (plugin) {
@@ -2577,7 +2611,7 @@ async function deactivatePlugin(slug: string, opts: { prune?: boolean } = {}) {
                     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
                     await prunePluginDependencies(slug, manifest);
                 } catch (e) {
-                    console.error(`⚠️ Failed to process manifest for prune ${logSafe(slug)}: ${logSafe(e.message)}`);
+                    log.error({ slug: logSafe(slug), err: e }, `⚠️ Failed to process manifest for prune ${logSafe(slug)}`);
                 }
             }
         }
@@ -2618,9 +2652,9 @@ function publishPluginChange(slug: string, action: string) {
  */
 async function loadOnePlugin(slug: string) {
     const plugin = scanPlugins().find(p => p.slug === slug);
-    if (!plugin) { console.warn(`[plugins] cross-node activate '${logSafe(slug)}': not present on this node`); return false; }
+    if (!plugin) { log.warn({ slug: logSafe(slug) }, `[plugins] cross-node activate '${logSafe(slug)}': not present on this node`); return false; }
     const mainFile = findMainFile(plugin.path);
-    if (!mainFile) { console.warn(`[plugins] cross-node activate '${logSafe(slug)}': no main file`); return false; }
+    if (!mainFile) { log.warn({ slug: logSafe(slug) }, `[plugins] cross-node activate '${logSafe(slug)}': no main file`); return false; }
     let manifest: any = null;
     const manifestPath = path.join(plugin.path, 'manifest.json');
     if (fs.existsSync(manifestPath)) { try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* */ } }
@@ -2646,10 +2680,10 @@ async function loadOnePlugin(slug: string) {
         try { unloadIsolatedPlugin(slug); } catch { /* not loaded here yet */ }
         await loadIsolatedPlugin(slug, mainFile);
         fixMiddlewareOrder();
-        console.log(`[plugins] '${logSafe(slug)}' loaded live (cross-node activation)`);
+        log.info({ slug: logSafe(slug) }, `[plugins] '${logSafe(slug)}' loaded live (cross-node activation)`);
         return true;
     } catch (e: any) {
-        console.error(`[plugins] cross-node load of '${logSafe(slug)}' failed: ${logSafe(e && e.message)}`);
+        log.error({ slug: logSafe(slug), err: e }, `[plugins] cross-node load of '${logSafe(slug)}' failed`);
         return false;
     }
 }
@@ -2658,8 +2692,8 @@ async function loadOnePlugin(slug: string) {
  * Unload ONE plugin live from THIS node (cross-node deactivation). Does NOT touch `active_plugins`.
  */
 function unloadOnePlugin(slug: string) {
-    try { unloadIsolatedPlugin(slug); console.log(`[plugins] '${logSafe(slug)}' unloaded live (cross-node deactivation)`); return true; }
-    catch (e: any) { console.warn(`[plugins] cross-node unload of '${logSafe(slug)}': ${logSafe(e && e.message)}`); return false; }
+    try { unloadIsolatedPlugin(slug); log.info({ slug: logSafe(slug) }, `[plugins] '${logSafe(slug)}' unloaded live (cross-node deactivation)`); return true; }
+    catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugins] cross-node unload of '${logSafe(slug)}'`); return false; }
 }
 
 /**
@@ -2695,7 +2729,7 @@ async function reconcileDeactivatedPlugins(): Promise<string[]> {
         const seen = (strayObservations.get(slug) || 0) + 1;
         if (seen < 2) { strayObservations.set(slug, seen); continue; }
         strayObservations.delete(slug);
-        console.warn(`[plugins] '${logSafe(slug)}' runs here but is no longer active in the shared active set (a lost deactivation) — stopping it`);
+        log.warn({ slug: logSafe(slug) }, `[plugins] '${logSafe(slug)}' runs here but is no longer active in the shared active set (a lost deactivation) — stopping it`);
         if (unloadOnePlugin(slug)) stopped.push(slug);
     }
     return stopped;
@@ -2717,12 +2751,17 @@ async function loadActivePlugins() {
         await pruneOrphanedActivePlugins();
         await retireResolvedOrphanNotices();
     } catch (e: any) {
-        console.warn(`[plugins] orphaned-entry reconciliation skipped: ${logSafe(e && e.message)}`);
+        log.warn({ err: e }, '[plugins] orphaned-entry reconciliation skipped');
     }
 
     const activePlugins = await getActivePlugins();
     const plugins = scanPlugins();
-    const CrashGuard = require('./crash-guard');
+    const secondary = onSecondarySite();
+    // CrashGuard watches the BOOT of the process (the main site's plugins load during it); another site's
+    // plugins load when that site is first prepared, long after, so they are not part of its strike count.
+    const CrashGuard = secondary
+        ? { checkPreviousCrash: () => null, startLoading: () => {}, finishLoading: () => {}, MAX_STRIKES: 0 }
+        : require('./crash-guard');
 
     // 1. CRASH RECOVERY CHECK (with 3-Strike Rule)
     // Did we crash last time?
@@ -2730,8 +2769,8 @@ async function loadActivePlugins() {
 
     if (crashInfo && crashInfo.shouldDisable) {
         const culpritSlug = crashInfo.slug;
-        console.error(`🚨 CRASH DETECTED: Plugin '${logSafe(culpritSlug)}' has ${logSafe(crashInfo.strikes)} strikes.`);
-        console.error(`🛡️  CrashGuard: Automatically disabling '${logSafe(culpritSlug)}' to prevent boot loop.`);
+        log.error(`🚨 CRASH DETECTED: Plugin '${logSafe(culpritSlug)}' has ${logSafe(crashInfo.strikes)} strikes.`);
+        log.error(`🛡️  CrashGuard: Automatically disabling '${logSafe(culpritSlug)}' to prevent boot loop.`);
 
         // Remove from active plugins list (atomic read-modify-write under the dist-lock so a
         // concurrent activation on another node can't resurrect the crasher by clobbering this write).
@@ -2764,7 +2803,7 @@ async function loadActivePlugins() {
                 }
             }
         } catch (e: any) {
-            console.error('[CrashGuard] Failed to record admin notice:', e && e.message);
+            log.error({ err: e }, '[CrashGuard] Failed to record admin notice');
         }
 
         // Update local list for THIS run
@@ -2772,13 +2811,19 @@ async function loadActivePlugins() {
         if (index > -1) activePlugins.splice(index, 1);
     } else if (crashInfo && !crashInfo.shouldDisable) {
         // Crash detected but not at 3 strikes yet, just log and continue
-        console.warn(`⚠️ [CrashGuard] Previous crash during '${logSafe(crashInfo.slug)}' load (Strike ${logSafe(crashInfo.strikes)}/${logSafe(CrashGuard.MAX_STRIKES)}). Retrying...`);
+        log.warn(`⚠️ [CrashGuard] Previous crash during '${logSafe(crashInfo.slug)}' load (Strike ${logSafe(crashInfo.strikes)}/${logSafe(CrashGuard.MAX_STRIKES)}). Retrying...`);
     }
 
     // 2. Load Plugins
     for (const slug of activePlugins) {
         const plugin = plugins.find(p => p.slug === slug);
         if (!plugin) continue;
+        // Multisite: a plugin the network stopped offering stays listed (the site's choice is kept) but
+        // does not run here until it is offered again.
+        if (secondary && !require('./plugin-permissions').isOfferedHere(slug)) {
+            log.warn(`   ⚠ Skipping '${logSafe(slug)}' on site ${siteContext.currentSiteId()}: not offered by the network.`);
+            continue;
+        }
 
         const mainFile = findMainFile(plugin.path);
         if (!mainFile) continue;
@@ -2797,9 +2842,9 @@ async function loadActivePlugins() {
                 // across restarts instead of quietly coming back.
                 validatePluginPermissions(slug, plugin.path, manifest, { mode: 'grant' });
 
-                await installPluginDependencies(slug, manifest, plugin.path);
+                if (!secondary) await installPluginDependencies(slug, manifest, plugin.path);
             } catch (e) {
-                console.error(`   ✗ Security Block for ${logSafe(slug)} on load: ${logSafe(e.message)}`);
+                log.error({ err: e }, `   ✗ Security Block for ${logSafe(slug)} on load`);
                 // We don't load plugins that fail validation
                 continue;
             }
@@ -2817,22 +2862,22 @@ async function loadActivePlugins() {
             // in-process execution has been removed — a plugin MUST declare "isolated": true.
             if (manifest && manifest.isolated) {
                 await loadIsolatedPlugin(slug, mainFile);
-                console.log(`   ✓ Plugin loaded ISOLATED: ${logSafe(plugin.name)} (${logSafe(slug)})`);
+                log.info(`   ✓ Plugin loaded ISOLATED: ${logSafe(plugin.name)} (${logSafe(slug)})`);
                 CrashGuard.finishLoading(slug);
                 // Keep its declared roles in line with the manifest on disk (a plugin updated in place
                 // between two boots). Best-effort: a refusal is logged and the roles stay as they were.
                 try { await syncPluginRoles(slug, manifest); }
-                catch (e: any) { console.error(`   ✗ Roles of ${logSafe(slug)} not refreshed: ${logSafe(e && e.message)}`); }
+                catch (e: any) { log.error({ err: e }, `   ✗ Roles of ${logSafe(slug)} not refreshed`); }
                 continue;
             }
 
-            console.warn(`   ⚠ Skipping '${logSafe(slug)}': not isolated. Set "isolated": true to run it in the sandbox (legacy in-process loading was removed).`);
+            log.warn(`   ⚠ Skipping '${logSafe(slug)}': not isolated. Set "isolated": true to run it in the sandbox (legacy in-process loading was removed).`);
             CrashGuard.finishLoading(slug);
         } catch (error) {
             // If we caught the error (it didn't crash the process), we should still clear the lock
             CrashGuard.finishLoading(slug);
 
-            console.error(`   ✗ Failed to load plugin ${logSafe(slug)}: ${logSafe(error.message)}`);
+            log.error({ err: error }, `   ✗ Failed to load plugin ${logSafe(slug)}`);
         }
     }
 }
@@ -2891,12 +2936,12 @@ async function applyPluginRoles(slug: string, manifest: any, dryRun: boolean) {
     const installed = listInstalledPluginIds();
     let result = { registered: [] as string[], removed: [] as string[], orphaned: [] as string[], skipped: false };
     if (declaresRoles(manifest) && !isGranted(slug, ROLES_PERMISSION.scope, ROLES_PERMISSION.access)) {
-        if (!dryRun) console.warn(`[plugins] '${logSafe(slug)}' declares roles but roles:declare is not granted — no role registered.`);
+        if (!dryRun) log.warn({ slug: logSafe(slug) }, `[plugins] '${logSafe(slug)}' declares roles but roles:declare is not granted — no role registered.`);
         result.skipped = true;
     } else {
         result = { ...(await roles.registerPluginRoles(slug, manifest, { installedPluginIds: installed, dryRun })), skipped: false };
         if (dryRun) return result;
-        if (result.registered.length) console.log(`[plugins] '${logSafe(slug)}' roles registered: ${logSafe(result.registered.join(', '))}`);
+        if (result.registered.length) log.info({ slug: logSafe(slug) }, `[plugins] '${logSafe(slug)}' roles registered: ${logSafe(result.registered.join(', '))}`);
     }
     if (dryRun) return result;
     await roles.enforcePluginRoleNamespaces(installed);
@@ -2917,7 +2962,12 @@ async function getAllPlugins() {
 }
 
 /**
- * Create sample plugin
+ * Create the sample plugin (POST /plugins/sample) when backend/plugins/hello-world/ is missing.
+ *
+ * It used to write an in-process plugin that require()d core's hooks and filtered `the_content` — no
+ * manifest (so not a plugin the list could show), a require the sandbox refuses, and a hook core never
+ * applies. It now writes the same isolated sample the repository ships: a [hello] shortcode through the
+ * bridge, no permissions.
  */
 function createSamplePlugin() {
     const sampleDir = path.join(PLUGINS_DIR, 'hello-world');
@@ -2926,36 +2976,43 @@ function createSamplePlugin() {
 
     fs.mkdirSync(sampleDir, { recursive: true });
 
-    const sampleCode = `/**
- * Hello World Plugin for WordJS
- */
+    const manifest = {
+        name: 'Hello World',
+        version: '1.1.0',
+        description: 'A sample plugin that adds a [hello] shortcode',
+        author: 'WordJS',
+        isolated: true,
+        permissions: [],
+    };
+    const sampleCode = [
+        '/**',
+        ' * Hello World Plugin for WordJS: put [hello] or [hello name="Ada"] in a post or page.',
+        ' * Isolated: it reaches core only through the injected `wordjs` bridge. Shortcodes need no permission.',
+        ' */',
+        '',
+        'exports.metadata = {',
+        "    name: 'Hello World',",
+        "    version: '1.1.0',",
+        "    description: 'A sample plugin that adds a [hello] shortcode',",
+        "    author: 'WordJS'",
+        '};',
+        '',
+        "const escapeHtml = (s) => String(s).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));",
+        '',
+        'exports.renderHello = function (attrs) {',
+        "    const name = attrs && typeof attrs.name === 'string' && attrs.name.trim() ? attrs.name.trim().slice(0, 80) : 'world';",
+        "    return '<p class=\"hello-world-greeting\">Hello, ' + escapeHtml(name) + '!</p>';",
+        '};',
+        '',
+        'exports.init = function (wordjs) {',
+        "    wordjs.shortcodes.add('hello', (attrs) => exports.renderHello(attrs));",
+        '};',
+        '',
+        'exports.deactivate = function () {};',
+        '',
+    ].join('\n');
 
-// Plugin metadata
-exports.metadata = {
-  name: 'Hello World',
-  version: '1.0.0',
-  description: 'A sample plugin that adds a greeting filter',
-  author: 'WordJS'
-};
-
-// Called when plugin is activated
-exports.init = function() {
-  const { addFilter } = require('../../src/core/hooks');
-  
-  // Add a filter to post content
-  addFilter('the_content', (content) => {
-    return '<p><em>Hello from the Hello World plugin!</em></p>' + content;
-  });
-  
-  console.log('Hello World plugin initialized!');
-};
-
-// Called when plugin is deactivated
-exports.deactivate = function() {
-  console.log('Hello World plugin deactivated!');
-};
-`;
-
+    fs.writeFileSync(path.join(sampleDir, 'manifest.json'), JSON.stringify(manifest, null, 4) + '\n');
     fs.writeFileSync(path.join(sampleDir, 'index.js'), sampleCode);
 }
 
@@ -2973,15 +3030,108 @@ exports.deactivate = function() {
  * they are. Clearing them and writing back a copy taken from this node's memory undid, on a node that had
  * not heard of it, a revoke or a narrowed allowlist another node had stored.
  */
+// --- Multisite: plugins across the sites of a network ---------------------------------------------
+
+/**
+ * Load the active plugins of the site being prepared (core/network-sites initSiteRuntime): its grants and
+ * egress policy first (they are that site's options), then one worker per active, offered plugin. Runs
+ * inside that site's context. Never throws: a site whose plugins fail to load still serves its content.
+ */
+async function loadSitePlugins(): Promise<void> {
+    try {
+        const perms = require('./plugin-permissions');
+        await perms.loadGrants();
+        await perms.loadEgressHosts();
+        await loadActivePlugins();
+        fixMiddlewareOrder();
+    } catch (e: any) {
+        log.warn(`[plugins] site ${siteContext.currentSiteIdOrNull()}: plugins not loaded: ${logSafe(e && e.message)}`);
+    }
+}
+
+/**
+ * Stop `slug` on every site other than the main one and drop it from their active sets — the plugin is
+ * leaving the network (deleted) or no longer offered. Each site's own record of the deactivation (its
+ * `deactivated_plugin` hook, its active set) is written in that site's context. Grants are kept, so an
+ * offer made again later restores each site's own decisions. Returns the site ids it was active on.
+ */
+async function deactivatePluginOnSecondarySites(slug: string): Promise<number[]> {
+    const done: number[] = [];
+    if (!siteContext.multisiteEnabled()) return done;
+    await require('./network-sites').forEachSecondarySite(`deactivate ${slug}`, async (siteId: number) => {
+        if (!(await isPluginActive(slug))) {
+            // Not in the active set, but a worker may still run (activation in flight): stop it anyway.
+            try { await unloadIsolatedPlugin(slug); } catch { /* not running */ }
+            return;
+        }
+        await deactivatePlugin(slug, { prune: false });
+        done.push(siteId);
+    });
+    // Suspended sites are skipped by forEachSecondarySite; stop any worker they still have.
+    try {
+        const iso = require('./plugin-isolate');
+        for (const key of iso.listIsolateKeys()) {
+            const { siteId, slug: s } = iso.splitIsolateKey(key);
+            if (s === slug && siteId !== siteContext.PRIMARY_SITE_ID) { try { await iso.unloadIsolateKey(key); } catch { /* gone */ } }
+        }
+    } catch { /* isolate layer unavailable */ }
+    return done;
+}
+
+/**
+ * Network administrator: offer `slug` to the other sites with `tokens` as its grant ceiling (or change the
+ * ceiling). Installs its dependencies into the shared node_modules once (the main site's job; sites never
+ * install code), then respawns every running worker of it on the other sites, so a lowered ceiling takes
+ * effect in the children too (the host gates already read it live). Runs as the main site.
+ */
+async function offerPluginToSites(slug: string, tokens: unknown): Promise<string[]> {
+    const plugin = scanPlugins().find((p) => p.slug === slug);
+    if (!plugin) { const e: any = new Error(`Plugin ${slug} not found`); e.code = 'plugin_not_found'; e.status = 404; throw e; }
+    const manifestPath = path.join(plugin.path, 'manifest.json');
+    let manifest: any = null;
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* checked below */ }
+    if (!manifest || !manifest.isolated) { const e: any = new Error(`Plugin ${slug} is not an isolated plugin`); e.code = 'plugin_not_isolated'; e.status = 400; throw e; }
+    const stored = require('./network').setPluginCeiling(slug, tokens);
+    if (!isBundledPlugin(plugin.path, manifest)) {
+        try { await installPluginDependencies(slug, manifest, plugin.path); }
+        catch (e: any) { log.warn(`[plugins] '${logSafe(slug)}' offered, but its dependencies could not be installed: ${logSafe(e && e.message)}`); }
+    }
+    await respawnOnSecondarySites(slug);
+    return stored;
+}
+
+/** Network administrator: stop offering `slug` to the other sites (deactivates it there). */
+async function withdrawPluginFromSites(slug: string): Promise<{ withdrawn: boolean; deactivatedOn: number[] }> {
+    const withdrawn = require('./network').clearPluginCeiling(slug);
+    const deactivatedOn = await deactivatePluginOnSecondarySites(slug);
+    return { withdrawn, deactivatedOn };
+}
+
+/** Respawn every running worker of `slug` on the sites other than the main one (a policy change). */
+async function respawnOnSecondarySites(slug: string): Promise<void> {
+    if (!siteContext.multisiteEnabled()) return;
+    const iso = require('./plugin-isolate');
+    for (const key of iso.listIsolateKeys()) {
+        const { siteId, slug: s } = iso.splitIsolateKey(key);
+        if (s !== slug || siteId === siteContext.PRIMARY_SITE_ID) continue;
+        try {
+            await siteContext.runWithSite(siteId, async () => {
+                await require('./plugin-permissions').loadGrants();
+                await iso.reloadIsolatedPlugin(slug);
+            });
+        } catch (e: any) { log.warn(`[plugins] respawn of '${logSafe(slug)}' on site ${siteId} failed: ${logSafe(e && e.message)}`); }
+    }
+}
+
 async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false }: { dropTables?: boolean; keepGrants?: boolean } = {}) {
     const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; appContainerRetired: boolean } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false };
     if (!keepGrants) {
         try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
-        catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] removeGrants failed: ${logSafe(e && e.message)}`); }
+        catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] removeGrants failed`); }
     }
     try { const { clearStrikes } = require('./crash-guard'); clearStrikes(slug); result.strikesCleared = true; }
-    catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] clearStrikes failed: ${logSafe(e && e.message)}`); }
-    try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] clearAssets failed: ${logSafe(e && e.message)}`); }
+    catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] clearStrikes failed`); }
+    try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] clearAssets failed`); }
     if (dropTables) {
         try {
             const { dbAsync, getDbType } = require('../config/database');
@@ -2999,22 +3149,23 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
                 await dbAsync.run(`DROP TABLE IF EXISTS "${String(name).replace(/"/g, '')}"`);
                 result.tablesDropped.push(name);
             }
-        } catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] table drop failed: ${logSafe(e && e.message)}`); }
+        } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] table drop failed`); }
     }
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
-    catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] db role drop failed: ${logSafe(e && e.message)}`); }
+    catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] db role drop failed`); }
     if (process.platform === 'win32') {
         try {
             const appRoot = path.resolve(__dirname, '..', '..');
             result.appContainerRetired = await require('./sandbox-windows').retireAppContainerPlugin(appRoot, slug);
-        } catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] AppContainer ACL/profile cleanup failed: ${logSafe(e && e.message)}`); }
+        } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] AppContainer ACL/profile cleanup failed`); }
     }
-    console.log(`[uninstall ${logSafe(slug)}] grants=${logSafe(result.grantsRemoved)} strikes=${logSafe(result.strikesCleared)} tablesDropped=${logSafe(result.tablesDropped.length)}`);
+    log.info({ slug: logSafe(slug), grantsRemoved: logSafe(result.grantsRemoved), strikesCleared: logSafe(result.strikesCleared) }, `[uninstall ${logSafe(slug)}] grants=${logSafe(result.grantsRemoved)} strikes=${logSafe(result.strikesCleared)} tablesDropped=${logSafe(result.tablesDropped.length)}`);
     return result;
 }
 
 module.exports = {
+    loadSitePlugins, deactivatePluginOnSecondarySites, offerPluginToSites, withdrawPluginFromSites, respawnOnSecondarySites, onSecondarySite,
     scanPlugins,
     getActivePlugins,
     isPluginActive,

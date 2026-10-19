@@ -32,9 +32,9 @@ export default function ThemeLoader({
     // ALREADY-OPEN public tab keeps the theme it was rendered with until it navigates — deliberate, and
     // far cheaper than a request per visitor per focus.
     //
-    // The one client resolve left is for the Verso editor preview, which reuses this shell WITHOUT
-    // server props (VersoEditor renders <PublicLayoutShell/> bare). It reads the settings endpoint —
-    // cheap, cached, no fs — once, not on a timer.
+    // The one client resolve left is for a shell rendered WITHOUT server props. (The Verso editor's
+    // canvas renders the shell with `stylesheets={false}`: its iframe document links the theme itself.)
+    // It reads the settings endpoint — cheap, cached, no fs — once, not on a timer.
     useEffect(() => {
         if (initialSlug) return;
         let cancelled = false;

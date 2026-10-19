@@ -7,7 +7,7 @@
  * core ONLY via the `wordjs` bridge, whose calls are RPC'd here (over the IPC channel) and run through
  * createPluginApi() (permission-checked, in the plugin's context). Hooks/filters the plugin registers
  * become shims in the real hook system that call back into the isolate. The host's heap (secrets, DB
- * handle, other plugins) is unreachable from the child. See documentation/plugin-isolation-proposal.md.
+ * handle, other plugins) is unreachable from the child. See documentation/archive/plugin-isolation-proposal.md.
  */
 
 const { fork, spawn } = require('child_process');
@@ -20,8 +20,32 @@ const { runWithContext } = require('./plugin-context');
 const { hasProfessionalMailbox } = require('./mailbox');
 const hooks = require('./hooks');
 const { addShortcode, removeShortcode } = require('./shortcodes');
+const log = require('./module-logger').moduleLogger('core/plugin-isolate');
 
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
+
+/**
+ * MULTISITE: ONE WORKER PER (SITE, PLUGIN). Every registry below is keyed by the isolate KEY, not the
+ * plugin slug: `<slug>` for site 1 (so a single-site install, and the main site of a network, keep the
+ * exact keys, process names and behaviour they always had) and `s<id>:<slug>` for any other site
+ * (core/site-context siteKeyPrefix). A plugin's memory, module globals, caches and init() state never see
+ * two tenants, and a compromised worker holds one site's capabilities only: its bridge calls, hook and
+ * shortcode registrations, routes, mail provider and notification transports all run in, and answer
+ * only for, the site it was started for.
+ *
+ * The public functions of this module take a plugin SLUG and act on the CURRENT site's worker of it
+ * (they compute the key from the site context, which fails closed on a network when there is none).
+ * listIsolates() answers the current site's slugs; getAllIsolateStatuses() is network-wide (by key).
+ */
+const siteContext = require('./site-context');
+function isolateKey(slug: string, siteId: number = siteContext.currentSiteId()): string {
+    return siteContext.siteKeyPrefix(siteId) + slug;
+}
+/** The site and plugin slug of an isolate key (the inverse of isolateKey). */
+function splitIsolateKey(key: string): { siteId: number; slug: string } {
+    const m = /^s([1-9][0-9]{0,8}):(.+)$/.exec(String(key));
+    return m ? { siteId: Number(m[1]), slug: m[2] } : { siteId: siteContext.PRIMARY_SITE_ID, slug: String(key) };
+}
 
 /**
  * The ts-node preload, as an ABSOLUTE path.
@@ -241,8 +265,10 @@ function dropLivePid(slug: string, pid: number | undefined) {
     if (s.delete(pid)) releaseIpcFrameGuard();
     if (s.size === 0) livePids.delete(slug);
 }
-/** Pids we spawned for this slug and have not observed exiting. Empty ⇒ nothing of ours is running. */
-function getLivePids(slug: string): number[] { return Array.from(livePids.get(slug) || []); }
+/** Pids we spawned for this isolate key and have not observed exiting. Empty ⇒ nothing of ours is running. */
+function livePidsOf(key: string): number[] { return Array.from(livePids.get(key) || []); }
+/** Pids we spawned for the current site's worker of `slug`. */
+function getLivePids(slug: string): number[] { return livePidsOf(isolateKey(slug)); }
 /**
  * cgroup path only: child.pid is the systemd-run WRAPPER, but the transient .scope (the actual plugin
  * node + any grandchildren) is tracked by the manager, not tied to the wrapper's lifetime — a SIGKILL of
@@ -309,14 +335,14 @@ function onHostUncaughtException(err: any): void {
         const now = Date.now();
         if (now - ipcGuardLastWarn > 1000) { // rate-limit: a wedged channel can re-throw every read
             ipcGuardLastWarn = now;
-            try { console.error(`[Isolate] dropped a malformed IPC frame on a plugin channel (contained — the affected isolate is recycled by the RPC timeout / liveness checks). ${logSafe(err.message)}`); } catch { /* */ }
+            try { log.error({ err }, '[Isolate] dropped a malformed IPC frame on a plugin channel (contained — the affected isolate is recycled by the RPC timeout / liveness checks).'); } catch { /* */ }
         }
         return; // swallow ONLY the IPC framing error; the host stays up
     }
     // Not ours: reproduce Node's default fatal behavior so real bugs are never masked. If the app has its
     // OWN uncaughtException listener too, defer to it (it also runs) rather than exiting out from under it.
     if (process.listenerCount('uncaughtException') > 1) return;
-    try { console.error(err && err.stack ? err.stack : String(err)); } catch { /* */ }
+    try { log.error(err); } catch { /* */ }
     process.exit(1);
 }
 // SEND-SIDE twin of the guard above. `child.send()` can throw SYNCHRONOUSLY for two unrelated reasons:
@@ -357,9 +383,28 @@ function releaseIpcFrameGuard(): void {
  * refuse rather than pull the directory out from under a process that is still dying.
  */
 async function awaitIsolateStopped(slug: string, timeoutMs = 3000): Promise<boolean> {
+    const key = isolateKey(slug);
     const deadline = Date.now() + Math.max(0, timeoutMs);
     for (;;) {
-        if (!isolates.has(slug) && getLivePids(slug).length === 0) return true;
+        if (!isolates.has(key) && livePidsOf(key).length === 0) return true;
+        if (Date.now() >= deadline) return false;
+        await new Promise((r) => setTimeout(r, 25));
+    }
+}
+
+/**
+ * Multisite: wait (bounded) until no worker of `slug` runs on any site other than the main one — the
+ * DELETE precondition for the code's directory, network-wide. True on a single site.
+ */
+async function awaitOtherSitesStopped(slug: string, timeoutMs = 3000): Promise<boolean> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    const others = () => {
+        const keys = new Set<string>([...listIsolateKeys(), ...livePids.keys()]);
+        return Array.from(keys).filter((k) => { const p = splitIsolateKey(k); return p.slug === slug && p.siteId !== siteContext.PRIMARY_SITE_ID; });
+    };
+    for (;;) {
+        const left = others().filter((k) => isolates.has(k) || livePidsOf(k).length > 0);
+        if (!left.length) return true;
         if (Date.now() >= deadline) return false;
         await new Promise((r) => setTimeout(r, 25));
     }
@@ -399,28 +444,31 @@ function getHealth(slug: string): IsolateHealth {
 
 // Bounded exponential-backoff restart of a crashed child; gives up as 'crash-looping' after maxRestarts
 // within the window so a wedged plugin can't thrash the host forever.
-function superviseRestart(slug: string, entryFile: string) {
-    const h = getHealth(slug);
+function superviseRestart(key: string, entryFile: string) {
+    const { siteId, slug } = splitIsolateKey(key);
+    const h = getHealth(key);
     const now = Date.now();
     h.crashWindow = h.crashWindow.filter((t) => now - t < SUPERVISOR.windowMs);
     if (h.crashWindow.length >= SUPERVISOR.maxRestarts) {
         h.state = 'crash-looping';
-        console.error(`[Isolate ${logSafe(slug)}] crash-looping: ${logSafe(h.crashWindow.length)} restarts within ${logSafe(SUPERVISOR.windowMs / 1000)}s — giving up. Fix the plugin and reload it manually.`);
+        log.error({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] crash-looping: ${logSafe(h.crashWindow.length)} restarts within ${logSafe(SUPERVISOR.windowMs / 1000)}s — giving up. Fix the plugin and reload it manually.`);
         try {
             const { addAdminNotice } = require('./plugins');
-            if (typeof addAdminNotice === 'function') addAdminNotice(`Plugin "${slug}" keeps crashing and was stopped. Last error: ${h.lastError || 'unknown'}.`, 'error');
+            // The notice belongs to the site the worker ran for (its own administrators).
+            if (typeof addAdminNotice === 'function') siteContext.runWithSite(siteId, () => addAdminNotice(`Plugin "${slug}" keeps crashing and was stopped. Last error: ${h.lastError || 'unknown'}.`, 'error'));
         } catch { /* notice is best-effort */ }
         return;
     }
     const delay = SUPERVISOR.backoff[Math.min(h.crashWindow.length, SUPERVISOR.backoff.length - 1)];
     h.state = 'restarting';
-    console.warn(`[Isolate ${logSafe(slug)}] scheduling auto-restart in ${logSafe(delay)}ms (attempt ${logSafe(h.crashWindow.length + 1)}/${logSafe(SUPERVISOR.maxRestarts)}).`);
-    const t = setTimeout(async () => {
-        restartTimers.delete(slug);
-        if (isolates.has(slug)) return; // already back up (e.g. a manual reload beat us to it)
+    log.warn({ slug: logSafe(slug), delay: logSafe(delay), maxRestarts: logSafe(SUPERVISOR.maxRestarts) }, `[Isolate ${logSafe(slug)}] scheduling auto-restart in ${logSafe(delay)}ms (attempt ${logSafe(h.crashWindow.length + 1)}/${logSafe(SUPERVISOR.maxRestarts)}).`);
+    const t = setTimeout(() => siteContext.runWithSite(siteId, async () => {
+        restartTimers.delete(key);
+        if (isolates.has(key)) return; // already back up (e.g. a manual reload beat us to it)
         h.crashWindow.push(Date.now());
         h.restarts++;
         try {
+            // Restarted as the site it ran for: the restart re-registers that site's hooks and routes.
             await loadIsolatedPlugin(slug, entryFile, { supervised: true });
             // The restarted child re-registers its routes at the END of the app stack — after the
             // notFound/errorHandler layers boot appended — so without this they'd all 404 (same reason
@@ -438,16 +486,20 @@ function superviseRestart(slug: string, entryFile: string) {
                 } catch { /* notice is best-effort */ }
                 return;
             }
-            h.state = 'crashed'; h.lastError = e && e.message; superviseRestart(slug, entryFile);
+            h.state = 'crashed'; h.lastError = e && e.message; superviseRestart(key, entryFile);
         }
-    }, delay);
+    }), delay);
     if (t.unref) t.unref();
-    restartTimers.set(slug, t);
+    restartTimers.set(key, t);
 }
 
+/** The live health of the current site's worker of `slug` (null when it never ran here). */
 function getIsolateStatus(slug: string) {
-    const h = isolateHealth.get(slug);
-    if (!h) return isolates.has(slug) ? { state: 'running' } : null;
+    return statusOf(isolateKey(slug));
+}
+function statusOf(key: string) {
+    const h = isolateHealth.get(key);
+    if (!h) return isolates.has(key) ? { state: 'running' } : null;
     return {
         state: h.state, pid: h.pid, startedAt: h.startedAt, uptimeMs: h.startedAt ? Date.now() - h.startedAt : 0, restarts: h.restarts, lastExitCode: h.lastExitCode, lastError: h.lastError, rssBytes: h.rssBytes,
         ...(h.state === 'refused' && h.sandbox ? { sandbox: h.sandbox } : {}),
@@ -465,18 +517,19 @@ function getIsolateStatus(slug: string) {
  * (`runtime.state: 'refused'`, `runtime.lastError`, `runtime.sandbox`) where the admin screen can say why.
  * The details are the refusal's own, already path-free (core/sandbox-refusal.ts).
  */
-function recordLaunchRefusal(slug: string, err: unknown): void {
+function recordLaunchRefusal(key: string, err: unknown): void {
     const refusal = require('./sandbox-refusal').findSandboxUnavailable(err);
     if (!refusal) return;
-    const h = getHealth(slug);
+    const h = getHealth(key);
     h.state = 'refused';
     h.pid = null;
     h.lastError = refusal.message;
     h.sandbox = refusal.sandbox;
 }
+/** Every isolate this process ever ran, network-wide, by isolate key (`<slug>` / `s<id>:<slug>`). */
 function getAllIsolateStatuses() {
     const out: Record<string, any> = {};
-    for (const slug of isolateHealth.keys()) out[slug] = getIsolateStatus(slug);
+    for (const key of isolateHealth.keys()) out[key] = statusOf(key);
     return out;
 }
 
@@ -507,10 +560,22 @@ function getAllIsolateStatuses() {
  * `theme:` isolate before loading the incoming theme's child, and it must not reach into our internals.
  */
 function listIsolates(): string[] {
-    const slugs = new Set<string>(isolates.keys());
-    for (const slug of restartTimers.keys()) slugs.add(slug);
-    for (const slug of loading.keys()) slugs.add(slug);
-    return Array.from(slugs);
+    // The CURRENT site's isolates, by plugin slug (multisite: another site's workers are not listed).
+    const prefix = siteContext.siteKeyPrefix(siteContext.currentSiteId());
+    const out: string[] = [];
+    for (const key of listIsolateKeys()) {
+        if (prefix) { if (key.startsWith(prefix)) out.push(key.slice(prefix.length)); }
+        else if (!/^s[1-9][0-9]{0,8}:/.test(key)) out.push(key);
+    }
+    return out;
+}
+
+/** Every managed isolate of the network, by isolate key (see listIsolates for the three sources). */
+function listIsolateKeys(): string[] {
+    const keys = new Set<string>(isolates.keys());
+    for (const key of restartTimers.keys()) keys.add(key);
+    for (const key of loading.keys()) keys.add(key);
+    return Array.from(keys);
 }
 
 /**
@@ -525,11 +590,25 @@ function listIsolates(): string[] {
  */
 function projectRouteUser(user: any, slug: string): any {
     if (!user) return null;
-    return {
-        id: user.id, role: user.role, userEmail: user.userEmail, userLogin: user.userLogin,
+    const projected: any = {
+        id: user.id, role: user.role,
         hasProfessionalMailbox: hasProfessionalMailbox(user),
         pluginCapabilities: pluginCapabilitiesOf(user, slug),
     };
+    // The account's IDENTIFYING fields (email, login) are personal data: the same grant that lets a
+    // plugin look accounts up through the users bridge (users:read) is required to see them here. Without
+    // it a route still gets everything a gate needs (id, role, the mailbox fact, its own capabilities).
+    if (routeUserPiiGranted(slug)) {
+        projected.userEmail = user.userEmail;
+        projected.userLogin = user.userLogin;
+    }
+    return projected;
+}
+
+/** Whether plugin `slug` holds users:read on the current site (fails closed). */
+function routeUserPiiGranted(slug: string): boolean {
+    try { return require('./plugin-permissions').isGranted(slug, 'users', 'read') === true; }
+    catch { return false; }
 }
 
 /**
@@ -547,7 +626,7 @@ function pluginCapabilitiesOf(user: any, slug: string): string[] {
         const others = Array.from(new Set([...installed, ...listIsolates().filter((s) => !s.startsWith('theme:'))]));
         return require('./roles').pluginCapabilitiesFor(user, slug, others);
     } catch (e: any) {
-        console.warn(`[Isolate ${logSafe(slug)}] could not resolve an account's plugin capabilities: ${logSafe(e && e.message)}`);
+        log.warn({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] could not resolve an account's plugin capabilities`);
         return [];
     }
 }
@@ -571,9 +650,12 @@ function pluginCapabilitiesOf(user: any, slug: string): string[] {
  * uncleared Promise.race timer is precisely what once kept a test subprocess alive past its IPC teardown.
  */
 async function awaitIsolateSettled(slug: string, timeoutMs = 30000): Promise<boolean> {
+    return awaitKeySettled(isolateKey(slug), timeoutMs);
+}
+async function awaitKeySettled(key: string, timeoutMs = 30000): Promise<boolean> {
     const deadline = Date.now() + Math.max(0, timeoutMs);
     for (;;) {
-        const rec = loading.get(slug);
+        const rec = loading.get(key);
         if (!rec) return true;
         const left = deadline - Date.now();
         if (left <= 0) return false;
@@ -617,7 +699,7 @@ function probeOsMemoryCap(): Promise<number | null> {
             let enforcement = 'unknown';
             try { enforcement = await require('./sandbox-macos').probeMacosMemoryCapEnforcement(); } catch { /* no claim */ }
             if (enforcement !== 'enforced') {
-                console.warn(`[Sandbox] preventive RLIMIT memory cap is ${logSafe(enforcement)} on macOS; using the 256 MB V8 heap ceiling plus the host RSS watchdog without claiming a kernel resident cap.`);
+                log.warn({ enforcement: logSafe(enforcement) }, `[Sandbox] preventive RLIMIT memory cap is ${logSafe(enforcement)} on macOS; using the 256 MB V8 heap ceiling plus the host RSS watchdog without claiming a kernel resident cap.`);
                 return null;
             }
         }
@@ -658,9 +740,9 @@ function probeOsMemoryCap(): Promise<number | null> {
                 c.on('error', () => finish(false));
                 c.on('exit', (code: number) => finish(got && code === 0));
             });
-            if (ok) { console.log(`[Sandbox] kernel memory cap active: RLIMIT_AS ${logSafe(mb)} MB per isolated child.`); return kb; }
+            if (ok) { log.info({ mb: logSafe(mb) }, `[Sandbox] kernel memory cap active: RLIMIT_AS ${logSafe(mb)} MB per isolated child.`); return kb; }
         }
-        console.log('[Sandbox] kernel rlimit cap unavailable here; relying on /proc RSS poll + process separation.');
+        log.info('[Sandbox] kernel rlimit cap unavailable here; relying on /proc RSS poll + process separation.');
         return null;
     })();
     return osCapProbe;
@@ -977,7 +1059,7 @@ function raiseCgroupCpuNotice(): void {
             since: Date.now(),
         });
     } catch (e: any) {
-        console.warn(`[Sandbox] the CPU-bound admin notice could not be raised: ${e && e.message}`);
+        log.warn({ err: e }, '[Sandbox] the CPU-bound admin notice could not be raised');
     }
 }
 
@@ -985,7 +1067,7 @@ function retireCgroupCpuNotice(): void {
     try {
         require('./admin-notices').clearAdminNotice(CGROUP_CPU_NOTICE_ID);
     } catch (e: any) {
-        console.warn(`[Sandbox] the CPU-bound admin notice could not be retired: ${e && e.message}`);
+        log.warn({ err: e }, '[Sandbox] the CPU-bound admin notice could not be retired');
     }
 }
 // The cgroup-scope resource caps, built ONCE so probeCgroupCap and the real launch apply the IDENTICAL
@@ -1061,8 +1143,8 @@ function probeCgroupCap(): Promise<boolean> {
             proc.on('error', () => { clearTimeout(overall); finish(false); });
             proc.on('exit', () => { clearTimeout(overall); finish(gotOk); }); // exit AFTER ok ⇒ kill worked
         });
-        if (ok) console.log(`[Sandbox] preventive cgroup caps ACTIVE (systemd-run --user --scope ${logSafe(props.join(' '))} per isolated child).`);
-        else console.warn('[Sandbox] cgroup caps requested (useCgroupMemoryCap/cpuQuotaPercent) but the probe failed (no usable --user scope, or cpu/memory not delegated to the user cgroup) — falling back to RLIMIT_AS + the RSS poll.');
+        if (ok) log.info(`[Sandbox] preventive cgroup caps ACTIVE (systemd-run --user --scope ${logSafe(props.join(' '))} per isolated child).`);
+        else log.warn('[Sandbox] cgroup caps requested (useCgroupMemoryCap/cpuQuotaPercent) but the probe failed (no usable --user scope, or cpu/memory not delegated to the user cgroup) — falling back to RLIMIT_AS + the RSS poll.');
         return ok;
     })();
     return cgroupProbe;
@@ -1172,8 +1254,8 @@ function probeJobObjectCap(): Promise<boolean> {
             if (to.unref) to.unref();
             assignProcessToJobObject(probe.pid, 256 * 1024 * 1024)
                 .then((ok) => {
-                    if (ok) console.log('[Sandbox] preventive Job Object memory cap ACTIVE (Windows; per-plugin-child ProcessMemoryLimit).');
-                    else console.warn('[Sandbox] Job Object memory cap unavailable here (PowerShell/Win32 probe failed) — relying on the RSS poll.');
+                    if (ok) log.info('[Sandbox] preventive Job Object memory cap ACTIVE (Windows; per-plugin-child ProcessMemoryLimit).');
+                    else log.warn('[Sandbox] Job Object memory cap unavailable here (PowerShell/Win32 probe failed) — relying on the RSS poll.');
                     finish(ok);
                 })
                 .catch(() => finish(false));
@@ -1229,7 +1311,7 @@ function probePermissionModel(): Promise<string | null> {
             const verdict = await runProbeChild([flag, `--allow-fs-read=${__dirname}`, '-e', probeSrc]);
             if (verdict === 'DENIED') {
                 permissionModelState = 'active';
-                console.log(`[Sandbox] capability confinement ACTIVE on ${process.platform} (Node permission model via ${flag}: filesystem scoped to the plugin's own zones, child_process/worker_threads/native addons/WASI denied below JS).`);
+                log.info({ platform: process.platform, flag }, `[Sandbox] capability confinement ACTIVE on ${process.platform} (Node permission model via ${flag}: filesystem scoped to the plugin's own zones, child_process/worker_threads/native addons/WASI denied below JS).`);
                 return flag;
             }
         }
@@ -1298,12 +1380,12 @@ function probeNetPermission(): Promise<string[] | null> {
         for (const flags of [['--allow-net', '--disable-warning=ExperimentalWarning'], ['--allow-net']]) {
             if (await runProbeChild([...base, ...flags, '-e', lookupSrc]) === 'OPEN') {
                 netPermissionState = 'gated';
-                console.log(`[Sandbox] Node's permission model denies network on this Node; network-granted isolated plugins start with ${flags.join(' ')} (the egress guard still decides which hosts they reach).`);
+                log.info(`[Sandbox] Node's permission model denies network on this Node; network-granted isolated plugins start with ${flags.join(' ')} (the egress guard still decides which hosts they reach).`);
                 return flags;
             }
         }
         netPermissionState = 'unrestorable';
-        console.warn(`[Sandbox] Node's permission model denies network on this Node (${process.version}) and no form of --allow-net was accepted: network-granted isolated plugins will fail every outbound call with ERR_ACCESS_DENIED. Run a Node release whose --allow-net works (the production image uses Node 22).`);
+        log.warn({ version: process.version }, `[Sandbox] Node's permission model denies network on this Node (${process.version}) and no form of --allow-net was accepted: network-granted isolated plugins will fail every outbound call with ERR_ACCESS_DENIED. Run a Node release whose --allow-net works (the production image uses Node 22).`);
         return null;
     })();
     return netPermissionProbe;
@@ -1570,7 +1652,7 @@ function probePlatformConfinement(): Promise<ConfinementState> {
                 : await require('./sandbox-macos').probeSeatbelt();
         } catch (e: any) {
             sandboxPlatformState = 'degraded';
-            console.warn(`[Sandbox] ${mech} probe errored (${logSafe(e && e.message)}).`);
+            log.warn({ mech, err: e }, `[Sandbox] ${mech} probe errored`);
         }
         sandboxHardeningState = sandboxPlatformState;
         sandboxPlatformNetworkState = sandboxPlatformState;
@@ -1650,8 +1732,15 @@ function fsGrantsFor(slug: string): { read: boolean; write: boolean } {
 // The admin-set per-plugin egress allowlist (bare hosts / IP literals), resolved host-side at spawn and
 // pushed into the child's cfg (→ egress-guard.setAllowedHosts). Empty ⇒ allow-all-public (unchanged
 // behavior). Only meaningful for a network-granted plugin; fail-OPEN (no allowlist) on any error.
+// The admin-approved private destinations (exact `host:port`, plugin-permissions getPrivateDestinations) ride
+// in the same list: egress-guard.setAllowedHosts splits them out, so they never narrow the allowlist. They are
+// fail-CLOSED on their own (none on any error), whatever happens to the allowlist half.
 function getEgressAllowlistFor(slug: string): string[] {
-    try { const l = require('./plugin-permissions').getEgressAllowlist(slug); return Array.isArray(l) ? l : []; } catch { return []; }
+    let hosts: string[];
+    try { const l = require('./plugin-permissions').getEgressAllowlist(slug); hosts = Array.isArray(l) ? l : []; } catch { hosts = []; }
+    let priv: string[];
+    try { const l = require('./plugin-permissions').getPrivateDestinations(slug); priv = Array.isArray(l) ? l : []; } catch { priv = []; }
+    return [...hosts, ...priv];
 }
 // Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
 // permissions module can't be required at all), the spawn path below fails egress CLOSED for a
@@ -1693,6 +1782,8 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     // Private media description (gated host-side on media:private_read). Streaming the BYTES is not a
     // bridge call: it is a route reply (`res.sendPrivateMedia`), so file contents never cross the IPC.
     'media.getPrivate',
+    // Text completion through the AI provider of the site (gated host-side on ai:use; the key stays host-side).
+    'ai.complete',
     // Host-mediated DNS (network-gated + private-IP-filtered host-side; see api.dns in plugin-api.ts).
     // The raw dns.resolve* surface is denied inside the isolate, so an MTA reaches MX/TXT records here.
     'dns.resolveMx', 'dns.resolveTxt', 'dns.resolve4', 'dns.resolve6', 'dns.resolve',
@@ -1729,7 +1820,10 @@ function callApi(api: any, method: string, args: any[]) {
  * runs its own, so "load X from this file" never silently returns a child running a different file.
  */
 function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?: boolean; readyTimeoutMs?: number } = {}): Promise<any> {
-    const pending = loading.get(slug);
+    // The current site's worker of `slug` (multisite: one per site; see isolateKey).
+    const siteId = siteContext.currentSiteId();
+    const key = isolateKey(slug, siteId);
+    const pending = loading.get(key);
     if (pending && pending.entryFile === entryFile) return pending.promise;
     const rec: { promise: Promise<any>; entryFile: string } = {
         entryFile,
@@ -1738,22 +1832,25 @@ function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?
             // own caller's business) so the two children can never overlap, then start ours.
             if (pending) { try { await pending.promise; } catch { /* not our load, not our error */ } }
             try {
-                return await startIsolate(slug, entryFile, opts);
+                return await startIsolate(slug, siteId, entryFile, opts);
             } catch (e: any) {
-                recordLaunchRefusal(slug, e);
+                recordLaunchRefusal(key, e);
                 throw e;
             }
         })(),
     };
-    loading.set(slug, rec);
+    loading.set(key, rec);
     // Clear only OUR OWN entry: a later load may already have replaced it (the different-entry-file path
     // above overwrites while the earlier one is still settling).
-    const clear = () => { if (loading.get(slug) === rec) loading.delete(slug); };
+    const clear = () => { if (loading.get(key) === rec) loading.delete(key); };
     rec.promise.then(clear, clear);
     return rec.promise;
 }
 
-async function startIsolate(slug: string, entryFile: string, opts: { supervised?: boolean; readyTimeoutMs?: number } = {}): Promise<any> {
+async function startIsolate(slug: string, siteId: number, entryFile: string, opts: { supervised?: boolean; readyTimeoutMs?: number } = {}): Promise<any> {
+    // `slug` is the plugin (its code, manifest, grants, table prefix, route namespace); `key` names THIS
+    // worker in every registry of this module (multisite: one per site — see isolateKey).
+    const key = isolateKey(slug, siteId);
     // Resolve the memory-cap capabilities ONCE (cached) before building the child, so the spawn path is
     // chosen synchronously inside the executor below. cgroup (preventive) is preferred over rlimit (loose).
     const cgroupOk = await probeCgroupCap();
@@ -1783,7 +1880,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // structured refusal (core/sandbox-refusal.ts): POST /plugins/:slug/activate answers it as
             // 409 `sandbox_unavailable` with the reason and the action, instead of a bare 500 that
             // left the administrator with "failed" and nothing to act on.
-            console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': sandbox.requireHardening is ON but this host's kernel confinement (${mech}) is '${sandboxPlatformState}' (not ACTIVE). ${fix}, or explicitly set sandbox.requireHardening=false to permit an unsafe compatibility fallback.`);
+            log.warn({ slug: logSafe(slug), mech, sandboxPlatformState, fix }, `[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': sandbox.requireHardening is ON but this host's kernel confinement (${mech}) is '${sandboxPlatformState}' (not ACTIVE). ${fix}, or explicitly set sandbox.requireHardening=false to permit an unsafe compatibility fallback.`);
             throw nativeGateRefusal(slug, mech, sandboxPlatformState);
         }
     }
@@ -1839,7 +1936,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // Recorded from the SAME synchronous read of the grant/egress maps as the cfg below, so the
     // fingerprint is exactly the policy this child is being born with (see spawnPolicies).
     const spawnFp = policyFingerprintFor(slug);
-    if (spawnFp !== undefined) spawnPolicies.set(slug, spawnFp); else spawnPolicies.delete(slug);
+    if (spawnFp !== undefined) spawnPolicies.set(key, spawnFp); else spawnPolicies.delete(key);
     const netGranted = isNetworkGrantedFor(slug);
     // allowedHosts only matters for a network-granted plugin (a non-network plugin has no egress at all);
     // pushed into cfg so the child installs it as its egress-guard allowlist. Empty ⇒ allow-all-public.
@@ -1853,7 +1950,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     const fsGrant = fsGrantsFor(slug);
     // The same path declaration feeds every OS sandbox, Node's permission model and io-guard.
     const APP_ROOT = path.resolve(__dirname, '..', '..');
-    const nativePaths = sandboxPaths(APP_ROOT, slug, __dirname);
+    const nativePaths = sandboxPaths(APP_ROOT, slug, __dirname, siteId);
     // Source-only workers preload ts-node, which reads both the project config and the package scope
     // before it can compile the worker. Keep them separate from the directory roots: granting APP_ROOT
     // just to reach these two files would expose wordjs-config.json, databases and every sibling plugin
@@ -1910,7 +2007,15 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // Private capability storage is created only for a plugin that currently holds that capability.
     // Own-dir private storage remains the compatibility floor for zero-permission plugins.
     if (storageEnabled) for (const dir of nativePaths.storage) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const sandboxWritable = [nativePaths.own, ...(fsGrant.write ? nativePaths.storage : [])];
+    // Another site's worker never writes its (shared) code directory — its storage is its own (sandbox-paths).
+    // In its place it keeps ONE always-present write zone: its site's private data directory, created here.
+    // The native layers need at least one existing zone (the Linux shim refuses an argv with none, and
+    // site 1's floor — the code directory — always exists); what plugin code may actually write there is
+    // still decided by io-guard and the filesystem grant, exactly as for site 1's private storage.
+    if (!nativePaths.ownWritable) fs.mkdirSync(nativePaths.storage[0], { recursive: true, mode: 0o700 });
+    const sandboxWritable = nativePaths.ownWritable
+        ? [nativePaths.own, ...(fsGrant.write ? nativePaths.storage : [])]
+        : Array.from(new Set([nativePaths.storage[0], ...(fsGrant.write ? nativePaths.storage : [])]));
     const sandboxReadable = Array.from(new Set([
         ...nativePaths.readOnly,
         ...(storageEnabled ? nativePaths.storage : []),
@@ -1932,7 +2037,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // worker scrubs the secret out of process.argv before plugin code runs, so a forged frame written
     // straight to fd 3 by plugin code can never carry it. Closes the frame-forge class regardless of vector.
     const frameNonce = require('crypto').randomBytes(24).toString('base64url');
-    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, envAllow: SAFE_ENV_KEYS, frameNonce });
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, site: siteId, envAllow: SAFE_ENV_KEYS, frameNonce });
     const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
     // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
     // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -2025,7 +2130,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             })];
         } catch (e: any) {
             if (requireNativeSandbox) {
-                console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified Linux sandbox argv could not be built (${logSafe(e && e.message)}).`);
+                log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified Linux sandbox argv could not be built`);
                 throw require('./sandbox-refusal').sandboxUnavailable(slug, {
                     mechanism: 'landlock', state: linuxZeroConfState,
                     reason: 'The Linux kernel sandbox is certified on this server, but the confinement for this plugin could not be built.',
@@ -2033,7 +2138,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 });
             }
             zeroConfPre = [];
-            console.warn(`[Sandbox] Linux sandbox construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
+            log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] Linux sandbox construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
         }
     }
     // -- PLATFORM KERNEL CONFINEMENT (Windows / macOS) --------------------------------------------
@@ -2081,7 +2186,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             seatbeltPre = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
         } catch (e: any) {
             if (requireNativeSandbox) {
-                console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified Seatbelt profile could not be built (${logSafe(e && e.message)}).`);
+                log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified Seatbelt profile could not be built`);
                 throw require('./sandbox-refusal').sandboxUnavailable(slug, {
                     mechanism: 'seatbelt', state: sandboxPlatformState,
                     reason: 'The macOS Seatbelt sandbox is certified on this server, but the profile for this plugin could not be built.',
@@ -2089,7 +2194,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 });
             }
             seatbeltPre = [];
-            console.warn(`[Sandbox] Seatbelt profile construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
+            log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] Seatbelt profile construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
         }
     }
     // Windows: the ONE launch in this module that cannot start synchronously. The contained child is
@@ -2099,7 +2204,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     let acLaunch: { child: any; containedPid: number | null } | null = null;
     if (platformLaunch.use && platformLaunch.mechanism === 'appcontainer') {
         try {
-            acLaunch = await launchAppContainerChild(slug, APP_ROOT, {
+            acLaunch = await launchAppContainerChild(key, APP_ROOT, {
                 args: [...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 // No cwd here: launchAppContainerChild takes a typed options object and sets the
                 // container's working directory itself. The blanket insertion that gave the four real
@@ -2111,7 +2216,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             });
         } catch (e: any) {
             if (requireNativeSandbox) {
-                console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified AppContainer launch failed (${logSafe(e && e.message)}).`);
+                log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified AppContainer launch failed`);
                 throw require('./sandbox-refusal').sandboxUnavailable(slug, {
                     mechanism: 'appcontainer', state: sandboxPlatformState,
                     reason: 'The Windows AppContainer sandbox is certified on this server, but the container for this plugin could not be created.',
@@ -2119,7 +2224,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 });
             }
             acLaunch = null;
-            console.warn(`[Sandbox] AppContainer launch failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
+            log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] AppContainer launch failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
         }
         // NOTE ON WHAT IS *NOT* RETRIED. This catch covers a failure to CREATE the contained child at all
         // (no SID, the relay produced nothing). If the relay starts and the contained node then dies —
@@ -2155,7 +2260,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // the probe validated, so activation guarantees these exact caps start. --scope runs node as a
             // direct child of systemd-run, inheriting the IPC fd (probe-verified); child.pid is systemd-run
             // and the kernel is the cap, so the /proc poll is skipped below.
-            cgroupUnit = `wjp-${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${process.pid}-${++cgroupSeq}.scope`;
+            cgroupUnit = `wjp-${key.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${process.pid}-${++cgroupSeq}.scope`;
             // F-04: give the systemd-run CLIENT the session-bus vars (cgroupClientEnv) so `--user` connects
             // to the per-user manager, then SCOPE_ENV_STRIP (`env -u …`) removes them again inside the scope
             // so the plugin process's env is exactly workerEnv (bus vars never leak to the plugin).
@@ -2226,7 +2331,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // Record the pid as OURS-and-alive from the moment it exists (see livePids): the registry entry
         // below is not evidence of a running process, and every teardown path needs an answer that is.
         const spawnedPid: number | undefined = child.pid;
-        if (spawnedPid) addLivePid(slug, spawnedPid);
+        if (spawnedPid) addLivePid(key, spawnedPid);
         // WINDOWS preventive memory cap: assign the just-forked child to a Job Object whose per-process
         // commit limit (JOB_OBJECT_LIMIT_PROCESS_MEMORY = RSS_BUDGET_BYTES) makes the KERNEL fail any
         // allocation past the budget — the host stays safe even on a fast off-heap balloon, instead of
@@ -2250,7 +2355,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 .catch(() => { /* poll remains the cap */ });
         }
         // Forward + rate-limit the child's piped stdout/stderr (see IPC_STDIO above).
-        attachLogLimiter(slug, child);
+        attachLogLimiter(key, child);
         // THE SHIM'S LAST WORDS, KEPT FOR THE LOAD VERDICT. When the Linux shim fronts this launch and
         // refuses before exec (exit 79 `SHIM-FAIL: …`, exit 78 `SHIM-UNSUPPORTED: …`), that line is the
         // reason the plugin did not start, and the activation must be able to say so instead of "exited
@@ -2315,12 +2420,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // this poll because `child.pid` is systemd-run.
         const pollPid: number | null = acLaunch ? containedPid : (child.pid || null);
         if (acLaunch && !containedPid) {
-            console.warn(`[Isolate ${logSafe(slug)}] the AppContainer relay reported no contained pid — the reactive RSS poll is SKIPPED for this child; its resident cap is the relay's kernel Job Object alone.`);
+            log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] the AppContainer relay reported no contained pid — the reactive RSS poll is SKIPPED for this child; its resident cap is the relay's kernel Job Object alone.`);
         }
         const killOverBudget = (rssBytes: number) => {
-            getHealth(slug).rssBytes = rssBytes; // single choke point for RSS across all platforms → health surface
+            getHealth(key).rssBytes = rssBytes; // single choke point for RSS across all platforms → health surface
             if (rssBytes > RSS_BUDGET_BYTES) {
-                console.error(`[Isolate ${logSafe(slug)}] killed: child rss over budget (${logSafe(rssBytes)} bytes).`);
+                log.error({ slug: logSafe(slug), rssBytes: logSafe(rssBytes) }, `[Isolate ${logSafe(slug)}] killed: child rss over budget (${logSafe(rssBytes)} bytes).`);
                 // `child` is the relay on the AppContainer path, and killing it is still the correct and
                 // complete action: KILL_ON_JOB_CLOSE takes the contained node down with it.
                 try { child.kill('SIGKILL'); } catch { /* gone */ }
@@ -2362,7 +2467,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         sandboxCpuBound = preventiveCpuCap ? 'preventive' : (cpuSampled ? 'reactive' : 'unbounded');
         if (cgroupOk && !preventiveCpuCap && !cgroupNoCpuQuotaWarned) {
             cgroupNoCpuQuotaWarned = true;
-            console.warn('[Sandbox] cgroup mode is ON but sandbox.cpuQuotaPercent is 0: isolated plugins have NO CPU bound on this host. The preventive CPUQuota is not in the scope, and the reactive CPU watchdog cannot cover it either (under a --scope, child.pid is systemd-run, not the plugin). Set sandbox.cpuQuotaPercent to install the preventive cap.');
+            log.warn('[Sandbox] cgroup mode is ON but sandbox.cpuQuotaPercent is 0: isolated plugins have NO CPU bound on this host. The preventive CPUQuota is not in the scope, and the reactive CPU watchdog cannot cover it either (under a --scope, child.pid is systemd-run, not the plugin). Set sandbox.cpuQuotaPercent to install the preventive cap.');
             // …and the same sentence somewhere it survives the boot log.
             raiseCgroupCpuNotice();
             // The `else if` below is guarded on the bound itself, not on this branch, so the SECOND
@@ -2388,7 +2493,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     // preventive. A panel that keeps saying 'preventive' here is the "reports success
                     // and binds nothing" failure this watch exists to catch.
                     sandboxCpuBound = 'reactive';
-                    console.warn(`[Isolate ${logSafe(slug)}] the AppContainer relay could not install the Job Object CPU rate cap — the reactive CPU watchdog takes over for this child.`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] the AppContainer relay could not install the Job Object CPU rate cap — the reactive CPU watchdog takes over for this child.`);
                 });
             } catch { /* no stderr to watch ⇒ the claim stands, as it did before */ }
         }
@@ -2419,8 +2524,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // Unlike the rss overage, this reason is also parked on the health surface: a CPU kill has no
             // other trace (no fatal IPC frame, no exit message), so without this the admin health panel
             // would show a bare restart with lastError null and nobody could tell why the plugin died.
-            getHealth(slug).lastError = reason;
-            console.error(`[Isolate ${logSafe(slug)}] killed: ${reason}.`);
+            getHealth(key).lastError = reason;
+            log.error({ slug: logSafe(slug), reason: logSafe(reason) }, `[Isolate ${logSafe(slug)}] killed: ${reason}.`);
             try { child.kill('SIGKILL'); } catch { /* gone */ }
         };
         if (!cgroupOk && process.platform === 'linux' && child.pid) {
@@ -2497,7 +2602,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     // own exit handler). Demoting on a dead pid costs at most one child's watchdog.
                     if (process.platform === 'darwin' && psTwoColumn && code !== 0 && !out.trim()) {
                         psTwoColumn = false;
-                        console.warn(`[Isolate ${logSafe(slug)}] this host's ps rejected '-o cputime=' — falling back to the rss-only query; the reactive CPU watchdog is OFF for this child (the resident cap is unaffected).`);
+                        log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] this host's ps rejected '-o cputime=' — falling back to the rss-only query; the reactive CPU watchdog is OFF for this child (the resident cap is unaffected).`);
                     }
                     try {
                         const now = Date.now();
@@ -2555,8 +2660,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // cgroup path: confirm the transient scope is actually gone before declaring the pid dead — the
             // wrapper can exit while the scoped node is still being SIGKILLed. Other paths: child.pid IS the
             // plugin, so its exit is authoritative.
-            if (cgroupUnit && spawnedPid) dropLivePidWhenScopeGone(slug, spawnedPid, cgroupUnit);
-            else dropLivePid(slug, spawnedPid);
+            if (cgroupUnit && spawnedPid) dropLivePidWhenScopeGone(key, spawnedPid, cgroupUnit);
+            else dropLivePid(key, spawnedPid);
         });
         const api = createPluginApi(slug);
         let invokeId = 0;
@@ -2591,14 +2696,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         const registrationRejected = (arr: any[], max: number, kind: string): boolean => {
             registrationAttempts++;
             if (registrationAttempts > 10000) {
-                console.error(`[Isolate ${logSafe(slug)}] terminated: registration flood (${logSafe(registrationAttempts)} attempts).`);
+                log.error({ slug: logSafe(slug), registrationAttempts: logSafe(registrationAttempts) }, `[Isolate ${logSafe(slug)}] terminated: registration flood (${logSafe(registrationAttempts)} attempts).`);
                 try { worker.terminate(); } catch { /* already gone */ }
                 return true;
             }
             if (arr.length >= max) {
                 if (!registrationCapWarned) {
                     registrationCapWarned = true;
-                    console.warn(`[Isolate ${logSafe(slug)}] registration cap reached (${logSafe(kind)} >= ${logSafe(max)}); ignoring further registrations (possible DoS).`);
+                    log.warn({ slug: logSafe(slug), kind: logSafe(kind), max: logSafe(max) }, `[Isolate ${logSafe(slug)}] registration cap reached (${logSafe(kind)} >= ${logSafe(max)}); ignoring further registrations (possible DoS).`);
                 }
                 return true;
             }
@@ -2616,7 +2721,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     rej(new Error(`Isolated plugin '${slug}' RPC timed out`));
                     // A handler that blew the timeout is wedged (hang / synchronous spin) — recycle the
                     // worker so it can't keep leaking pending requests or pinning host timers/sockets.
-                    console.error(`[Isolate ${logSafe(slug)}] terminated: RPC timeout (wedged handler).`);
+                    log.error({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] terminated: RPC timeout (wedged handler).`);
                     try { worker.terminate(); } catch { /* already gone */ }
                 }
             }, RPC_TIMEOUT_MS);
@@ -2663,9 +2768,17 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             if (!p) return;
             map.delete(msg.id);
             clearTimeout(p.timer);
-            if (!msg.ok) { p.rej(new Error(msg.error)); return; }
+            if (!msg.ok) {
+                const e: any = new Error(typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'plugin callback failed');
+                // A client refusal the plugin chose (see plugin-worker.js 'invoke'): kept only in that
+                // shape, so a worker cannot make the host answer with a 5xx or an arbitrary code.
+                if (Number.isInteger(msg.status) && msg.status >= 400 && msg.status <= 499) e.pluginStatus = msg.status;
+                if (typeof msg.code === 'string' && /^rest_[a-z0-9_]{1,60}$/.test(msg.code)) e.pluginCode = msg.code;
+                p.rej(e);
+                return;
+            }
             if (replySize(value) > MAX_REPLY_BYTES) {
-                console.error(`[Isolate ${logSafe(slug)}] terminated: oversized RPC reply.`);
+                log.error({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] terminated: oversized RPC reply.`);
                 try { worker.terminate(); } catch { /* already gone */ }
                 p.rej(new Error(`Isolated plugin '${slug}' returned an oversized reply`));
                 return;
@@ -2686,6 +2799,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         const registeredRoutes: Array<{ m: string; full: string; handler: any; webhook?: boolean }> = []; // mounted Express routes
         const registeredHooks: Array<{ hook: string; type: string; shim: (...args: any[]) => any }> = []; // hook/filter shims
         let providedMail = false;                                                   // did this plugin become the mail sender
+        let mailProviderFn: ((m: any) => any) | null = null;                        // ...with this function, for its site only
         const invokeShortcode = (scId: string, payload: any) => rpcSend(pendingShortcode, { kind: 'invoke-shortcode', scId, ...payload });
 
         const pendingMail = new Map<number, any>();
@@ -2710,7 +2824,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             return [];
         };
 
-        worker.on('message', async (msg: any) => {
+        // Every frame from this child is handled AS ITS SITE: its bridge calls read and write that site's
+        // database, its registrations land in that site's tables, its grants are that site's.
+        worker.on('message', (msg: any) => siteContext.runWithSite(siteId, async () => {
           // A malicious child can postMessage ANY object. An uncaught throw in a branch below would
           // reject this async handler → unhandledRejection → host process crash (Node >= 15 default).
           // Contain every message: log and drop a poison/malformed one instead of crashing the host.
@@ -2720,7 +2836,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             const _now = Date.now();
             if (_now - msgWindowStart > MSG_WINDOW_MS) { msgWindowStart = _now; msgWindowCount = 0; }
             if (++msgWindowCount > MAX_MSGS_PER_WINDOW) {
-                console.error(`[Isolate ${logSafe(slug)}] terminated: IPC message-rate flood (${logSafe(msgWindowCount)} in ${logSafe(MSG_WINDOW_MS)}ms).`);
+                log.error({ slug: logSafe(slug), msgWindowCount: logSafe(msgWindowCount) }, `[Isolate ${logSafe(slug)}] terminated: IPC message-rate flood (${logSafe(msgWindowCount)} in ${logSafe(MSG_WINDOW_MS)}ms).`);
                 try { worker.terminate(); } catch { /* already gone */ }
                 return;
             }
@@ -2731,7 +2847,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // init(), a {kind:'fatal'}, a {kind:'register-route'} — lacks the nonce and is dropped here.
             // Counted against the rate cap above first, so a forge flood is still bounded. (IPC-FORGE)
             if (!msg || typeof msg !== 'object' || msg.__wjn !== frameNonce) {
-                console.error(`[Isolate ${logSafe(slug)}] dropped an unauthenticated IPC frame (kind=${logSafe(String(msg && msg.kind))}).`);
+                log.error({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] dropped an unauthenticated IPC frame (kind=${logSafe(String(msg && msg.kind))}).`);
                 return;
             }
             if (msg.kind === 'ready') {
@@ -2743,8 +2859,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // memory budget exceeded) and is exiting. These messages were previously DROPPED, so the
                 // death showed only as a bare 'code 1'. Capture the precise reason for the health surface.
                 const reason: string = String(msg.error || 'fatal error in sandbox');
-                getHealth(slug).lastError = reason;
-                console.error(`[Isolate ${logSafe(slug)}] fatal: ${logSafe(reason)}`);
+                getHealth(key).lastError = reason;
+                log.error({ slug: logSafe(slug), reason: logSafe(reason) }, `[Isolate ${logSafe(slug)}] fatal: ${logSafe(reason)}`);
                 // failLoad, not a bare reject: the child is registered and hook-wired by now (see it).
                 failLoad(new Error(reason));
             } else if (msg.kind === 'init-error') {
@@ -2759,7 +2875,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     // host can drain (thousands of calls while pinned at the limit) is hammering the
                     // event loop — terminate it as abusive (DoS containment, like registrationRejected).
                     if (++callBackpressureRejections > 50000) {
-                        console.error(`[Isolate ${logSafe(slug)}] terminated: bridge-call flood (${logSafe(callBackpressureRejections)} over-limit calls).`);
+                        log.error({ slug: logSafe(slug), callBackpressureRejections: logSafe(callBackpressureRejections) }, `[Isolate ${logSafe(slug)}] terminated: bridge-call flood (${logSafe(callBackpressureRejections)} over-limit calls).`);
                         try { worker.terminate(); } catch { /* already gone */ }
                         return;
                     }
@@ -2773,7 +2889,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 callBucketTs = _cnow;
                 if (callTokens < 1) {
                     if (++callBackpressureRejections > 50000) {
-                        console.error(`[Isolate ${logSafe(slug)}] terminated: bridge-call flood (sustained rate).`);
+                        log.error({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] terminated: bridge-call flood (sustained rate).`);
                         try { worker.terminate(); } catch { /* already gone */ }
                         return;
                     }
@@ -2809,11 +2925,11 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 const hookName = typeof msg.hook === 'string' ? msg.hook : '';
                 const access = hookAccess.checkHookSubscription(slug, hookName);
                 if (!access.ok) {
-                    console.warn(`[Isolate ${logSafe(slug)}] denied hook subscription: ${logSafe(access.reason)}.`);
+                    log.warn({ slug: logSafe(slug), reason: logSafe(access.reason) }, `[Isolate ${logSafe(slug)}] denied hook subscription: ${logSafe(access.reason)}.`);
                     return;
                 }
                 if (msg.hookType !== 'filter' && msg.hookType !== 'action') {
-                    console.warn(`[Isolate ${logSafe(slug)}] rejected hook registration with invalid type '${logSafe(String(msg.hookType))}'.`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] rejected hook registration with invalid type '${logSafe(String(msg.hookType))}'.`);
                     return;
                 }
                 // Cap callbacks PER hook NAME too: many shims on one core hook (e.g. the_content)
@@ -2821,7 +2937,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 const hookCnt = (hookNameCounts.get(hookName) || 0) + 1;
                 hookNameCounts.set(hookName, hookCnt);
                 if (hookCnt > MAX_PER_HOOK) {
-                    console.warn(`[Isolate ${logSafe(slug)}] too many callbacks on hook '${logSafe(hookName)}' (cap ${logSafe(MAX_PER_HOOK)}) — ignoring further.`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] too many callbacks on hook '${logSafe(hookName)}' (cap ${logSafe(MAX_PER_HOOK)}) — ignoring further.`);
                     return;
                 }
                 // Install a shim in the real hook system that calls back into the isolate. Cap the
@@ -2831,6 +2947,21 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // hook. The underlying RPC still times out and recycles the wedged worker separately.
                 const HOOK_SHIM_TIMEOUT_MS = 2000;
                 const isFilter = msg.hookType === 'filter';
+                // FAIL CLOSED where the hook's contract says a failing callback stops the operation
+                // (hook-access failClosed: comments:pre_insert). There, a callback that throws — or does
+                // not answer in time — REJECTS the filter instead of returning the value unchanged: a
+                // broken or wedged anti-spam plugin must refuse comments, not wave every one through.
+                // The plugin's own 4xx status and rest_* code are kept (its deliberate, visible refusal);
+                // any other failure is a 503 that names no plugin internals.
+                const failClosed = isFilter && hookAccess.isFailClosedHook(hookName);
+                const refusal = (cause: any) => {
+                    const e: any = new Error(cause && cause.pluginStatus
+                        ? String(cause.message || 'Refused by a plugin.')
+                        : 'This could not be checked right now. Please try again later.');
+                    e.status = (cause && cause.pluginStatus) || 503;
+                    e.code = (cause && cause.pluginCode) || 'rest_plugin_check_failed';
+                    return e;
+                };
                 const shim = (...args: any[]) => {
                     // Re-decided on EVERY delivery, not only at registration: a grant revoked since then
                     // stops the flow at once, and the payload is always minimized for THIS plugin's grants
@@ -2839,12 +2970,22 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     const safeArgs = hookAccess.argsForPlugin(slug, hookName, args);
                     if (!safeArgs) return Promise.resolve(isFilter ? args[0] : undefined);
                     let t: any;
-                    const fallback = new Promise((resolve) => {
-                        t = setTimeout(() => resolve(args[0]), HOOK_SHIM_TIMEOUT_MS);
+                    const fallback = new Promise((resolve, reject) => {
+                        t = setTimeout(() => {
+                            if (failClosed) {
+                                log.warn({ slug: logSafe(slug), hook: logSafe(hookName) }, `[Isolate ${logSafe(slug)}] '${logSafe(hookName)}' did not answer in ${HOOK_SHIM_TIMEOUT_MS} ms — refusing (fail-closed hook).`);
+                                reject(refusal(null));
+                            } else resolve(args[0]);
+                        }, HOOK_SHIM_TIMEOUT_MS);
                         if (t.unref) t.unref();
                     });
                     return Promise.race([
-                        invokeWorker(msg.cbId, safeArgs).then((v) => { clearTimeout(t); return v; }, () => { clearTimeout(t); return args[0]; }),
+                        invokeWorker(msg.cbId, safeArgs).then((v) => { clearTimeout(t); return v; }, (err: any) => {
+                            clearTimeout(t);
+                            if (!failClosed) return args[0];
+                            if (!(err && err.pluginStatus)) log.warn({ slug: logSafe(slug), hook: logSafe(hookName), err }, `[Isolate ${logSafe(slug)}] '${logSafe(hookName)}' callback failed — refusing (fail-closed hook).`);
+                            throw refusal(err);
+                        }),
                         fallback,
                     ]);
                 };
@@ -2862,7 +3003,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // against the grant, so a plugin mounted /api/v1/plugin/<slug>/* regardless of grant/revoke.
                 // Gate it here like register-mail-provider / register-notify-transport already do.
                 if (!isGrantedFor(slug, 'express', 'register_route')) {
-                    console.warn(`[Isolate ${logSafe(slug)}] denied route registration: express:register_route not granted.`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] denied route registration: express:register_route not granted.`);
                     return;
                 }
                 if (registrationRejected(registeredRoutes, MAX_ROUTES, 'routes')) return;
@@ -2871,7 +3012,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // listen/…) or throw a TypeError on a non-method (which would crash the host handler).
                 const routeMethod = String(msg.method).toLowerCase();
                 if (!['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'all'].includes(routeMethod)) {
-                    console.warn(`[Isolate ${logSafe(slug)}] rejected route registration with invalid method '${logSafe(routeMethod)}'.`);
+                    log.warn({ slug: logSafe(slug), routeMethod: logSafe(routeMethod) }, `[Isolate ${logSafe(slug)}] rejected route registration with invalid method '${logSafe(routeMethod)}'.`);
                     return;
                 }
                 // SECURITY (host DoS): `routePath` is attacker-controlled — a malicious child sends any
@@ -2891,7 +3032,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     routePath.includes('::') ||                    // malformed param
                     (routePath.match(/\*/g) || []).length > 2 ||   // cap wildcards (bounds (.*) polynomial blowup)
                     routePath.includes('..')) {                    // no traversal-looking segments
-                    console.warn(`[Isolate ${logSafe(slug)}] rejected route registration with unsafe path '${logSafe(routePath.slice(0, 80))}'.`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] rejected route registration with unsafe path '${logSafe(routePath.slice(0, 80))}'.`);
                     return;
                 }
                 // Mount an Express route owned by the host; run the real auth middleware, then forward
@@ -2907,7 +3048,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     console.warn(`[Isolate ${logSafe(slug)}] rejected webhook route '${logSafe(routePath.slice(0, 80))}': a webhook is a plain POST with no auth/admin/multipart.`);
                     return;
                 }
-                const mw: any[] = [];
+                // Multisite: every site's worker of this plugin mounts the same path. Each mount answers only
+                // its own site's requests and passes the others on ('route' skips this mount's handlers, auth
+                // included), so a request reaches the worker of the site it was addressed to — or, when the
+                // plugin is not active on that site, no worker at all (404).
+                const siteGate = (req: any, res: any, next: any) => (siteContext.currentSiteIdOrNull() === siteId ? next() : next('route'));
+                const mw: any[] = [siteGate];
                 if (msg.opts && msg.opts.auth) mw.push(require('../middleware/auth').authenticate);
                 if (msg.opts && msg.opts.admin) mw.push(require('../middleware/permissions').isAdmin);
                 // Multipart uploads can't be serialized over RPC, so the HOST parses them (multer)
@@ -2923,7 +3069,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                         const up = multer({ dest: path.join(os.tmpdir(), 'wordjs-uploads'), limits: { fileSize: maxFileSize, files: 1 } });
                         mw.push(up.single(String(msg.opts.multipart)));
                         startUploadReaper(); // sweep crash-orphaned temp uploads (the per-request unlink handles the happy path)
-                    } catch (e: any) { console.warn(`[Isolate ${logSafe(slug)}] multipart unavailable: ${logSafe(e && e.message)}`); }
+                    } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] multipart unavailable`); }
                 }
                 const cookieNs = `wjp_${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}_`;
                 const finalHandler = async (req: any, res: any) => {
@@ -2973,7 +3119,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                         if (r && r.media && typeof r.media === 'object') {
                             const granted = runWithContext(slug, () => require('./plugin-context').hasPermission('media', 'private_read'));
                             if (!granted) {
-                                console.warn(`[Isolate ${logSafe(slug)}] denied private media delivery: media:private_read not granted.`);
+                                log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] denied private media delivery: media:private_read not granted.`);
                                 res.status(403).json({ error: 'Plugin is not allowed to deliver private media (media:private_read not granted).' });
                                 return;
                             }
@@ -3022,7 +3168,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                                 // overwrite a host cookie (wordjs_token/session), never widen scope via
                                 // `domain`, and never escape their route path; clamp lifetime. Applied to ALL
                                 // plugins (no trust exemption).
-                                if (HOST_AUTH_COOKIE_RE.test(name)) { console.warn(`[Isolate ${logSafe(slug)}] dropped cookie '${logSafe(name)}' (would shadow a host cookie).`); continue; }
+                                if (HOST_AUTH_COOKIE_RE.test(name)) { log.warn({ slug: logSafe(slug), name: logSafe(name) }, `[Isolate ${logSafe(slug)}] dropped cookie '${logSafe(name)}' (would shadow a host cookie).`); continue; }
                                 if (!name.startsWith(cookieNs)) name = cookieNs + name;
                                 options = { ...options };
                                 delete options.domain;
@@ -3083,10 +3229,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // Becoming the host-wide mail sender is host-level hijack potential, so it requires an
                 // explicit admin grant of the email:provider capability (Android-style, default-deny).
                 if (isGrantedFor(slug, 'email', 'provider')) {
-                    (global as any).wordjs_send_mail = (mailMsg: any) => invokeMail(mailMsg);
+                    // The provider of THIS worker's site only (core/mail-provider: site 1 keeps the global).
+                    mailProviderFn = (mailMsg: any) => invokeMail(mailMsg);
+                    require('./mail-provider').setMailProvider(mailProviderFn, slug);
                     providedMail = true;
                 } else {
-                    console.warn(`[Isolate ${logSafe(slug)}] provideMail denied: the email:provider permission is not granted (grant it in /admin/plugins).`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] provideMail denied: the email:provider permission is not granted (grant it in /admin/plugins).`);
                 }
             } else if (msg.kind === 'mail-reply') {
                 rpcSettle(pendingMail, msg, msg.value);
@@ -3100,9 +3248,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                         // pluginSlug=null, so unregisterPluginTransports(slug) never matched it on unload and
                         // every later notify() RPC'd a DEAD worker and hung to the 30s timeout.
                         runWithContext(slug, () => require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification)));
-                    } catch (e: any) { console.warn(`[Isolate ${logSafe(slug)}] notify transport register failed: ${logSafe(e && e.message)}`); }
+                    } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] notify transport register failed`); }
                 } else {
-                    console.warn(`[Isolate ${logSafe(slug)}] notify.registerTransport denied: the notifications:provider permission is not granted (grant it in /admin/plugins).`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] notify.registerTransport denied: the notifications:provider permission is not granted (grant it in /admin/plugins).`);
                 }
             } else if (msg.kind === 'notify-transport-reply') {
                 rpcSettle(pendingTransport, msg, msg.value);
@@ -3111,7 +3259,11 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // time, admin-granted). Without it the answer says so and the plugin may fall back to its
                 // own listener where its platform allows one.
                 let value: any;
-                if (!isGrantedFor(slug, 'smtp', 'inbound')) {
+                if (siteId !== siteContext.PRIMARY_SITE_ID) {
+                    // Multisite: the inbound SMTP listener is ONE host-wide port with one owner; it stays the
+                    // main site's in this version (another site's worker of a mail plugin gets no listener).
+                    value = { ok: false, granted: false, error: 'the inbound SMTP listener belongs to the main site of the network' };
+                } else if (!isGrantedFor(slug, 'smtp', 'inbound')) {
                     value = { ok: false, granted: false, error: 'the smtp:inbound permission is not granted (grant it in /admin/plugins)' };
                 } else {
                     try {
@@ -3123,18 +3275,18 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value });
             } else if (msg.kind === 'smtp-status') {
                 const st = require('./inbound-smtp').getStatus();
-                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value: { ...st, mine: st.owner === slug } });
+                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value: { ...st, mine: st.owner === slug && siteId === siteContext.PRIMARY_SITE_ID } });
             } else if (msg.kind === 'smtp-reply') {
                 rpcSettle(pendingSmtp, msg, msg.value);
             }
           } catch (e: any) {
-            console.error(`[Isolate ${logSafe(slug)}] dropped malformed/poison IPC message (kind=${logSafe(msg && msg.kind)}): ${logSafe(e && e.message)}`);
+            log.error({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] dropped malformed/poison IPC message (kind=${logSafe(msg && msg.kind)})`);
           }
-        });
+        }));
 
         // Remove every host-side registration this plugin made. Idempotent (safe to call twice)
         // so it can run both from unloadIsolatedPlugin and as a crash safety-net in 'exit'.
-        const teardown = () => {
+        const teardown = () => siteContext.runWithSite(siteId, () => {
             // Routes: splice the plugin's layers out of the Express stack (Express 4 has no public
             // unmount API), so a request to its path no longer reaches a dead worker.
             try {
@@ -3172,12 +3324,13 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // tried to squat (refused at add time, but still tracked here) is owned by core/another plugin,
             // so removeShortcode safely skips it instead of deleting a victim's shortcode from host context.
             for (const tag of registeredShortcodes) { try { runWithContext(slug, () => removeShortcode(tag)); } catch { /* */ } }
-            if (providedMail && (global as any).wordjs_send_mail) { try { delete (global as any).wordjs_send_mail; } catch { /* */ } }
+            if (providedMail) { try { require('./mail-provider').clearMailProvider(mailProviderFn || undefined); } catch { /* */ } }
             try { require('./notifications').unregisterPluginTransports(slug); } catch { /* */ }
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
-            // The inbound SMTP listener the host opened for this plugin (no-op if it owns none).
-            try { require('./inbound-smtp').stop(slug).catch(() => { /* */ }); } catch { /* */ }
-        };
+            // The inbound SMTP listener the host opened for this plugin (no-op if it owns none). Only the main
+            // site's worker can own it, so another site's teardown must never stop it.
+            if (siteId === siteContext.PRIMARY_SITE_ID) { try { require('./inbound-smtp').stop(slug).catch(() => { /* */ }); } catch { /* */ } }
+        });
 
         /**
          * THE ONLY WAY THIS LOAD MAY FAIL. Every reject path goes through here.
@@ -3205,21 +3358,21 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // describe the new child. Same guard the 'exit' handler uses, for the same reason. Note that
             // "already absent" is NOT "owned by another": the exit handler deregisters before calling
             // in here, and that case must still clean up.
-            const cur = isolates.get(slug);
+            const cur = isolates.get(key);
             const ownedByAnother = !!(cur && cur.worker !== worker);
             if (readyTimer) { try { clearTimeout(readyTimer); } catch { /* */ } readyTimer = null; }
             if (rssPoll) { try { clearInterval(rssPoll); } catch { /* */ } rssPoll = null; }
             if (!ownedByAnother) {
                 // A supervised restart armed for this slug must not resurrect what we are tearing down.
-                const pendingRestart = restartTimers.get(slug);
-                if (pendingRestart) { clearTimeout(pendingRestart); restartTimers.delete(slug); }
+                const pendingRestart = restartTimers.get(key);
+                if (pendingRestart) { clearTimeout(pendingRestart); restartTimers.delete(key); }
                 if (cur) {
-                    isolates.delete(slug);
-                    try { teardown(); } catch (e: any) { console.error(`[Isolate ${logSafe(slug)}] teardown after a failed load: ${logSafe(e && e.message)}`); }
+                    isolates.delete(key);
+                    try { teardown(); } catch (e: any) { log.error({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] teardown after a failed load`); }
                 }
             }
             if (!opts.alreadyExited) { try { worker.terminate(); } catch { /* already gone */ } }
-            const h = getHealth(slug);
+            const h = getHealth(key);
             if (!ownedByAnother) { h.state = 'stopped'; h.pid = null; }
             h.lastError = String((err && err.message) || err);
             reject(err);
@@ -3235,20 +3388,20 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         if (readyTimeoutMs > 0) {
             readyTimer = setTimeout(() => {
                 readyTimer = null;
-                console.error(`[Isolate ${logSafe(slug)}] load timed out: no 'ready' within ${logSafe(readyTimeoutMs)}ms (init() never returned) — failing the load.`);
+                log.error({ slug: logSafe(slug), readyTimeoutMs: logSafe(readyTimeoutMs) }, `[Isolate ${logSafe(slug)}] load timed out: no 'ready' within ${logSafe(readyTimeoutMs)}ms (init() never returned) — failing the load.`);
                 failLoad(new Error(`Isolated plugin '${slug}' did not become ready within ${readyTimeoutMs}ms`));
             }, readyTimeoutMs);
             if (readyTimer.unref) readyTimer.unref();
         }
 
-        worker.on('error', (err: any) => { console.error(`[Isolate ${logSafe(slug)}] child error: ${logSafe(err && err.message)}`); failLoad(err instanceof Error ? err : new Error(String(err))); });
+        worker.on('error', (err: any) => { log.error({ slug: logSafe(slug), err }, `[Isolate ${logSafe(slug)}] child error`); failLoad(err instanceof Error ? err : new Error(String(err))); });
         worker.on('exit', (code: number) => {
             // Only act if WE are still the registered isolate — on reload a fresh child has already
             // replaced us, and tearing down here would rip out the new child's registrations.
-            const cur = isolates.get(slug);
+            const cur = isolates.get(key);
             const wasCurrent = cur && cur.worker === worker;
-            if (wasCurrent) { isolates.delete(slug); try { teardown(); } catch { /* */ } }
-            if (code !== 0) console.warn(`[Isolate ${logSafe(slug)}] child exited with code ${logSafe(code)}`);
+            if (wasCurrent) { isolates.delete(key); try { teardown(); } catch { /* */ } }
+            if (code !== 0) log.warn({ slug: logSafe(slug), code: logSafe(code) }, `[Isolate ${logSafe(slug)}] child exited with code ${logSafe(code)}`);
             // CONSUME the intentional-stop mark here, BEFORE any early return, and remember the answer.
             //
             // `stopping` is written by unloadIsolatedPlugin and read by exactly one place — this handler —
@@ -3260,7 +3413,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // and returned through the failed-load branch — stranding the mark forever. The NEXT child
             // for that slug then had its very first crash classified as an intentional stop: no teardown
             // of the crash path, no supervised restart, no 'crashed' health state, silently.
-            const wasIntentional = stopping.delete(slug);
+            const wasIntentional = stopping.delete(key);
             // child_process: a crash DURING init emits 'exit' (not 'error'); reject the load Promise so it
             // doesn't hang forever if the child died before sending 'ready' / 'init-error'. Routed through
             // failLoad so this path clears the same state as every other failure (alreadyExited: the
@@ -3276,7 +3429,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     lz.afterStreamDrained(child.stderr, 1000, () => {
                         const refusal = lz.classifyShimLaunchFailure(code, startupStderr);
                         if (!refusal) { failLoad(startupFailure(), { alreadyExited: true }); return; }
-                        console.warn(`[Sandbox] the Linux shim refused to launch isolated plugin '${logSafe(slug)}' (exit ${logSafe(code)}): ${logSafe(refusal.line)}`);
+                        log.warn({ slug: logSafe(slug), code: logSafe(code) }, `[Sandbox] the Linux shim refused to launch isolated plugin '${logSafe(slug)}' (exit ${logSafe(code)}): ${logSafe(refusal.line)}`);
                         failLoad(require('./sandbox-refusal').sandboxUnavailable(slug, {
                             mechanism: 'landlock',
                             state: linuxZeroConfState,
@@ -3295,13 +3448,13 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             }
 
             // Settled = the child had been RUNNING, so this is a RUNTIME exit.
-            const h = getHealth(slug);
+            const h = getHealth(key);
             h.lastExitCode = code;
             if (wasIntentional) { h.state = 'stopped'; return; } // intentional unload/deactivate/reload
             if (!wasCurrent) return; // a newer child already replaced us (reload race) — not our crash to supervise
             h.state = 'crashed';
-            console.warn(`[Isolate ${logSafe(slug)}] child crashed at runtime (code ${logSafe(code)}) — supervising.`);
-            superviseRestart(slug, entryFile);
+            log.warn({ slug: logSafe(slug), code: logSafe(code) }, `[Isolate ${logSafe(slug)}] child crashed at runtime (code ${logSafe(code)}) — supervising.`);
+            superviseRestart(key, entryFile);
         });
 
         // Register the live handle + refresh per-child health telemetry.
@@ -3320,14 +3473,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // handler already sees a registry entry that is not its own and returns without supervising.
         // Safe against the incoming child's registrations: this executor is synchronous, so at this line
         // the new child has not sent a single message and `teardown()` can only remove the old one's.
-        const displaced = isolates.get(slug);
+        const displaced = isolates.get(key);
         if (displaced && displaced.worker !== worker) {
-            console.warn(`[Isolate ${logSafe(slug)}] a second load replaced a live child for this slug — retiring the displaced one so it cannot be orphaned.`);
-            try { if (displaced.teardown) displaced.teardown(); } catch (e: any) { console.error(`[Isolate ${logSafe(slug)}] teardown of the displaced child: ${logSafe(e && e.message)}`); }
+            log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] a second load replaced a live child for this slug — retiring the displaced one so it cannot be orphaned.`);
+            try { if (displaced.teardown) displaced.teardown(); } catch (e: any) { log.error({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] teardown of the displaced child`); }
             try { displaced.worker.terminate(); } catch { /* already gone */ }
         }
-        isolates.set(slug, { worker, teardown, entryFile });
-        const h = getHealth(slug);
+        isolates.set(key, { worker, teardown, entryFile });
+        const h = getHealth(key);
         // Report the pid of the process that IS the plugin. On the AppContainer path `child.pid` is the
         // PowerShell relay, and an operator reading the admin plugin list would otherwise be shown a pid
         // that Task Manager labels "powershell.exe" — and would find nothing when they went looking for
@@ -3337,13 +3490,16 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         h.sandbox = null; // a refusal recorded by an earlier launch no longer describes this child
         // A clean MANUAL (re)start (activate / grants-reload / dev-reload / admin restart) resets the
         // crash accounting; a supervised auto-restart keeps counting toward the crash-loop cap.
-        if (!opts.supervised) { h.crashWindow = []; h.restarts = 0; stopping.delete(slug); }
+        if (!opts.supervised) { h.crashWindow = []; h.restarts = 0; stopping.delete(key); }
     });
 }
 
 // Returns void on the ordinary synchronous path, and a Promise only when it has to wait out an in-flight
 // load (see below). The annotation is required: the function references itself in a return expression.
 function unloadIsolatedPlugin(slug: string): void | Promise<void> {
+    return unloadKey(isolateKey(slug));
+}
+function unloadKey(key: string): void | Promise<void> {
     // A load for this slug is IN FLIGHT — its `isolates.set` has not landed yet. The synchronous body below
     // would therefore find no handle, do nothing, and leave a live child behind the moment that load
     // completes: the unload silently lost. awaitIsolateSettled is the documented primitive for "I intend to
@@ -3359,21 +3515,21 @@ function unloadIsolatedPlugin(slug: string): void | Promise<void> {
     // load is still pending. In THAT window the synchronous body is correct and load-bearing — it marks the
     // stop, kills the child, and the exit handler consumes the mark (see the 'unload that lands MID-LOAD'
     // test). Deferring there would be a regression. Only the no-handle-yet case is the silent no-op.
-    if (!isolates.has(slug) && loading.has(slug)) {
-        return awaitIsolateSettled(slug).then(() => {
+    if (!isolates.has(key) && loading.has(key)) {
+        return awaitKeySettled(key).then(() => {
             // Settled ⇒ recursing hits the sync path. If it never settled we would spin, so stop instead:
             // a load stuck past the timeout has bigger problems than a missed unload.
-            if (loading.has(slug)) return;
-            return unloadIsolatedPlugin(slug);
+            if (loading.has(key)) return;
+            return unloadKey(key);
         });
     }
     // Cancel any pending backoff restart from an earlier crash. Unconditional: the whole point of the
     // no-handle case is that a crashed plugin has NO registered isolate while its restart timer is armed.
-    const pending = restartTimers.get(slug);
-    if (pending) { clearTimeout(pending); restartTimers.delete(slug); }
-    const health = isolateHealth.get(slug);
+    const pending = restartTimers.get(key);
+    if (pending) { clearTimeout(pending); restartTimers.delete(key); }
+    const health = isolateHealth.get(key);
     if (health) health.state = 'stopped';
-    const h = isolates.get(slug);
+    const h = isolates.get(key);
     // Nothing registered ⇒ nothing to kill, and — crucially — no 'exit' is coming. `stopping` is
     // consumed by a child's exit handler, so marking a slug with no handle leaves an entry that is never
     // read and never removed: it accumulated on EVERY delete and on the activate backstop, and the next
@@ -3381,11 +3537,11 @@ function unloadIsolatedPlugin(slug: string): void | Promise<void> {
     // supervise. Only mark the stop when there is actually a child whose exit will consume it.
     if (!h) return;
     // INTENTIONAL stop — so the exit handler doesn't mistake it for a crash and auto-restart it.
-    stopping.add(slug);
+    stopping.add(key);
     try { if (h.teardown) h.teardown(); } catch (e) { /* */ }
     try { h.worker.terminate(); } catch (e) { /* */ }
-    isolates.delete(slug);
-    spawnPolicies.delete(slug);
+    isolates.delete(key);
+    spawnPolicies.delete(key);
 }
 
 // Tear the plugin down and start it again, reusing the entry file from the original load. Used when a
@@ -3397,7 +3553,7 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     // replace) or read `isolates` before the load registers and no-op. Let the load settle first, then
     // reload what it produced.
     await awaitIsolateSettled(slug);
-    const h = isolates.get(slug);
+    const h = isolates.get(isolateKey(slug));
     if (!h || !h.entryFile) return null;
     const entryFile = h.entryFile;
     unloadIsolatedPlugin(slug);
@@ -3412,14 +3568,16 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
 
 module.exports = {
     loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin,
-    isIsolated: (slug: string) => isolates.has(slug),
+    isIsolated: (slug: string) => isolates.has(isolateKey(slug)),
     // The policy fingerprint the RUNNING child of `slug` was spawned with (undefined when none is running).
-    spawnPolicyFingerprint: (slug: string) => (isolates.has(slug) ? spawnPolicies.get(slug) : undefined),
-    listIsolates,
+    spawnPolicyFingerprint: (slug: string) => { const key = isolateKey(slug); return isolates.has(key) ? spawnPolicies.get(key) : undefined; },
+    listIsolates, listIsolateKeys, isolateKey, splitIsolateKey,
+    // Network-wide: stop one isolate by key (core/plugins, when a plugin leaves the network or a site).
+    unloadIsolateKey: unloadKey,
     // What a plugin route handler receives as req.user (incl. its own pluginCapabilities).
     projectRouteUser,
     pluginCapabilitiesOf,
-    getLivePids, awaitIsolateStopped, awaitIsolateSettled,
+    getLivePids, awaitIsolateStopped, awaitIsolateSettled, awaitOtherSitesStopped,
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState,
     getPermissionModelState, probePermissionModel, probeKernelHardening,
@@ -3485,7 +3643,7 @@ module.exports = {
     // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
     // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child
     // behind it is a leak — it never goes away and it silences the supervisor for the NEXT child.
-    __stopIntentMarked: (slug: string) => stopping.has(slug),
+    __stopIntentMarked: (slug: string) => stopping.has(isolateKey(slug)),
     // Test seams for the IPC-frame containment guard (see the regression test): the classifier that
     // decides whether an uncaughtException is the child_process advanced-deserializer framing error, and
     // the ref-counted install/uninstall so a test can exercise the lifecycle without a real plugin.

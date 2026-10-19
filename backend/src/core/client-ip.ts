@@ -174,4 +174,47 @@ function pluginClientKey(req: any): string {
     }
 }
 
-module.exports = { clientIp, clientIpBucket, ipBucket, pluginClientKey, resolveTrustProxy, trustProxyConfigured, normalizeTrustProxy };
+const LOOPBACK_ADDRESS = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
+
+function isLoopbackAddress(addr: unknown): boolean {
+    return LOOPBACK_ADDRESS.test(String(addr ?? '').trim());
+}
+
+/**
+ * THE PROXY NOBODY TOLD US ABOUT. Behind nginx (or any reverse proxy) on the same machine with no
+ * `trustProxy` / WORDJS_TRUST_PROXY, every request reaches us from the proxy's loopback address and
+ * clientIp() — rightly, since nothing says that hop may be believed — answers 127.0.0.1 for everyone: one
+ * login-lockout and rate-limit bucket for the whole site, and an audit log that names nobody. Trusting
+ * the header by guesswork would reopen the forgery clientIp() exists to close, so instead the FIRST
+ * request that shows the pattern — the resolved client is loopback while X-Forwarded-For names a client
+ * that is not — logs one loud warning saying what to set. Split mode gets the gateway's setting (it
+ * fixes the gateway's limiter and what the gateway tells us); the monolith gets WORDJS_TRUST_PROXY.
+ *
+ * Returns an Express middleware; after the warning it only calls next().
+ */
+function untrustedProxyWarning(logger: { warn: (msg: string) => void }) {
+    let warned = false;
+    return (req: any, _res: any, next: () => void) => {
+        if (!warned) {
+            try {
+                const xff = req && req.headers && req.headers['x-forwarded-for'];
+                const first = String(Array.isArray(xff) ? xff.join(',') : xff || '').split(',')[0].trim();
+                if (first && !isLoopbackAddress(first) && isLoopbackAddress(clientIp(req))) {
+                    warned = true;
+                    const embedded = process.env.WORDJS_EMBEDDED === '1';
+                    logger.warn(
+                        '⚠️ Requests are arriving through a proxy on this machine (X-Forwarded-For from a loopback address) that ' +
+                        'WordJS does not trust: every visitor is seen as 127.0.0.1, so login lockout, rate limits and the audit log ' +
+                        'treat the whole site as one client. ' +
+                        (embedded
+                            ? 'Set WORDJS_TRUST_PROXY=loopback (or "trustProxy": "loopback" in wordjs-config.json) and restart.'
+                            : 'Set "trustProxy": "loopback" in gateway/gateway-config.json (or WORDJS_TRUST_PROXY=loopback for the gateway) and restart the gateway.')
+                    );
+                }
+            } catch { /* a warning must never fail a request */ }
+        }
+        next();
+    };
+}
+
+module.exports = { clientIp, clientIpBucket, ipBucket, pluginClientKey, resolveTrustProxy, trustProxyConfigured, normalizeTrustProxy, isLoopbackAddress, untrustedProxyWarning };

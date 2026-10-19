@@ -6,13 +6,15 @@
 
 const { getOption } = require('./options');
 const config = require('../config/app');
+const log = require('./module-logger').moduleLogger('core/roles');
 
 const ROLES_OPTION_NAME = 'wordjs_user_roles';
 
 // Built-in WordPress-style roles. These are the source of truth when the stored wordjs_user_roles
 // option is empty/missing — which it was on every install, because options seeded it from the
 // hardcoded-empty config.roles, leaving every role (administrator included) with NO capabilities
-// and the admin Roles page showing nothing. config.roles, when an operator sets it, still wins.
+// and the admin Roles page showing nothing. config.roles is merged over them, but it is always empty
+// (config/app explains: there is no operator setting behind it), so in practice these ARE the seed.
 const DEFAULT_ROLES: Record<string, { name: string; capabilities: string[] }> = {
     administrator: {
         name: 'Administrator',
@@ -52,7 +54,15 @@ const DEFAULT_ROLES: Record<string, { name: string; capabilities: string[] }> = 
 const defaultRoles = (): Record<string, any> => JSON.parse(JSON.stringify(DEFAULT_ROLES));
 
 // Cache roles in memory for synchronous access (required by User.toJSON)
-let _rolesCache: Record<string, any> | null = null;
+// One cache per site in a multisite network (each site has its own roles option). Site 1's state is
+// the one a single-site install has always had. Every field below is read through rolesState().
+const rolesStateBySite = require('./site-context').perSite(() => ({
+    cache: null as Record<string, any> | null,
+    loadedAt: 0,
+    refreshInFlight: false,
+    localWriteEpoch: 0,
+}));
+const rolesState = (): { cache: Record<string, any> | null; loadedAt: number; refreshInFlight: boolean; localWriteEpoch: number } => rolesStateBySite.get();
 
 // Freshness fallback (multi-node safety net): the primary invalidation path is the Redis pub/sub
 // signal handled in coherence.ts. But if Redis is down (or a publish is missed), a role/capability
@@ -66,17 +76,14 @@ let _rolesCache: Record<string, any> | null = null;
 // is corrected quickly. The dedupe is handled by the in-flight flag, not by pre-bumping the stamp,
 // so a FAILED background reload does NOT extend staleness for another full TTL.
 const ROLES_CACHE_TTL_MS = 10_000; // 10s
-let _rolesCacheLoadedAt = 0;
-let _rolesRefreshInFlight = false;
 
 // Monotonic local-write epoch (DATA-05). Bumped whenever a LOCAL setRole/updateRoleCapabilities/
-// syncRoles mutates _rolesCache. The background TTL refresh captures this epoch before its DB read and
+// syncRoles mutates the roles cache. The background TTL refresh captures this epoch before its DB read and
 // applies the result ONLY if the epoch is unchanged when the read returns — so a stale read (e.g. from
 // a lagging replica, or one that started before a local roles write committed) can never clobber a
 // just-applied local edit (the fail-OPEN direction for a capability revocation). The genuine self-heal
 // for cross-node changes is preserved: when NO local write raced the refresh, the fresh DB value is
 // applied exactly as before.
-let _localWriteEpoch = 0;
 
 /**
  * Initialize roles from DB (Async)
@@ -85,22 +92,22 @@ let _localWriteEpoch = 0;
 async function loadRoles() {
     const stored = await getOption(ROLES_OPTION_NAME);
     if (stored && Object.keys(stored).length > 0) {
-        _rolesCache = stored;
+        rolesState().cache = stored;
     } else {
-        // Empty/missing option: fall back to the built-in defaults (operator config.roles overrides)
+        // Empty/missing option: fall back to the built-in defaults (config.roles, always empty, merged over)
         // and backfill the option so the roles are durable and visible to anything reading the DB. The
         // backfill is a roles write like any other (writeRoles): it saves the defaults only while the
         // stored map is still empty, so a map another node saved after this (cached) read is adopted,
         // never overwritten.
-        _rolesCache = { ...defaultRoles(), ...(config.roles || {}) };
+        rolesState().cache = { ...defaultRoles(), ...(config.roles || {}) };
         try {
             await withRolesWriteLock(() => writeRoles(async (current) => ({ next: current, result: undefined })));
         } catch (e: any) {
-            console.warn('Could not persist default roles:', e?.message);
+            log.warn({ err: e }, 'Could not persist default roles');
         }
     }
-    _rolesCacheLoadedAt = Date.now(); // stamp freshness on every (re)load
-    return _rolesCache;
+    rolesState().loadedAt = Date.now(); // stamp freshness on every (re)load
+    return rolesState().cache;
 }
 
 /**
@@ -108,38 +115,38 @@ async function loadRoles() {
  * stale reads triggers at most one DB re-read. Errors are swallowed (the current cache stays usable).
  *
  * DATA-05: unlike the startup loadRoles() (which always applies), this background path is a
- * compare-and-set on _localWriteEpoch — it reads the DB and applies the result ONLY if no LOCAL write
+ * compare-and-set on the local-write epoch — it reads the DB and applies the result ONLY if no LOCAL write
  * (setRole/updateRoleCapabilities/syncRoles) landed while the read was in flight. That closes the
  * lost-update window where a stale DB read could overwrite a just-applied local revocation. When no
  * local write raced it, the fresh value is applied exactly as the old loadRoles()-based path did.
  */
 function maybeRefreshStaleRoles() {
-    if (_rolesRefreshInFlight) return;
-    if (Date.now() - _rolesCacheLoadedAt < ROLES_CACHE_TTL_MS) return;
-    // The in-flight flag alone dedupes concurrent refreshes — do NOT pre-bump _rolesCacheLoadedAt.
+    if (rolesState().refreshInFlight) return;
+    if (Date.now() - rolesState().loadedAt < ROLES_CACHE_TTL_MS) return;
+    // The in-flight flag alone dedupes concurrent refreshes — do NOT pre-bump the load stamp.
     // The stamp is advanced ONLY on a successful, applied read below. If this background reload FAILS
     // (or is superseded by a local write), the stamp stays old so the very next sync access re-attempts
     // the refresh immediately, instead of believing the cache is fresh and extending stale (over-broad)
     // capabilities for another full TTL (a fail-open authorization window).
-    _rolesRefreshInFlight = true;
-    const epochAtStart = _localWriteEpoch;
+    rolesState().refreshInFlight = true;
+    const epochAtStart = rolesState().localWriteEpoch;
     Promise.resolve()
         .then(() => getOption(ROLES_OPTION_NAME))
         .then((stored: any) => {
             // A local write landed while we were reading — it is strictly fresher than this DB snapshot
             // (which may even predate the local write's commit), so DROP the read and keep the local
-            // value. The local write already stamped _rolesCacheLoadedAt, so the cache is fresh.
-            if (_localWriteEpoch !== epochAtStart) return;
+            // value. The local write already stamped the load stamp, so the cache is fresh.
+            if (rolesState().localWriteEpoch !== epochAtStart) return;
             if (stored && Object.keys(stored).length > 0) {
-                _rolesCache = stored;
-                _rolesCacheLoadedAt = Date.now();
+                rolesState().cache = stored;
+                rolesState().loadedAt = Date.now();
             }
             // Empty/missing option: leave the current in-memory cache (which already holds the seeded
             // defaults) untouched — matching loadRoles()'s "never return an empty map" guarantee. We do
             // NOT re-seed/backfill the option here; the startup loadRoles() owns that.
         })
-        .catch((e: any) => console.warn('[roles] background TTL refresh failed:', e && e.message))
-        .finally(() => { _rolesRefreshInFlight = false; });
+        .catch((e: any) => log.warn({ err: e }, '[roles] background TTL refresh failed'))
+        .finally(() => { rolesState().refreshInFlight = false; });
 }
 
 /**
@@ -148,13 +155,13 @@ function maybeRefreshStaleRoles() {
 function getRoles() {
     // If not loaded yet, fall back to the built-in defaults merged with operator config (safe for
     // startup/tests). Never return an empty map — that strips every user of their capabilities.
-    if (!_rolesCache) {
+    if (!rolesState().cache) {
         return { ...defaultRoles(), ...(config.roles || {}) };
     }
     // Bound staleness: kick a background re-read if the cache aged past the TTL (self-heals a missed
     // cross-node invalidation). Non-blocking — returns the current cache immediately.
     maybeRefreshStaleRoles();
-    return _rolesCache;
+    return rolesState().cache;
 }
 
 // ── Plugin-declared roles ────────────────────────────────────────────────────────────────────────────
@@ -307,9 +314,9 @@ async function readStoredRoles(): Promise<{ raw: string | null; roles: Record<st
 
 /** Make `roles` this node's cache: a local write is fresh (TTL clock reset) and wins over an in-flight refresh. */
 function adoptRoles(roles: Record<string, any>): void {
-    _rolesCache = roles;
-    _rolesCacheLoadedAt = Date.now(); // local write is fresh — reset the TTL clock
-    _localWriteEpoch++;               // DATA-05: an in-flight background refresh must not clobber this
+    rolesState().cache = roles;
+    rolesState().loadedAt = Date.now(); // local write is fresh — reset the TTL clock
+    rolesState().localWriteEpoch++;               // DATA-05: an in-flight background refresh must not clobber this
 }
 
 interface RolesDecision<T> {
@@ -356,6 +363,9 @@ async function writeRoles<T>(decide: (current: Record<string, any>) => Promise<R
         await lock.release();
     }
     if (announce) await announce();
+    // A capability can have just been taken from a role: live collaboration streams are long-lived requests
+    // and are re-authorized now instead of at their next periodic check.
+    if (announce) { try { require('./collab-rooms').recheckAll(); } catch { /* periodic re-check still applies */ } }
     return outcome!.result;
 }
 
@@ -586,7 +596,7 @@ function enforcePluginRoleNamespaces(installedPluginIds: string[]): Promise<stri
             }
             return { next: trimmed.length ? next : null, result: trimmed };
         });
-        if (changed.length) console.warn(`[roles] plugin roles trimmed back into their own namespace: ${changed.join(', ')}`);
+        if (changed.length) log.warn(`[roles] plugin roles trimmed back into their own namespace: ${changed.join(', ')}`);
         return changed;
     });
 }
@@ -736,7 +746,7 @@ function getAllAvailableCapabilities() {
         const pluginCaps = getAllRegisteredCapabilities();
         pluginCaps.forEach((cap: any) => caps.add(cap));
     } catch (err) {
-        console.warn('Could not load plugin capabilities:', err.message);
+        log.warn({ err }, 'Could not load plugin capabilities');
     }
 
     return Array.from(caps);
@@ -762,7 +772,8 @@ async function syncRolesUnlocked(configRoles: any, installedPluginIds?: string[]
 function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPluginIds?: string[]): boolean {
     let changed = false;
 
-    // Built-in defaults guarantee the core roles always exist; operator config.roles overrides them.
+    // Built-in defaults guarantee the core roles always exist (config.roles, always empty — see
+    // config/app — is merged over them).
     const effective = { ...defaultRoles(), ...(configRoles || {}) };
 
     // Check subscriber specifically for the access_admin_panel capability
@@ -772,7 +783,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
 
         // If DB is missing access_admin_panel but the effective definition has it, FORCE update
         if (!dbCaps.includes('access_admin_panel') && effCaps.includes('access_admin_panel')) {
-            console.log('🔄 Syncing Subscriber roles: Adding access_admin_panel');
+            log.info('🔄 Syncing Subscriber roles: Adding access_admin_panel');
             dbRoles.subscriber.capabilities = effCaps;
             changed = true;
         }
@@ -782,7 +793,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
     // predates them).
     for (const [slug, role] of Object.entries(effective)) {
         if (!dbRoles[slug]) {
-            console.log(`➕ Adding missing role: ${slug}`);
+            log.info({ slug }, `➕ Adding missing role: ${slug}`);
             dbRoles[slug] = role;
             changed = true;
         }
@@ -800,7 +811,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
             if ('source' in role || 'plugin' in role || 'orphaned' in role || 'adminChanges' in role) {
                 const { source: _s, plugin: _p, orphaned: _o, adminChanges: _a, ...rest } = role;
                 dbRoles[slug] = rest;
-                console.warn(`[roles] core role '${slug}' carried plugin provenance — removed.`);
+                log.warn({ slug }, `[roles] core role '${slug}' carried plugin provenance — removed.`);
                 changed = true;
             }
             continue;
@@ -809,7 +820,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
         const clean = sanitizePluginRole(slug, role, installedPluginIds);
         if (clean !== role) {
             dbRoles[slug] = clean;
-            console.warn(`[roles] plugin role '${slug}' held capabilities outside its plugin's namespace — removed.`);
+            log.warn({ slug }, `[roles] plugin role '${slug}' held capabilities outside its plugin's namespace — removed.`);
             changed = true;
         }
     }
@@ -818,6 +829,8 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
 }
 
 module.exports = {
+    // The built-in role map (a fresh copy). backend/cli/force-sync-roles.js resets the stored core roles to it.
+    defaultRoles,
     loadRoles,
     getRoles,
     getRole,
