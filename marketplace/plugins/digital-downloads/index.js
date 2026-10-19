@@ -30,7 +30,7 @@
 
 exports.metadata = {
     name: 'Digital Downloads',
-    version: '1.1.0',
+    version: '1.1.1',
     description: 'Downloadable products (private media files) with token-gated, expiring, limited-use download links.',
     author: 'WordJS',
 };
@@ -210,13 +210,15 @@ exports.init = async function (wordjs) {
         }
     }
 
+    // The buyer's mails carry only the site's own text (never the name typed in the order form): they
+    // go to an address nobody has proven.
     async function sendDownloadLinkEmail(order, product, cfg) {
         const link = await buildDownloadLink(order.page_path, order.token);
         const expires = order.expires_at ? new Date(order.expires_at).toLocaleDateString('es') : '';
         const html = `
             <div style="font-family:sans-serif;max-width:560px;margin:0 auto">
                 <h2>Tu descarga está lista</h2>
-                <p>Hola ${escapeHtml(order.customer_name || '')},</p>
+                <p>Hola,</p>
                 <p>Aquí tienes tu enlace de descarga para <strong>${escapeHtml(product.name)}</strong>${product.file_label ? ` (${escapeHtml(product.file_label)})` : ''}:</p>
                 <p style="margin:24px 0">
                     <a href="${escapeHtml(link)}" style="background:#111;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Descargar ahora</a>
@@ -236,7 +238,7 @@ exports.init = async function (wordjs) {
         const html = `
             <div style="font-family:sans-serif;max-width:560px;margin:0 auto">
                 <h2>Pedido recibido</h2>
-                <p>Hola ${escapeHtml(order.customer_name || '')},</p>
+                <p>Hola,</p>
                 <p>Recibimos tu pedido de <strong>${escapeHtml(product.name)}</strong> por <strong>${fmtMoney(order.amount_cents, cfg.currencySymbol)}</strong>.</p>
                 ${cfg.manualInstructions ? `<p style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(cfg.manualInstructions)}</p>` : ''}
                 <p>Cuando confirmemos tu pago te enviaremos el enlace de descarga a este correo. También puedes consultar el estado de tu pedido aquí:</p>

@@ -33,7 +33,7 @@
 
 exports.metadata = {
     name: 'Event Tickets',
-    version: '1.1.0',
+    version: '1.1.1',
     description: 'Ticket types with capacity caps, unique ticket codes by email, attendee list and check-in.',
     author: 'WordJS',
 };
@@ -65,6 +65,9 @@ const NO_MAIL_TRANSPORT_RE = [/^Mail server not available$/, /tried to access 'e
 // Mails to one buyer address from the public order form, whatever clients ask (see mailBudget).
 const MAIL_PER_ADDRESS_MAX = 5;
 const MAIL_PER_ADDRESS_WINDOW_MS = 60 * 60 * 1000;
+// Confirmation codes go to addresses nobody has proven yet: the whole site mails at most this many an
+// hour (MAIL_PER_ADDRESS_WINDOW_MS), whatever addresses and clients ask.
+const VERIFY_MAIL_SITE_MAX = 200;
 // Free tickets cost nothing to claim, so the per-email window alone let one visitor rotate
 // addresses and take the whole capacity. Free seats are capped per order, per email per event
 // (durable quota), and per client per event per ORDER_WINDOW_MS (rolling window, see the header).
@@ -214,6 +217,23 @@ exports.init = async function (wordjs) {
     // (rotating clients defeat a per-client limit): past MAIL_PER_ADDRESS_MAX in the window the order
     // is still created and its reference (or free tickets) shown on screen, but no mail is sent.
     const mailSentTo = new Map(); // address -> timestamps[]
+    // Confirmation codes mailed by the whole site over the last hour (timestamps, oldest first).
+    let verifyMailsSent = [];
+    /** Spend one unit of the site-wide confirmation-code budget: a refund function, or null when spent. */
+    function takeVerifyMailBudget() {
+        const now = Date.now();
+        verifyMailsSent = verifyMailsSent.filter((t) => now - t < MAIL_PER_ADDRESS_WINDOW_MS);
+        if (verifyMailsSent.length >= VERIFY_MAIL_SITE_MAX) return null;
+        verifyMailsSent.push(now);
+        let refunded = false;
+        return () => {
+            if (refunded) return;
+            refunded = true;
+            const i = verifyMailsSent.indexOf(now);
+            if (i >= 0) verifyMailsSent.splice(i, 1);
+        };
+    }
+
     function mailBudget(email) {
         const key = String(email || '').trim().toLowerCase();
         const now = Date.now();
@@ -428,9 +448,10 @@ exports.init = async function (wordjs) {
     // ── seat claims and the paid-order confirmation ──────────────────────────────────────────────
     /**
      * Claim capacity for `items`: one conditional UPDATE per type (race-safe), earlier claims rolled
-     * back when a later one fails. A pending (unpaid) order also claims `held`, within holdPercent of
-     * the capacity — the first hold of a type is always allowed, so a small type can still be ordered.
-     * Returns { ok: true, rollback } or { ok: false, error }.
+     * back when a later one fails. A pending (unpaid) order also claims `held`: all pending orders of a
+     * type together hold at most max(1, floor(capacity × holdPercent / 100)) seats — the first one
+     * included, so one order can never take more than the share; a small type can still be ordered
+     * one seat at a time. Returns { ok: true, rollback } or { ok: false, error }.
      */
     async function claimSeats(items, pending, holdPercent) {
         const claimed = [];
@@ -447,8 +468,8 @@ exports.init = async function (wordjs) {
                 ? await db.run(
                     `UPDATE ${T.types} SET sold = sold + ?, held = COALESCE(held, 0) + ?
                      WHERE id = ? AND is_active = 1 AND sold + ? <= capacity
-                       AND (COALESCE(held, 0) = 0 OR (COALESCE(held, 0) + ?) * 100 <= capacity * ?)`,
-                    [it.qty, it.qty, it.ticket_type_id, it.qty, it.qty, holdPercent]
+                       AND ((COALESCE(held, 0) + ?) * 100 <= capacity * ? OR COALESCE(held, 0) + ? <= 1)`,
+                    [it.qty, it.qty, it.ticket_type_id, it.qty, it.qty, holdPercent, it.qty]
                 )
                 : await db.run(
                     `UPDATE ${T.types} SET sold = sold + ? WHERE id = ? AND is_active = 1 AND sold + ? <= capacity`,
@@ -529,6 +550,14 @@ exports.init = async function (wordjs) {
             return { status: 409, error: 'El pedido cambió mientras se confirmaba. Inténtalo de nuevo.' };
         }
         return null;
+    }
+
+    /**
+     * One address holds at most MAX_TICKETS_PER_ORDER unpaid seats per event per window: claim `order`'s
+     * seats on that window. A release function, or null when the window is full.
+     */
+    function claimPendingForEmail(order) {
+        return claimWindows([['pe:' + order.buyer_email + ':' + order.event_id, MAX_TICKETS_PER_ORDER, seatsOf(order.items)]]);
     }
 
     function notifyOwner(cfg, eventRow, order, statusLabel) {
@@ -736,7 +765,12 @@ exports.init = async function (wordjs) {
                         return res.status(409).json({ error: `Entradas agotadas para ${it.name}.` });
                     }
                 }
+                const releaseVerifyMail = takeVerifyMailBudget();
+                if (!releaseVerifyMail) {
+                    return res.status(429).json({ error: 'Hay demasiados pedidos pendientes de confirmación en este momento. Inténtalo de nuevo en unos minutos.' });
+                }
                 if (!mailBudget(buyerEmail)) {
+                    releaseVerifyMail();
                     return res.status(429).json({ error: 'Ya enviamos varios correos a esa dirección. Revisa tu bandeja o inténtalo de nuevo más tarde.' });
                 }
                 const code = await genVerifyCode();
@@ -749,6 +783,7 @@ exports.init = async function (wordjs) {
                     );
                     orderId = result.lastID;
                 } catch (e) {
+                    releaseVerifyMail();
                     return res.status(500).json({ error: 'No se pudo crear el pedido, inténtalo de nuevo.' });
                 }
                 created = true; // the order and client windows stay spent
@@ -769,10 +804,16 @@ exports.init = async function (wordjs) {
                     return res.status(503).json({ error: 'No pudimos enviar el código de confirmación. Revisa el correo e inténtalo de nuevo.' });
                 }
                 // This site cannot send mail at all: there is no channel to prove the address, so the
-                // order holds its seats now (the pre-1.1.0 behaviour), still under every cap.
+                // order holds its seats now (the pre-1.1.0 behaviour), still under every cap — the
+                // per-address unpaid-seat window included, as a confirmed order is.
+                releaseVerifyMail(); // nothing was mailed
                 const order = { id: orderId, token, event_id: eventId, buyer_name: buyerName, buyer_email: buyerEmail, items: JSON.stringify(items), total_cents: totalCents };
-                const failed = await holdVerifiedOrder(order, code, cfg);
+                const releasePerEmail = claimPendingForEmail(order);
+                const failed = releasePerEmail
+                    ? await holdVerifiedOrder(order, code, cfg)
+                    : { status: 429, error: 'Ya tienes entradas pendientes de pago para este evento. Espera unos minutos e inténtalo de nuevo.' };
                 if (failed) {
+                    if (releasePerEmail) releasePerEmail();
                     await db.run(`DELETE FROM ${T.orders} WHERE id = ? AND payment_status IN ('unverified', 'expired')`, [orderId]).catch(() => {});
                     created = false;
                     return res.status(failed.status).json({ error: failed.error });
@@ -856,8 +897,7 @@ exports.init = async function (wordjs) {
             if (!tried || tried.changes !== 1) return res.status(400).json({ error: 'Demasiados intentos con este código. Haz el pedido de nuevo.' });
             if (code !== String(order.verify_code)) return res.status(400).json({ error: 'Código incorrecto.' });
 
-            // One address holds at most MAX_TICKETS_PER_ORDER unpaid seats per event per window.
-            releasePerEmail = claimWindows([['pe:' + order.buyer_email + ':' + order.event_id, MAX_TICKETS_PER_ORDER, seatsOf(order.items)]]);
+            releasePerEmail = claimPendingForEmail(order);
             if (!releasePerEmail) {
                 return res.status(429).json({ error: 'Ya tienes entradas pendientes de pago para este evento. Espera unos minutos e inténtalo de nuevo.' });
             }

@@ -1067,10 +1067,14 @@ app.get('/metrics', async (req: Request, res: Response) => {
 // The verdict is cached ~1 s and shared by concurrent callers (core/readiness.ts): this route is
 // unauthenticated and rate-limit exempt, so its cost must not scale with the request rate. A failure's
 // detail is logged, never sent.
-const readiness = require('./core/readiness').createReadinessProbe({
+// The database check has a deadline (WORDJS_READINESS_TIMEOUT_MS, 3 s by default): a query that never
+// answers is reported 503 instead of leaving /readyz pending forever.
+const readinessModule = require('./core/readiness');
+const readiness = readinessModule.createReadinessProbe({
     isInstalled: () => require('./core/configManager').isInstalled(),
     isBooted: () => appReady,
-    checkDatabase: () => require('./core/system-health').checkDatabase(),
+    checkDatabase: (opts: { timeoutMs: number }) => require('./core/system-health').checkDatabase(opts),
+    timeoutMs: readinessModule.readinessTimeoutMs(process.env),
     onError: (err: unknown) => log.warn({ err }, '/readyz: readiness check failed'),
 });
 app.get('/readyz', async (req: Request, res: Response) => {

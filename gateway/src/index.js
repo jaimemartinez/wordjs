@@ -14,7 +14,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const proxyAddr = require('proxy-addr');
 const morgan = require('morgan');
-const { accessLogFormat } = require('./access-log');
+const { accessLogFormat, redactUrl } = require('./access-log');
 const compression = require('compression');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
@@ -259,6 +259,7 @@ function maybeStartAcmeHttpListener() {
 if (cluster.isPrimary) {
     const numCPUs = os.cpus().length;
     logger.info(`[Gateway] Starting on port ${FINAL_PORT}...`);
+    logger.info(`[Gateway] ${runtimeSettings.trustProxyBootLine(TRUST_PROXY)}`);
 
     (async () => {
         await ensureSSLCerts(config);
@@ -1200,7 +1201,9 @@ if (cluster.isPrimary) {
             // Behind a trusted proxy the backend is told the client Express resolved, not the proxy.
             if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, req.ip);
 
-            logger.debug(`[Gateway] Proxying ${req.method} ${req.url} to ${target}`);
+            // Query values are redacted exactly as in the access log: reset, verification and invitation links
+            // carry their one-time token there, and debug logs are retained and shared like any other.
+            logger.debug(`[Gateway] Proxying ${logSafe(req.method)} ${logSafe(redactUrl(req.url))} to ${target}`);
             proxy.web(req, res, {
                 ...(trustsProxy ? { xfwd: false } : {}),
                 target,
@@ -1309,7 +1312,12 @@ if (cluster.isPrimary) {
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
 
-    const upgradeLimiter = require('./rate-limit').createUpgradeLimiter(config);
+    // Without a trusted proxy the upgrade cap keys on the socket peer; a CDN or reverse proxy in front then
+    // makes the whole site one peer. The limiter widens that peer's budget with the number of distinct
+    // forwarded clients behind it (bounded) and the operator is told, once, to trust the proxy.
+    const upgradeLimiter = require('./rate-limit').createUpgradeLimiter(config, {
+        onShared: (peer, n) => warnUntrustedProxy.sharedAddress(peer, n),
+    });
     server.on('upgrade', (req, socket, head) => {
         // Upgrades never pass through the Express chain above, so the edge check and the forwarded-header
         // pins are applied here too: a WebSocket to an address the site does not answer is refused, and
@@ -1322,7 +1330,9 @@ if (cluster.isPrimary) {
         if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, upgradeClient, { upgrade: true });
         // Upgrades also skip the public limiter mounted on the Express chain, so they get their own
         // per-client cap (src/rate-limit.js createUpgradeLimiter).
-        if (!upgradeLimiter.allow(upgradeClient)) {
+        if (!trustsProxy) warnUntrustedProxy(req);
+        const forwardedClient = trustsProxy ? '' : runtimeSettings.firstForwardedFor(req.headers['x-forwarded-for']);
+        if (!upgradeLimiter.allow(upgradeClient, forwardedClient)) {
             try { socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); } catch (e) { /* socket already gone */ }
             return;
         }
