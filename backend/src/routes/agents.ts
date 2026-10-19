@@ -29,6 +29,15 @@ const AgentConnection = require('../models/AgentConnection');
 const User = require('../models/User');
 const config = require('../config/app');
 
+// The MFA-by-role rule for minting a headless credential — the SAME helper POST /auth/tokens uses, so an
+// agent connection (exempt from the compliance gate like an API token) is never easier to obtain. Required
+// lazily: routes/auth.ts is a large router and only these two doors need it.
+type MachineCredentialKind = { before: string; action: string; auditDetail?: Record<string, string> };
+const requireMfaForMachineCredential = (req: Request, res: Response, kind: MachineCredentialKind) =>
+    require('./auth').requireMfaForMachineCredential(req, res, kind);
+const MFA_AGENT_CREATE: MachineCredentialKind = { before: 'creating agent connections', action: 'create an agent connection', auditDetail: { credential: 'agent_connection' } };
+const MFA_AGENT_GRANT: MachineCredentialKind = { before: 'granting capabilities to an agent', action: 'grant capabilities to an agent connection', auditDetail: { credential: 'agent_grant' } };
+
 /** At most this many live (pending or active) connections per bound user. */
 const MAX_LIVE_CONNECTIONS_PER_USER = 25;
 
@@ -167,11 +176,15 @@ router.post('/', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandl
         });
     }
 
+    // Last, after every cheap validation, so a malformed request never spends a step-up code.
+    const mfaAssurance = await requireMfaForMachineCredential(req, res, MFA_AGENT_CREATE);
+    if (!mfaAssurance) return;
+
     const { token, connection } = await AgentConnection.create({
         userId: boundId, name, requested: caps, createdBy: req.user.id, expiresInDays: expiresInDays ?? null,
     });
     await recordAudit(req.user.id, 'agent.create', 'agent', connection.id, {
-        name: connection.name, boundUser: boundId, requested: connection.requested,
+        name: connection.name, boundUser: boundId, requested: connection.requested, mfa: mfaAssurance,
     });
     res.status(201).json({ token, connection: await present(connection), mcpUrl: mcpEndpoint() });
 }));
@@ -230,11 +243,13 @@ router.put('/:id/grant', authenticate, sessionOnly, can('manage_api_tokens'), as
             data: { status: 400 }
         });
     }
+    const mfaAssurance = await requireMfaForMachineCredential(req, res, MFA_AGENT_GRANT);
+    if (!mfaAssurance) return;
     const changed = await AgentConnection.setGrant(rec.id, within.grant, req.user.id);
     if (!changed) {
         return res.status(409).json({ code: 'rest_agent_revoked', message: 'This connection was revoked; create a new one.', data: { status: 409 } });
     }
-    await recordAudit(req.user.id, 'agent.grant', 'agent', rec.id, { previous: rec.granted, granted: within.grant, boundUser: rec.userId });
+    await recordAudit(req.user.id, 'agent.grant', 'agent', rec.id, { previous: rec.granted, granted: within.grant, boundUser: rec.userId, mfa: mfaAssurance });
     res.json({ connection: await present(await AgentConnection.findById(rec.id)) });
 }));
 

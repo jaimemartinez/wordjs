@@ -508,6 +508,24 @@ const mcpLimiter = rateLimit({
     passOnStoreError: true,
     message: { jsonrpc: '2.0', error: { code: -32029, message: 'Too many requests from this agent, please slow down.' }, id: null }
 });
+// ONE PATH, ONE SPELLING — mounted before every limiter below. Each per-route limiter is a PREFIX mount
+// ('/api/v1/auth/login', '/api/v1/media', …), and a prefix mount matches path SEGMENTS literally: an
+// extra slash ('/api/v1//auth/login', '/api/v1/auth//login') matches none of them, yet the router that
+// finally serves the request trims the empty segment away and reaches the very same handler. So every
+// throttle in this section could be stepped around by doubling a slash. Collapsing runs of '/' in the
+// PATH (never the query string) makes the request look the same to every mount after it; originalUrl
+// follows, so code that derives a sub-path from it (pathAfterApiPrefix, apiResourceOf) agrees too.
+const collapseSlashes = (u: string): string => {
+    const q = u.indexOf('?');
+    const p = q === -1 ? u : u.slice(0, q);
+    if (p.indexOf('//') === -1) return u;
+    return p.replace(/\/{2,}/g, '/') + (q === -1 ? '' : u.slice(q));
+};
+app.use((req: Request, _res: Response, next: NextFunction) => {
+    req.url = collapseSlashes(req.url);
+    req.originalUrl = collapseSlashes(req.originalUrl);
+    next();
+});
 app.use(`${config.api.prefix}/mcp`, mcpLimiter);
 
 // (#19) Collaboration's own budget, mounted BEFORE the global limiter — which now skips these paths
