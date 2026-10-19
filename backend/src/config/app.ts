@@ -258,10 +258,14 @@ function assertInstalledJwtSecretIsNotPublished(cfg: FileConfig, file: string = 
 const bootNote = /^(1|true|yes)$/i.test(String(process.env.WORDJS_LOG_TO_STDERR || '')) ? console.error : console.log;
 
 if (!(globalThis as any).__WORDJS_ISOLATED__) {
+    // Whether the file was actually READ (and parsed). The secret auto-generation below rewrites only
+    // the file it loaded: it never creates one, and never overwrites a file it could not parse.
+    let configLoaded = false;
     try {
         if (fs.existsSync(configPath)) {
             const rawData = fs.readFileSync(configPath, 'utf8');
             fileConfig = JSON.parse(rawData);
+            configLoaded = true;
             bootNote('📄 Config loaded from wordjs-config.json');
         } else {
             console.warn('⚠️  wordjs-config.json not found, using defaults.');
@@ -272,7 +276,7 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
 
     // 1.5 Secure Auto-Generation — generate secure keys ONLY if config exists but is insecure.
     let configChanged = false;
-    if (fs.existsSync(configPath)) {
+    if (configLoaded) {
         // Outside the load's try/catch on purpose: this must stop the process, not be logged and ignored.
         assertInstalledJwtSecretIsNotPublished(fileConfig);
         if (jwtSecretNeedsReplacing(fileConfig)) {
@@ -290,8 +294,18 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
         if (configChanged) {
             try {
                 // The file now holds fresh secrets: never readable by OTHER users (owner/group bits kept).
-                fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2), { mode: 0o600 });
-                try { fs.chmodSync(configPath, fs.statSync(configPath).mode & 0o770); } catch { /* Windows: no POSIX bits */ }
+                // One descriptor for the whole rewrite: 'r+' opens the file that was just read (it never
+                // creates one), and the mode is read and narrowed on that same descriptor, so nothing is
+                // checked by path and then acted on by path.
+                const fd = fs.openSync(configPath, 'r+');
+                try {
+                    const text = JSON.stringify(fileConfig, null, 2);
+                    fs.ftruncateSync(fd, 0);
+                    fs.writeSync(fd, text, 0, 'utf8');
+                    try { fs.fchmodSync(fd, fs.fstatSync(fd).mode & 0o770); } catch { /* Windows: no POSIX bits */ }
+                } finally {
+                    fs.closeSync(fd);
+                }
                 bootNote('💾 wordjs-config.json updated with secure credentials.');
             } catch (err) {
                 console.error('❌ Failed to persist secure credentials:', err.message);

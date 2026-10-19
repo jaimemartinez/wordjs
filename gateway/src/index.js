@@ -110,6 +110,31 @@ function writeGatewayConfig(configPath, data) {
     try { fs.chmodSync(configPath, 0o600); } catch { /* best effort */ }
 }
 
+/**
+ * The http(s) ORIGIN `value` names (scheme, host, optional port — nothing else), or null. The site
+ * address the backend pushes over /config-update is persisted into gateway-config.json and read back
+ * at every boot, so only a well-formed origin is ever written there.
+ */
+function siteOriginOrNull(value) {
+    if (typeof value !== 'string' || value.length > 2048) return null;
+    let u;
+    try { u = new URL(value); } catch { return null; }
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username || u.password) return null;
+    if ((u.pathname && u.pathname !== '/') || u.search || u.hash) return null;
+    return u.origin;
+}
+
+/** True when `origin` is exactly what siteOriginOrNull produces for itself (a canonical origin). */
+function isValidSiteOrigin(origin) {
+    return typeof origin === 'string' && siteOriginOrNull(origin) === origin;
+}
+
+/** A TCP port 1-65535 from a request value, or null. */
+function portOrNull(value) {
+    const n = typeof value === 'number' ? value : (typeof value === 'string' && /^[0-9]{1,5}$/.test(value) ? Number(value) : NaN);
+    return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+}
+
 let configSecret = null;
 let configPort = 3000;
 let config = {};
@@ -751,17 +776,24 @@ if (cluster.isPrimary) {
 
                 // New Config Update Endpoint
                 internalApp.post('/config-update', requireIdentity(['backend']), (req, res) => {
-                    const { port, sslEnabled, siteUrl } = req.body;
+                    const { port, sslEnabled, siteUrl } = req.body || {};
+
+                    // Everything below is persisted to gateway-config.json: refuse a malformed value here
+                    // rather than writing it and failing at the next boot.
+                    const newPort = port ? portOrNull(port) : null;
+                    if (port && newPort === null) return res.status(400).json({ error: 'port must be an integer between 1 and 65535' });
+                    const newOrigin = siteUrl ? siteOriginOrNull(siteUrl) : null;
+                    if (siteUrl && !isValidSiteOrigin(newOrigin)) return res.status(400).json({ error: 'siteUrl must be an http(s) origin' });
 
                     try {
                         // Update Config Object
-                        if (port) config.gatewayPort = parseInt(port, 10);
+                        if (newPort !== null) config.gatewayPort = newPort;
                         if (!config.ssl) config.ssl = {};
                         if (typeof sslEnabled !== 'undefined') config.ssl.enabled = !!sslEnabled;
 
                         // Update siteUrl logic (Gateway side)
-                        if (siteUrl) {
-                            config.siteUrl = siteUrl;
+                        if (newOrigin && isValidSiteOrigin(newOrigin)) {
+                            config.siteUrl = newOrigin;
                         } else if (config.siteUrl) {
                             // If backend didn't send new siteUrl, try to autocorrect protocol
                             // Use updated values

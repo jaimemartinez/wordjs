@@ -109,3 +109,40 @@ test('every gateway-config.json write goes through the owner-only writer', () =>
     const bare = INDEX_SRC.split(/\r?\n/).filter((l) => /writeFileSync\(/.test(l) && /config(Path)?\b|gateway-config\.json/.test(l) && !/mode: 0o600/.test(l));
     assert.deepStrictEqual(bare.map((l) => l.trim()), [], 'no bare writeFileSync of the gateway config');
 });
+
+// /config-update persists siteUrl and port into gateway-config.json (read back at every boot), so
+// only a well-formed origin and a real port may reach that file. The helpers live in src/index.js,
+// which is not a module; they are evaluated from its source so the test runs the shipped code.
+function loadConfigUpdateValidators() {
+    const pick = (name) => {
+        const m = INDEX_SRC.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\r?\\n\\}`));
+        assert.ok(m, `${name} is defined in src/index.js`);
+        return m[0];
+    };
+    // eslint-disable-next-line no-new-func
+    return new Function(`${pick('siteOriginOrNull')}\n${pick('isValidSiteOrigin')}\n${pick('portOrNull')}\nreturn { siteOriginOrNull, isValidSiteOrigin, portOrNull };`)();
+}
+
+test('/config-update accepts only an http(s) origin and a real port', () => {
+    const { siteOriginOrNull, isValidSiteOrigin, portOrNull } = loadConfigUpdateValidators();
+    assert.strictEqual(siteOriginOrNull('https://example.com'), 'https://example.com');
+    assert.strictEqual(siteOriginOrNull('https://example.com/'), 'https://example.com');
+    assert.strictEqual(siteOriginOrNull('http://example.com:8080'), 'http://example.com:8080');
+    for (const bad of ['javascript:alert(1)', 'file:///etc/passwd', 'https://u:p@example.com', 'https://example.com/path',
+        'https://example.com/?q=1', 'https://example.com/#x', 'not a url', 42, null, `https://${'a'.repeat(3000)}.com`]) {
+        assert.strictEqual(siteOriginOrNull(bad), null, `refused: ${String(bad).slice(0, 40)}`);
+    }
+    assert.ok(isValidSiteOrigin('https://example.com'));
+    assert.ok(!isValidSiteOrigin('https://example.com/'), 'only the canonical spelling is persisted');
+    assert.strictEqual(portOrNull('443'), 443);
+    assert.strictEqual(portOrNull(8080), 8080);
+    for (const bad of ['0', '65536', '-1', '80abc', '1e3', 1.5, '']) assert.strictEqual(portOrNull(bad), null, `refused port ${bad}`);
+});
+
+test('/config-update validates before it persists', () => {
+    const start = INDEX_SRC.indexOf("internalApp.post('/config-update'");
+    const handler = INDEX_SRC.slice(start, INDEX_SRC.indexOf('writeGatewayConfig(', start));
+    assert.ok(/siteOriginOrNull\(siteUrl\)/.test(handler) && /status\(400\)/.test(handler));
+    assert.ok(!/config\.siteUrl = siteUrl/.test(handler), 'the raw request value is never stored');
+    assert.ok(!/parseInt\(port/.test(handler), 'the raw port is never stored');
+});

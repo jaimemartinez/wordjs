@@ -164,3 +164,49 @@ describe('secret-bearing files are not readable by other users', () => {
         assert.ok(/fs\.copy\(src, dest\);\s*\r?\n\s*if \(file\.endsWith\('\.key'\)\) await restrictMode\(dest\);/.test(src));
     });
 });
+
+describe('config/app.ts boot rewrite of generated secrets', () => {
+    const { spawnSync } = require('child_process');
+    // config/app.ts resolves wordjs-config.json against its own location (two levels up), so it is
+    // booted from a throwaway copy of the tree — never against this checkout's real config file. Its one
+    // project import is stubbed; nothing else is loaded.
+    const stage = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-appboot-'));
+        fs.mkdirSync(path.join(root, 'src', 'config'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'src', 'core'), { recursive: true });
+        fs.copyFileSync(path.join(SRC, 'config', 'app.ts'), path.join(root, 'src', 'config', 'app.ts'));
+        fs.writeFileSync(path.join(root, 'src', 'core', 'content-rollout.js'), 'module.exports = { normalizeContentValidationConfig: (v) => v };');
+        return { root, file: path.join(root, 'wordjs-config.json') };
+    };
+    const boot = (root: string) => spawnSync(process.execPath, ['-r', require.resolve('ts-node/register/transpile-only'), '-e', `require(${JSON.stringify(path.join(root, 'src', 'config', 'app.ts'))})`], {
+        cwd: root, encoding: 'utf8', env: { ...process.env, TS_NODE_PROJECT: path.join(SRC, '..', 'tsconfig.json') }, timeout: 120000,
+    });
+
+    test('a loaded config with a placeholder password is rewritten in place, readable by no other user', () => {
+        const { root: dir, file: f } = stage();
+        fs.writeFileSync(f, JSON.stringify({ dbPassword: 'password', siteUrl: 'http://localhost:3000' }));
+        if (POSIX) fs.chmodSync(f, 0o644);
+        const r = boot(dir);
+        assert.equal(r.status, 0, r.stderr);
+        const after = JSON.parse(fs.readFileSync(f, 'utf8'));
+        assert.notEqual(after.dbPassword, 'password', 'a real password was generated and persisted');
+        assert.equal(after.siteUrl, 'http://localhost:3000', 'the rest of the file is kept');
+        if (POSIX) assert.equal(fs.statSync(f).mode & 0o777, 0o640, 'other bits cleared, owner/group kept');
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    test('a config that cannot be parsed is never overwritten', () => {
+        const { root: dir, file: f } = stage();
+        fs.writeFileSync(f, '{ "dbPassword": "password", oops');
+        boot(dir);
+        assert.equal(fs.readFileSync(f, 'utf8'), '{ "dbPassword": "password", oops', 'the operator\'s file is left for them to fix');
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    test('no path check gates the rewrite', () => {
+        const src = read('config/app.ts');
+        assert.ok(/if \(configLoaded\) \{/.test(src));
+        assert.ok(/fs\.openSync\(configPath, 'r\+'\)/.test(src) && /fs\.fchmodSync\(fd,/.test(src));
+        assert.ok(!/chmodSync\(configPath/.test(src));
+    });
+});
