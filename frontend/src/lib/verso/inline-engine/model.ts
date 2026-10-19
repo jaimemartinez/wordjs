@@ -21,6 +21,8 @@
  * triviales y la forma canónica sale sola del serializador.
  */
 
+import { URL_SANITIZATION } from "@/generated/visual-contract.generated";
+
 export interface LinkAttrs {
     /** href verbatim (D8: sin autolink, sin normalización de URL). */
     href: string;
@@ -38,6 +40,29 @@ export const NO_MARKS: Marks = Object.freeze({ bold: false, italic: false, link:
 
 export function cloneMarks(m: Marks): Marks {
     return { bold: m.bold, italic: m.italic, link: m.link ? { ...m.link } : null };
+}
+
+// Esquemas que un enlace de contenido puede llevar: la MISMA lista que aplica sanitizeHTML al
+// renderizar (contentSchemes), para que el lienzo admin y la página pública acepten lo mismo.
+const LINK_SAFE_SCHEMES: ReadonlySet<string> = new Set(URL_SANITIZATION.contentSchemes);
+// Lo que el parser de URL borra/recorta ANTES de leer el esquema: tab/LF/CR en cualquier posición y
+// controles C0 + espacio en los extremos. Se decide sobre la cadena que el navegador VERÁ.
+const LINK_STRIPPED_CONTROLS = new RegExp(URL_SANITIZATION.stripControlsPattern, "g");
+const LINK_EDGE_CONTROLS = /^[\u0000- ]+|[\u0000- ]+$/g;
+const LINK_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
+
+/**
+ * ¿Puede este href vivir en el modelo? Relativo (ruta, `#frag`, `?q`, `//host`) o absoluto con un
+ * esquema de contentSchemes (http/https/mailto/tel). `javascript:`, `data:`, `vbscript:` y cualquier
+ * otro esquema → false: el enlace se descarta (el texto se conserva). D8 sigue en pie — el href que
+ * sobrevive se guarda VERBATIM; esto solo decide si sobrevive.
+ */
+export function isSafeLinkHref(href: unknown): href is string {
+    if (typeof href !== "string") return false;
+    const seen = href.replace(LINK_STRIPPED_CONTROLS, "").replace(LINK_EDGE_CONTROLS, "");
+    if (seen.length === 0) return false;
+    const scheme = LINK_SCHEME.exec(seen);
+    return scheme === null || LINK_SAFE_SCHEMES.has(scheme[1].toLowerCase());
 }
 
 export function sameLink(a: LinkAttrs | null, b: LinkAttrs | null): boolean {
@@ -276,8 +301,14 @@ export function normalizeDoc(doc: RichDoc): RichDoc {
 
 export function normalizePara(para: Para): Para {
     const units: InlineUnit[] = [];
-    for (const u of para.units) {
-        if (u.kind === "text" && u.text.length === 0) continue;
+    for (const u0 of para.units) {
+        if (u0.kind === "text" && u0.text.length === 0) continue;
+        // Un enlace con esquema no permitido no entra en la forma canónica (ni del parse, ni de una
+        // op, ni de la lectura del DOM): se queda su texto, sin la marca de enlace.
+        const u: InlineUnit =
+            u0.marks.link && !isSafeLinkHref(u0.marks.link.href)
+                ? { ...u0, marks: { ...cloneMarks(u0.marks), link: null } }
+                : u0;
         const last = units[units.length - 1];
         if (u.kind === "text" && last && last.kind === "text" && sameMarks(last.marks, u.marks)) {
             last.text += u.text;

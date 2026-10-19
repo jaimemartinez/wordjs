@@ -31,6 +31,7 @@ export {
     emptyPara,
     getPara,
     isCollapsed,
+    isSafeLinkHref,
     listParas,
     normalizeDoc,
     normalizePara,

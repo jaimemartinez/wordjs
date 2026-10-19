@@ -13,7 +13,7 @@
  * 2. `projectNodes` — proyección al modelo (spec §6.2 y D1/D2/D5/D6/D11):
  *    b→strong, i→em, h1..h6→p, div/section/… desenvueltos a párrafos,
  *    ul/ol/li conservados (li normalizado a li>p, listas anidadas APLANADAS a
- *    hermanas), `a` conserva href verbatim (+target="_blank"→newTab; cualquier
+ *    hermanas), `a` conserva href verbatim si su esquema es seguro (isSafeLinkHref; si no, se desenvuelve) (+target="_blank"→newTab; cualquier
  *    otro target se descarta; rel se RECALCULA al serializar — D11), todo lo
  *    demás (span[style], u, s, code, mark…) se desenvuelve a su texto, y los
  *    elementos sin contenido textual se descartan. `<p></p>` EXPLÍCITO se
@@ -24,7 +24,7 @@
  */
 
 import type { Block, InlineUnit, Marks, Para, RichDoc } from "./model";
-import { NO_MARKS, cloneMarks, emptyPara, normalizeDoc, normalizePara, paraText } from "./model";
+import { NO_MARKS, cloneMarks, emptyPara, isSafeLinkHref, normalizeDoc, normalizePara, paraText } from "./model";
 import { FILLER_BR_ATTR } from "./serialize";
 
 /* ------------------------------------------------------------------ */
@@ -239,7 +239,9 @@ function marksFor(el: ParseElement, m: Marks): Marks {
     if (el.tag === "strong" || el.tag === "b") return { ...cloneMarks(m), bold: true };
     if (el.tag === "em" || el.tag === "i") return { ...cloneMarks(m), italic: true };
     const href = el.tag === "a" ? attr(el, "href") : undefined;
-    if (typeof href === "string") {
+    // Un <a> con esquema no permitido (javascript:, data:, …) se DESENVUELVE a su texto: la forma
+    // canónica nunca lo lleva, ni siquiera en el lienzo del admin (isSafeLinkHref).
+    if (isSafeLinkHref(href)) {
         return {
             ...cloneMarks(m),
             link: {
