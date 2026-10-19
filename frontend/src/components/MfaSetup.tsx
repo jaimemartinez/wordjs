@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { Button } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 /**
  * Self-service TOTP enrollment/management, rendered on the account page. Uses the zero-dependency
@@ -38,6 +39,9 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
     const [code, setCode] = useState("");
     // one code field reused by the enabled-state actions (disable / regenerate)
     const [manageCode, setManageCode] = useState("");
+    // Past the account's invalid-code ceiling the backend wants the password next to the code
+    // (403 rest_mfa_password_required); the code field above stays the one these actions use.
+    const manageStepUp = useMfaStepUp();
     const [backupReveal, setBackupReveal] = useState<string | null>(null);
     // When enrolment (not a regenerate) triggered the backup-codes modal, defer onEnabled until the user
     // CLOSES it — otherwise a host that re-renders on onEnabled (the forced-enrol gate) unmounts us and the
@@ -106,23 +110,31 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
     const disable = async () => {
         setBusy(true);
         try {
-            await mfaApi.disable(manageCode.trim());
+            await mfaApi.disable(manageCode.trim(), manageStepUp.payload().currentPassword);
             addToast(t("mfa.disabledToast"), "success");
             setManageCode("");
+            manageStepUp.reset();
             await loadStatus();
-        } catch (e: any) { addToast(e?.message || t("mfa.invalidCode"), "error"); }
+        } catch (e: any) {
+            if (manageStepUp.absorb(e)) addToast(t("stepUp.passwordHelp"), "info");
+            else addToast(e?.message || t("mfa.invalidCode"), "error");
+        }
         finally { setBusy(false); }
     };
 
     const regenerate = async () => {
         setBusy(true);
         try {
-            const res = await mfaApi.regenerateBackupCodes(manageCode.trim());
+            const res = await mfaApi.regenerateBackupCodes(manageCode.trim(), manageStepUp.payload().currentPassword);
             setBackupReveal(res.backupCodes.join("\n"));
             setManageCode("");
+            manageStepUp.reset();
             addToast(t("mfa.backupRegenerated"), "success");
             await loadStatus();
-        } catch (e: any) { addToast(e?.message || t("mfa.invalidCode"), "error"); }
+        } catch (e: any) {
+            if (manageStepUp.absorb(e)) addToast(t("stepUp.passwordHelp"), "info");
+            else addToast(e?.message || t("mfa.invalidCode"), "error");
+        }
         finally { setBusy(false); }
     };
 
@@ -176,6 +188,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                         <label htmlFor={manageCodeId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.enterCurrentCode")}</label>
                         <input id={manageCodeId} value={manageCode} onChange={(e) => setManageCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder={t("mfa.codePlaceholder")} className={codeInput} />
                     </div>
+                    <MfaStepUpFields stepUp={manageStepUp} withCode={false} />
                     <div className="flex flex-wrap gap-3">
                         <Button variant="secondary" icon="fa-rotate" onClick={regenerate} loading={busy} disabled={!manageCode.trim()}>{t("mfa.regenerate")}</Button>
                         <Button variant="danger" icon="fa-shield-halved" onClick={disable} loading={busy} disabled={!manageCode.trim()}>{t("mfa.disable")}</Button>
