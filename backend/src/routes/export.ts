@@ -268,10 +268,10 @@ router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandle
     // administrators' accounts and the network-wide settings as they are (core/network-auth).
     const networkAuth = require('../core/network-auth');
     const options = {
-        updateExisting: req.body.updateExisting === 'true' || req.body.updateExisting === true,
-        importUsers: req.body.importUsers === 'true' || req.body.importUsers === true,
         protectedUser: (userId: number) => networkAuth.protectsNetworkAdmin(req, userId),
-        skipSettings: networkAuth.networkSettingsReadOnly(req) ? networkAuth.NETWORK_WIDE_SETTINGS : null
+        skipSettings: networkAuth.networkSettingsReadOnly(req) ? networkAuth.NETWORK_WIDE_SETTINGS : null,
+        updateExisting: req.body.updateExisting === 'true' || req.body.updateExisting === true,
+        importUsers: req.body.importUsers === 'true' || req.body.importUsers === true
     };
 
     // An import creates and rewrites accounts (roles and email addresses included) when asked to, and

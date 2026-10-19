@@ -259,14 +259,14 @@ async function importSite(data: any, options: Record<string, any> = {}) {
     validateImportData(data);
 
     const {
-        updateExisting = false,
-        importUsers = false,
         // (userId) => true for an existing account this import may not rewrite (a network administrator
         // imported by someone who is not one — core/network-auth protectsNetworkAdmin).
         protectedUser = null,
         // Option names (canonical) this import may not write (the network-wide settings, for someone
         // who may not change them — core/network-auth networkSettingsReadOnly).
-        skipSettings = null
+        skipSettings = null,
+        updateExisting = false,
+        importUsers = false
     } = options;
 
     const results = {
