@@ -37,6 +37,16 @@ the main site.
 **Admin → Network**, where sites are created, suspended and resumed. A site's own administrators manage
 that site only and never learn that other sites exist.
 
+On the main site, what reaches the whole network is for network administrators only: installing,
+updating, packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the
+database migration tool, the site's addresses, certificates, the hooks registry and the Redis
+object-cache switch. An administrator of the main site who is not listed still runs the main site itself
+(its content, users, plugin activations and grants, settings) and gets `403 rest_forbidden_network` for
+the rest. A network administrator's account (email, password, role, two-factor reset, AI agent
+connections, deletion) is changed only by a network administrator or by its owner. Deleting an account
+removes it from the list, and each entry is bound to the account's login: at boot and after a backup
+restore it follows that login, and is dropped when the account is gone.
+
 ## Requirements
 
 - The `sqlite-native` database driver. Postgres and MySQL networks are planned; `npm run network --
@@ -146,6 +156,23 @@ creating, rebuilding, uploading, restoring or deleting theme files, and every wr
 (`/setup`). Activating, deactivating, granting, setting the egress allowlist of and reloading the offered
 plugins stay the site's.
 
+## Media storage quotas
+
+A network administrator can cap how much media each site other than the main one stores: **Admin →
+Network** shows every site's usage and takes a quota per site and a default for the sites without one
+(in MB; empty means no limit). With neither set there is no limit, which is also how a single-site
+install and the main site always behave. Usage is counted from each site's attachments — public and
+private, the original and every stored derivative — so it is the same whether the files are on disk or
+in the media bucket. An upload (or a WXR import download) that would go over the quota is refused with
+`413 rest_upload_quota_exceeded` and leaves nothing behind.
+
+Activating, deactivating and reloading a plugin, and changing its grants, egress hosts, private
+destinations or port (each of which restarts its worker), share a rate limit per site and per account
+(60 in 10 minutes; `429 rest_plugin_lifecycle_rate_limited` beyond it).
+
+With S3 media storage, each site's objects live in its own space of the shared bucket
+([media-storage.md](media-storage.md)), and moving the library to the bucket or back runs for every site.
+
 ## Where a site's data lives
 
 Everything a site other than the main one owns is in **one directory**, `<data dir>/sites/<id>/` (the data
@@ -176,6 +203,9 @@ wrong one is `403 rest_bad_current_password`.
 | `GET` | `/plugins` | — | `{ plugins: [{ slug, name, version, requestedPermissions, ceiling }] }`; `ceiling: null` means not offered |
 | `PUT` | `/plugins/:slug/ceiling` | `{ tokens: ["scope:access" \| "network", …], currentPassword }` | `{ slug, ceiling }`. Offers the plugin to the sites up to that ceiling (replacing a previous one) and restarts its workers on the other sites. `400 network_invalid_ceiling` for a malformed token, `404 plugin_not_found` |
 | `DELETE` | `/plugins/:slug/ceiling` | `{ currentPassword }` | `{ slug, withdrawn, deactivatedOn }`. Stops offering it and deactivates it on every other site |
+| `GET` | `/quotas` | — | `{ defaultQuota, sites: [{ id, quota, effectiveQuota, used }] }` in bytes; `null` = none / no limit, `used: null` when a site's database cannot be read |
+| `PUT` | `/quotas/default` | `{ bytes, currentPassword }` | `{ defaultQuota }`. The quota of every site without its own; `bytes: null` removes it. `400 network_invalid_quota` for anything but a whole number of bytes |
+| `PUT` | `/sites/:id/quota` | `{ bytes, currentPassword }` | `{ id, quota, effectiveQuota }`. One site's own quota; `bytes: null` makes it follow the default again. `400 network_primary_site` for the main site |
 
 ## Turning it off
 

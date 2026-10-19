@@ -1,4 +1,5 @@
 import { applyCsrfHeader, csrfHeaders } from './csrf';
+import { collabSaveHeaders } from './verso/collab/saveEpoch';
 import { createContentClient } from './generated/content-client.generated';
 import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
 export type {
@@ -177,6 +178,9 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
         // requests is a mutation — and BEFORE options.headers, so an explicit caller override still
         // wins, exactly like Content-Type.
         ...csrfHeaders(),
+        // A save made from a live collaborative editing session names the room generation it was seeded
+        // from, so the backend can tell it from a write made outside the session (lib/verso/collab/saveEpoch).
+        ...collabSaveHeaders(endpoint, options.method),
         ...options.headers,
     };
 
@@ -1575,6 +1579,11 @@ export interface NetworkSite {
     createdAt: string;
     updatedAt: string;
 }
+/** Media storage quotas of the network (bytes; null = none / no limit). `used` is null when a site cannot be read. */
+export interface NetworkQuotas {
+    defaultQuota: number | null;
+    sites: { id: number; quota: number | null; effectiveQuota: number | null; used: number | null }[];
+}
 export interface NewNetworkSite {
     slug: string;
     url: string;
@@ -1603,6 +1612,11 @@ export const networkApi = {
     create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+    quotas: () => apiGet<NetworkQuotas>("/network/quotas"),
+    setDefaultQuota: (bytes: number | null, currentPassword: string) =>
+        apiPut<{ defaultQuota: number | null }>("/network/quotas/default", { bytes, currentPassword }),
+    setSiteQuota: (id: number, bytes: number | null, currentPassword: string) =>
+        apiPut<{ id: number; quota: number | null; effectiveQuota: number | null }>(`/network/sites/${id}/quota`, { bytes, currentPassword }),
 };
 
 // ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────

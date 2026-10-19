@@ -89,6 +89,23 @@ export function runWithSite<T>(siteId: number | null, fn: () => T): T {
 }
 
 /**
+ * Keep the request's site for everything its BODY STREAM triggers. A middleware that reads the body
+ * itself (multer for an upload, a streaming parser) resumes from the stream's 'data'/'end' events, and
+ * those run in the async context of the connection, not of the request: past the first network packet
+ * the work had no site, and a multipart upload on a network failed with "No site context" (or, worse,
+ * ran as whatever the connection carried). Binding the request's `emit` to the context it is called in
+ * (the site the resolver just entered) makes every listener — and whatever it calls, up to the route
+ * handler — run as that site. Idempotent.
+ */
+const BOUND = Symbol('wjs.siteBoundRequest');
+export function bindRequestToCurrentSite(req: any): void {
+    if (!req || typeof req.emit !== 'function' || req[BOUND]) return;
+    const { AsyncResource } = require('async_hooks');
+    req.emit = AsyncResource.bind(req.emit, 'WJS_SITE_REQUEST', req);
+    req[BOUND] = true;
+}
+
+/**
  * The key segment that keeps one site's entries apart from another's in a shared namespace (a cache
  * key, a lock name, a tag): '' for site 1, so single-site and main-site keys stay exactly what they
  * were, and `s<id>:` for every other site.

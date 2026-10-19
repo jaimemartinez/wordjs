@@ -87,28 +87,68 @@ function firstForwardedFor(xff) {
 }
 
 /**
- * Warn ONCE when a request arrives from a proxy on this machine (loopback peer carrying an
- * X-Forwarded-For that names a non-loopback client) while the gateway trusts no proxy: every visitor then
- * shares the proxy's address — one rate-limit bucket for the whole site, and the backend sees the proxy too.
- * Returns a function `(req) => void`; cheap after the first warning.
+ * Warn ONCE when requests reach the gateway through a proxy while the gateway trusts no proxy: every
+ * visitor then shares the proxy's address — one rate-limit bucket (and one WebSocket upgrade budget) for
+ * the whole site, and the backend sees the proxy too. Two signs of it:
+ *   • a proxy on this machine: a loopback peer carrying an X-Forwarded-For that names a non-loopback client;
+ *   • a proxy elsewhere (a CDN, a load balancer): one peer carrying X-Forwarded-For for `distinctThreshold`
+ *     or more different clients within `windowMs`.
+ * Returns a function `(req) => void`, cheap after the first warning. Its `sharedAddress(peer, n)` property
+ * reports the second sign from a caller that already counted distinct clients (the upgrade limiter).
  */
-function createUntrustedProxyWarning(trustProxy, logger) {
-    if (trustsAnyProxy(trustProxy)) return () => {};
+function createUntrustedProxyWarning(trustProxy, logger, { distinctThreshold = 5, windowMs = 60 * 1000, maxPeers = 1024 } = {}) {
+    if (trustsAnyProxy(trustProxy)) {
+        const noop = () => {};
+        noop.sharedAddress = () => {};
+        return noop;
+    }
     let warned = false;
-    return (req) => {
+    let windowStart = Date.now();
+    let byPeer = new Map(); // peer -> Set of forwarded clients (at most distinctThreshold kept)
+    const sharedAddress = (peer, n) => {
         if (warned) return;
-        const peer = req && req.socket && req.socket.remoteAddress;
-        if (!isLoopbackAddress(peer)) return;
-        const client = firstForwardedFor(req.headers && req.headers['x-forwarded-for']);
-        if (!client || isLoopbackAddress(client)) return;
         warned = true;
         logger.warn(
-            '[Gateway] ⚠️ Requests are reaching the gateway through a proxy on this machine (X-Forwarded-For from 127.0.0.1), ' +
-            'but no proxy is trusted — every visitor is counted as 127.0.0.1: one rate-limit bucket for the whole site, ' +
-            'and the backend sees the proxy\'s address for everyone. Set "trustProxy": "loopback" in gateway-config.json ' +
-            '(or WORDJS_TRUST_PROXY=loopback) and restart the gateway.'
+            `[Gateway] ⚠️ ${n} different clients reached the gateway through ${peer} (X-Forwarded-For) in one minute, ` +
+            'but no proxy is trusted — every visitor behind that proxy or CDN is counted as one address: one rate-limit ' +
+            "bucket for the whole site, and the backend sees the proxy's address for everyone. If that is your reverse " +
+            'proxy, load balancer or CDN, set "trustProxy" in gateway-config.json (or WORDJS_TRUST_PROXY) to its ' +
+            'address or CIDR range (e.g. "10.0.0.0/8", or a hop count like 1) and restart the gateway.'
         );
     };
+    const warn = (req) => {
+        if (warned) return;
+        const peer = req && req.socket && req.socket.remoteAddress;
+        const client = firstForwardedFor(req && req.headers && req.headers['x-forwarded-for']);
+        if (!client) return;
+        if (isLoopbackAddress(peer)) {
+            if (isLoopbackAddress(client)) return;
+            warned = true;
+            logger.warn(
+                '[Gateway] ⚠️ Requests are reaching the gateway through a proxy on this machine (X-Forwarded-For from 127.0.0.1), ' +
+                'but no proxy is trusted — every visitor is counted as 127.0.0.1: one rate-limit bucket for the whole site, ' +
+                'and the backend sees the proxy\'s address for everyone. Set "trustProxy": "loopback" in gateway-config.json ' +
+                '(or WORDJS_TRUST_PROXY=loopback) and restart the gateway.'
+            );
+            return;
+        }
+        if (!peer || client === peer) return;
+        const now = Date.now();
+        if (now - windowStart >= windowMs || byPeer.size >= maxPeers) { windowStart = now; byPeer = new Map(); }
+        let seen = byPeer.get(peer);
+        if (!seen) { seen = new Set(); byPeer.set(peer, seen); }
+        seen.add(client);
+        if (seen.size >= distinctThreshold) sharedAddress(peer, seen.size);
+    };
+    warn.sharedAddress = sharedAddress;
+    return warn;
+}
+
+/** One boot line saying which client address the gateway believes, and how to change it. */
+function trustProxyBootLine(tp) {
+    if (trustsAnyProxy(tp)) return `Trusted proxy: ${JSON.stringify(tp)} — client addresses are read from X-Forwarded-For through those hops.`;
+    return "No proxy is trusted: each connection's socket address is the client. Behind a CDN, load balancer or reverse proxy, " +
+        'set "trustProxy" in gateway-config.json (or WORDJS_TRUST_PROXY) to it, or every visitor shares one rate-limit bucket.';
 }
 
 /**
@@ -166,4 +206,5 @@ module.exports = {
     isLoopbackAddress,
     firstForwardedFor,
     createUntrustedProxyWarning,
+    trustProxyBootLine,
 };

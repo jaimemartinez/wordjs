@@ -97,6 +97,7 @@ vi.mock("@/contexts/MenuContext", () => ({ useMenu: () => ({ refreshMenus: () =>
 vi.mock("@/contexts/ToastContext", () => ({ useToast: () => ({ addToast: () => {} }) }));
 vi.mock("@/contexts/I18nContext", () => ({ useI18n: () => ({ t: (k: string) => k }), useOptionalI18n: () => ({ t: (k: string) => k }) }));
 vi.mock("@/contexts/ModalContext", () => ({ useModal: () => ({ confirm: async () => true, alert: async () => {} }) }));
+vi.mock("@/contexts/AuthContext", () => ({ useOptionalAuth: () => null }));
 vi.mock("../MarketplaceTab", () => ({ default: () => null }));
 
 import PluginsPage from "../page";

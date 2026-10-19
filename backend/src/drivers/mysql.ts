@@ -671,6 +671,23 @@ class MysqlDriver extends DatabaseDriverInterface {
         }
     }
 
+    /**
+     * get() under a statement timeout, for the readiness probe: the server-side MAX_EXECUTION_TIME hint
+     * on a SELECT (MySQL; other servers read it as a comment) plus mysql2's client-side `timeout`, which
+     * gives up on the query and discards its connection.
+     */
+    async getWithTimeout(sql: string, params: any[] = [], timeoutMs: number = 3000) {
+        const ms = Math.max(1, Math.floor(Number(timeoutMs) || 3000));
+        const text = translateSql(sql).replace(/^\s*SELECT\b/i, `SELECT /*+ MAX_EXECUTION_TIME(${ms}) */`);
+        try {
+            const [rows] = await this.pool.query({ sql: text, timeout: ms }, params);
+            return Array.isArray(rows) ? rows[0] : undefined;
+        } catch (err: any) {
+            log.warn({ err }, 'MySQL: timed query failed');
+            throw err;
+        }
+    }
+
     async all(sql: string, params: any[] = []) {
         try {
             const [rows] = await this.pool.query(translateSql(sql), params);

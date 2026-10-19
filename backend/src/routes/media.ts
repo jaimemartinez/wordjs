@@ -663,6 +663,15 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         });
     }
 
+    // MULTISITE STORAGE QUOTA (core/site-upload-quota): a site other than site 1 may be capped by the
+    // network administrator. Checked before any processing, against the bytes that arrived; a refused
+    // upload leaves nothing behind. No quota (site 1, a single site, none set) costs no query.
+    const quotaCheck = await require('../core/site-upload-quota').checkUploadFits(uploaded.size);
+    if (!quotaCheck.ok) {
+        discardUploadedFile(uploaded.path);
+        return res.status(413).json(require('../core/site-upload-quota').quotaExceededBody(quotaCheck));
+    }
+
     // --- SECURITY CHECK: Magic Numbers & SVG Sanitization ---
     const { fileTypeFromBuffer } = require('../core/file-type-detect');
     const sanitizeHtml = require('sanitize-html');
@@ -1030,6 +1039,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         alt
     });
 
+    require('../core/site-upload-quota').invalidateUsage();
     await recordAudit(req.user.id, 'media.upload', 'media', media && media.id, {
         mimeType: uploaded.mimetype, size: uploaded.size, visibility: wantPrivate ? 'private' : 'public'
     });

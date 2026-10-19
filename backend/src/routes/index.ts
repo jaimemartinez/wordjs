@@ -140,6 +140,11 @@ router.use('/setup', multisiteGuards.mainSiteWrites);
 router.use('/system/certs', multisiteGuards.mainSiteOnly);
 router.use('/health/details', multisiteGuards.mainSiteOnly);
 router.use('/hooks', multisiteGuards.mainSiteOnly);
+// On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
+// administrator of the main site (the plugin and theme guards above apply the same rule to code changes).
+for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/hooks']) {
+    router.use(subtree, multisiteGuards.networkAdminOnMainSite);
+}
 // The network itself: its sites and administrators (main site, network administrators only).
 router.use('/network', require('./network'));
 

@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { networkApi, type NetworkPlugin, type NetworkSite } from "@/lib/api";
+import { networkApi, type NetworkPlugin, type NetworkQuotas, type NetworkSite } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { formatServerTimestamp } from "@/lib/serverTimestamp";
 import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/components/ui";
+import { fmtBytes, fromMbField, toMbField } from "@/lib/networkQuota";
 
 /**
  * Admin → Network (multisite). The sites of the network: create one, suspend or resume it. Shown in the
@@ -20,6 +21,10 @@ import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/comp
  * plugin to the other sites with a grant CEILING — the most a site administrator may grant it — or stops
  * offering it (it is then deactivated on every other site). The server enforces the ceiling on every
  * write and every check (core/plugin-permissions); this card only records it.
+ *
+ * Media quotas: each site other than the main one can be capped in how much media it stores (its own
+ * quota, else the network default; empty = no limit). Shown and typed in MB, stored in bytes; the server
+ * enforces it on every upload (core/site-upload-quota).
  */
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
@@ -43,11 +48,19 @@ export default function NetworkPage() {
     const [netPlugins, setNetPlugins] = useState<NetworkPlugin[]>([]);
     const [ceilingDraft, setCeilingDraft] = useState<Record<string, string[]>>({});
     const [busyPlugin, setBusyPlugin] = useState<string | null>(null);
+    const [quotas, setQuotas] = useState<NetworkQuotas | null>(null);
+    const [quotaDraft, setQuotaDraft] = useState<Record<string, string>>({});
+    const [busyQuota, setBusyQuota] = useState<string | null>(null);
 
     const load = async () => {
         try {
-            const [{ sites }, { plugins }] = await Promise.all([networkApi.sites(), networkApi.plugins()]);
+            const [{ sites }, { plugins }, q] = await Promise.all([networkApi.sites(), networkApi.plugins(), networkApi.quotas()]);
             setSites(sites);
+            setQuotas(q);
+            setQuotaDraft({
+                default: toMbField(q.defaultQuota),
+                ...Object.fromEntries(q.sites.map((s) => [String(s.id), toMbField(s.quota)])),
+            });
             setNetPlugins(plugins);
             setCeilingDraft(Object.fromEntries(plugins.map((p) => [p.slug, p.ceiling ?? p.requestedPermissions])));
         } catch (e: any) {
@@ -109,6 +122,36 @@ export default function NetworkPage() {
             setBusyId(null);
         }
     };
+
+    /** Save the default ('default') or one site's quota (its id) from its MB field. */
+    const saveQuota = async (key: string, site?: NetworkSite) => {
+        if (!actionPassword) {
+            addToast(t("network.passwordRequired"), "error");
+            return;
+        }
+        const bytes = fromMbField(quotaDraft[key] || "");
+        if (bytes === undefined) {
+            addToast(t("network.quotaInvalid"), "error");
+            return;
+        }
+        setBusyQuota(key);
+        try {
+            if (site) {
+                await networkApi.setSiteQuota(site.id, bytes, actionPassword);
+                addToast(t("network.quotaSaved").replace("{host}", site.host), "success");
+            } else {
+                await networkApi.setDefaultQuota(bytes, actionPassword);
+                addToast(t("network.quotaDefaultSaved"), "success");
+            }
+            await load();
+        } catch (err: any) {
+            addToast(err?.message || t("network.actionFailed"), "error");
+        } finally {
+            setBusyQuota(null);
+        }
+    };
+
+    const quotaFor = (id: number) => quotas?.sites.find((s) => s.id === id) || null;
 
     const toggleCeiling = (slug: string, token: string) => setCeilingDraft((d) => {
         const cur = new Set(d[slug] || []);
@@ -207,6 +250,15 @@ export default function NetworkPage() {
                         <Input label={t("network.actionPassword")} icon="fa-lock" value={actionPassword} onChange={(e) => setActionPassword(e.target.value)} type="password" autoComplete="current-password" />
                     </div>
                 </div>
+                {quotas && (
+                    <div className="px-6 md:px-8 py-5 border-b border-gray-50 flex flex-wrap items-end gap-4" data-testid="network-default-quota">
+                        <div className="w-full md:w-72">
+                            <Input label={t("network.quotaDefault")} icon="fa-hard-drive" value={quotaDraft.default ?? ""} onChange={(e) => setQuotaDraft((d) => ({ ...d, default: e.target.value }))} inputMode="decimal" placeholder={t("network.quotaUnlimited")} />
+                        </div>
+                        <Button variant="secondary" icon="fa-check" loading={busyQuota === "default"} onClick={() => saveQuota("default")}>{t("network.quotaSave")}</Button>
+                        <p className="text-xs text-gray-500 w-full">{t("network.quotaDefaultHint")}</p>
+                    </div>
+                )}
                 {loading || allowed === null ? (
                     <div className="p-20 text-center">
                         <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -231,6 +283,28 @@ export default function NetworkPage() {
                                         <span className="mx-2">·</span>
                                         {t("network.createdAt")} {fmtDate(site.createdAt)}
                                     </div>
+                                    {(() => {
+                                        const q = quotaFor(site.id);
+                                        if (!q) return null;
+                                        const over = q.effectiveQuota !== null && q.used !== null && q.used >= q.effectiveQuota;
+                                        return (
+                                            <div className={`text-xs mt-2 ${over ? "text-red-600 font-bold" : "text-gray-500"}`} data-site-usage={site.id}>
+                                                {q.used === null
+                                                    ? t("network.quotaUnknown")
+                                                    : q.effectiveQuota === null
+                                                        ? t("network.quotaUsageUnlimited").replace("{used}", fmtBytes(q.used))
+                                                        : t("network.quotaUsage").replace("{used}", fmtBytes(q.used)).replace("{quota}", fmtBytes(q.effectiveQuota))}
+                                            </div>
+                                        );
+                                    })()}
+                                    {!site.main && quotas && (
+                                        <div className="mt-3 flex flex-wrap items-end gap-3" data-site-quota={site.id}>
+                                            <div className="w-full sm:w-56">
+                                                <Input label={t("network.quotaSite")} icon="fa-hard-drive" value={quotaDraft[String(site.id)] ?? ""} onChange={(e) => setQuotaDraft((d) => ({ ...d, [String(site.id)]: e.target.value }))} inputMode="decimal" placeholder={t("network.quotaFollowsDefault")} />
+                                            </div>
+                                            <Button variant="secondary" icon="fa-check" loading={busyQuota === String(site.id)} onClick={() => saveQuota(String(site.id), site)}>{t("network.quotaSave")}</Button>
+                                        </div>
+                                    )}
                                 </div>
                                 {!site.main && (
                                     <div className="shrink-0">

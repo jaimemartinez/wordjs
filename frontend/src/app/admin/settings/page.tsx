@@ -9,6 +9,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import ModernSelect from "@/components/ModernSelect";
 import { useModal } from "@/contexts/ModalContext";
+import { useOptionalAuth } from "@/contexts/AuthContext";
 import { PageHeader } from "@/components/ui";
 
 
@@ -52,6 +53,11 @@ export function boolSetting(value: unknown, fallback: "0" | "1"): string {
 }
 
 export default function SettingsPage() {
+    // Multisite: the site's addresses, the media storage and the object-cache switch are the NETWORK's —
+    // a network administrator on the main site changes them (the server refuses everyone else). A single
+    // site (no `network` on the user) is unchanged.
+    const viewerNetwork = useOptionalAuth()?.user?.network;
+    const networkToolsOffered = !viewerNetwork || (viewerNetwork.mainSite && viewerNetwork.networkAdmin);
     const { t } = useI18n();
     const [settings, setSettings] = useState({
         blogname: "",
@@ -247,6 +253,7 @@ export default function SettingsPage() {
                 {/* The site address has its own screen: every change there is sudo-gated, audited and
                     notified, so it is deliberately NOT a field of this bulk form (PUT /settings refuses
                     siteurl/home). */}
+                {networkToolsOffered && (<>
                 <div className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-3xl border-2 border-gray-50 bg-white px-6 py-5 shadow-xl shadow-gray-100/50">
                     <div className="flex min-w-0 flex-1 items-start gap-4">
                         <i className="fa-solid fa-globe text-blue-500 text-xl mt-0.5" aria-hidden="true"></i>
@@ -280,6 +287,7 @@ export default function SettingsPage() {
                         {t('settings.mediaStorage.open')} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
                     </Link>
                 </div>
+                </>)}
 
                 <form onSubmit={handleSubmit} className="space-y-8">
                     {/* General Settings Section */}
@@ -689,8 +697,10 @@ export default function SettingsPage() {
                                     role="switch"
                                     aria-checked={settings.redis_cache_enabled === "1"}
                                     aria-label={t('settings.redis.cache')}
+                                    disabled={!networkToolsOffered}
+                                    data-network-only={networkToolsOffered ? undefined : ""}
                                     onClick={() => setSettings({ ...settings, redis_cache_enabled: settings.redis_cache_enabled === "1" ? "0" : "1" })}
-                                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.redis_cache_enabled === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
+                                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${settings.redis_cache_enabled === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
                                 >
                                     <span
                                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.redis_cache_enabled === "1" ? 'translate-x-6' : 'translate-x-1'}`}

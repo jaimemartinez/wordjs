@@ -51,6 +51,7 @@ import type {
   WelcomeMessage,
 } from "./types";
 import { RateGate } from "./rateGate";
+import { setCollabSaveEpoch } from "./saveEpoch";
 
 /**
  * Las tres ranuras de envío. Están enumeradas porque comparten UN planificador y UN freno: mientras
@@ -115,7 +116,7 @@ const MAX_OPS_PER_FLUSH = 400;
  */
 const RETRYABLE_REFUSALS = new Set([
   "site-taken", "too-many-tabs", "too-many-connections", "server-full", "server-error",
-  "read-budget",
+  "read-budget", "room-full",
 ]);
 
 /**
@@ -290,6 +291,7 @@ export class VersoCollabSession {
     // por eso NO pasa por el freno: `/leave` no se cobra al ritmo (el servidor no lo pasa por
     // `rateGate`), así que esperar aquí solo serviría para no llegar a mandarlo nunca.
     if (this.self) void this.postNow("leave", { siteId: this.siteId }).catch(() => undefined);
+    setCollabSaveEpoch(Number(this.opts.postId), null);
     this.setStatus("off");
   }
 
@@ -403,6 +405,10 @@ export class VersoCollabSession {
     }
 
     this.epoch = msg.epoch;
+    // Lo que se guarde a partir de aquí sale de ESTA generación de la sala (ver `saveEpoch.ts`). Se
+    // mantiene aunque el canal se caiga un rato: el documento sigue derivado de este epoch, y si la sala
+    // se reinició entretanto el servidor rechaza el guardado en vez de dejarlo pisar el reinicio.
+    setCollabSaveEpoch(Number(this.opts.postId), this.epoch);
     this.self = msg.self ?? null;
     this.members.clear();
     for (const m of msg.members ?? []) this.members.set(m.siteId, m);

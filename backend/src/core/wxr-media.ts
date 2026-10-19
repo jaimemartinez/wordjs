@@ -653,6 +653,12 @@ class MediaImporter {
         const problem = await magicByteProblem(body, placed.mimeType);
         if (problem) return this.fail(url, problem);
 
+        // MULTISITE STORAGE QUOTA: an import fills the media library exactly like the upload route, so it
+        // stops at the same per-site quota (core/site-upload-quota; no quota on site 1 or a single site).
+        const quota = require('./site-upload-quota');
+        const fits = await quota.checkUploadFits(body.length);
+        if (!fits.ok) return this.fail(url, `the site's media storage quota (${fits.quota} bytes) is used up`);
+
         // PUBLISH ATOMICALLY, INTO A PATH NOTHING ELSE HOLDS. The path was claimed above, so this write
         // can never land on another attachment's bytes; the temp name (dot-leading, which index.ts'
         // `dotfiles: 'deny'` refuses to serve) means express.static can never hand a client a
@@ -669,6 +675,7 @@ class MediaImporter {
         }
 
         const created = await this.createRecord(att, { ...placed, body }, url);
+        quota.invalidateUsage();
         if (typeof created === 'string') {
             // A ROW IS THE ONLY THING THAT CAN EVER DELETE A FILE. Media._deletableFiles walks rows, so
             // bytes left under `uploads/` by a failed record write are unreachable forever — publicly

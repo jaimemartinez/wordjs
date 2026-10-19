@@ -180,7 +180,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.17.0
+**ID:** `conference-manager` | **Version:** 2.17.2
 
 Complex business logic for managing church conferences.
 
@@ -421,7 +421,7 @@ Test Schema are bundled with core):
 | Slug | What it does | Key requested capabilities |
 | --- | --- | --- |
 | `analytics-tag` | Site-wide analytics tag (GA4, Plausible or Matomo) with optional cookie-consent gating | `settings` r/w, routes, admin menu, `assets:write` |
-| `auctions` | Auction listings with bidding (address confirmed by a mailed code, or signed-in accounts only), a per-bid jump cap, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
+| `auctions` | Auction listings with bidding (address confirmed by a mailed code, or signed-in accounts only, who bid as their account address), a per-bid jump cap, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `users` read, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | `browser:script` only (frontend-only) |
 | `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write, routes, admin menu |

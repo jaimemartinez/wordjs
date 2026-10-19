@@ -13,6 +13,49 @@ import type { FileFilterCallback } from 'multer';
 const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/plugins');
 const router = express.Router();
+
+// ---- PLUGIN LIFECYCLE RATE LIMIT ----------------------------------------------------------------------
+// Activating, deactivating and reloading a plugin (and changing its grants, egress hosts, private
+// destinations or port, which reload it) each tear down and spawn a sandboxed child process
+// (and run the full load pipeline). They are administrator routes, but nothing bounded how often they
+// ran, so a script holding one admin session — on any site of a network — could keep the host busy
+// starting processes. One bucket per (site, account) for all of these routes together: generous for a
+// person (or a deploy script) working through a list of plugins, a ceiling for a loop.
+const PLUGIN_LIFECYCLE_WINDOW_MS = 10 * 60 * 1000;
+const PLUGIN_LIFECYCLE_MAX = 60;
+const rateLimit = require('express-rate-limit');
+
+/** The lifecycle limiter, built with `store` (the shared Redis store, or undefined for in-process). Exported for tests. */
+function createPluginLifecycleLimiter(store?: unknown) {
+    return rateLimit({
+        windowMs: PLUGIN_LIFECYCLE_WINDOW_MS,
+        max: PLUGIN_LIFECYCLE_MAX,
+        standardHeaders: true,
+        legacyHeaders: false,
+        // Runs after authenticate + isAdmin, so the caller is known. Keyed by site and account: one
+        // site's administrator cannot spend another site's budget.
+        keyGenerator: (req: Request) => {
+            const site = require('../core/site-context').currentSiteIdOrNull();
+            return `s${site === null ? 0 : site}:u:${req.user ? req.user.id : 'anon'}`;
+        },
+        store,
+        passOnStoreError: true,
+        message: {
+            code: 'rest_plugin_lifecycle_rate_limited',
+            message: 'Too many plugin activations, deactivations or reloads; wait a few minutes and try again.',
+            data: { status: 429 },
+        },
+    });
+}
+// Built at module scope (express-rate-limit flags a limiter constructed inside a handler); index.ts hands
+// over the shared store at boot, before any request (same contract as routes/comments).
+let pluginLifecycleLimiterImpl: any = createPluginLifecycleLimiter(undefined);
+function usePluginLifecycleLimiterStore(store: unknown) {
+    pluginLifecycleLimiterImpl = createPluginLifecycleLimiter(store);
+}
+function pluginLifecycleLimiter(req: Request, res: Response, next: any) {
+    return pluginLifecycleLimiterImpl(req, res, next);
+}
 const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
@@ -1589,7 +1632,7 @@ function refuseNotOffered(res: Response, slug: string) {
     });
 }
 
-router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/activate', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
@@ -1790,7 +1833,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *       429:
  *         description: Global per-IP API rate limit exceeded.
  */
-router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/permissions', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
@@ -2048,7 +2091,7 @@ router.get('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req
     res.json({ slug, hosts: getEgressAllowlist(slug), network: getGrants(slug).includes('network') });
 }));
 
-router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/egress-hosts', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
     const { applyEgressAllowlist, getEgressAllowlist } = require('../core/plugin-permissions');
@@ -2208,7 +2251,7 @@ router.get('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (r
     res.json({ slug, destinations: getPrivateDestinations(slug), network: getGrants(slug).includes('network') });
 }));
 
-router.post('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/private-egress', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     const requested = safeSlugParam(req.params.slug);
     if (!requested) return res.status(400).json({ error: 'Invalid plugin slug' });
     // Approvals are for an INSTALLED plugin, and the slug used below (store key, reload) is the one read from
@@ -2278,7 +2321,7 @@ router.post('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (
  *           already stopped, so the plugin is now stopped (`stopped: true`). Same body as POST
  *           /plugins/{slug}/activate's 409.
  */
-router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/reload', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
@@ -2684,7 +2727,7 @@ router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (r
  *           The disable ran but the port did not come free (PORT_STILL_IN_USE), or the disable command
  *           itself failed (DISABLE_FAILED).
  */
-router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/free-port', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
@@ -2755,7 +2798,7 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
  *           active_plugins entry is always cleared, and the leftover directory is removed only when it
  *           holds no manifest.json and no entry file (its data/ subdir is preserved either way).
  */
-router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/deactivate', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug — and use the VALIDATED value below, never req.params.slug again.
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
@@ -3036,7 +3079,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
  *         name: token
  *         schema:
  *           type: string
- *         description: Bearer token for download authentication
+ *         description: A query ticket for this path (POST /auth/query-ticket), for a download opened without the session cookie. A session token is not accepted here.
  *     responses:
  *       200:
  *         description: Plugin ZIP file
@@ -3175,6 +3218,9 @@ router.use('/', bundleRoutes);
 module.exports = router;
 // Exposed for unit tests of the path-traversal guards (the router remains the default export).
 module.exports.isValidSlug = isValidSlug;
+module.exports.usePluginLifecycleLimiterStore = usePluginLifecycleLimiterStore;
+module.exports.createPluginLifecycleLimiter = createPluginLifecycleLimiter;
+module.exports.PLUGIN_LIFECYCLE_MAX = PLUGIN_LIFECYCLE_MAX;
 module.exports.resolveSafePluginDir = resolveSafePluginDir;
 module.exports.safeSlugParam = safeSlugParam;
 module.exports.pluginFile = pluginFile;

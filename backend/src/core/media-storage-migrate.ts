@@ -24,6 +24,7 @@
  */
 
 const fs = require('fs');
+const log = require('./module-logger').moduleLogger('core/media-storage-migrate');
 
 export type MigrationDirection = 'offload' | 'restore';
 export type MigrationState = 'local' | 'migrating' | 'offloaded' | 'restoring';
@@ -326,4 +327,242 @@ async function runMigration(direction: MigrationDirection, opts: {
     }
 }
 
-module.exports = { runMigration, getState, getProgress, isRunning, isRunningAnywhere, isLiveRecord, PROGRESS_STALE_MS, countOffloaded, bucketUsage, migrateOne, STATE_OPTION, PROGRESS_OPTION };
+// ---- the network: every site, one at a time -----------------------------------------------------------
+//
+// The storage block is the network's, but the library, its markers, its state and its progress record
+// are each site's own (each site has its own database). So a move "of the network" is one run per site,
+// each inside that site's context, where Media, Post and the options resolve to that site's database
+// and the store to that site's key space.
+
+/** The sites a network-wide command walks: site 1 first, then every other site (suspended ones too). */
+function networkSiteIds(): number[] {
+    const siteContext = require('./site-context');
+    if (!siteContext.multisiteEnabled()) return [siteContext.PRIMARY_SITE_ID];
+    const ids = require('./network').listSites().map((s: any) => Number(s.id));
+    return [siteContext.PRIMARY_SITE_ID, ...ids.filter((id: number) => id !== siteContext.PRIMARY_SITE_ID)];
+}
+
+/** Run `fn` as `siteId`, with that site's database open. */
+async function withSite<T>(siteId: number, fn: () => Promise<T>): Promise<T> {
+    const siteContext = require('./site-context');
+    return siteContext.runWithSite(siteId, async () => {
+        if (siteId !== siteContext.PRIMARY_SITE_ID) {
+            const network = require('./network');
+            const site = network.getSite(siteId);
+            if (!site) throw new Error(`site ${siteId} does not exist`);
+            await deps().database.openSiteDatabase(siteId, site.dbPath || network.siteDbPath(siteId));
+        }
+        return fn();
+    });
+}
+
+let networkRunning = false;
+
+/** Is a migration running for ANY site of the network (here, or on a node whose record is fresh)? */
+async function isRunningOnAnySite(): Promise<boolean> {
+    if (running || networkRunning) return true;
+    for (const id of networkSiteIds()) {
+        try {
+            if (await withSite(id, () => isRunningAnywhere())) return true;
+        } catch { /* a site that cannot be read runs nothing here */ }
+    }
+    return false;
+}
+
+/** Each site's state, for the network's admin screen and the CLI. */
+async function siteStates(): Promise<Array<{ siteId: number; host: string; state: MigrationState | null; inBucket: number | null; migration: MigrationProgress | null; error?: string }>> {
+    const out = [];
+    const hostOf = (id: number): string => {
+        try { return (require('./site-context').multisiteEnabled() && require('./network').getSite(id)?.mainHost) || ''; } catch { return ''; }
+    };
+    for (const id of networkSiteIds()) {
+        const host = hostOf(id);
+        try {
+            out.push(await withSite(id, async () => ({ siteId: id, host, state: await getState(), inBucket: await countOffloaded(), migration: await getProgress() })));
+        } catch (e: any) {
+            out.push({ siteId: id, host, state: null, inBucket: null, migration: null, error: String(e?.message || e).slice(0, 200) });
+        }
+    }
+    return out;
+}
+
+/**
+ * Run (or resume) the same move for each of `siteIds` (default: every site of the network), one site
+ * at a time, each as that site. A site that cannot start (its database cannot be opened…) is reported
+ * and the others still run. Resolves with one result per site.
+ */
+async function runNetworkMigration(direction: MigrationDirection, opts: {
+    deleteLocal?: boolean; restart?: boolean; limit?: number; siteIds?: number[];
+    onProgress?: (siteId: number, p: MigrationProgress) => void;
+} = {}): Promise<Array<{ siteId: number; result: MigrationProgress | null; error: string | null }>> {
+    if (networkRunning) {
+        const err: any = new Error('A media storage migration is already running.');
+        err.code = 'media_storage_busy';
+        throw err;
+    }
+    networkRunning = true;
+    try {
+        // Objects a site stored before sites had key spaces move into its own space first, so the run
+        // below finds them where the store now addresses them.
+        try { await migrateSiteKeys(); } catch (e: any) { log.warn(`media storage: the move into per-site key spaces did not finish: ${String(e?.message || e).slice(0, 200)}`); }
+        const ids = opts.siteIds && opts.siteIds.length ? opts.siteIds : networkSiteIds();
+        const out: Array<{ siteId: number; result: MigrationProgress | null; error: string | null }> = [];
+        for (const id of ids) {
+            try {
+                const result = await withSite(id, () => runMigration(direction, {
+                    deleteLocal: opts.deleteLocal,
+                    restart: opts.restart,
+                    limit: opts.limit,
+                    onProgress: opts.onProgress ? (p) => opts.onProgress!(id, p) : undefined,
+                }));
+                out.push({ siteId: id, result, error: null });
+            } catch (e: any) {
+                out.push({ siteId: id, result: null, error: String(e?.message || e).slice(0, 300) });
+            }
+        }
+        return out;
+    } finally {
+        networkRunning = false;
+    }
+}
+
+// ---- the one-time move into per-site key spaces -----------------------------------------------------------
+
+/** Per-site option: 'site' once the site's objects live in its own key space (core/media-storage SITES_SEGMENT). */
+const KEY_LAYOUT_OPTION = 'media_storage_key_layout';
+
+/** The relative paths (original first) of every offloaded attachment of the current site. */
+async function offloadedItems(): Promise<Array<{ id: number; original: string; rels: string[] }>> {
+    const { database, Post, privateMedia, storage } = deps();
+    const rows = await database.dbAsync.all(
+        `SELECT pm.post_id AS id FROM post_meta pm JOIN posts p ON p.id = pm.post_id
+         WHERE pm.meta_key = ? AND pm.meta_value = ? AND p.post_type = 'attachment' ORDER BY pm.post_id ASC`,
+        [storage.STORAGE_META_KEY, 's3']
+    );
+    const root = privateMedia.publicUploadsRoot();
+    const out = [];
+    for (const row of rows) {
+        const meta = await Post.getAllMeta(Number(row.id));
+        const rels = attachmentFiles(meta, root)
+            .map((f: string) => storage.relativeTo(root, f))
+            .filter((r: string | null) => r && storage.isOffloadablePath(r)) as string[];
+        if (rels.length) out.push({ id: Number(row.id), original: rels[0], rels });
+    }
+    return out;
+}
+
+/**
+ * Move the objects each site other than site 1 stored under the shared layout (`<prefix>/<rel>`, before
+ * sites had key spaces) into the site's own space (`<prefix>/sites/<id>/<rel>`). Per site, once: the
+ * `media_storage_key_layout` option records that it is done, and the walk is idempotent (an object
+ * already in the site's space is not copied again), so an interrupted run simply runs again.
+ *
+ * Each copy is verified by size before anything is removed. The old object is removed only when no
+ * other site — site 1 included — has an offloaded item at the same relative path: under the shared
+ * layout such an object may be the other site's, and it stays where that site reads it.
+ *
+ * A no-op on a single site, with no s3 store, and for a network whose sites are all migrated.
+ */
+let keysInFlight: Promise<any> | null = null;
+type KeyMoveReport = { sites: Array<{ siteId: number; copied: number; removed: number; failed: number }> };
+function migrateSiteKeys(opts: { adapterFor?: (store: any) => any } = {}): Promise<KeyMoveReport> {
+    // One walk at a time in this process (boot and a migration may both ask): a second caller waits for it.
+    if (keysInFlight) return keysInFlight;
+    keysInFlight = migrateSiteKeysOnce(opts).finally(() => { keysInFlight = null; });
+    return keysInFlight;
+}
+
+async function migrateSiteKeysOnce(opts: { adapterFor?: (store: any) => any }): Promise<KeyMoveReport> {
+    const siteContext = require('./site-context');
+    const { storage, options } = deps();
+    const report: Array<{ siteId: number; copied: number; removed: number; failed: number }> = [];
+    if (!siteContext.multisiteEnabled()) return { sites: report };
+    const probe = storage.resolveMediaStorage(process.env, undefined, siteContext.PRIMARY_SITE_ID);
+    if (probe.driver !== 's3') return { sites: report };
+    const adapterFor = opts.adapterFor || ((store: any) => storage.getMediaStorage(store));
+    const os = require('os');
+    const path = require('path');
+
+    // Which site has an offloaded item at each original path (a removal must not take another site's object).
+    const claims = new Map<string, Set<number>>();
+    const pending: Array<{ siteId: number; items: Array<{ id: number; original: string; rels: string[] }> }> = [];
+    for (const id of networkSiteIds()) {
+        try {
+            await withSite(id, async () => {
+                const items = await offloadedItems();
+                for (const it of items) {
+                    if (!claims.has(it.original)) claims.set(it.original, new Set());
+                    claims.get(it.original)!.add(id);
+                }
+                if (id !== siteContext.PRIMARY_SITE_ID && (await options.getOptionFresh(KEY_LAYOUT_OPTION, null)) !== 'site') {
+                    pending.push({ siteId: id, items });
+                }
+            });
+        } catch {
+            // A site that cannot be read claims everything: nothing it may own is removed this run.
+            claims.set('*', new Set([id]));
+        }
+    }
+    const nothingIsSafeToRemove = claims.has('*');
+
+    for (const { siteId, items } of pending) {
+        const r = { siteId, copied: 0, removed: 0, failed: 0 };
+        await withSite(siteId, async () => {
+            const store = storage.resolveMediaStorage();
+            const target = adapterFor(store);
+            const legacy = adapterFor(storage.legacyLayoutStore(store));
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-media-keys-'));
+            try {
+                for (const it of items) {
+                    let itemOk = true;
+                    const copiedRels: string[] = [];
+                    for (const rel of it.rels) {
+                        try {
+                            const there = await target.head(rel);
+                            const old = await legacy.head(rel);
+                            if (old === null) {
+                                // Nothing under the shared layout: fine when the site space has it.
+                                if (there === null && rel === it.original) throw new Error(`${rel} is in neither key layout`);
+                                continue;
+                            }
+                            // What the site space already holds is the site's own (written there by this
+                            // site, or by an earlier pass of this walk): never overwritten from the shared key.
+                            if (there === null) {
+                                const bytes = await legacy.get(rel);
+                                if (!bytes) throw new Error(`${rel} vanished while moving`);
+                                const tmp = path.join(tmpDir, require('crypto').randomBytes(8).toString('hex'));
+                                fs.writeFileSync(tmp, bytes, { mode: 0o600 });
+                                try { await target.put(rel, tmp); } finally { try { fs.unlinkSync(tmp); } catch { /* best effort */ } }
+                                const after = await target.head(rel);
+                                if (!after || (after.size >= 0 && after.size !== bytes.length)) throw new Error(`${rel} did not verify after the move`);
+                                r.copied++;
+                            }
+                            copiedRels.push(rel);
+                        } catch {
+                            itemOk = false;
+                        }
+                    }
+                    if (!itemOk) { r.failed++; continue; }
+                    const owners = claims.get(it.original);
+                    const onlyThisSite = !nothingIsSafeToRemove && owners && owners.size === 1 && owners.has(siteId);
+                    if (onlyThisSite) {
+                        for (const rel of copiedRels) {
+                            try { await legacy.remove(rel); r.removed++; } catch { /* left in place; harmless */ }
+                        }
+                    }
+                }
+            } finally {
+                try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+            }
+            if (r.failed === 0) await options.updateOption(KEY_LAYOUT_OPTION, 'site', 'no');
+        });
+        report.push(r);
+    }
+    return { sites: report };
+}
+
+module.exports = {
+    runMigration, getState, getProgress, isRunning, isRunningAnywhere, isLiveRecord, PROGRESS_STALE_MS, countOffloaded, bucketUsage, migrateOne,
+    runNetworkMigration, isRunningOnAnySite, siteStates, networkSiteIds, migrateSiteKeys,
+    STATE_OPTION, PROGRESS_OPTION, KEY_LAYOUT_OPTION,
+};

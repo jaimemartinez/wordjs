@@ -406,11 +406,12 @@ const normalizedSettingValue = (key: string, value: any): any =>
 // Multisite: settings whose effect is NETWORK-wide, not the site's. The Redis object-cache switch is one
 // process-wide flag (core/cache) shared by every site this server answers, so it is the main site's to
 // set. On another site a CHANGE is refused before anything is written (the settings screen sends every
-// field back on save, so an unchanged value passes untouched and is not rewritten).
-const NETWORK_WIDE_SETTINGS = new Set(['redis_cache_enabled']);
-const { onSecondarySite } = require('../core/multisite-guards');
-async function changedNetworkSettings(updates: Record<string, any>): Promise<string[]> {
-    if (!onSecondarySite()) return [];
+// field back on save, so an unchanged value passes untouched and is not rewritten). On the main site of a
+// network a change takes a NETWORK administrator (core/network-auth), not just an administrator of the
+// main site. A single site is unaffected.
+const { NETWORK_WIDE_SETTINGS, networkSettingsReadOnly } = require('../core/network-auth');
+async function changedNetworkSettings(req: Request, updates: Record<string, any>): Promise<string[]> {
+    if (!networkSettingsReadOnly(req)) return [];
     const changed: string[] = [];
     for (const [key, value] of Object.entries(updates)) {
         if (!NETWORK_WIDE_SETTINGS.has(key)) continue;
@@ -421,7 +422,7 @@ async function changedNetworkSettings(updates: Record<string, any>): Promise<str
 function refuseNetworkSettings(res: Response, keys: string[]) {
     return res.status(403).json({
         code: 'rest_network_only',
-        message: 'Only the main site can change this; ask the network administrator.',
+        message: 'Only a network administrator on the main site can change this.',
         data: { status: 403, params: keys }
     });
 }
@@ -597,9 +598,9 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     const writable = Object.fromEntries(Object.entries(updates).filter(([key]) => ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)));
     const registration = await changedRegistrationSettings(writable);
     if (registration.length && refuseAccountAuthority(req, res, registration)) return;
-    const network = await changedNetworkSettings(writable);
+    const network = await changedNetworkSettings(req, writable);
     if (network.length) return refuseNetworkSettings(res, network);
-    const skipUnchangedNetwork = onSecondarySite();
+    const skipUnchangedNetwork = networkSettingsReadOnly(req);
 
     for (const [key, value] of Object.entries(updates)) {
         if (skipUnchangedNetwork && NETWORK_WIDE_SETTINGS.has(key)) continue;
@@ -680,10 +681,10 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
     // The same rule as the bulk save above. `key` is one of ALL_SETTINGS by now, never a prototype name.
     const registration = await changedRegistrationSettings({ [key]: value });
     if (registration.length && refuseAccountAuthority(req, res, registration)) return;
-    const network = await changedNetworkSettings({ [key]: value });
+    const network = await changedNetworkSettings(req, { [key]: value });
     if (network.length) return refuseNetworkSettings(res, network);
 
-    if (!(onSecondarySite() && NETWORK_WIDE_SETTINGS.has(key))) await updateOption(key, normalizedSettingValue(key, value));
+    if (!(networkSettingsReadOnly(req) && NETWORK_WIDE_SETTINGS.has(key))) await updateOption(key, normalizedSettingValue(key, value));
 
     res.json({
         key,

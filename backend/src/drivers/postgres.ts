@@ -222,6 +222,29 @@ class PostgresDriver extends DatabaseDriverInterface {
         }
     }
 
+    /**
+     * get() under a server-side statement timeout (`SET LOCAL statement_timeout`, scoped to one
+     * transaction so the pooled connection keeps its own setting). Used by the readiness probe. A
+     * connection whose query failed is discarded rather than returned to the pool mid-transaction.
+     */
+    async getWithTimeout(sql: string, params: any[] = [], timeoutMs: number = 3000) {
+        const ms = Math.max(1, Math.floor(Number(timeoutMs) || 3000));
+        const client = await this.pool.connect();
+        let failed = false;
+        try {
+            await client.query(`BEGIN; SET LOCAL statement_timeout = ${ms}`);
+            const res = await client.query(this.normalizeSql(sql), params);
+            await client.query('COMMIT');
+            return res.rows[0];
+        } catch (err) {
+            failed = true;
+            log.warn({ err }, 'Postgres: timed query failed');
+            throw err;
+        } finally {
+            client.release(failed ? true : undefined);
+        }
+    }
+
     async all(sql: string, params: any[] = []) {
         try {
             // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)

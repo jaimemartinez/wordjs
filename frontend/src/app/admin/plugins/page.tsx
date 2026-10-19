@@ -11,6 +11,7 @@ import { permMeta } from "@/lib/permissionMeta";
 import { reloadActivePlugins } from "@/lib/plugins";
 import { deepLinkedPlugin, withoutPermissionsDeepLink } from "@/lib/pluginPermissionsLink";
 import { useMenu } from "@/contexts/MenuContext";
+import { useOptionalAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
@@ -245,6 +246,11 @@ export default function PluginsPage() {
     // code is the network's there: no upload, marketplace, download, build or delete — only activation and
     // grants, bounded by what the network administrator offers.
     const siteScoped = plugins.some((p) => Array.isArray(p.grantCeiling));
+    // ...and on the main site, the same code actions are a NETWORK administrator's: an administrator of
+    // the main site who is not one activates and grants, nothing more (the server refuses the rest).
+    const user = useOptionalAuth()?.user ?? null;
+    const mainSiteNonNetworkAdmin = !!(user && user.network && user.network.mainSite && !user.network.networkAdmin);
+    const codeLocked = siteScoped || mainSiteNonNetworkAdmin;
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const { refreshMenus } = useMenu();
@@ -1244,7 +1250,7 @@ export default function PluginsPage() {
                     title={t('plugins.title')}
                     subtitle={t('plugins.extend.functionality')}
                     icon="fa-plug"
-                    actions={siteScoped ? undefined : (
+                    actions={codeLocked ? undefined : (
                         <div className="relative">
                             <Button
                                 icon={uploading ? "fa-spinner fa-spin" : "fa-upload"}
@@ -1267,6 +1273,9 @@ export default function PluginsPage() {
                 {siteScoped && (
                     <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="">{t('plugins.network.siteNote')}</p>
                 )}
+                {!siteScoped && mainSiteNonNetworkAdmin && (
+                    <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="main">{t('plugins.network.mainSiteNote')}</p>
+                )}
             </div>
 
             {/* Installed | Marketplace tabs */}
@@ -1277,7 +1286,7 @@ export default function PluginsPage() {
                 >
                     <FaPlug className="text-xs" /> {t('plugins.tab.installed')}
                 </button>
-                {!siteScoped && <button
+                {!codeLocked && <button
                     onClick={() => setTab('marketplace')}
                     className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${tab === 'marketplace' ? 'bg-white text-slate-900 shadow-md border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
                 >
@@ -1378,8 +1387,8 @@ export default function PluginsPage() {
                                         >
                                             <FaInfoCircle className="text-sm" />
                                         </button>
-                                        {!siteScoped && <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />}
-                                        {!plugin.active && !siteScoped && (
+                                        {!codeLocked && <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />}
+                                        {!plugin.active && !codeLocked && (
                                             <>
                                                 <button
                                                     onClick={() => pluginsApi.download(plugin.slug)}

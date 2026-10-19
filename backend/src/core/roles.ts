@@ -363,6 +363,9 @@ async function writeRoles<T>(decide: (current: Record<string, any>) => Promise<R
         await lock.release();
     }
     if (announce) await announce();
+    // A capability can have just been taken from a role: live collaboration streams are long-lived requests
+    // and are re-authorized now instead of at their next periodic check.
+    if (announce) { try { require('./collab-rooms').recheckAll(); } catch { /* periodic re-check still applies */ } }
     return outcome!.result;
 }
 

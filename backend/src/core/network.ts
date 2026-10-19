@@ -119,6 +119,11 @@ function openStore(): any {
             tokens TEXT NOT NULL DEFAULT '[]',
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS network_site_quotas (
+            site_id INTEGER PRIMARY KEY,
+            upload_bytes INTEGER,
+            updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS network_audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             at TEXT NOT NULL,
@@ -128,6 +133,12 @@ function openStore(): any {
             detail TEXT NOT NULL DEFAULT ''
         );
     `);
+    // Each network administrator row names the account's login as well as its id (added after the first
+    // release of the table: older rows have none until reconcileNetworkAdmins fills it in). A database
+    // restored from a backup can give an id to a different account; the login says whose row it is.
+    if (!handle.prepare('PRAGMA table_info(network_admins)').all().some((c: any) => c.name === 'user_login')) {
+        handle.exec('ALTER TABLE network_admins ADD COLUMN user_login TEXT');
+    }
     db = handle;
     snapshot = null;
     ceilings = null;
@@ -276,6 +287,7 @@ function deleteSiteRecord(id: number): void {
     const store = openStore();
     store.transaction(() => {
         store.prepare('DELETE FROM network_site_hosts WHERE site_id = ?').run(id);
+        store.prepare('DELETE FROM network_site_quotas WHERE site_id = ?').run(id);
         store.prepare('DELETE FROM network_sites WHERE id = ?').run(id);
     })();
     invalidate();
@@ -290,22 +302,77 @@ function setSiteStatus(id: number, status: SiteStatus): SiteRecord {
     return getSite(id) as SiteRecord;
 }
 
-function isNetworkAdmin(userId: unknown): boolean {
+/**
+ * Is `userId` a network administrator? With `login` (the account's current login), a row that names a
+ * DIFFERENT login is not this account's: the id was given to someone else (a restored database).
+ */
+function isNetworkAdmin(userId: unknown, login?: unknown): boolean {
     if (!isSiteId(userId)) return false;
-    return !!openStore().prepare('SELECT 1 FROM network_admins WHERE user_id = ?').get(userId);
+    const row = openStore().prepare('SELECT user_login FROM network_admins WHERE user_id = ?').get(userId);
+    if (!row) return false;
+    if (login !== undefined && row.user_login && row.user_login !== login) return false;
+    return true;
 }
 
 function listNetworkAdmins(): number[] {
     return openStore().prepare('SELECT user_id FROM network_admins ORDER BY user_id').all().map((r: any) => Number(r.user_id));
 }
 
-function addNetworkAdmin(userId: number): void {
+function addNetworkAdmin(userId: number, login?: string | null): void {
     if (!isSiteId(userId)) throw codedError('network_invalid_user', 'Not a user id.');
-    openStore().prepare('INSERT OR IGNORE INTO network_admins (user_id, created_at) VALUES (?, ?)').run(userId, now());
+    const name = typeof login === 'string' && login ? login : null;
+    openStore().prepare(`INSERT INTO network_admins (user_id, created_at, user_login) VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET user_login = COALESCE(excluded.user_login, network_admins.user_login)`).run(userId, now(), name);
 }
 
 function removeNetworkAdmin(userId: number): void {
     openStore().prepare('DELETE FROM network_admins WHERE user_id = ?').run(userId);
+}
+
+/**
+ * A main-site account was deleted: it is no longer a network administrator. Never creates the store
+ * (an install that never had a network has nothing to forget).
+ */
+function forgetNetworkAdmin(userId: number): void {
+    if (!isSiteId(userId)) return;
+    if (!db && !fs.existsSync(networkDbPath())) return;
+    removeNetworkAdmin(userId);
+}
+
+type AdminAccount = { id: number; login: string } | null;
+
+/**
+ * Re-check every network administrator row against the main site's accounts (at boot, and after the
+ * main database is restored from a backup). A row whose login names an account keeps following THAT
+ * account (a logical restore gives accounts new ids); a row whose account is gone, or whose id now
+ * belongs to another login, is removed; an older row with no login is bound to the account its id
+ * names today. Never creates the store.
+ */
+async function reconcileNetworkAdmins(lookup: { byId: (id: number) => Promise<AdminAccount>; byLogin: (login: string) => Promise<AdminAccount> }) {
+    const outcome = { kept: 0, rebound: 0, removed: 0 };
+    if (!db && !fs.existsSync(networkDbPath())) return outcome;
+    const rows = openStore().prepare('SELECT user_id, user_login FROM network_admins ORDER BY user_id').all();
+    for (const row of rows) {
+        const id = Number(row.user_id);
+        const login = typeof row.user_login === 'string' && row.user_login ? row.user_login : null;
+        const current = await lookup.byId(id);
+        if (login === null) {
+            if (current) { addNetworkAdmin(id, current.login); outcome.kept++; }
+            else { removeNetworkAdmin(id); outcome.removed++; }
+            continue;
+        }
+        if (current && current.login === login) { outcome.kept++; continue; }
+        const owner = await lookup.byLogin(login);
+        removeNetworkAdmin(id);
+        if (owner && isSiteId(owner.id)) {
+            addNetworkAdmin(owner.id, owner.login);
+            outcome.rebound++;
+        } else {
+            outcome.removed++;
+        }
+    }
+    if (outcome.rebound || outcome.removed) audit('network.admins.reconciled', { detail: outcome });
+    return outcome;
 }
 
 // ── Plugin grant ceilings ─────────────────────────────────────────────────────────────────────────────
@@ -370,6 +437,63 @@ function clearPluginCeiling(slug: string): boolean {
     return r.changes > 0;
 }
 
+// ---- per-site upload quotas ---------------------------------------------------------------------------
+// The most bytes of media a site other than site 1 may hold (its uploads, with their derivatives),
+// set by a network administrator. A site's own value wins; without one, the network's default applies;
+// with neither (and always for site 1, and on a single site) there is no limit — what every install
+// had before quotas existed.
+
+const DEFAULT_QUOTA_KEY = 'default_site_upload_quota_bytes';
+/** The largest quota accepted: 1 PiB, far beyond any real disk, and exact as a JS number. */
+const MAX_QUOTA_BYTES = 2 ** 50;
+
+function cleanQuota(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    const n = typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value.trim()) : value;
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0 || n > MAX_QUOTA_BYTES) {
+        throw codedError('network_invalid_quota', 'The upload quota must be a whole number of bytes (or empty for no limit).');
+    }
+    return n;
+}
+
+/** The network's default upload quota for its sites, or null (no limit). */
+function defaultUploadQuota(): number | null {
+    const row = openStore().prepare('SELECT meta_value FROM network_meta WHERE meta_key = ?').get(DEFAULT_QUOTA_KEY);
+    if (!row || row.meta_value === '') return null;
+    try { return cleanQuota(String(row.meta_value)); } catch { return null; }
+}
+
+function setDefaultUploadQuota(value: unknown): number | null {
+    const bytes = cleanQuota(value);
+    if (bytes === null) openStore().prepare('DELETE FROM network_meta WHERE meta_key = ?').run(DEFAULT_QUOTA_KEY);
+    else openStore().prepare('INSERT INTO network_meta (meta_key, meta_value) VALUES (?, ?) ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value').run(DEFAULT_QUOTA_KEY, String(bytes));
+    return bytes;
+}
+
+/** A site's OWN quota (null when it has none and follows the network default). */
+function siteUploadQuotaOverride(siteId: number): number | null {
+    if (!isSiteId(siteId)) return null;
+    const row = openStore().prepare('SELECT upload_bytes FROM network_site_quotas WHERE site_id = ?').get(siteId);
+    return row && row.upload_bytes !== null && row.upload_bytes !== undefined ? Number(row.upload_bytes) : null;
+}
+
+/** Set (a number of bytes) or clear (null) a site's own quota. Site 1 has none. */
+function setSiteUploadQuota(siteId: number, value: unknown): number | null {
+    if (!getSite(siteId)) throw codedError('network_site_not_found', 'No such site.');
+    if (siteId === PRIMARY_SITE_ID) throw codedError('network_primary_site', 'The main site has no upload quota.');
+    const bytes = cleanQuota(value);
+    if (bytes === null) openStore().prepare('DELETE FROM network_site_quotas WHERE site_id = ?').run(siteId);
+    else openStore().prepare('INSERT INTO network_site_quotas (site_id, upload_bytes, updated_at) VALUES (?, ?, ?) ON CONFLICT(site_id) DO UPDATE SET upload_bytes = excluded.upload_bytes, updated_at = excluded.updated_at').run(siteId, bytes, now());
+    return bytes;
+}
+
+/** The quota in effect for a site: its own, else the network default; null = no limit (site 1, always). */
+function effectiveUploadQuota(siteId: number): number | null {
+    if (!isSiteId(siteId) || siteId === PRIMARY_SITE_ID) return null;
+    const own = siteUploadQuotaOverride(siteId);
+    return own !== null ? own : defaultUploadQuota();
+}
+
 function codedError(code: string, message: string): Error & { code: string } {
     const e = new Error(message) as Error & { code: string };
     e.code = code;
@@ -396,6 +520,8 @@ module.exports = {
     listNetworkAdmins,
     addNetworkAdmin,
     removeNetworkAdmin,
+    forgetNetworkAdmin,
+    reconcileNetworkAdmins,
     audit,
     auditLog,
     invalidate,
@@ -403,4 +529,10 @@ module.exports = {
     listPluginCeilings,
     setPluginCeiling,
     clearPluginCeiling,
+    defaultUploadQuota,
+    setDefaultUploadQuota,
+    siteUploadQuotaOverride,
+    setSiteUploadQuota,
+    effectiveUploadQuota,
+    MAX_QUOTA_BYTES,
 };

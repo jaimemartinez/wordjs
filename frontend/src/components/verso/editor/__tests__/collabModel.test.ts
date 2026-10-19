@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { CollabMember } from "@/lib/verso/collab";
 import {
     initialsOf,
+    memberIdentity,
     memberLabel,
     noticeSeverity,
     onColor,
@@ -165,8 +166,16 @@ describe("remoteSelections", () => {
 
 describe("texto accesible", () => {
     it("el avatar se lee en palabras, con su estado", () => {
-        expect(memberLabel(member({ sel: null }))).toBe("Ana Pérez — en la página");
-        expect(memberLabel(member({ sel: { nodeId: "n1" } }))).toBe("Ana Pérez — editando un bloque");
+        expect(memberLabel(member({ sel: null }))).toBe("Ana Pérez (#1) — en la página");
+        expect(memberLabel(member({ sel: { nodeId: "n1" } }))).toBe("Ana Pérez (#1) — editando un bloque");
+    });
+    it("el nombre elegido por su dueño va SIEMPRE con la identidad estable de la cuenta", () => {
+        // Dos personas con el mismo nombre visible —o una que se pone el de otra— se distinguen.
+        const real = memberIdentity(member({ userId: 1, name: "Admin" }));
+        const imitador = memberIdentity(member({ userId: 7, name: "Admin" }));
+        expect(real).toBe("Admin (#1)");
+        expect(imitador).toBe("Admin (#7)");
+        expect(real).not.toBe(imitador);
     });
     it("el anuncio del role=status dice el estado y quién está", () => {
         expect(presenceAnnouncement("live", [])).toBe("En vivo. Nadie más está editando esta página.");

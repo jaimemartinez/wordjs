@@ -13,15 +13,24 @@
  *    is on this site; any other http(s) page_url turned the checkout into a redirect off-site.
  *    MUTATION PROOF: accept any /^https?:/ page_url again.
  *  - event-tickets: a paid order holds its seats only once the buyer types the code mailed to the
- *    address; verified unpaid orders may hold at most `pendingHoldPercent` of a type; unpaid orders do
- *    not count in the site-wide order window. MUTATION PROOF: claim the seats when the order is placed.
+ *    address; unpaid orders together — the first one included — hold at most `pendingHoldPercent` of a
+ *    type (never less than one seat); unpaid orders do not count in the site-wide order window, but the
+ *    confirmation codes the site mails are bounded site-wide; an order placed on a site without mail is
+ *    held to the same per-address unpaid-seat window as a confirmed one. MUTATION PROOF: claim the seats
+ *    when the order is placed; let the first hold of a type skip the share (`held = 0 OR …`); drop
+ *    takeVerifyMailBudget(), or the claimPendingForEmail() call in the no-transport branch.
  *  - auctions: a bid may raise the price by at most `max_bid_jump_percent`; bidders prove their address
- *    with a mailed code (or sign in, per `bid_verification`); a client's first bid in its window is not
- *    held to the shared per-auction and site-wide windows. MUTATION PROOF: drop the jump cap, the
- *    bidderProven() gate, or the firstInWindow exemption.
+ *    with a mailed code (or sign in, per `bid_verification`); every bid is held to the shared
+ *    per-auction and site-wide windows; a mailed code stays charged to the requesting client's window,
+ *    and codes are bounded per address, per client and site-wide. A signed-in bidder's req.user is built
+ *    by the host's real projection (core/plugin-isolate projectRouteUser) from the grants the manifest
+ *    declares: the account address reaches the plugin only through users:read, and without that grant a
+ *    signed-in bidder proves a typed address like a guest. MUTATION PROOF: drop the jump cap, the
+ *    bidderProven() gate, users:read from the manifest, the site-wide code budget, or bring back the
+ *    window refund on a mailed code or the firstInWindow exemption.
  *  - visitor text in mail: the mails the anonymous forms send to an unverified address (online-store,
- *    donations, event-tickets, bookings, newsletter, auctions' outbid notice) carry only the site's own
- *    text — never the name the visitor typed — and are bounded per recipient address.
+ *    donations, event-tickets, bookings, newsletter, digital-downloads, auctions' outbid notice) carry
+ *    only the site's own text — never the name the visitor typed — and are bounded per recipient address.
  *    MUTATION PROOF: put the name back into a mail, or drop its mailBudget() check.
  */
 import { test, after } from 'node:test';
@@ -39,6 +48,23 @@ after(async () => {
 async function withPlugin(slug: string, fn: (p: BootedPlugin) => Promise<void>) {
     const p = await bootPlugin(slug);
     try { await fn(p); } finally { p.close(); }
+}
+
+/** The grant tokens a plugin's manifest declares (what an administrator approving it grants). */
+function declaredGrants(slug: string): string[] {
+    const manifest = require(`../../../marketplace/plugins/${slug}/manifest.json`);
+    return (manifest.permissions || []).map((p: any) => `${p.scope}:${p.access}`);
+}
+
+/**
+ * `account` as plugin `slug`'s route sees it in req.user: the host's own projection
+ * (core/plugin-isolate projectRouteUser) under `grants` — by default every grant the manifest declares.
+ */
+function routeUser(slug: string, account: any, grants = declaredGrants(slug)) {
+    const perms = require('../core/plugin-permissions');
+    perms._setGrantsInMemory(slug, grants);
+    try { return require('../core/plugin-isolate').projectRouteUser(account, slug); }
+    finally { perms._setGrantsInMemory(slug, []); }
 }
 
 /** Run `fn` with Date.now() shifted forward, so window-based limits in the plugin see time pass. */
@@ -322,6 +348,58 @@ test('event-tickets: with no mail transport at all a paid order holds its seats 
     });
 });
 
+test('event-tickets: the first unpaid order of a type is held to the share too (never less than one seat)', async () => {
+    await withPlugin('event-tickets', async (p) => {
+        seedTicketEvent(p, 20);
+        assert.strictEqual((await p.call('post', '/config', { user: ET_ADMIN, body: { pendingHoldPercent: 10 } })).status, 200);
+        // 10 % of 20 seats: unpaid orders hold at most 2, the very first order included.
+        const big = await placeTickets(p, 'first', 5);
+        const refused = await verifyTickets(p, 'first', big.body.token, codeMailedTo(p, 'first@x.io')!);
+        assert.strictEqual(refused.status, 409, `the first unpaid order held more than the share: ${JSON.stringify(refused.body)}`);
+        assert.deepStrictEqual(typeRow(p), { sold: 0, held: 0 });
+        const fits = await placeTickets(p, 'second', 2);
+        assert.strictEqual((await verifyTickets(p, 'second', fits.body.token, codeMailedTo(p, 'second@x.io')!)).status, 200);
+        assert.deepStrictEqual(typeRow(p), { sold: 2, held: 2 });
+    });
+    await withPlugin('event-tickets', async (p) => {
+        // A type too small for the share to reach one seat can still be ordered one seat at a time.
+        seedTicketEvent(p, 1);
+        const one = await placeTickets(p, 'solo', 1);
+        assert.strictEqual((await verifyTickets(p, 'solo', one.body.token, codeMailedTo(p, 'solo@x.io')!)).status, 200);
+        assert.deepStrictEqual(typeRow(p), { sold: 1, held: 1 });
+    });
+});
+
+test('event-tickets: without a mail transport an order is held to the per-address unpaid-seat window', async () => {
+    await withPlugin('event-tickets', async (p) => {
+        seedTicketEvent(p, 100);
+        p.setMailFailure(new Error('Mail server not available'));
+        // One address, rotating clients: at most 20 unpaid seats per event per window, as when confirmed.
+        const statuses: number[] = [];
+        for (let i = 0; i < 3; i++) statuses.push((await placeTickets(p, `rot${i}`, 10, 'same@x.io')).status);
+        assert.deepStrictEqual(statuses, [200, 200, 429], 'an address held more than 20 unpaid seats');
+        assert.deepStrictEqual(typeRow(p), { sold: 20, held: 20 });
+        assert.strictEqual(p.sdb.prepare(`SELECT COUNT(*) AS n FROM ${p.prefix}orders`).get().n, 2, 'the refused order is withdrawn');
+    });
+});
+
+test('event-tickets: the site mails a bounded number of confirmation codes an hour', async () => {
+    await withPlugin('event-tickets', async (p) => {
+        seedTicketEvent(p, 20);
+        for (let i = 0; i < 200; i++) {
+            const r = await placeTickets(p, `c${i}`, 1, `fresh${i}@x.io`);
+            assert.strictEqual(r.status, 200, `${i}: ${JSON.stringify(r.body)}`);
+        }
+        const over = await placeTickets(p, 'c200', 1, 'fresh200@x.io');
+        assert.strictEqual(over.status, 429, `the site mailed more than 200 codes in an hour: ${JSON.stringify(over.body)}`);
+        assert.strictEqual(p.mails.length, 200);
+        // Free orders mail no code and are not held to it; an hour later the budget is back.
+        assert.strictEqual((await placeTickets(p, 'freebie', 1, 'freebie@x.io', 2)).status, 200);
+        const later = await withClockAdvanced(3601e3, () => placeTickets(p, 'late', 1, 'late@x.io'));
+        assert.strictEqual(later.status, 200, JSON.stringify(later.body));
+    });
+});
+
 test('event-tickets: the free-ticket and order-received mails carry no visitor name and are bounded per address', async () => {
     await withPlugin('event-tickets', async (p) => {
         seedTicketEvent(p, 100);
@@ -417,27 +495,53 @@ test('auctions: on a site that cannot send mail the email mode falls back to ope
     });
 });
 
+const MEMBER = { id: 7, role: 'subscriber', userEmail: 'Member@Site.test', userLogin: 'member' };
+const bidAsUser = (p: BootedPlugin, user: any, amount: number, extra: any = {}) => p.call('post', '/bid-user', {
+    clientKey: 'm', user,
+    body: { auction_id: 1, elapsed: 5000, bidder_name: 'Member', bidder_email: 'someone-else@x.io', amount_cents: amount, ...extra },
+});
+
 test('auctions: in login mode only signed-in accounts bid, as their account address', async () => {
     await withPlugin('auctions', async (p) => {
         seedLot(p, { bid_verification: 'login' });
         const anon = await placeBid(p, 'anon', 1100);
         assert.strictEqual(anon.status, 401, JSON.stringify(anon.body));
         assert.strictEqual(anon.body.loginRequired, true);
-        const member = await p.call('post', '/bid-user', {
-            clientKey: 'm', user: { id: 7, role: 'subscriber', userEmail: 'Member@Site.test' },
-            body: { auction_id: 1, elapsed: 5000, bidder_name: 'Member', bidder_email: 'someone-else@x.io', amount_cents: 1100 },
-        });
-        assert.strictEqual(member.status, 200, JSON.stringify(member.body));
+        // req.user exactly as the host builds it for this plugin, from the grants its manifest asks for.
+        assert.ok(declaredGrants('auctions').includes('users:read'), 'the manifest must ask for users:read to learn the account address');
+        const member = await bidAsUser(p, routeUser('auctions', MEMBER), 1100);
+        assert.strictEqual(member.status, 200, `a signed-in bid was refused: ${JSON.stringify(member.body)}`);
         assert.strictEqual(p.sdb.prepare(`SELECT bidder_email FROM ${p.prefix}bids`).get().bidder_email, 'member@site.test');
+        assert.strictEqual(p.mails.length, 0, 'an account address needs no code');
     });
 });
 
-test('auctions: clients filling the shared windows cannot keep a new bidder out', async () => {
+test('auctions: until users:read is granted, a signed-in bidder proves a typed address like a guest', async () => {
+    await withPlugin('auctions', async (p) => {
+        seedLot(p, { bid_verification: 'login' });
+        // An install updated to this version whose administrator has not approved users:read yet.
+        const user = routeUser('auctions', MEMBER, declaredGrants('auctions').filter((g) => g !== 'users:read'));
+        assert.strictEqual('userEmail' in user, false);
+        const noAddress = await bidAsUser(p, user, 1100, { bidder_email: '' });
+        assert.strictEqual(noAddress.status, 400, JSON.stringify(noAddress.body));
+        assert.strictEqual(noAddress.body.needsEmail, true, 'the form is told to ask for an address');
+        const typed = await bidAsUser(p, user, 1100, { bidder_email: 'member@x.io' });
+        assert.strictEqual(typed.status, 202, `a typed address bid without proof: ${JSON.stringify(typed.body)}`);
+        assert.strictEqual(bidCount(p), 0);
+        const code = String(p.mails.find((m) => m.to === 'member@x.io')!.text).match(/\b(\d{8})\b/)![1];
+        const ok = await p.call('post', '/public/verify-bidder', { clientKey: 'm', body: { bidder_email: 'member@x.io', code } });
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+        const placed = await bidAsUser(p, user, 1100, { bidder_email: 'member@x.io', bidder_key: ok.body.bidder_key });
+        assert.strictEqual(placed.status, 200, JSON.stringify(placed.body));
+        assert.strictEqual(p.sdb.prepare(`SELECT bidder_email FROM ${p.prefix}bids`).get().bidder_email, 'member@x.io');
+    });
+});
+
+test('auctions: every bid is held to the shared windows', async () => {
     await withPlugin('auctions', async (p) => {
         seedLot(p, { bid_verification: 'none', max_bid_jump_percent: '0' });
         let amount = 1100;
-        // Seven clients, ten bids each, fill the auction's shared 60-a-minute window. Each one's first
-        // bid is not held to it, so 67 land and the rest wait.
+        // Seven clients, ten bids each, against the auction's shared 60-a-minute window.
         const statuses: number[] = [];
         for (let c = 0; c < 7; c++) {
             for (let i = 0; i < 10; i++) {
@@ -445,12 +549,38 @@ test('auctions: clients filling the shared windows cannot keep a new bidder out'
                 amount += 100;
             }
         }
-        assert.deepStrictEqual([statuses.filter((s) => s === 200).length, statuses.filter((s) => s === 429).length], [67, 3]);
-        const newcomer = await placeBid(p, 'newcomer', amount + 100000);
-        assert.strictEqual(newcomer.status, 200, `the shared window locked a new bidder out: ${JSON.stringify(newcomer.body)}`);
-        assert.strictEqual(newcomer.body.isTop, true);
-        // The newcomer's own next bid is held to the shared window like everyone else's.
-        assert.strictEqual((await placeBid(p, 'newcomer', amount + 200000, { bidder_email: 'newcomer-b@x.io' })).status, 429);
+        assert.deepStrictEqual([statuses.filter((s) => s === 200).length, statuses.filter((s) => s === 429).length], [60, 10],
+            'a client\'s first bid in its window skipped the shared windows');
+        // A client's first bid is held to the window too, until the window moves on.
+        assert.strictEqual((await placeBid(p, 'newcomer', amount)).status, 429);
+        const later = await withClockAdvanced(61e3, () => placeBid(p, 'newcomer', amount));
+        assert.strictEqual(later.status, 200, JSON.stringify(later.body));
+        // Refused or invalid requests never count toward the shared window: only bids that land.
+        assert.strictEqual(bidCount(p), 61);
+    });
+});
+
+test('auctions: a mailed code stays charged to the client, and the site mails a bounded number of codes', async () => {
+    await withPlugin('auctions', async (p) => {
+        seedLot(p);
+        // One client asking codes for many addresses: its own window (10 a minute on an auction)
+        // keeps the units of every code it had mailed.
+        const spray: number[] = [];
+        for (let i = 0; i < 12; i++) spray.push((await placeBid(p, 'spray', 1100, { bidder_email: `spray${i}@x.io` })).status);
+        assert.deepStrictEqual(spray, [...Array(10).fill(202), 429, 429], 'a mailed code was refunded to the client');
+        // ... and its hourly code budget (10) outlasts the minute.
+        const nextMinute = await withClockAdvanced(61e3, () => placeBid(p, 'spray', 1100, { bidder_email: 'spray99@x.io' }));
+        assert.strictEqual(nextMinute.status, 202);
+        assert.strictEqual(p.mails.filter((m) => /^spray/.test(m.to)).length, 10, 'one client had more than 10 codes mailed in an hour');
+        // Many clients, one fresh address each: the site mails at most 200 codes an hour (10 above).
+        for (let i = 0; i < 200; i++) {
+            const r = await placeBid(p, `c${i}`, 1100, { bidder_email: `fresh${i}@x.io` });
+            assert.strictEqual(r.status, 202, JSON.stringify(r.body));
+        }
+        assert.strictEqual(p.mails.length, 200, 'the site mailed more than 200 codes in an hour');
+        // An hour later the budget is back.
+        await withClockAdvanced(3601e3, () => placeBid(p, 'late', 1100, { bidder_email: 'late@x.io' }));
+        assert.strictEqual(p.mails.filter((m) => m.to === 'late@x.io').length, 1);
     });
 });
 
@@ -489,6 +619,24 @@ test('online-store: the order-received mail carries no visitor name and is bound
         assert.strictEqual(toVictim.length, 5, 'mails to one customer address are capped at 5 an hour');
         for (const m of toVictim) assertNoVisitorName(m, 'order-received mail');
         assert.strictEqual(p.mails.filter((m) => m.to === 'shop@site.test').length, 7, 'the shop is still told about every order');
+    });
+});
+
+test('digital-downloads: the download and order-received mails carry no visitor name and are bounded per address', async () => {
+    await withPlugin('digital-downloads', async (p) => {
+        p.sdb.prepare(`INSERT INTO ${p.prefix}products (name, slug, price_cents, file_url, is_published) VALUES ('Free guide', 'free-guide', 0, '', 1)`).run();
+        p.sdb.prepare(`INSERT INTO ${p.prefix}products (name, slug, price_cents, file_url, is_published) VALUES ('Paid guide', 'paid-guide', 900, '', 1)`).run();
+        const order = (c: string, productId: number) => p.call('post', '/public/order', {
+            clientKey: c, body: { product_id: productId, customer_name: NAME_PAYLOAD, customer_email: 'victim@x.io', elapsed: 5000 },
+        });
+        for (let i = 0; i < 7; i++) {
+            const r = await order(`c${i}`, i % 2 ? 2 : 1);
+            assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+        }
+        const toVictim = p.mails.filter((m) => m.to === 'victim@x.io');
+        assert.strictEqual(toVictim.length, 5, 'mails to one customer address are capped at 5 an hour');
+        assert.ok(toVictim.some((m) => /descarga/i.test(m.subject)) && toVictim.some((m) => /Pedido recibido/.test(m.subject)));
+        for (const m of toVictim) assertNoVisitorName(m, `"${m.subject}"`);
     });
 });
 

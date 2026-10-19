@@ -38,6 +38,8 @@ async function upsertContent(opts: {
     if (puckData && postId) {
         await dbAsync.run('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, '_puck_data']);
         await dbAsync.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [postId, '_puck_data', JSON.stringify(puckData)]);
+        // Same rule as every other page-tree write that is not a collaboration save (core/collab-rooms).
+        require('./collab-rooms').contentChangedOutside(Number(postId));
     }
     return postId || null;
 }
