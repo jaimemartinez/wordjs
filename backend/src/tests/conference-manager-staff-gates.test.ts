@@ -154,3 +154,60 @@ test('GET /meals/people: the kitchen gets no ID document and finds a person only
         assert.strictEqual((await people(u, '1234567')).body.people.length, 3);
     }
 });
+
+test('the ID document reaches inscriptions:view only: roster, its search, the CSV export, the lodging review, the meals card', async () => {
+    const PAY = member(70, 'pay');        // payments:view opens the roster to NAME people
+    const REP = member(71, 'rep');        // reports:view opens the export
+    const LOC = member(72, 'loc');        // locations:view opens the lodging review
+    const COOK = member(73, 'cook2');     // the kitchen: the confirmation card
+    const DESK = member(74, 'desk2');     // inscriptions:view: everything, as before
+    const p = await bootPlugin({ users: [PAY, REP, LOC, COOK, DESK] });
+    await addMember(p, PAY, { payments: 'view' });
+    await addMember(p, REP, { reports: 'view' });
+    await addMember(p, LOC, { locations: 'view' });
+    await addMember(p, COOK, { meals_delivery: 'manage' });
+    await addMember(p, DESK, { inscriptions: 'view', reports: 'view', locations: 'view', meals_delivery: 'manage' });
+    const cid = (await p.call('post', '/create', { body: { name: 'C' } })).body.id;
+    for (const t of ['first_name', 'last_name']) assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, template: t } })).status, 200);
+    assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, name: 'document_number', label: 'DNI', type: 'text', is_unique: true } })).status, 200);
+    const loc = await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 10 } });
+    assert.strictEqual(loc.status, 200, JSON.stringify(loc.body));
+    const ins = await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: 'Ana', last_name: 'Pérez', document_number: 'X-99887766', location_id: loc.body.id } });
+    assert.strictEqual(ins.status, 200, JSON.stringify(ins.body));
+    const svc = await p.call('post', '/meals/services', { body: { conference_id: cid, service_date: '2027-03-01', meal: 'almuerzo', location_ids: [loc.body.id] } });
+    assert.strictEqual(svc.status, 200, JSON.stringify(svc.body));
+    assert.strictEqual((await p.call('put', '/meals/display-fields', { body: { conference_id: cid, keys: ['@name', 'document_number'] } })).status, 200);
+    const DOC = 'X-99887766';
+
+    const roster = (u: HarnessUser, q = '') => p.call('get', `/inscriptions?conference_id=${cid}${q ? `&search=${encodeURIComponent(q)}` : ''}`, { user: u });
+    const exportCsv = (u: HarnessUser) => p.call('get', `/inscriptions/export?conference_id=${cid}`, { user: u });
+    const lodging = (u: HarnessUser) => p.call('get', `/locations/${loc.body.id}/lodging`, { user: u });
+    const card = (u: HarnessUser) => p.call('post', '/meals/check', { user: u, body: { service_id: svc.body.id, inscription_id: ins.body.id } });
+
+    const r = await roster(PAY);
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.length, 1);
+    assert.strictEqual(r.body[0].first_name, 'Ana', 'the roster still names the person');
+    assert.ok(!JSON.stringify(r.body).includes(DOC), `the roster carries the document: ${JSON.stringify(r.body)}`);
+    assert.strictEqual((await roster(PAY, '998877')).body.length, 0, 'a part of the document finds the person');
+    const csv = await exportCsv(REP);
+    assert.strictEqual(csv.status, 200, JSON.stringify(csv.body));
+    assert.ok(!csv.body.csv.includes(DOC) && !csv.body.csv.includes('DNI'), `the export carries the document column: ${csv.body.csv}`);
+    const lg = await lodging(LOC);
+    assert.strictEqual(lg.status, 200, JSON.stringify(lg.body));
+    assert.ok(JSON.stringify(lg.body).includes('Ana'), 'the review still lists the attendee');
+    assert.ok(!JSON.stringify(lg.body).includes(DOC), 'the lodging review carries the document');
+    const c = await card(COOK);
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    assert.ok(!JSON.stringify(c.body).includes(DOC), `the meals card carries the document: ${JSON.stringify(c.body)}`);
+    assert.deepStrictEqual(c.body.person.fields.find((f: any) => f.key === 'document_number'), { key: 'document_number', label: 'DNI', value: null, hidden: true });
+
+    // inscriptions:view (and the administrator) see it everywhere, as before.
+    for (const u of [DESK, undefined as any]) {
+        assert.strictEqual((await roster(u)).body[0].document_number, DOC);
+        assert.strictEqual((await roster(u, '998877')).body.length, 1);
+        assert.ok((await exportCsv(u)).body.csv.includes(DOC));
+        assert.ok(JSON.stringify((await lodging(u)).body).includes(DOC));
+        assert.strictEqual((await card(u)).body.person.fields.find((f: any) => f.key === 'document_number').value, DOC);
+    }
+});
