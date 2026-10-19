@@ -70,11 +70,16 @@ export function isCertificateError(err: any): boolean {
     return !!err && (CERT_ERROR_CODES.has(err.code) || /self[- ]signed certificate|unable to verify|certificate has expired|Hostname\/IP does not match/i.test(String(err.message || '')));
 }
 
+/** Where the upgrade note for verified database TLS lives (per-provider CA bundles and settings). */
+export const DB_TLS_UPGRADE_DOC = 'documentation/database.md#upgrade-note-database-tls-is-verified-by-default';
+
 /** The operator-facing explanation for a certificate failure (no secrets, no connection details). */
 export const DB_TLS_VERIFY_HINT =
     'The database server\'s TLS certificate could not be verified. Database TLS is verified by default: ' +
     'set "dbSslCa" in wordjs-config.json to the CA certificate (PEM file path or contents) that signed the ' +
-    'server certificate, or — only if you accept an unverified connection — set "dbSslRejectUnauthorized": false.';
+    'server certificate (managed databases such as Amazon RDS, DigitalOcean or Azure: your provider\'s CA ' +
+    'bundle; Docker/Helm: WORDJS_DB_SSL_CA), or — only if you accept an unverified connection — set ' +
+    '"dbSslRejectUnauthorized": false. See ' + DB_TLS_UPGRADE_DOC + ' for the exact steps per provider.';
 
 export const DB_TLS_UNVERIFIED_WARNING =
     'Database TLS certificate verification is DISABLED (dbSslRejectUnauthorized: false): the connection is ' +

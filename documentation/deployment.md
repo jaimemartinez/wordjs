@@ -356,7 +356,7 @@ runs the **compiled** build via `node monolith.js prod`. No TypeScript is transp
 | **Port** | `3000`, plain HTTP. `WORDJS_HTTP=1` is baked in: the container never resolves, generates or renews a TLS certificate, so it is probe-able as-is and TLS terminates at your proxy or ingress. Unset it only if you mount real certificates and want the container itself to serve HTTPS |
 | **Volumes** | `/app/backend/data` and `/app/backend/uploads`, declared in the image. `monolith.js` chdir()s into `backend/`, and the runtime resolves both relative to that cwd. PRIVATE media (`documentation/security.md` §1.5) is stored in `data/private-uploads/` by default (`privateUploadDir` in `wordjs-config.json`), so the data volume persists it — keep that directory out of any static/CDN mount. **Named volumes and host bind mounts are not equivalent here** — see the ownership note below |
 | **`HEALTHCHECK`** | `GET /healthz` — **liveness**. Answered by the monolith's dispatcher before the backend app, so it means "this process is serving" and stays green while the site is still uninstalled |
-| **Readiness** | `GET /readyz` — 200 only when installed **and** booted **and** the database answers; 503 otherwise. Not the container `HEALTHCHECK` (an uninstalled container would then be permanently `unhealthy`, and any `depends_on: condition: service_healthy` would never fire), but exactly right as a Kubernetes `readinessProbe` |
+| **Readiness** | `GET /readyz` — 200 only when installed **and** booted **and** the database answers within 3 s (`WORDJS_READINESS_TIMEOUT_MS`); 503 otherwise (`db: "timeout"` when it did not answer in time). Not the container `HEALTHCHECK` (an uninstalled container would then be permanently `unhealthy`, and any `depends_on: condition: service_healthy` would never fire), but exactly right as a Kubernetes `readinessProbe` |
 
 `backend/data` holds the SQLite database, the `0600` install-token mirror **and `wordjs-config.json`**.
 That file normally sits beside the code at `backend/wordjs-config.json`, where a container recreate would
@@ -660,6 +660,7 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 | `METRICS_TOKEN` | `metrics.token` | empty (`/metrics` answers 404) | file | Scrape token for `GET /metrics` ([observability.md](observability.md)). |
 | `LOG_LEVEL` | `logging.level` | `info` | env | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`; an unknown value is skipped. |
 | `WORDJS_TRUST_PROXY` | `trustProxy` | unset (by mode) | file | Which peers are your proxies — see [site-address.md](site-address.md). |
+| `WORDJS_READINESS_TIMEOUT_MS` | — | `3000` | env only | Deadline for the `/readyz` database check (100–60000 ms); past it the probe answers 503 `db: "timeout"`. |
 | `WORDJS_DB_STRICT` | `dbStrictDriver` | `false` | env | Refuse to boot instead of falling back to `sqlite-legacy` (above). |
 | `WORDJS_INSTALL_TOKEN` | — | random | env only | Your own one-time install token (≥ 16 characters). `WORDJS_PRINT_INSTALL_TOKEN=1` prints it in the banner. |
 | `WORDJS_SITE_URL` | — | — | — | Offered by the install wizard as the suggested main address; never overrides an installed one. |

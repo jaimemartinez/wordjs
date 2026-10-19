@@ -6,6 +6,22 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### ⚠️ Upgrade note — database TLS is now verified
+
+Sites with `dbSsl: true` on a **managed database whose CA is not in Node.js's trust store** — Amazon RDS /
+Aurora, DigitalOcean Managed Databases, Azure Database for PostgreSQL / MySQL and any private CA — stop at
+boot after this upgrade until the CA is configured. **Before upgrading**, download your provider's CA
+bundle and set it, e.g. for RDS:
+
+```json
+{ "dbSsl": true, "dbSslCa": "./certs/rds-global-bundle.pem" }
+```
+
+(`https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`; Docker/Helm: `WORDJS_DB_SSL_CA`).
+Per-provider downloads and the last-resort opt-out are in
+[database.md — Upgrade note](documentation/database.md#upgrade-note-database-tls-is-verified-by-default);
+the boot error links there too.
+
 ### Changed
 
 - **Database TLS verifies the server certificate.** With `dbSsl: true`, Postgres and MySQL connections
@@ -18,8 +34,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
   `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
 
+### Fixed
+
+- **`/readyz` no longer hangs when the database stops answering.** The readiness check now has a deadline
+  (3 s, `WORDJS_READINESS_TIMEOUT_MS`): past it the probe answers `503 not_ready` (`db: "timeout"`)
+  instead of leaving every later probe waiting on the stuck one, and no second query is started while
+  the first is still pending. On Postgres and MySQL the check also runs with a server-side statement
+  timeout.
+- **WebSocket upgrades behind an untrusted CDN or reverse proxy.** Without `trustProxy` every visitor
+  behind such a proxy shared one upgrade budget, so collaboration, presence and HMR sockets could be
+  refused for the whole site. The gateway now gives each forwarded client behind a shared address its own
+  per-client budget and raises that address's total with the number of distinct clients behind it (up to
+  `rateLimit.upgradeSharedMultiplier`, default 20×). It also logs its trust posture at boot and warns once
+  when one address carries many forwarded clients, naming `trustProxy` / `WORDJS_TRUST_PROXY`.
+
 ### Security
 
+- **The gateway's debug "Proxying" line redacts query values,** like the access log, so one-time tokens
+  in reset, verification and invitation links are not written to debug logs.
 - **A plugin's JavaScript under `public/` now needs `browser:script`, like its `dist/` bundles.** The static
   `/plugins/<slug>/public/*.js|.mjs|.cjs` files are served only while the plugin is active and granted
   `browser:script`; styles, images and fonts keep the active-only rule. Every marketplace plugin that
@@ -40,6 +72,28 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   bucket.
 - **A plugin route's `req.user` carries the caller's email and login only with `users:read`.** Without the
   grant a route still receives `id`, `role`, `hasProfessionalMailbox` and `pluginCapabilities`.
+
+### Fixed
+
+- **`auctions` 1.1.1: signed-in bidding works again.** The plugin now requests `users:read`, so a signed-in
+  bidder bids as the address of their own account (the host shares a caller's email with a plugin route only
+  under that permission). Until an administrator approves it on an updated site, a signed-in bidder types an
+  address and confirms it with a mailed code, in `login` mode too. Every bid is now held to the per-auction and
+  site-wide bid windows, a mailed verification code stays charged to the requesting client's window, and
+  verification codes are bounded per client and site-wide (200 an hour) as well as per address.
+- **`vendor-marketplace` 1.0.3 and `conference-manager` 2.17.2: a right portal code is never refused for other
+  callers' wrong ones.** The per-client budget is the only one that refuses a portal sign-in; past the
+  per-portal and site-wide budgets every attempt waits a little longer instead, and only wrong codes for a
+  store or location that exists count toward them. The `vendor-marketplace` block now sends the CSRF header
+  with its sign-in, portal, application and inquiry requests, so a visitor who is signed in to the site can
+  use them.
+- **`event-tickets` 1.1.1: unpaid holds.** Unpaid orders of a ticket type together hold at most
+  `pendingHoldPercent` of its capacity (never less than one seat), the first order included. On a site without
+  a mail transport an order is held to the same per-address unpaid-seat window as a confirmed one, and the
+  confirmation codes the site mails are bounded site-wide (200 an hour).
+- **`digital-downloads` 1.1.1: the download and order-received mails carry only the site's own text** (no
+  longer the name typed in the order form), like the other public-form plugins' mails. Its block now sends
+  the CSRF header with the order request, so a visitor who is signed in to the site can order.
 
 ## [2.7.0] - 2026-10-17
 

@@ -194,9 +194,52 @@ The same two settings are offered everywhere a server database is configured:
 The wizard and the migration screen take the CA as **PEM text** only; a file path is set in
 `wordjs-config.json` (or via `WORDJS_DB_SSL_CA`) on the server itself.
 
-> **Upgrading:** releases before this change did not verify the database certificate at all. A site with
-> `dbSsl: true` whose server presents a certificate Node cannot verify will stop at boot after the
-> upgrade with the message above — add `dbSslCa` (preferred) or the explicit opt-out.
+#### Upgrade note: database TLS is verified by default
+
+> ⚠️ **Read this before upgrading a site with `"dbSsl": true`.** Releases up to and including 2.7.0 did
+> not verify the database server's certificate. From this release on they do, and a backend whose
+> database presents a certificate signed by a CA that is **not in Node.js's built-in trust store** stops
+> at boot. Most managed databases are in that case: Amazon RDS / Aurora, DigitalOcean Managed Databases,
+> and Azure Database for PostgreSQL / MySQL (depending on server generation and region) sign their
+> server certificates with their own or a regional CA. The boot log then reads:
+>
+> `The database server's TLS certificate could not be verified. … See documentation/database.md#upgrade-note-database-tls-is-verified-by-default`
+>
+> Before you upgrade, download your provider's CA bundle and point `dbSslCa` at it.
+
+| Provider | CA bundle to download | Setting |
+|---|---|---|
+| **Amazon RDS / Aurora** (PostgreSQL, MySQL, MariaDB) | `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` (every region; region bundles are also published by AWS) | `"dbSslCa": "./certs/rds-global-bundle.pem"` |
+| **DigitalOcean Managed Databases** | Control panel → your cluster → **Connection details** → **Download CA certificate** (`ca-certificate.crt`) | `"dbSslCa": "./certs/do-ca-certificate.crt"` |
+| **Azure Database for PostgreSQL / MySQL** | The root CA(s) Azure's documentation lists for your server (flexible servers: *DigiCert Global Root G2* and *Microsoft RSA Root Certificate Authority 2017*; concatenate both into one PEM file during Azure's CA rotation) | `"dbSslCa": "./certs/azure-db-ca.pem"` |
+| **Any other private / self-signed CA** | The CA certificate that signed the server certificate (PEM) | `"dbSslCa": "./certs/db-ca.pem"` |
+
+Step by step (on every backend node):
+
+```bash
+mkdir -p backend/certs
+curl -fsSL -o backend/certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+```
+
+```json
+{
+  "dbSsl": true,
+  "dbSslCa": "./certs/rds-global-bundle.pem"
+}
+```
+
+- Relative paths resolve against `backend/`; the PEM text itself is accepted too. A file with several
+  certificates (a bundle) is fine.
+- **Docker / Helm:** mount the bundle (a Secret or ConfigMap) and set
+  `WORDJS_DB_SSL_CA=/run/secrets/db-ca.pem` (with `WORDJS_DB_SSL=true`).
+- **Connect by the host name the certificate names** (the endpoint your provider gives you), not by an IP
+  address: the host name is verified as well. A connection through a provider's local proxy (for example
+  the Cloud SQL Auth Proxy) does not use `dbSsl` at all.
+- `NODE_EXTRA_CA_CERTS=/path/to/bundle.pem` in the backend's environment also works (it extends Node's
+  trust store for the whole process) as long as `dbSslCa` is not set.
+- **Last resort — encrypted but unauthenticated:** `"dbSslRejectUnauthorized": false` (or
+  `WORDJS_DB_SSL_REJECT_UNAUTHORIZED=false`) restores the old behaviour. Every connect logs a warning;
+  use it only for a provider that publishes no CA, and only while you obtain one.
 
 **Example — SQLite (default):**
 ```json
