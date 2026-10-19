@@ -40,9 +40,26 @@ function fmtMoney(cents, symbol) {
 async function jsonOrNull(res) {
     try { return await res.json(); } catch { return null; }
 }
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
 /** Portal fetch with the x-portal-token header (cookie rides along as a fallback). */
 async function portalFetch(path, token, opts = {}) {
-    const headers = { ...(opts.headers || {}) };
+    const headers = { ...(opts.headers || {}), ...(opts.method && opts.method !== "GET" ? csrfHeaders() : {}) };
     if (token) headers["x-portal-token"] = token;
     if (opts.body) headers["Content-Type"] = "application/json";
     const res = await fetch(API + path, { ...opts, headers });
@@ -139,7 +156,7 @@ function ProductModal({ product, symbol, onClose }) {
         try {
             const res = await fetch(`${API}/public/inquiry`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({
                     product_id: product.id,
                     buyer_name: name,
@@ -335,7 +352,7 @@ function PortalPanel({ symbol, onBack }) {
         try {
             const res = await fetch(`${API}/public/apply`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ ...apply, elapsed: Date.now() - applyOpenedAtRef.current }),
             });
             const data = await jsonOrNull(res);

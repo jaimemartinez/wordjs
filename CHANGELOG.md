@@ -38,13 +38,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **`vendor-marketplace` 1.0.3 and `conference-manager` 2.17.2: a right portal code is never refused for other
   callers' wrong ones.** The per-client budget is the only one that refuses a portal sign-in; past the
   per-portal and site-wide budgets every attempt waits a little longer instead, and only wrong codes for a
-  store or location that exists count toward them.
+  store or location that exists count toward them. The `vendor-marketplace` block now sends the CSRF header
+  with its sign-in, portal, application and inquiry requests, so a visitor who is signed in to the site can
+  use them.
 - **`event-tickets` 1.1.1: unpaid holds.** Unpaid orders of a ticket type together hold at most
   `pendingHoldPercent` of its capacity (never less than one seat), the first order included. On a site without
   a mail transport an order is held to the same per-address unpaid-seat window as a confirmed one, and the
   confirmation codes the site mails are bounded site-wide (200 an hour).
 - **`digital-downloads` 1.1.1: the download and order-received mails carry only the site's own text** (no
-  longer the name typed in the order form), like the other public-form plugins' mails.
+  longer the name typed in the order form), like the other public-form plugins' mails. Its block now sends
+  the CSRF header with the order request, so a visitor who is signed in to the site can order.
 
 ## [2.7.0] - 2026-10-17
 
