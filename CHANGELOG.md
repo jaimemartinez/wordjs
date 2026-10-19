@@ -6,6 +6,34 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Marketplace payment and public-form plugins: charge amounts, return pages, seat holds, bidding
+  and visitor mail.** Regression tests boot each real plugin (`backend/src/tests/payment-plugins-hardening.test.ts`).
+  - **donations 1.0.2, restaurant-menu 2.0.2** — a zero-decimal currency (JPY, KRW, CLP…) was sent to
+    Stripe in cents, so the charge was 100 times the price. Both now convert the amount the way
+    online-store already did; a donation in such a currency records the whole amount it charges.
+  - **online-store 2.0.2, donations 1.0.2, restaurant-menu 2.0.2** — the Stripe Checkout `success_url`
+    and `cancel_url` follow the visitor's page only when it is on this site (same origin, under the site
+    path); any other `page_url` returns to the site URL, as bookings already did.
+  - **event-tickets 1.1.0** — a paid order now holds its seats only after the buyer types the 8-digit code
+    mailed to the address (`POST /public/order/verify`); an unconfirmed order holds nothing and expires
+    after 15 minutes. Confirmed unpaid orders may hold at most `pendingHoldPercent` of a ticket type
+    (default 50 %) and expire after `pendingTtlMinutes` (default 20, was a fixed 30) — both in
+    **Entradas → Configuración**. Unpaid orders no longer count in the site-wide order window. On a site
+    with no mail transport at all, a paid order holds its seats right away, as before.
+  - **auctions 1.1.0** — a bid may raise the price by at most `max_bid_jump_percent` of the current
+    price (default 100 %, `0` = no cap), and always by at least ten increments. Who may bid is a setting
+    (`bid_verification`): `email` (default) — the bidder confirms the address once per browser with a
+    code mailed to it (`POST /public/verify-bidder`); `login` — signed-in accounts only, bidding as their
+    account address (`POST /bid-user`); `none` — anyone, the previous behaviour. A site with no mail
+    transport keeps open bidding. A client's first bid on an auction in its window is no longer held to
+    the shared per-auction and site-wide windows.
+  - **online-store, donations, event-tickets, bookings 1.0.2, newsletter 1.0.2, auctions** — the mails the
+    public forms send to an address nobody has verified yet carry only the site's own text, never the
+    name (or message) the visitor typed, and each is bounded per recipient address (5 an hour; the
+    newsletter opt-in 3 an hour and 6 a day; auction outbid notices 10 an hour).
+
 ## [2.7.0] - 2026-10-17
 
 ### Added

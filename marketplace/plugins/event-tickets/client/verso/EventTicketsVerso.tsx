@@ -122,6 +122,7 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
     const [error, setError] = useState("");
     const [result, setResult] = useState(null);  // order response after submit
     const [lookup, setLookup] = useState(null);  // order status from ?tickets=<token>
+    const [code, setCode] = useState("");        // code mailed to confirm a paid order
     const mountedAtRef = useRef(Date.now());
 
     // Load published upcoming events (public endpoint; also works in the editor iframe).
@@ -225,6 +226,32 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
         }
     };
 
+    // A paid order holds its seats once the buyer types the code mailed to the address.
+    const confirmCode = async (e) => {
+        e.preventDefault();
+        if (!result || submitting) return;
+        setError("");
+        setSubmitting(true);
+        try {
+            const res = await fetch("/api/v1/plugin/event-tickets/public/order/verify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token: result.token, code: code.trim() }),
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setError(body.error || "No se pudo confirmar el pedido, inténtalo de nuevo.");
+                return;
+            }
+            setResult(body);
+            setCode("");
+        } catch {
+            setError("Error de conexión — inténtalo de nuevo.");
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
     const accent = accentColor || "#4f46e5";
     const wrapStyle = { "--wjet-accent": accent };
 
@@ -250,6 +277,8 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
                             {lookup.manualInstructions ? <p style={{ margin: ".5rem 0 0" }}>{lookup.manualInstructions}</p> : null}
                             <p className="wjet-note">Cuando confirmemos tu pago recibirás los códigos por correo.</p>
                         </div>
+                    ) : lookup.status === "unverified" ? (
+                        <div className="wjet-pend">Este pedido aún no se confirmó con el código enviado por correo.</div>
                     ) : (
                         <div className="wjet-error">Este pedido fue cancelado.</div>
                     )}
@@ -261,7 +290,26 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
         content = (
             <div className="wjet-card">
                 <div className="wjet-body">
-                    {result.status === "paid" ? (
+                    {result.status === "unverified" ? (
+                        <form className="wjet-pend wjet-form" onSubmit={confirmCode}>
+                            <strong>Confirma tu correo</strong> — total {fmtMoney(result.total_cents, symbol)}.
+                            <p style={{ margin: ".5rem 0" }}>{result.message || "Te enviamos un código a tu correo."}</p>
+                            <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                placeholder="Código de 8 dígitos"
+                                aria-label="Código de confirmación"
+                                value={code}
+                                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                                required
+                            />
+                            {error ? <div className="wjet-error" style={{ marginTop: ".5rem" }}>{error}</div> : null}
+                            <button type="submit" className="wjet-btn" style={{ marginTop: ".75rem" }} disabled={submitting || code.length !== 8}>
+                                {submitting ? "Confirmando…" : "Confirmar pedido"}
+                            </button>
+                        </form>
+                    ) : result.status === "paid" ? (
                         <div className="wjet-ok">
                             <strong>¡Listo! Tus entradas están confirmadas.</strong>
                             <TicketCodes tickets={result.tickets} />

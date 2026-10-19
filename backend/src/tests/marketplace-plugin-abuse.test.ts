@@ -153,6 +153,9 @@ async function seedAuction(p: BootedPlugin) {
         `INSERT INTO ${p.prefix}auctions (title, slug, start_price_cents, min_increment_cents, ends_at, anti_snipe_min, status, is_published, created_at)
          VALUES ('Car', 'car', 1000, 100, ?, 2, 'active', 1, ?)`
     ).run(sqlUtc(Date.now() + 3600e3), sqlUtc(Date.now()));
+    // These cases are about the throttles: open bidding to anyone (no address proof) with no cap on a
+    // bid's jump, so every bid lands on its own. Both rules are covered in payment-plugins-hardening.
+    p.sdb.prepare(`INSERT INTO ${p.prefix}settings (name, value) VALUES ('bid_verification', 'none'), ('max_bid_jump_percent', '0')`).run();
 }
 const bid = (p: BootedPlugin, clientKey: string, amount: number, email = `${clientKey}@x.io`, extra: any = {}) =>
     p.call('post', '/public/bid', {
@@ -1515,9 +1518,17 @@ async function seedPaidType(p: BootedPlugin, capacity: number) {
     p.sdb.prepare(`INSERT INTO ${p.prefix}ticket_types (event_id, name, price_cents, capacity, sold, sales_end, is_active) VALUES (1, 'Paid', 1000, ?, 0, '', 1)`).run(capacity);
     return 2; // the new type's id
 }
-const paidOrder = (p: BootedPlugin, clientKey: string, qty: number) => p.call('post', '/public/order', {
-    clientKey, body: { event_id: 1, buyer_name: 'Ana', buyer_email: `${clientKey}@x.io`, items: [{ ticket_type_id: 2, qty }], elapsed: 5000 },
-});
+/** A paid order as the buyer places it: the order, then the code mailed to the address (it holds seats only then). */
+const paidOrder = async (p: BootedPlugin, clientKey: string, qty: number) => {
+    const email = `${clientKey}@x.io`;
+    const placed = await p.call('post', '/public/order', {
+        clientKey, body: { event_id: 1, buyer_name: 'Ana', buyer_email: email, items: [{ ticket_type_id: 2, qty }], elapsed: 5000 },
+    });
+    if (placed.status !== 200 || placed.body.status !== 'unverified') return placed;
+    const mail = p.mails.filter((m) => m.to === email && /código/i.test(m.subject)).pop();
+    const code = String(mail && mail.text).match(/\b(\d{8})\b/)![1];
+    return p.call('post', '/public/order/verify', { clientKey, body: { token: placed.body.token, code } });
+};
 const ageOrders = (p: BootedPlugin) => p.sdb.prepare(`UPDATE ${p.prefix}orders SET created_at = ? WHERE payment_status = 'pending'`)
     .run(new Date(Date.now() - 3600e3).toISOString());
 const orderIdOf = (p: BootedPlugin, email: string) => p.sdb.prepare(`SELECT id FROM ${p.prefix}orders WHERE buyer_email = ?`).get(email).id as number;

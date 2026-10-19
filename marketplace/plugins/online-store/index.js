@@ -50,7 +50,7 @@
 
 exports.metadata = {
     name: 'Online Store',
-    version: '2.0.1',
+    version: '2.0.2',
     description: 'Tienda completa: variantes, galerías, zonas de envío, impuestos, reembolsos, informes, webhooks de Stripe y pedidos por cuenta.',
     author: 'WordJS',
 };
@@ -71,6 +71,27 @@ const STRIPE_ZERO_DECIMAL = new Set([
 ]);
 const toStripeAmount = (cents, currencyCode) =>
     STRIPE_ZERO_DECIMAL.has(String(currencyCode || '').toLowerCase()) ? Math.round((Number(cents) || 0) / 100) : (Number(cents) || 0);
+
+/**
+ * The page a Stripe Checkout returns to: the visitor's page only when it is on this site (same
+ * origin and under the site's path), otherwise the site URL itself. Stripe redirects the payer to
+ * success_url / cancel_url, so an unchecked page_url would turn the checkout into an open redirect.
+ */
+function onSiteReturnUrl(pageUrl, siteUrl) {
+    let site;
+    try { site = new URL(String(siteUrl || '')); } catch (e) { return String(siteUrl || ''); }
+    const sitePath = site.pathname.replace(/\/+$/, '');
+    try {
+        const u = new URL(String(pageUrl || '').trim().slice(0, 1000));
+        if ((u.protocol === 'http:' || u.protocol === 'https:') && u.origin === site.origin
+            && !u.username && !u.password
+            && (sitePath === '' || u.pathname === sitePath || u.pathname.startsWith(sitePath + '/'))) {
+            u.hash = '';
+            return u.toString();
+        }
+    } catch (e) { /* not a URL — fall back to the site */ }
+    return site.toString();
+}
 
 // Timers created in init(), cleared in deactivate() (module scope so both exports see them).
 const activeTimers = [];
@@ -413,15 +434,37 @@ exports.init = async function (wordjs) {
         return t;
     };
 
+    // Mails to one customer address from the anonymous checkout are bounded whatever clients ask
+    // (rotating clients defeat a per-client limit): past MAIL_PER_ADDRESS_MAX in the window the order
+    // is still created and its token shown on screen, but no mail goes to that address.
+    const MAIL_PER_ADDRESS_MAX = 5;
+    const MAIL_PER_ADDRESS_WINDOW_MS = 60 * 60 * 1000;
+    const mailSentTo = new Map(); // lower-cased address -> timestamps[]
+    const mailBudget = (email) => {
+        const key = String(email || '').trim().toLowerCase();
+        const now = Date.now();
+        if (!mailSentTo.has(key) && mailSentTo.size >= 10000) {
+            for (const [k, ts] of mailSentTo) if (!ts.length || now - ts[ts.length - 1] >= MAIL_PER_ADDRESS_WINDOW_MS) mailSentTo.delete(k);
+            while (mailSentTo.size >= 10000) mailSentTo.delete(mailSentTo.keys().next().value);
+        }
+        const ts = (mailSentTo.get(key) || []).filter((t) => now - t < MAIL_PER_ADDRESS_WINDOW_MS);
+        if (ts.length >= MAIL_PER_ADDRESS_MAX) { mailSentTo.set(key, ts); return false; }
+        ts.push(now);
+        mailSentTo.set(key, ts);
+        return true;
+    };
+
+    // The "order received" mail goes to an address the checkout never verified, so it carries only
+    // the site's own text (products, prices, instructions) — never what the visitor typed.
     const sendOrderEmails = async (order, cfg) => {
         const items = parseItems(order.items);
         const lines = items.map((i) => `- ${itemLabel(i)} x${i.qty} — ${fmtMoney(i.price_cents * i.qty, cfg.currencySymbol)}`).join('\n');
         const totals = orderTotalsText(order, cfg);
         try {
-            await mail({
+            if (mailBudget(order.customer_email)) await mail({
                 to: order.customer_email,
                 subject: `Pedido recibido — #${order.id}`,
-                text: `Hola ${order.customer_name},\n\nRecibimos tu pedido #${order.id}.\n\n${lines}\n\n${totals}\n\n`
+                text: `Hola,\n\nRecibimos tu pedido #${order.id}.\n\n${lines}\n\n${totals}\n\n`
                     + (order.payment_method === 'manual' ? `Pago: ${cfg.manualPaymentInstructions}\n\n` : '')
                     + (order.shipping_method === 'pickup' ? `Recogida: ${cfg.pickupInstructions}\n\n` : '')
                     + `Código de seguimiento: ${order.token}\n\nGracias por tu compra.`,
@@ -1017,8 +1060,7 @@ exports.init = async function (wordjs) {
 
         if (method === 'stripe') {
             try {
-                let pageUrl = String(body.page_url || '').trim().slice(0, 1000);
-                if (!/^https?:\/\//i.test(pageUrl)) pageUrl = await site.url();
+                const pageUrl = onSiteReturnUrl(body.page_url, await site.url());
                 const sep = pageUrl.includes('?') ? '&' : '?';
                 const form = new URLSearchParams();
                 form.set('mode', 'payment');

@@ -17,6 +17,10 @@
  * Responses also carry epoch-ms fields (endsAtMs/startsAtMs/serverNowMs) so clients never have to
  * parse the SQL string (JS would read it as LOCAL time).
  *
+ * Who may bid is a setting (bid_verification): a bidder proves the address once per browser with a
+ * mailed code ('email', the default), signs in ('login') or nobody is checked ('none'). One bid may
+ * raise the price by at most max_bid_jump_percent of it.
+ *
  * Derived state (never stored): currentPrice = MAX(bids.amount_cents) or start_price_cents;
  * winner = the top bid once ended. Routes lazily flip status 'active' -> 'ended' when
  * now > ends_at, so no cron is needed.
@@ -24,7 +28,7 @@
 
 exports.metadata = {
     name: 'Auctions',
-    version: '1.0.1',
+    version: '1.1.0',
     description: 'Auction listings with public bidding, minimum increments, anti-snipe extension and winner reporting.',
     author: 'WordJS',
 };
@@ -40,6 +44,7 @@ exports.init = async function (wordjs) {
         auctions: P + 'auctions',
         bids: P + 'bids',
         settings: P + 'settings',
+        bidders: P + 'bidders',
     };
 
     // ---- limits & constants ----------------------------------------------------------------------
@@ -51,6 +56,23 @@ exports.init = async function (wordjs) {
     const BID_MAX_CLIENT_ATTEMPTS = 30;         // ALL attempts/min per client (only throttles that client)
     const BID_MAX_GLOBAL = 300;                 // safety net across all auctions (INSERTED bids only)
     const MIN_FORM_ELAPSED_MS = 3000;           // anti-bot: form must be open at least this long
+    // A bid may raise the price by at most max_bid_jump_percent (setting; 0 = no cap) of the current
+    // price, and always by at least BID_JUMP_MIN_INCREMENTS increments — so one bid can no longer jump
+    // to an amount nobody can top.
+    const BID_JUMP_PERCENT_DEFAULT = 100;
+    const BID_JUMP_PERCENT_MAX = 10000;
+    const BID_JUMP_MIN_INCREMENTS = 10;
+    // Who may bid (setting bid_verification): 'email' — a bidder proves the address with a code mailed
+    // to it (once per browser); 'login' — signed-in accounts only, as their account address; 'none' —
+    // anyone (the pre-1.1.0 behaviour). 'email' falls back to 'none' on a site that cannot send mail.
+    const BID_VERIFICATION_MODES = ['email', 'login', 'none'];
+    const VERIFY_CODE_TTL_MS = 30 * 60 * 1000;
+    const VERIFY_CODE_MAX_TRIES = 5;            // wrong codes before a new code must be requested
+    const VERIFY_MAIL_PER_HOUR = 3;             // verification codes mailed to one address per hour
+    const VERIFY_CLIENT_ATTEMPTS = 20;          // code checks per client per BID_WINDOW_MS
+    const OUTBID_MAIL_PER_HOUR = 10;            // outbid notices mailed to one address per hour
+    // The host's own refusals when this site cannot send mail at all (same list as bookings).
+    const NO_MAIL_TRANSPORT_RE = [/^Mail server not available$/, /tried to access 'email' \(admin\) without permission/];
     const PUBLIC_LIST_DEFAULT = 12;
     const PUBLIC_LIST_MAX = 50;
 
@@ -92,6 +114,23 @@ exports.init = async function (wordjs) {
             'value TEXT'
         ]);
 
+        // Bidder addresses proven with a mailed code (bid_verification = 'email'). `bidder_key` is the
+        // secret the verifying browser keeps and sends with each bid. VARCHAR so the unique index is
+        // valid on MySQL.
+        await db.createTable(T.bidders, [
+            'id INT_PK',
+            'email VARCHAR(200) NOT NULL',
+            'bidder_key TEXT',
+            'code TEXT',
+            'code_expires_at TEXT',
+            'code_tries INT DEFAULT 0',
+            'verified_at TEXT',
+            'created_at TEXT'
+        ]);
+        try {
+            await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_bidders_email ON ${T.bidders} (email)`);
+        } catch (e) { console.error('[auctions] could not create the bidder index:', e.message); }
+
         // Index names must also carry the plugin prefix.
         try {
             await db.run(`CREATE INDEX IF NOT EXISTS ${P}idx_bids_auction ON ${T.bids} (auction_id, amount_cents)`);
@@ -121,6 +160,20 @@ exports.init = async function (wordjs) {
         }
     }
     const getCurrencySymbol = () => getSetting('currency_symbol', '$');
+    const getBidVerification = async () => {
+        const v = await getSetting('bid_verification', 'email');
+        return BID_VERIFICATION_MODES.includes(v) ? v : 'email';
+    };
+    const getBidJumpPercent = async () => {
+        const n = Number(await getSetting('max_bid_jump_percent', String(BID_JUMP_PERCENT_DEFAULT)));
+        return Number.isInteger(n) && n >= 0 && n <= BID_JUMP_PERCENT_MAX ? n : BID_JUMP_PERCENT_DEFAULT;
+    };
+    /** Highest bid accepted over `currentPriceCents` (null = no cap). */
+    const maxBidFor = (currentPriceCents, incCents, jumpPercent) => (jumpPercent > 0
+        ? Math.min(MAX_MONEY_CENTS, Math.max(
+            currentPriceCents + incCents * (BID_JUMP_MIN_INCREMENTS + 1),
+            currentPriceCents + Math.floor(currentPriceCents * jumpPercent / 100)))
+        : null);
 
     // ---- date helpers (UTC 'YYYY-MM-DD HH:MM:SS' everywhere in the DB) ----------------------------
     const SQL_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/;
@@ -227,7 +280,7 @@ exports.init = async function (wordjs) {
     }
 
     /** Public projection of an auction row + derived pricing/time fields. Never includes emails. */
-    function publicView(a, bidCount, topAmount) {
+    function publicView(a, bidCount, topAmount, jumpPercent) {
         const nowMs = Date.now();
         const endsAtMs = parseSqlMs(a.ends_at);
         const startsAtMs = a.starts_at ? parseSqlMs(a.starts_at) : null;
@@ -243,6 +296,7 @@ exports.init = async function (wordjs) {
             min_increment_cents: inc,
             currentPriceCents,
             minNextBidCents: currentPriceCents + inc,
+            maxNextBidCents: maxBidFor(currentPriceCents, inc, jumpPercent),
             bidCount: Number(bidCount) || 0,
             starts_at: a.starts_at || null,
             startsAtMs: Number.isFinite(startsAtMs) ? startsAtMs : null,
@@ -322,6 +376,78 @@ exports.init = async function (wordjs) {
 
     // Public callers never see an error's text: a driver's message names tables, columns and
     // constraints. The details go to the server log.
+    // ---- mail budgets & bidder verification ---------------------------------------------------------
+    // Mails to one address are bounded whatever clients ask (rotating clients defeat a per-client
+    // limit). key -> timestamps[] over the last hour; the map is bounded like bidHits.
+    const MAIL_WINDOW_MS = 60 * 60 * 1000;
+    const mailSentTo = new Map();
+    function mailBudget(key, max) {
+        const now = Date.now();
+        if (!mailSentTo.has(key) && mailSentTo.size >= 20000) {
+            for (const [k, ts] of mailSentTo) if (!ts.length || now - ts[ts.length - 1] >= MAIL_WINDOW_MS) mailSentTo.delete(k);
+            while (mailSentTo.size >= 20000) mailSentTo.delete(mailSentTo.keys().next().value);
+        }
+        const ts = (mailSentTo.get(key) || []).filter((t) => now - t < MAIL_WINDOW_MS);
+        if (ts.length >= max) { mailSentTo.set(key, ts); return false; }
+        ts.push(now);
+        mailSentTo.set(key, ts);
+        return true;
+    }
+
+    /** Length-independent string comparison for secrets. */
+    function safeEqual(a, b) {
+        const x = String(a || ''), y = String(b || '');
+        let diff = x.length ^ y.length;
+        for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x.charCodeAt(i) || 0) ^ (y.charCodeAt(i) || 0);
+        return diff === 0;
+    }
+
+    /** True when `email` was verified and `key` is the bidder key its verification handed out. */
+    async function bidderProven(email, key) {
+        if (typeof key !== 'string' || key.length < 16 || key.length > 128) return false;
+        const row = await db.get(`SELECT bidder_key, verified_at FROM ${T.bidders} WHERE email = ?`, [email]);
+        return !!(row && row.verified_at && row.bidder_key && safeEqual(row.bidder_key, key));
+    }
+
+    /**
+     * Mail a fresh verification code to `email`. Returns 'sent', 'throttled' (the address had its
+     * share this hour — nothing rotated, nothing sent), 'no-transport' (this site cannot send mail
+     * at all) or 'failed'. The mail carries only the site's own text and the code.
+     */
+    async function sendVerifyCode(email, auctionTitle) {
+        if (!mailBudget('verify:' + email, VERIFY_MAIL_PER_HOUR)) return 'throttled';
+        const code = String(await wordjs.crypto.randomInt(0, 100000000)).padStart(8, '0');
+        const expires = new Date(Date.now() + VERIFY_CODE_TTL_MS).toISOString().slice(0, 19).replace('T', ' ');
+        const setCode = () => db.run(
+            `UPDATE ${T.bidders} SET code = ?, code_expires_at = ?, code_tries = 0 WHERE email = ?`,
+            [code, expires, email]
+        );
+        const up = await setCode();
+        if (!up || !up.changes) {
+            try {
+                await db.run(
+                    `INSERT INTO ${T.bidders} (email, code, code_expires_at, code_tries, created_at) VALUES (?, ?, ?, 0, ?)`,
+                    [email, code, expires, nowSql()]
+                );
+            } catch (e) { await setCode(); } // inserted concurrently: the unique email decided
+        }
+        const minutes = Math.round(VERIFY_CODE_TTL_MS / 60000);
+        try {
+            await mail({
+                to: email,
+                subject: `Tu código para pujar: ${code}`,
+                text: `Tu código para pujar en "${auctionTitle}" es ${code}. Escríbelo en la subasta para confirmar tu correo; caduca en ${minutes} minutos.\n\nSi no intentaste pujar, ignora este correo.`,
+                html: `<p>Tu código para pujar en <strong>"${escHtml(auctionTitle)}"</strong> es:</p><p style="font-size:26px;font-weight:bold;letter-spacing:4px">${code}</p><p>Escríbelo en la subasta para confirmar tu correo; caduca en ${minutes} minutos.</p><p style="color:#6b7280;font-size:12px">Si no intentaste pujar, ignora este correo.</p>`,
+            });
+            return 'sent';
+        } catch (e) {
+            const msg = String((e && e.message) || e || '');
+            if (NO_MAIL_TRANSPORT_RE.some((re) => re.test(msg))) return 'no-transport';
+            console.warn('[auctions] verification code not sent:', msg);
+            return 'failed';
+        }
+    }
+
     const failQuietly = (res, e, what) => {
         console.error(`[auctions] ${what} failed:`, e && e.message ? e.message : e);
         res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
@@ -342,7 +468,8 @@ exports.init = async function (wordjs) {
                  FROM ${T.auctions} a
                  WHERE a.is_published = 1 AND a.status IN ('active', 'ended')`
             );
-            const items = rows.map((a) => publicView(a, a.bid_count, a.top_amount));
+            const jumpPercent = await getBidJumpPercent();
+            const items = rows.map((a) => publicView(a, a.bid_count, a.top_amount, jumpPercent));
             // Active first (soonest ending on top), then ended (most recent first).
             items.sort((x, y) => {
                 const xa = x.status === 'active' ? 0 : 1;
@@ -373,7 +500,7 @@ exports.init = async function (wordjs) {
 
             const countRow = await db.get(`SELECT COUNT(*) AS c FROM ${T.bids} WHERE auction_id = ?`, [a.id]);
             const top = await topBid(a.id);
-            const view = publicView(a, countRow ? countRow.c : 0, top ? top.amount_cents : 0);
+            const view = publicView(a, countRow ? countRow.c : 0, top ? top.amount_cents : 0, await getBidJumpPercent());
 
             const history = await db.all(
                 `SELECT bidder_name, amount_cents, created_at
@@ -394,14 +521,19 @@ exports.init = async function (wordjs) {
                 })),
                 winner,
                 currencySymbol: await getCurrencySymbol(),
+                bidVerification: await getBidVerification(),
                 serverNowMs: Date.now(),
             });
         } catch (e) { failQuietly(res, e, 'auction detail'); }
     });
 
     // Place a bid. Anti-spam (honeypot + min elapsed) -> rate cap -> full server-side validation.
-    // Amount must be >= currentPrice + min_increment where currentPrice is re-read from the DB.
-    http.route('post', '/public/bid', async (req, res) => {
+    // Amount must be >= currentPrice + min_increment where currentPrice is re-read from the DB, and
+    // within the jump cap. `account` is the signed-in bidder ('/bid-user'), null on the public route.
+    http.route('post', '/public/bid', (req, res) => placeBid(req, res, null));
+    http.route('post', '/bid-user', { auth: true }, (req, res) => placeBid(req, res, req.user || null));
+
+    async function placeBid(req, res, account) {
         const body = req.body || {};
         let releaseHits = null; // refunded in `finally` unless the bid inserted
         let inserted = false;
@@ -433,7 +565,8 @@ exports.init = async function (wordjs) {
 
             // --- input validation ---
             const name = String(body.bidder_name || '').trim();
-            const email = String(body.bidder_email || '').trim().toLowerCase();
+            // A signed-in bidder bids as the account's own address.
+            const email = String((account ? account.userEmail : body.bidder_email) || '').trim().toLowerCase();
             const amountCents = centsOrNull(body.amount_cents, false);
             if (name.length < 2 || name.length > 120) {
                 return res.status(400).json({ error: 'Escribe tu nombre (2 a 120 caracteres).' });
@@ -446,8 +579,14 @@ exports.init = async function (wordjs) {
             }
             // Claim the shared windows and the per-client / per-email ones in one synchronous step
             // (no await since the top of the handler), so concurrent bids see each other's claims.
-            const windows = [['all', BID_MAX_GLOBAL], ['a:' + auctionId, BID_MAX_PER_AUCTION]];
-            if (clientKey) windows.push(['ca:' + auctionId + ':' + clientKey, BID_MAX_PER_CLIENT_AUCTION]);
+            // A client's FIRST bid on this auction in its window is not held to the shared windows:
+            // a few clients filling them could otherwise keep every other bidder out of the auction
+            // (and win at their own price). Their own later bids still count against them.
+            const caKey = 'ca:' + auctionId + ':' + clientKey;
+            const caRec = clientKey ? bidHits.get(caKey) : null;
+            const firstInWindow = !!clientKey && (!caRec || Date.now() - caRec.first >= BID_WINDOW_MS || caRec.count === 0);
+            const windows = firstInWindow ? [] : [['all', BID_MAX_GLOBAL], ['a:' + auctionId, BID_MAX_PER_AUCTION]];
+            if (clientKey) windows.push([caKey, BID_MAX_PER_CLIENT_AUCTION]);
             releaseHits = claimHits(windows);
             if (!releaseHits) {
                 return res.status(429).json({ error: 'Demasiadas pujas en este momento. Espera un minuto e inténtalo de nuevo.' });
@@ -487,6 +626,38 @@ exports.init = async function (wordjs) {
                     currentPriceCents,
                     minBidCents,
                 });
+            }
+            const maxBidCents = maxBidFor(currentPriceCents, inc, await getBidJumpPercent());
+            if (maxBidCents !== null && amountCents > maxBidCents) {
+                return res.status(400).json({
+                    error: `La puja máxima en este momento es ${fmtMoney(maxBidCents, symbol)}.`,
+                    currentPriceCents,
+                    minBidCents,
+                    maxBidCents,
+                });
+            }
+
+            // --- who may bid (see BID_VERIFICATION_MODES) ---
+            const mode = await getBidVerification();
+            if (mode === 'login' && !account) {
+                return res.status(401).json({ error: 'Inicia sesión para pujar en esta subasta.', loginRequired: true });
+            }
+            if (mode === 'email' && !account) {
+                const proven = await bidderProven(email, body.bidder_key);
+                if (!proven) {
+                    const sent = await sendVerifyCode(email, a.title);
+                    if (sent === 'failed') {
+                        return res.status(503).json({ error: 'No se pudo enviar el código de verificación. Inténtalo de nuevo en unos minutos.' });
+                    }
+                    if (sent !== 'no-transport') {
+                        // Same reply whether a code went out or this address already had its share.
+                        return res.status(202).json({
+                            needsVerification: true,
+                            message: 'Para pujar, confirma tu correo: te enviamos un código de 8 dígitos. Si no llega, revisa el spam o espera unos minutos.',
+                        });
+                    }
+                    // This site cannot send mail at all: bidding stays open, as in 'none'.
+                }
             }
 
             // --- guarded single-statement insert: the bid only lands while the auction is still
@@ -530,13 +701,15 @@ exports.init = async function (wordjs) {
             const endsAt = fresh ? fresh.ends_at : a.ends_at;
 
             // --- best-effort outbid notice to the PREVIOUS top bidder (bid stands even if mail fails) ---
-            if (isTop && prevTop && prevTop.bidder_email && prevTop.bidder_email !== email) {
+            // It carries only the site's own text: the stored name was typed by whoever placed that bid.
+            if (isTop && prevTop && prevTop.bidder_email && prevTop.bidder_email !== email
+                && mailBudget('outbid:' + prevTop.bidder_email, OUTBID_MAIL_PER_HOUR)) {
                 try {
                     await mail({
                         to: prevTop.bidder_email,
                         subject: `Te han superado en la subasta "${a.title}"`,
-                        text: `Hola ${prevTop.bidder_name},\n\nAlguien superó tu puja en la subasta "${a.title}". El precio actual es ${fmtMoney(newPriceCents, symbol)}. Si quieres seguir participando, vuelve a pujar antes de que termine.\n\n— Subastas`,
-                        html: `<p>Hola ${escHtml(prevTop.bidder_name)},</p><p>Alguien superó tu puja en la subasta <strong>"${escHtml(a.title)}"</strong>. El precio actual es <strong>${escHtml(fmtMoney(newPriceCents, symbol))}</strong>.</p><p>Si quieres seguir participando, vuelve a pujar antes de que termine.</p>`,
+                        text: `Hola,\n\nAlguien superó tu puja en la subasta "${a.title}". El precio actual es ${fmtMoney(newPriceCents, symbol)}. Si quieres seguir participando, vuelve a pujar antes de que termine.\n\n— Subastas`,
+                        html: `<p>Hola,</p><p>Alguien superó tu puja en la subasta <strong>"${escHtml(a.title)}"</strong>. El precio actual es <strong>${escHtml(fmtMoney(newPriceCents, symbol))}</strong>.</p><p>Si quieres seguir participando, vuelve a pujar antes de que termine.</p>`,
                     });
                 } catch (e) { /* mail provider missing/failing — silently degrade */ }
             }
@@ -555,6 +728,43 @@ exports.init = async function (wordjs) {
         } finally {
             if (!inserted && releaseHits) releaseHits();
         }
+    }
+
+    // Prove a bidder address with the code mailed to it; the reply carries the bidder key this
+    // browser sends with its bids from now on (the same key for every browser the address verifies).
+    http.route('post', '/public/verify-bidder', async (req, res) => {
+        try {
+            const body = req.body || {};
+            const clientKey = String(req.clientKey || '').slice(0, 64);
+            if (clientKey && rateLimited('v:' + clientKey, VERIFY_CLIENT_ATTEMPTS)) {
+                return res.status(429).json({ error: 'Demasiados intentos. Espera un minuto e inténtalo de nuevo.' });
+            }
+            const email = String(body.bidder_email || '').trim().toLowerCase();
+            const code = String(body.code || '').replace(/\s+/g, '');
+            if (!email || email.length > 200 || !EMAIL_RE.test(email) || !/^\d{8}$/.test(code)) {
+                return res.status(400).json({ error: 'Código no válido.' });
+            }
+            const row = await db.get(`SELECT * FROM ${T.bidders} WHERE email = ?`, [email]);
+            const expired = !row || !row.code || !(parseSqlMs(row.code_expires_at) > Date.now());
+            if (expired) return res.status(400).json({ error: 'El código caducó. Vuelve a pujar para recibir uno nuevo.' });
+            // Count the try first, in one conditional statement, so concurrent guesses share the budget.
+            const tried = await db.run(
+                `UPDATE ${T.bidders} SET code_tries = code_tries + 1 WHERE id = ? AND code = ? AND code_tries < ?`,
+                [row.id, row.code, VERIFY_CODE_MAX_TRIES]
+            );
+            if (!tried || tried.changes !== 1) {
+                return res.status(400).json({ error: 'Demasiados intentos con este código. Vuelve a pujar para recibir uno nuevo.' });
+            }
+            if (!safeEqual(code, String(row.code))) return res.status(400).json({ error: 'Código incorrecto.' });
+            const key = row.bidder_key || await wordjs.crypto.randomToken(24);
+            await db.run(
+                `UPDATE ${T.bidders} SET bidder_key = COALESCE(bidder_key, ?), verified_at = ?, code = NULL, code_tries = 0 WHERE id = ? AND code = ?`,
+                [key, nowSql(), row.id, row.code]
+            );
+            const fresh = await db.get(`SELECT bidder_key, verified_at FROM ${T.bidders} WHERE id = ?`, [row.id]);
+            if (!fresh || !fresh.verified_at || !fresh.bidder_key) return res.status(409).json({ error: 'Inténtalo de nuevo.' });
+            res.json({ success: true, bidder_key: fresh.bidder_key });
+        } catch (e) { failQuietly(res, e, 'bidder verification'); }
     });
 
     // =================================================================================================
@@ -787,14 +997,39 @@ exports.init = async function (wordjs) {
     // Display settings (currency symbol — not a secret).
     http.route('get', '/settings', { auth: true, admin: true }, async (req, res) => {
         try {
-            res.json({ currencySymbol: await getCurrencySymbol() });
+            res.json({
+                currencySymbol: await getCurrencySymbol(),
+                bidVerification: await getBidVerification(),
+                maxBidJumpPercent: await getBidJumpPercent(),
+            });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
     http.route('post', '/settings', { auth: true, admin: true }, async (req, res) => {
         try {
-            const sym = String((req.body && req.body.currencySymbol) || '').trim().slice(0, 8);
-            await setSetting('currency_symbol', sym || '$');
-            res.json({ success: true, currencySymbol: sym || '$' });
+            const body = req.body || {};
+            // Each field is optional (absent = keep), so an older admin screen saving only the symbol
+            // does not reset the bidding rules.
+            if (body.bidVerification !== undefined) {
+                if (!BID_VERIFICATION_MODES.includes(body.bidVerification)) return res.status(400).json({ error: 'Modo de verificación no válido.' });
+                await setSetting('bid_verification', body.bidVerification);
+            }
+            if (body.maxBidJumpPercent !== undefined) {
+                const n = Number(body.maxBidJumpPercent);
+                if (!Number.isInteger(n) || n < 0 || n > BID_JUMP_PERCENT_MAX) {
+                    return res.status(400).json({ error: `El salto máximo debe ser un entero entre 0 y ${BID_JUMP_PERCENT_MAX}.` });
+                }
+                await setSetting('max_bid_jump_percent', String(n));
+            }
+            if (body.currencySymbol !== undefined) {
+                const sym = String(body.currencySymbol || '').trim().slice(0, 8);
+                await setSetting('currency_symbol', sym || '$');
+            }
+            res.json({
+                success: true,
+                currencySymbol: await getCurrencySymbol(),
+                bidVerification: await getBidVerification(),
+                maxBidJumpPercent: await getBidJumpPercent(),
+            });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
