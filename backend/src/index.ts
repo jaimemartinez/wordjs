@@ -245,7 +245,7 @@ const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 // an allow-listed but DIFFERENT origin from the backend, omitting it here would make every mutation
 // unreachable in the browser, before the gate could even see it. The listing does not weaken anything:
 // only an origin that already passed the check above is ever answered with these headers.
-const CORS_HEADERS = ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token', 'X-CSRF-Token'];
+const CORS_HEADERS = ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token', 'X-CSRF-Token', 'X-Collab-Epoch'];
 app.use(cors((req: any, done: any) => {
     const base = { credentials: true, methods: CORS_METHODS, allowedHeaders: CORS_HEADERS };
     const allow = () => done(null, { ...base, origin: true });   // reflect this origin + allow credentials

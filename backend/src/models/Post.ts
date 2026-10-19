@@ -28,6 +28,7 @@ const privateMedia = require('../core/private-media');
 const { canViewAttachment, attachmentVisibilityCondition } = require('../core/attachment-visibility');
 const { canReadPostContent, isPasswordProtected } = require('../core/post-capabilities');
 const { publicDisplayName } = require('../core/public-identity');
+const { canonicalMetaKey } = require('../core/protected-meta');
 
 /**
  * Marks a post whose stored post_date is a leftover from a schedule that was CANCELLED — i.e. a
@@ -1744,6 +1745,12 @@ class Post {
             await cache.del(`post:slug:any:${data.slug}`);
         }
 
+        // Status and author decide who may edit the post, so a live collaboration stream must be
+        // re-authorized NOW rather than at its next periodic check (core/collab-rooms recheckPost).
+        if (data.status !== undefined || data.authorId !== undefined) {
+            require('../core/collab-rooms').recheckPost(Number(id));
+        }
+
         // Durable semantic event. Pass the PRIOR status so listeners can detect a real transition
         // (draft→publish, →trash) rather than re-firing on every re-save.
         Post._invalidateCounts();
@@ -1959,6 +1966,10 @@ class Post {
                 await cache.del(`post:slug:any:${post.postName}`);
             }
 
+            // Its collaboration room goes with it: streams closed cluster-wide and the session rows
+            // removed (they describe a post that no longer exists and nothing else would retire them).
+            require('../core/collab-rooms').forgetPost(Number(id));
+
             // Pass the prior status so a listener can avoid re-emitting "deleted" when the post was
             // already trashed (the trash transition already signaled it).
             Post._invalidateCounts();
@@ -2028,6 +2039,10 @@ class Post {
             await dbAsync.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [postId, key, serialized]);
         }
 
+        // A live collaboration room on this post holds a base and a log of its own: a page tree written
+        // by anything other than the room's own save resets it (core/collab-rooms noteContentWrite).
+        if (canonicalMetaKey(key) === '_puck_data') require('../core/collab-rooms').noteContentWrite(Number(postId));
+
         // Invalidate Post Cache because meta impacts toJSON/frontend view
         await cache.del(`post:id:${postId}`);
         // We don't necessarily know the slug here easily without fetch, but usually invalidating by ID is enough 
@@ -2073,6 +2088,7 @@ class Post {
     static async deleteMeta(postId: any, key: string) {
         const result = await dbAsync.run('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
         const success = result.changes > 0;
+        if (success && canonicalMetaKey(key) === '_puck_data') require('../core/collab-rooms').noteContentWrite(Number(postId));
         if (success) {
             await cache.del(`post:id:${postId}`);
             const post = await dbAsync.get('SELECT post_name, post_type FROM posts WHERE id = ?', [postId]);

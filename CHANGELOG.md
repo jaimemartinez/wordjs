@@ -124,6 +124,20 @@ the boot error links there too.
   bucket.
 - **A plugin route's `req.user` carries the caller's email and login only with `users:read`.** Without the
   grant a route still receives `id`, `role`, `hasProfessionalMailbox` and `pluginCapabilities`.
+- **Real-time collaboration hardening.** The `/collab` routes now require an interactive sign-in; API
+  tokens and agent connections get `403 rest_session_required`. An open editing stream is re-checked at
+  once, on every node, when the user signs out, changes password, signs out everywhere, changes role,
+  falls under a two-factor requirement, or when the post's status or author changes; a check that cannot
+  complete closes the stream after a short grace, and deleting a post closes its streams and removes its
+  session rows. Messages on the `wordjs:collab` cluster bus are signed with a key derived from the site
+  secret, limited to the events the nodes publish, and their operations are validated like an upload.
+  Writing a page's content outside a live session (restoring a revision, saving from another editor)
+  resets that session so its members reload the saved content, and the collaborative editor's saves carry
+  `X-Collab-Epoch` so a save from a replaced session answers `409 collab_epoch_stale` instead of
+  overwriting it. New caps: connections per room and per user across the cluster, a per-user write budget
+  shared by all of the user's tabs, and a per-user share of a session's operation log. Structural edits
+  are sanitized with the same key-aware rules as `PUT /posts/:id`, and presence shows each member's
+  account number next to their display name.
 
 ### Fixed
 

@@ -650,6 +650,10 @@ cliente A ─ws─→ backend#1 ─┐                           ┌─→ backe
 cliente B ─ws─→ backend#2 ─┘   (payload lleva NODE_ID) └─→ backend#2 ─ws─→ cliente B
 ```
 
+- **Mensajes FIRMADOS** (implementado): HMAC con una clave derivada del secreto JWT del sitio, que todos
+  los nodos comparten; se descarta lo que no viene firmado, lo que tiene más de dos minutos, cualquier
+  evento fuera de la lista cerrada (`ops`, `presence`, `members`, `warning` y el `recheck` de control)
+  y las ops que la ruta de subida rechazaría (`validateFrame`).
 - **Entrega local primero, publish después**, con el payload etiquetado con `NODE_ID` para que el
   emisor descarte su propio eco. Es **exactamente** el patrón que `core/notifications.ts` (L12,
   L52–L70) ya usa en producción; se copia, no se reinventa.
@@ -693,6 +697,18 @@ El navegador **no puede** poner cabeceras en `new WebSocket()`. Por tanto:
    - máx. 50 ops/s y 64 KB/s por conexión ⇒ `4429` y cierre al tercer aviso;
    - máx. tamaño de frame 256 KB; máx. nodos por documento (ya implícito) y máx. átomos por campo.
 6. **El `siteId` se ata a la conexión** (§2.1): ops con otro `siteId` ⇒ cierre inmediato.
+
+> **Implementado (SSE + POST).** Solo sesión interactiva: un token de API o una conexión de agente
+> recibe `403 rest_session_required` (su ámbito se decide por el recurso de la URL, `collab`, y no por
+> el tipo del post). La autorización se repite mientras el stream vive: cada 30 s como respaldo y AL
+> MOMENTO —en todo el clúster— cuando ocurre el hecho que la revoca (cierre de sesión, contraseña,
+> rol, política de 2FA, estado o autor del post, borrado del post); una comprobación que no se puede
+> completar se tolera unos segundos y después se cierra. Topes además de los de arriba: por sala y
+> por usuario en todo el clúster (`collab_members`), un cubo de escritura por usuario que no se
+> multiplica abriendo pestañas, y una parte máxima del log del epoch por usuario cuando hay más gente.
+> Un guardado de `_puck_data` que no es el de la sala (restaurar una revisión, otro editor) reinicia
+> la sala (`room_reset`); los guardados del editor colaborativo llevan `X-Collab-Epoch` y uno de una
+> generación ya reemplazada recibe `409 collab_epoch_stale`.
 
 ### 4.5 Sanitización en el ingest (D17) — la parte de seguridad que no se puede omitir
 

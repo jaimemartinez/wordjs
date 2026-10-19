@@ -185,6 +185,18 @@ async function generateUniqueNicename(source: any): Promise<string> {
     }
 }
 
+/**
+ * Meta keys whose change can take away what a session is allowed to do RIGHT NOW: the role, the session
+ * revocation epoch stamped on logout / password change / "sign out everywhere", and the second factor
+ * (an enforced-MFA user who turns it off). Requests re-check these on their own; a long-lived stream is
+ * ONE request, so it is told explicitly (core/collab-rooms recheckUser), here, where every write lands.
+ */
+const ACCOUNT_SECURITY_META = new Set(['role', 'token_valid_after', 'mfa_enabled']);
+function noteAccountSecurityChange(userId: number, key: string): void {
+    if (!ACCOUNT_SECURITY_META.has(String(key))) return;
+    try { require('../core/collab-rooms').recheckUser(Number(userId)); } catch { /* periodic re-check still applies */ }
+}
+
 class User {
     id?: number;
     userLogin?: string;
@@ -637,6 +649,7 @@ class User {
         const siteContext = require('../core/site-context');
         if (siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID) require('../core/network').forgetNetworkAdmin(id);
         await require('../core/cache').del(`user:${id}`);
+        noteAccountSecurityChange(id, 'role');
         return true;
     }
 
@@ -760,11 +773,13 @@ class User {
         }
         // role / token_valid_after / mailbox live here — the cached user must die with every write
         await require('../core/cache').del(`user:${userId}`);
+        noteAccountSecurityChange(userId, key);
     }
 
     static async deleteMeta(userId: number, key: string) {
         await dbAsync.run('DELETE FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key]);
         await require('../core/cache').del(`user:${userId}`);
+        noteAccountSecurityChange(userId, key);
         return true;
     }
 

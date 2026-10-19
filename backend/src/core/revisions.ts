@@ -395,6 +395,12 @@ async function restoreRevision(revisionId: number) {
   // restore is indistinguishable from any other write to every downstream listener.
   await Post._invalidatePostCacheById(revisionRow.post_parent);
   Post._invalidateCounts();
+  // A live collaboration room still holds the pre-restore page tree, and the next autosave of any of its
+  // members would write it straight back over the restore. The room is reset to the restored content
+  // (its members re-seed from it), and its streams are re-authorized: the restore can move the status.
+  const collab = require('./collab-rooms');
+  collab.contentChangedOutside(Number(revisionRow.post_parent));
+  collab.recheckPost(Number(revisionRow.post_parent));
   const restored = Object.fromEntries(restorePlan.columns.map((entry: any) => [entry.column, entry.value]));
   recordContentEvent('post.updated', Number(revisionRow.post_parent), {
     data: {

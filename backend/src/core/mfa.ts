@@ -259,6 +259,8 @@ async function setPolicy(input: any): Promise<MfaPolicy> {
     policyCacheBySite.get().entry = { value: policy, at: Date.now() };  // write-through: this node enforces instantly
     // The first policy that requires a role has been decided, whatever it chose: the fresh-install default is spent.
     if (requiredRoles.length > 0 && await tokenEnforcementDefault()) await deleteOption(FRESH_INSTALL_OPTION);
+    // A role that now requires 2FA applies to sessions that are already streaming too (core/collab-rooms).
+    try { require('./collab-rooms').recheckAll(); } catch { /* periodic re-check still applies */ }
     return policy;
 }
 

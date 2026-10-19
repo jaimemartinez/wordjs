@@ -61,9 +61,20 @@ export function onColor(color: string): "#ffffff" | "#111827" {
     return l > 0.179 ? "#111827" : "#ffffff";
 }
 
-/** Texto accesible de un avatar: el color no dice nada a quien no lo ve. */
-export function memberLabel(member: Pick<CollabMember, "name" | "sel">, lang: Language = "es"): string {
+/**
+ * QUIÉN ES, de forma que no se pueda imitar. El nombre visible lo elige su dueño —dos personas pueden
+ * llamarse igual, y nada impide ponerse el nombre de otra—, así que junto a él va el número de cuenta,
+ * que asigna el servidor y no cambia. Es la identidad estable; el nombre es solo la etiqueta.
+ */
+export function memberIdentity(member: Pick<CollabMember, "name" | "userId">, lang: Language = "es"): string {
     const name = String(member.name || "").trim() || trStr("Alguien", lang);
+    const id = Number(member.userId);
+    return Number.isInteger(id) && id > 0 ? `${name} (#${id})` : name;
+}
+
+/** Texto accesible de un avatar: el color no dice nada a quien no lo ve. */
+export function memberLabel(member: Pick<CollabMember, "name" | "sel" | "userId">, lang: Language = "es"): string {
+    const name = memberIdentity(member, lang);
     return trFmt(member.sel?.nodeId ? "{name} — editando un bloque" : "{name} — en la página", lang, { name });
 }
 
