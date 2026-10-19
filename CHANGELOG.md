@@ -6,6 +6,27 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **conference-manager 2.17.1 and vendor-marketplace 1.0.2: portal sign-in hardening.** The location and
+  store portals now open an opaque, random session id stored on the server instead of a token derived
+  from the access code; a new access code, a suspended store, a deleted location, an unpublished
+  registration form or a logout ends every session at once (sessions still last 7 days). Sessions from
+  earlier versions are not carried over: coordinators and vendors sign in once more after the update. The
+  login throttle counts only wrong codes — per client and portal, per portal across clients, and
+  site-wide — and a right code clears only the caller's own count, so one visitor's mistakes no longer
+  refuse another visitor or anyone already signed in.
+- **conference-manager 2.17.1: the attendee's ID document (`document_number`) stays with
+  `inscriptions:view`.** The roster (`GET /inscriptions`) and its search, the CSV export, the lodging
+  review of a location and the meals confirmation card now leave it out for team roles that open them
+  without that permission, as the meals people search already did.
+
+### Fixed
+
+- **conference-manager 2.17.1: two registrations for a location's last seat can no longer both take it.**
+  The seat count and the write that takes the seat — the admin's and the portal's registrations, and an
+  edit that moves or un-cancels an attendee into a location — now run under one lock per location.
+
 ## [2.7.0] - 2026-10-17
 
 ### Added

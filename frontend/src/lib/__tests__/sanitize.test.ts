@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { sanitizeHTML, stripHTML, hasDangerousContent, resolveVideoEmbedUrl, sameOriginPath, ALLOWED_EMBED_HOSTS } from '../sanitize';
 
 // Security-property tests for the XSS sanitizer. Assertions hold on BOTH the sanitize-html SSR path
@@ -127,6 +127,61 @@ describe('sameOriginPath (autoridad relativa y caracteres de control)', () => {
   it('rechaza absolutas, esquemas peligrosos y lo que no sea cadena', () => {
     for (const raw of ['https://evil.test/v.mp4', 'javascript:alert(1)', 'data:text/html,x', 'clip.mp4', '', null, undefined, 42, {}]) {
       expect(sameOriginPath(raw), JSON.stringify(raw)).toBeNull();
+    }
+  });
+});
+
+/**
+ * The server sanitizer's FAILURE path. When sanitize-html cannot be loaded (or throws), the three
+ * entry points must still emit nothing executable — the fallback escapes the whole string instead of
+ * regex-stripping tags, which an unterminated tag slips through. The module is re-imported with the
+ * library made unloadable, so the cached instance from the suites above does not mask the path.
+ */
+describe('sanitize fallback (sanitize-html unavailable)', () => {
+  async function loadWithBrokenLib() {
+    const { createRequire } = await import('node:module');
+    const Module = createRequire(import.meta.url)('node:module') as { _load: (...a: unknown[]) => unknown };
+    const original = Module._load;
+    Module._load = function (request: unknown, ...rest: unknown[]) {
+      if (request === 'sanitize-html') throw new Error('sanitize-html unavailable');
+      return original.call(this, request, ...rest);
+    };
+    vi.resetModules();
+    vi.doMock('sanitize-html', () => { throw new Error('sanitize-html unavailable'); });
+    try {
+      return { mod: await import('../sanitize'), restore: () => { Module._load = original; vi.doUnmock('sanitize-html'); } };
+    } catch (e) {
+      Module._load = original;
+      throw e;
+    }
+  }
+
+  it('escapes instead of stripping, so an unterminated tag cannot survive', async () => {
+    const { mod, restore } = await loadWithBrokenLib();
+    try {
+      const payload = 'hi <img src=x onerror=alert(1) ';
+      for (const out of [mod.sanitizeHTML(payload), mod.sanitizeHTMLCustom(payload, {}), mod.stripHTML(payload)]) {
+        expect(out).not.toContain('<');
+        expect(out).toBe('hi &lt;img src=x onerror=alert(1) ');
+      }
+      expect(mod.sanitizeHTML(`<a title="x" href='y'>&</a>`)).toBe('&lt;a title=&quot;x&quot; href=&#39;y&#39;&gt;&amp;&lt;/a&gt;');
+    } finally {
+      restore();
+    }
+  });
+});
+
+/**
+ * A stored `content` is not guaranteed to be a string (a block prop is free-form JSON). The
+ * sanitizer is the last thing before the page, and on the server a throw there is a 500 for the whole
+ * page — so a non-string renders as nothing.
+ */
+describe('sanitize non-string input', () => {
+  it('returns an empty string for arrays, objects, numbers and null', () => {
+    for (const bad of [['<b>x</b>'], { html: '<b>x</b>' }, 42, null, undefined, true]) {
+      expect(sanitizeHTML(bad as unknown as string)).toBe('');
+      expect(stripHTML(bad as unknown as string)).toBe('');
+      expect(hasDangerousContent(bad as unknown as string)).toBe(false);
     }
   });
 });
