@@ -10,9 +10,11 @@
  * (WORDJS_MEDIA_*) wins over the file and is reported as such, read-only.
  */
 
-import type { Request, Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 const express = require('express');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
@@ -21,11 +23,51 @@ const { recordAudit, AUDIT_ACTIONS } = require('../core/audit');
 const mediaStorage = require('../core/media-storage');
 const migration = require('../core/media-storage-migrate');
 const s3offload = require('../core/s3-offload');
+const egress = require('../core/egress-guard');
 const { logSafeError } = require('../core/log-safe');
 const log = require('../core/module-logger').moduleLogger('routes/media-storage');
 
 const TEXT_FIELDS = ['bucket', 'region', 'endpoint', 'prefix', 'publicUrl', 'accessKeyId'] as const;
 const MAX_FIELD = 512;
+
+/**
+ * Multisite: the storage block serves every site of the network, so it is the network's. The mount in
+ * routes/index.ts already answers 404 off the main site; on the main site of a network it also takes a
+ * network administrator, not just any administrator of the main site. A no-op on a single site.
+ */
+function networkAdminOnly(req: Request, res: Response, next: NextFunction) {
+    if (!require('../core/site-context').multisiteEnabled()) return next();
+    return require('../core/network-auth').requireNetworkAdmin(req, res, next);
+}
+
+/** The endpoint origin the SAVED configuration (file or env) already uses, or null. */
+function savedEndpointOrigin(): string | null {
+    const saved = mediaStorage.resolveMediaStorage();
+    if (saved.driver !== 's3' || !saved.s3 || !saved.s3.endpoint) return null;
+    try { return new URL(saved.s3.endpoint).origin; } catch { return null; }
+}
+
+/**
+ * The connection test reaches whatever endpoint the request names, before anything is saved. An endpoint
+ * that is not the saved one must not resolve to a private, loopback or link-local address (core/
+ * egress-guard), and the connection is pinned to the address that was checked. A storage server on the
+ * operator's own network is still supported: save it first (that is the operator's decision, audited),
+ * then test it — the saved endpoint is tested as is. Returns the injectable request deps, or null when
+ * the target is refused.
+ */
+async function testTarget(store: any): Promise<{ deps: any } | null> {
+    if (!store.s3.endpoint) return { deps: {} }; // virtual-hosted AWS: <bucket>.s3.<region>.amazonaws.com
+    let origin: string;
+    try { origin = new URL(store.s3.endpoint).origin; } catch { return null; }
+    if (origin === savedEndpointOrigin()) return { deps: {} };
+    try { await egress.assertUrlAllowed(origin); } catch { return null; }
+    return {
+        deps: {
+            request: (options: any, cb: any) =>
+                (options.protocol === 'http:' ? http : https).request({ ...options, lookup: egress.validatingLookup }, cb),
+        },
+    };
+}
 
 function badRequest(res: Response, message: string, params?: string[]) {
     return res.status(400).json({ code: 'rest_invalid_param', message, data: { status: 400, ...(params ? { params } : {}) } });
@@ -122,7 +164,7 @@ function candidateStore(block: Record<string, any>) {
  *       403:
  *         description: Not an administrator
  */
-router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.get('/', authenticate, isAdmin, networkAdminOnly, asyncHandler(async (req: Request, res: Response) => {
     res.json(await statePayload());
 }));
 
@@ -160,7 +202,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *       409:
  *         description: rest_media_storage_in_use - switching to local while items are still in the bucket
  */
-router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.put('/', authenticate, isAdmin, networkAdminOnly, asyncHandler(async (req: Request, res: Response) => {
     const configManager = require('../core/configManager');
     const current = configManager.getConfig() || {};
     const merged = mergeBlock(current.mediaStorage && typeof current.mediaStorage === 'object' ? current.mediaStorage : {}, req.body);
@@ -173,13 +215,14 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
             return badRequest(res, `The S3 configuration is incomplete or invalid: ${(store.incomplete || []).join(', ')}.`, store.incomplete || []);
         }
     } else {
-        const state = await migration.getState();
-        const inBucket = await migration.countOffloaded();
-        if (state !== 'local' || inBucket > 0 || await migration.isRunningAnywhere()) {
+        // Every site of a network follows this block, so the media still in the bucket is counted on all
+        // of them (core/media-storage-migrate bucketUsage), not only on the site making the request.
+        const usage = await migration.bucketUsage();
+        if (usage.inUse) {
             return res.status(409).json({
                 code: 'rest_media_storage_in_use',
                 message: 'Media is still served from the bucket. Run a restore (Media storage → Move back to local disk) before switching to local storage.',
-                data: { status: 409, state, inBucket }
+                data: { status: 409, state: usage.state, inBucket: usage.inBucket, ...(usage.sites.length ? { sites: usage.sites } : {}) }
             });
         }
     }
@@ -221,7 +264,7 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *       400:
  *         description: The configuration is incomplete or invalid, or `probe` is not a probe name
  */
-router.post('/test', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/test', authenticate, isAdmin, networkAdminOnly, asyncHandler(async (req: Request, res: Response) => {
     const configManager = require('../core/configManager');
     const current = configManager.getConfig() || {};
     const body = req.body || {};
@@ -232,11 +275,15 @@ router.post('/test', authenticate, isAdmin, asyncHandler(async (req: Request, re
     if (store.driver !== 's3') {
         return badRequest(res, `The S3 configuration is incomplete or invalid: ${(store.incomplete || []).join(', ')}.`, store.incomplete || []);
     }
-    if (probe !== undefined) {
-        if (typeof probe !== 'string' || !PROBE_RE.test(probe)) return badRequest(res, 'probe is not a connection-test probe name.', ['probe']);
-        return res.json(await removeProbe(store, probe));
+    if (probe !== undefined && (typeof probe !== 'string' || !PROBE_RE.test(probe))) {
+        return badRequest(res, 'probe is not a connection-test probe name.', ['probe']);
     }
-    res.json({ ...(await testConnection(store, {}, { keepProbe: true })), warnings: warningsFor(store) });
+    const target = await testTarget(store);
+    if (!target) {
+        return badRequest(res, 'The endpoint is a private or internal address. To use a storage server on your own network, save the configuration first, then test it.', ['endpoint']);
+    }
+    if (probe !== undefined) return res.json(await removeProbe(store, probe, target.deps));
+    res.json({ ...(await testConnection(store, target.deps, { keepProbe: true })), warnings: warningsFor(store) });
 }));
 
 /** The only object names the cleanup call may delete: the probes testConnection writes. */
@@ -325,7 +372,7 @@ async function testConnection(store: any, deps: any = {}, opts: { keepProbe?: bo
  *       409:
  *         description: rest_media_storage_busy - a migration is already running
  */
-router.post('/migrate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/migrate', authenticate, isAdmin, networkAdminOnly, asyncHandler(async (req: Request, res: Response) => {
     const body = req.body || {};
     if (body.direction !== 'offload' && body.direction !== 'restore') return badRequest(res, 'direction must be offload or restore.', ['direction']);
     if (mediaStorage.resolveMediaStorage().driver !== 's3') return badRequest(res, 'Save a complete S3 configuration first.');

@@ -21,6 +21,7 @@ const CAP_ICONS: Record<AgentCapability, string> = {
     "content:read": "fa-book-open",
     "content:draft": "fa-pen-to-square",
     "content:publish": "fa-paper-plane",
+    "content:others": "fa-user-group",
     "media:upload": "fa-image",
     "taxonomy:write": "fa-tags",
     "comments:moderate": "fa-comments",
@@ -31,6 +32,7 @@ const capKey = (c: string) => c.replace(":", "_");
 const IMPLIES: Partial<Record<AgentCapability, AgentCapability[]>> = {
     "content:draft": ["content:read"],
     "content:publish": ["content:draft", "content:read"],
+    "content:others": ["content:read"],
 };
 const withImplied = (set: Set<AgentCapability>) => {
     const out = new Set(set);

@@ -345,6 +345,41 @@ describe('server protection', () => {
         assert.ok(r.body.errors.some((e: any) => e.extensions && e.extensions.code === 'GRAPHQL_DEPTH_LIMIT'));
     });
 
+    test('a chain of fragments that each spread the next one twice is measured in linear time', async () => {
+        // F1 { ...F2 ...F2 } F2 { ...F3 ...F3 } … — expanded naively that is 2^40 walks.
+        const N = 40;
+        const frags: string[] = [];
+        for (let i = 1; i < N; i++) frags.push(`fragment F${i} on ContentNode { ...F${i + 1} ...F${i + 1} }`);
+        frags.push(`fragment F${N} on ContentNode { author { name } }`);
+        const doc = `${frags.join('\n')}\n{ post(id: ${P.pub}) { ...F1 } }`;
+        const t0 = Date.now();
+        const r = await gqlRaw(null, doc);
+        const ms = Date.now() - t0;
+        assert.ok(ms < 200, `refused in ${ms}ms`);
+        assert.strictEqual(r.status, 400);
+        assert.strictEqual(r.body.data, undefined, 'nothing executed');
+        assert.ok(r.body.errors.some((e: any) => e.extensions && e.extensions.code === 'GRAPHQL_COST_LIMIT'));
+    });
+
+    test('a fragment reused under one type is measured once and still counted at every spread', () => {
+        // Memoisation must not under-count: the spreads cost exactly what the same fields written out do.
+        const { measureOperation } = require('../core/graphql/limits');
+        const { parse, TypeInfo, ValidationContext } = require('graphql');
+        const { buildCoreSchema } = require('../core/graphql/schema');
+        const schema = buildCoreSchema();
+        const opts = { maxDepth: 99, maxCost: 1e9, maxPageSize: 100 };
+        const measureDoc = (src: string) => {
+            const doc = parse(src);
+            const ctx = new ValidationContext(schema, doc, new TypeInfo(schema), () => {});
+            const op = doc.definitions.find((d: any) => d.kind === 'OperationDefinition');
+            return measureOperation(ctx, op.selectionSet, schema.getQueryType(), opts);
+        };
+        const spread = measureDoc(`fragment A on ContentNode { author { name } }
+            { post(id: 1) { ...A ...A } other: post(id: 2) { ...A } }`);
+        const inline = measureDoc(`{ post(id: 1) { a1: author { name } a2: author { name } } other: post(id: 2) { author { name } } }`);
+        assert.deepStrictEqual(spread, inline);
+    });
+
     test('a query whose cost exceeds the limit is refused (nested pages multiply)', async () => {
         const r = await gqlRaw(null, '{ posts(first: 100) { nodes { comments(first: 100) { nodes { id } } } } }');
         assert.strictEqual(r.status, 400);

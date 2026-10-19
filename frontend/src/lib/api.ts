@@ -1423,7 +1423,7 @@ export const tokensApi = {
 // The connection REQUESTS capabilities, an administrator GRANTS a subset; every call runs as the bound
 // user narrowed by the grant (backend core/agent-capabilities). The `wja_` token is shown once.
 export type AgentCapability =
-    | "content:read" | "content:draft" | "content:publish" | "media:upload"
+    | "content:read" | "content:draft" | "content:publish" | "content:others" | "media:upload"
     | "taxonomy:write" | "comments:moderate" | "settings:read";
 export interface AgentConnection {
     id: number;

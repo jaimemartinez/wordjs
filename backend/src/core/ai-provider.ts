@@ -20,10 +20,18 @@
  *     need deep reasoning), check `stop_reason === "refusal"` before reading content, and opt into the
  *     server-side fallback where the model supports it.
  *   • `openai-compatible` — any server speaking POST {baseUrl}/chat/completions (OpenAI, Azure OpenAI
- *     gateways, Ollama, LM Studio, vLLM…). https is required unless the host is loopback.
+ *     gateways, Ollama, LM Studio, vLLM…). https is required unless the host is loopback. The base URL
+ *     goes through the egress guard like a webhook target: a loopback or private-network server is only
+ *     reachable from the primary site (the network's own administrators) or with the explicit opt-in
+ *     WORDJS_AI_ALLOW_PRIVATE_PROVIDER=1; a link-local / metadata address never is. The address checked
+ *     is the address connected to (the resolved IP is pinned), and the URL may carry no query or fragment.
  */
 
+const http = require('http');
+const https = require('https');
 const { getOption, updateOption } = require('./options');
+const egress = require('./egress-guard');
+const siteContext = require('./site-context');
 
 const SETTINGS_OPTION = 'ai_provider';
 const KEY_OPTION = 'ai_provider_api_key';
@@ -137,12 +145,84 @@ function isLoopbackHost(host: string): boolean {
     return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.localhost');
 }
 
-/** Validate an OpenAI-compatible base URL: http(s), no credentials, https unless loopback. */
+/**
+ * May the provider live on this machine or on a private network? Yes on the primary site (single-site
+ * installs, and the network's own site in multisite) and wherever the operator opted in explicitly; a
+ * secondary site's administrator cannot point the server at the network's internal hosts.
+ */
+function privateProviderAllowed(): boolean {
+    if (process.env.WORDJS_AI_ALLOW_PRIVATE_PROVIDER === '1') return true;
+    try { return siteContext.isPrimarySite(); } catch { return false; }
+}
+
+function blockedBaseUrl(): AiError {
+    return new AiError(
+        'That AI server address is not allowed from this site. Use a public https endpoint (a server on this machine or a private network is only accepted on the primary site, or with WORDJS_AI_ALLOW_PRIVATE_PROVIDER=1).',
+        400,
+        'ai_provider_address_blocked',
+    );
+}
+
+/** Link-local, cloud-metadata, multicast or unspecified: refused on every site, whatever the opt-in. */
+function neverAllowedBaseUrl(): AiError {
+    return new AiError(
+        'That AI server address can never be used: link-local and cloud-metadata addresses are refused on every site. Use the address of the AI server itself.',
+        400,
+        'ai_provider_address_blocked',
+    );
+}
+
+/** A lookup that only refuses addresses no opt-in opens (link-local, metadata, multicast, unspecified). */
+function neverExemptLookup(hostname: string, options: any, callback?: any): void {
+    if (typeof options === 'function') { callback = options; options = {}; }
+    options = options || {};
+    require('dns').lookup(hostname, { ...options, all: true, verbatim: true }, (err: any, list: any) => {
+        if (err) return callback(err);
+        const all = Array.isArray(list) ? list : [{ address: list, family: options.family || 4 }];
+        if (all.some((a: any) => egress.isNeverExemptIp(a.address))) return callback(neverAllowedBaseUrl());
+        if (options.all) return callback(null, all);
+        return callback(null, all[0].address, all[0].family);
+    });
+}
+
+/**
+ * Check a base URL against the egress policy and return the connect-time lookup that pins it. Run at
+ * save time (a clear 400) and again before every request (the setting may predate the rule, and a name
+ * may resolve elsewhere later). Node consults `lookup` only for names, so IP literals are judged here.
+ */
+async function assertBaseUrlAllowed(baseUrl: string): Promise<(hostname: string, options: any, cb?: any) => void> {
+    let u: URL;
+    try { u = new URL(baseUrl); } catch { throw new AiError('The base URL is not a valid URL.', 400, 'rest_invalid_param'); }
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    if (require('net').isIP(host) && egress.isNeverExemptIp(host)) throw neverAllowedBaseUrl();
+    if (privateProviderAllowed()) return neverExemptLookup;
+    // A loopback NAME is refused as such, without depending on how this host resolves it.
+    if (isLoopbackHost(host)) throw blockedBaseUrl();
+    // An IP literal is judged directly (URL keeps IPv6 literals in brackets, which a resolver cannot read).
+    if (require('net').isIP(host)) {
+        if (egress.isBlockedIp(host)) throw blockedBaseUrl();
+        return egress.validatingLookup;
+    }
+    try { await egress.assertUrlAllowed(u.href); } catch (e: any) {
+        if (e && (e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN')) {
+            throw new AiError('Could not resolve the AI server address.', 502, 'ai_provider_unreachable');
+        }
+        throw blockedBaseUrl();
+    }
+    return egress.validatingLookup;
+}
+
+/** Validate an OpenAI-compatible base URL: http(s), no credentials, no query/fragment, https unless loopback. */
 function validateBaseUrl(raw: unknown): string {
     let u: URL;
-    try { u = new URL(String(raw || '')); } catch { throw new AiError('The base URL is not a valid URL.', 400, 'rest_invalid_param'); }
+    const text = String(raw || '');
+    try { u = new URL(text); } catch { throw new AiError('The base URL is not a valid URL.', 400, 'rest_invalid_param'); }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new AiError('The base URL must be http(s).', 400, 'rest_invalid_param');
     if (u.username || u.password) throw new AiError('Put the API key in its own field, not in the URL.', 400, 'rest_invalid_param');
+    // `/chat/completions` is appended to the path: a query or fragment would swallow it.
+    if (u.search || u.hash || /[?#]/.test(text)) {
+        throw new AiError('The base URL cannot carry a query string or fragment.', 400, 'rest_invalid_param');
+    }
     if (u.protocol === 'http:' && !isLoopbackHost(u.hostname)) {
         throw new AiError('Use https for a remote provider (plain http is only accepted for a server on this machine).', 400, 'rest_invalid_param');
     }
@@ -168,6 +248,7 @@ async function saveSettings(input: { provider?: unknown; model?: unknown; baseUr
         model = model || DEFAULT_ANTHROPIC_MODEL;
     } else if (provider === 'openai-compatible') {
         baseUrl = validateBaseUrl(input.baseUrl);
+        await assertBaseUrlAllowed(baseUrl);
         if (!model || !/^[A-Za-z0-9._:/@-]+$/.test(model)) {
             throw new AiError('Name the model the server should use (e.g. gpt-5-mini, llama3.2).', 400, 'rest_invalid_param');
         }
@@ -287,6 +368,59 @@ async function mapOpenAiCompatibleStatus(res: any, sentImage: boolean): Promise<
     return new AiError(`The AI provider answered with an error (HTTP ${status}).`, 502, 'ai_provider_error');
 }
 
+/** Largest provider answer read into memory. */
+const MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * POST a JSON body over http(s) with the connect-time lookup pinned (fetch takes no lookup). Redirects
+ * are not followed. Resolves a fetch-shaped { status, ok, text(), json() }; rejects on a transport error,
+ * and with a TimeoutError once `timeoutMs` passes (an absolute deadline, not an idle timeout).
+ */
+function postJsonPinned(url: string, headers: Record<string, string>, body: string, timeoutMs: number, lookup: any): Promise<any> {
+    const u = new URL(url);
+    const lib = u.protocol === 'https:' ? https : http;
+    const payload = Buffer.from(body, 'utf8');
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let deadline: any;
+        const settle = (fn: any, arg: any) => { if (settled) return; settled = true; clearTimeout(deadline); fn(arg); };
+        const req = lib.request({
+            method: 'POST',
+            hostname: u.hostname.replace(/^\[|\]$/g, ''),
+            port: u.port || (u.protocol === 'https:' ? 443 : 80),
+            path: (u.pathname || '/') + (u.search || ''),
+            lookup,
+            headers: { 'content-type': 'application/json', 'content-length': String(payload.length), ...headers },
+        }, (res: any) => {
+            const chunks: Buffer[] = [];
+            let received = 0;
+            res.on('data', (c: Buffer) => {
+                received += c.length;
+                if (received > MAX_PROVIDER_RESPONSE_BYTES) {
+                    res.destroy();
+                    settle(reject, new AiError('The AI provider answered with too much data.', 502, 'ai_provider_bad_response'));
+                    return;
+                }
+                chunks.push(c);
+            });
+            res.on('end', () => {
+                const text = Buffer.concat(chunks).toString('utf8');
+                const status = res.statusCode || 0;
+                settle(resolve, { status, ok: status >= 200 && status < 300, text: async () => text, json: async () => JSON.parse(text) });
+            });
+            res.on('error', (e: any) => settle(reject, e));
+        });
+        deadline = setTimeout(() => {
+            const e: any = new Error('timeout');
+            e.name = 'TimeoutError';
+            req.destroy(e);
+            settle(reject, e);
+        }, timeoutMs);
+        req.on('error', (e: any) => settle(reject, e));
+        req.end(payload);
+    });
+}
+
 async function completeOpenAiCompatible(s: AiSettings, apiKey: string, req: AiCompleteRequest): Promise<string> {
     const userContent: any = req.image
         ? [
@@ -295,23 +429,20 @@ async function completeOpenAiCompatible(s: AiSettings, apiKey: string, req: AiCo
         ]
         : req.prompt;
     const timeoutMs = requestTimeoutMs(s.baseUrl);
+    // Re-validated on every call: a URL stored before these rules, or a name that now resolves inward.
+    const baseUrl = validateBaseUrl(s.baseUrl);
+    const lookup = await assertBaseUrlAllowed(baseUrl);
     let res: any;
     try {
-        res = await fetch(`${s.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-            },
-            body: JSON.stringify({
-                model: s.model,
-                max_tokens: Math.min(Math.max(req.maxTokens || 1024, 64), 4096),
-                messages: [{ role: 'system', content: req.system }, { role: 'user', content: userContent }],
-            }),
-            redirect: 'error',
-            signal: AbortSignal.timeout(timeoutMs),
-        });
+        res = await postJsonPinned(`${baseUrl}/chat/completions`, {
+            ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        }, JSON.stringify({
+            model: s.model,
+            max_tokens: Math.min(Math.max(req.maxTokens || 1024, 64), 4096),
+            messages: [{ role: 'system', content: req.system }, { role: 'user', content: userContent }],
+        }), timeoutMs, lookup);
     } catch (e: any) {
+        if (e instanceof AiError) throw e;
         if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw timeoutError(timeoutMs);
         throw new AiError('Could not reach the AI provider.', 502, 'ai_provider_unreachable');
     }
@@ -392,6 +523,7 @@ module.exports = {
     complete,
     completeForPlugin,
     validateBaseUrl,
+    assertBaseUrlAllowed,
     requestTimeoutMs,
     SETTINGS_OPTION,
     KEY_OPTION,
