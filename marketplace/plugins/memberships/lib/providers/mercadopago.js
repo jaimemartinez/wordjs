@@ -55,7 +55,7 @@ const statusFromMp = (s) => {
 };
 
 function createMercadoPagoProvider(ctx) {
-    const { wordjs, db, T, getSetting, tierById, upsertProviderMember, memberBySubscription, toInt, recordEvent, seenEvent, providerError, getConfig } = ctx;
+    const { wordjs, db, T, getSetting, tierById, upsertProviderMember, memberBySubscription, recordEvent, seenEvent, providerError } = ctx;
 
     const accessToken = async () => {
         const t = await getSetting('mp_access_token');

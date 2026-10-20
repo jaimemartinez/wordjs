@@ -79,7 +79,7 @@ function pathValue(data, path) {
 }
 
 function createWompiProvider(ctx) {
-    const { wordjs, db, T, getSetting, tierById, memberByUser, upsertProviderMember, toInt, nowIso, recordEvent, seenEvent, providerError, getConfig, setMemberStatus } = ctx;
+    const { wordjs, db, T, getSetting, tierById, memberByUser, upsertProviderMember, recordEvent, seenEvent, providerError, getConfig, setMemberStatus } = ctx;
 
     const keys = async () => ({
         pub: await getSetting('wompi_public_key'),
