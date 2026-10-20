@@ -728,6 +728,11 @@ jobs:
           done
       - name: Coverage ratchet (c8 report over all four shards)
         working-directory: backend
+        # c8 merges every V8 profile of the four shards in one process. Each suite that boots the whole
+        # app (the multisite engine suites boot it once per engine) adds a full-size profile, and the merge
+        # outgrew Node's default old-space limit (exit 134, "heap out of memory"). The runner has 16 GB.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npm run test:coverage:report
       - name: Upload backend coverage (lcov)
         if: always()
