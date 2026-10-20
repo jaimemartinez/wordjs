@@ -97,7 +97,7 @@ vi.mock("@/components/HostNotAllowedNotice", async (importOriginal) => ({
 
 describe("RootLayout mounts the notice", () => {
     it("with the configured siteurl (falling back to home) and the document language", async () => {
-        const { default: RootLayout } = await import("@/app/layout");
+        const { default: RootLayout } = await import("@/app/_root/RootDocument");
         site.settings = { siteurl: "https://example.com", home: "https://home.example.com", WPLANG: "pt_BR" };
         let html = renderToStaticMarkup(await RootLayout({ children: null }));
         expect(html).toContain('data-canonical="https://example.com"');

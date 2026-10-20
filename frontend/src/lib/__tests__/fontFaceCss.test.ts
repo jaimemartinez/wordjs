@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildFontFaceCss } from '../fontFaceCss';
 
 /**
- * buildFontFaceCss output is written RAW into an SSR <style> element (app/layout.tsx), so a font
+ * buildFontFaceCss output is written RAW into an SSR <style> element (app/_root/RootDocument.tsx), so a font
  * family or URL must not be able to close the CSS string or the <style> element.
  */
 describe('buildFontFaceCss', () => {

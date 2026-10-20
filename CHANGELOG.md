@@ -549,6 +549,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **Deleting a site** (`DELETE /network/sites/:id`, Admin → Network): a suspended site and everything it
   holds are removed; its id is never reused. See the upgrade notes in
   [multisite.md](documentation/multisite.md#upgrading-from-27).
+- **Every site of a network has its own document.** Another site's pages, its sign-in, registration and
+  password screens and its admin now carry that site's `<html lang>` and text direction, the `@font-face`
+  rules of its own uploaded fonts and its own name in every title; before, all three came from the main
+  site. The frontend has a root layout per tree instead of a single `app/layout.tsx`
+  (`app/_root/RootDocument.tsx`), so moving between the public site, the admin and the sign-in screens is
+  a full page load. The main site and single-site installs render the same document as before. See
+  [frontend.md](documentation/frontend.md).
 
 ### ⚠️ Upgrade note — Node.js 22 or newer is required
 
