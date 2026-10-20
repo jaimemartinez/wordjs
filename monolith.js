@@ -507,7 +507,51 @@ async function main() {
 // nothing and exports the REAL predicate and handlers main() mounts — a test that re-implemented them
 // would prove nothing.
 if (require.main === module) {
-    main().catch((e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
+    if (process.env.WORDJS_SUPERVISED === '1' || process.env.WORDJS_NO_SUPERVISOR === '1') {
+        main().catch((e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
+    } else {
+        superviseMonolith();
+    }
+}
+
+/**
+ * Run the monolith as a child of this process and start it again when it asks for a restart.
+ *
+ * A few settings are read once, at boot (the database driver, multisite), and the admin panel changes them
+ * (zero config: never "now restart the server by hand"). The app asks for the restart by exiting with
+ * RESTART_EXIT_CODE (backend core/restart.ts); any other exit ends this process with the same code, so
+ * Docker's restart policy, Kubernetes and systemd see crashes and stops exactly as before. Termination
+ * signals are passed on to the child. WORDJS_NO_SUPERVISOR=1 runs the monolith in this process instead.
+ */
+function superviseMonolith() {
+    const { spawn } = require('child_process');
+    const RESTART_EXIT_CODE = 75;
+    let child = null;
+    let stopping = false;
+    const start = () => {
+        child = spawn(process.execPath, [...process.execArgv, __filename, ...process.argv.slice(2)], {
+            stdio: 'inherit',
+            env: { ...process.env, WORDJS_SUPERVISED: '1' },
+        });
+        child.on('exit', (code, signal) => {
+            if (code === RESTART_EXIT_CODE && !stopping) {
+                console.log('🔄 [monolith] restarting to apply a change made in the admin panel...');
+                setTimeout(start, 250);
+                return;
+            }
+            process.exit(code === null ? (signal ? 1 : 0) : code);
+        });
+        child.on('error', (e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
+    };
+    for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+        process.on(sig, () => {
+            stopping = true;
+            // Ctrl+C in a Windows console already reaches the child (same console); a kill there is not graceful.
+            if (process.platform === 'win32' && sig === 'SIGINT') return;
+            try { if (child) child.kill(sig); } catch { /* already gone */ }
+        });
+    }
+    start();
 }
 
 module.exports = {
@@ -523,4 +567,5 @@ module.exports = {
     createPublicServer,
     createAcmeHandler,
     main,
+    superviseMonolith,
 };

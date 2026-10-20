@@ -559,7 +559,10 @@ exports.getStatus = (req, res) => {
         currentDriver,
         availableDrivers: ['sqlite-legacy', 'sqlite-native', 'postgres', 'mysql'],
         status: globalStatus,
-        legacyFiles
+        legacyFiles,
+        // Changes on every boot: the panel waits for a new one after a migration (core/restart).
+        bootId: require('../restart').BOOT_ID,
+        restart: require('../restart').restartMode()
     });
 };
 
@@ -948,40 +951,18 @@ exports.runMigration = async (req, res) => {
 
         configManager.saveConfig(newConfig);
 
+        // Restart so the new database config is picked up (core/restart: the supervisor, node --watch or
+        // the service manager starts the process again). The old `process.exit(0)` here STOPPED a supervised
+        // install for good (backend/server.js treats exit 0 as "stopped on purpose").
+        const restart = require('../restart');
+        const mode = restart.scheduleRestart(`database moved to ${targetDriver}`, { delayMs: 1000 });
         res.json({
             success: true,
-            message: `Migration successful! Copied ${totalRows} rows to ${targetDriver}. Restarting server...`
+            restart: mode,
+            message: mode === 'manual'
+                ? `Migration successful! Copied ${totalRows} rows to ${targetDriver}. Restart WordJS to start using it.`
+                : `Migration successful! Copied ${totalRows} rows to ${targetDriver}. Restarting server...`
         });
-
-        setTimeout(() => {
-            log.info('🔄 Restarting server...');
-
-            // Trigger a restart so the new DB config is picked up. In dev (`node --watch`) this means
-            // touching the ACTUAL entry node is running — process.argv[1] is src/index.ts under ts-node
-            // (or dist/index.js when compiled) — so the watcher reruns it. The previous code hardcoded a
-            // non-existent 'src/index.js' (the entry is .ts), so utimesSync threw ENOENT and nothing
-            // restarted. In production the server.js supervisor restarts the child after this exit.
-            const candidates = [
-                process.argv[1],
-                path.resolve(__dirname, '../../index.ts'),
-                path.resolve(__dirname, '../../index.js')
-            ].filter(Boolean);
-            let touched = false;
-            for (const f of candidates) {
-                try {
-                    const t = new Date();
-                    fs.utimesSync(f, t, t);
-                    log.info({ f }, `🔄 Touched ${f} to trigger watch restart.`);
-                    touched = true;
-                    break;
-                } catch (err) { /* not this one — try the next candidate */ }
-            }
-            if (!touched) {
-                log.warn('🔄 Could not touch an entry file to trigger a watch restart; relying on process exit (the supervisor restarts in production).');
-            }
-
-            process.exit(0);
-        }, 1000);
 
     } catch (e) {
         log.error({ err: e }, 'Migration Failed');

@@ -12,7 +12,9 @@
  *
  *   --dir <path>                   the installation's backend directory (default: this one)
  *
- * Sites are created from the network screen (Admin → Network) by a network administrator.
+ * The admin panel does all of this too, and restarts the backend itself: Settings → Network (turn the
+ * network on or off, choose the network administrators). This script is the second path, for operators
+ * who prefer a terminal. Sites are created from Admin → Network by a network administrator.
  *
  * WHAT IT WRITES: `multisite.enabled` in wordjs-config.json (through core/configManager's atomic writer)
  * and the network store: `data/network.db` on sqlite-native, the `wordjs_network` schema on Postgres, the
@@ -207,6 +209,8 @@ async function runCommand(m, command, positionals, flags) {
         await m.network.ready();
         await m.network.registerPrimarySite(m.network.normalizeSiteUrl(siteUrl).url);
         for (const u of users) await m.network.addNetworkAdmin(u.id, u.login);
+        // The switch as the other backend nodes read it when they start (core/network-setup ENABLED_MARKER).
+        await m.network.storeUpsert('network_meta', { meta_key: 'network_enabled' }, { meta_value: '1' });
         await m.network.audit('network.enabled', { detail: { admins: users.map((u) => u.login), via: 'cli' } });
         setEnabled(m.configManager, true);
         console.log(`Multisite is on. Site 1 is ${siteUrl}; network administrators: ${users.map((u) => u.login).join(', ')}.`);
@@ -217,6 +221,10 @@ async function runCommand(m, command, positionals, flags) {
     if (command === 'disable') {
         if ((await storeExists(m)) && m.network.listSites().some((s) => s.id !== 1)) {
             throw new Error('the network has other sites; multisite stays on while they exist');
+        }
+        if (await storeExists(m)) {
+            await m.network.storeUpsert('network_meta', { meta_key: 'network_enabled' }, { meta_value: '0' });
+            await m.network.audit('network.disabled', { detail: { via: 'cli' } });
         }
         setEnabled(m.configManager, false);
         console.log('Multisite is off. Restart the backend.');

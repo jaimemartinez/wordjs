@@ -41,6 +41,13 @@ const AUDIT_ACTIONS = Object.freeze({
     // (core/network-handoff): {networkAdmin, networkAdminId, from, ip, expiresAt}. The network's own log
     // records the same event (site.handoff.redeemed).
     NETWORK_HANDOFF: 'auth.network_handoff',
+    // Multisite switched from the panel (routes/network.ts, core/network-setup): {admins, mfa} / {mfa}. The
+    // network's own log records the same (network.enabled / network.disabled).
+    NETWORK_ENABLE: 'network.enable',
+    NETWORK_DISABLE: 'network.disable',
+    // A network administrator added or removed from the panel: {login}. Also in the network's own log.
+    NETWORK_ADMIN_ADD: 'network.admin.add',
+    NETWORK_ADMIN_REMOVE: 'network.admin.remove',
     // A new password stored through a profile write (routes/users.ts PUT /users/me and PUT /users/:id).
     // Kept under `auth.` rather than as a `user.update` field, so "who changed whose password" is one query.
     PASSWORD_CHANGE: 'auth.password.change',
