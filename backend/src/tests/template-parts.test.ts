@@ -220,9 +220,16 @@ test('a ChromeNav of ANY shape is refused in a part — the rule is the block, n
 });
 
 test('every OTHER block in the allowlist is still legal in a part — this narrows, it does not gut', () => {
-    // The audit behind CHROME_DOCUMENT_SCOPED_BLOCKS: the other eight blocks are presentational server
-    // components with no "use client", no hooks and no document/window access, so N instances are fine.
+    // The audit behind CHROME_DOCUMENT_SCOPED_BLOCKS: every other block is a presentational server
+    // component or a read-only island (language switcher, widget area) that owns no document-level
+    // state, so N instances are fine.
     const legal: Record<string, any> = {
+        ChromeColumns: { columns: '3', gap: 'lg', items: [] },
+        ChromeHeading: { text: 'Links', level: 'h3' },
+        ChromeRichText: { html: '<b>hi</b>' },
+        ChromeCopyright: { text: '© {year} {site}' },
+        ChromeLanguageSwitcher: { style: 'inline' },
+        ChromeWidgets: { area: 'footer-1' },
         ChromeLogo: { size: 'md' },
         ChromeSiteTitle: { showTagline: true },
         ChromeSearch: { placeholder: 'Search' },

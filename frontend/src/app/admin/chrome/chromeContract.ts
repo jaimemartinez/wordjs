@@ -19,7 +19,9 @@ export function withBlockIds(data: ChromeData): ChromeData {
     const stamp = (block: ChromeBlock): ChromeBlock => {
         const props: Record<string, unknown> = { ...(block.props || {}) };
         if (typeof props.id !== "string") props.id = genId(block.type);
-        if (block.type === "ChromeRow" && Array.isArray(props.items)) {
+        // Every container's slot (ChromeRow, ChromeColumns): a child without an id is not a Verso item,
+        // so the editor would keep the slot as an opaque prop and render the container empty.
+        if (Array.isArray(props.items)) {
             props.items = (props.items as ChromeBlock[]).map(stamp);
         }
         return { type: block.type, props };

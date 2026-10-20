@@ -16,8 +16,7 @@ const fs = require('fs');
 const { sandboxPaths } = require('./sandbox-paths');
 const { createPluginApi } = require('./plugin-api');
 const { runWithContext } = require('./plugin-context');
-// The ACTIVE CORPORATE MAILBOX grant, read the one way (core/mailbox.ts) — never re-derived.
-const { hasProfessionalMailbox } = require('./mailbox');
+
 const hooks = require('./hooks');
 const { addShortcode, removeShortcode } = require('./shortcodes');
 const log = require('./module-logger').moduleLogger('core/plugin-isolate');
@@ -598,17 +597,23 @@ function listIsolateKeys(): string[] {
  * this plugin itself declared (core/roles.ts pluginCapabilitiesFor). Never a core capability, never
  * another plugin's, so a plugin can gate its routes on its own roles without learning anything else
  * about the account. An administrator receives every capability the plugin's own roles confer.
+ *
+ * `accountCapabilities` is the per-account grants an administrator gave this account that THIS plugin
+ * declared (core/account-capabilities.ts) — explicit grants only, never implied by a role (administrators
+ * included), never another plugin's, never derived from the account's email.
  */
 function projectRouteUser(user: any, slug: string): any {
     if (!user) return null;
     const projected: any = {
         id: user.id, role: user.role,
-        hasProfessionalMailbox: hasProfessionalMailbox(user),
         pluginCapabilities: pluginCapabilitiesOf(user, slug),
+        accountCapabilities: require('./account-capabilities').accountCapabilitiesFor(user, slug),
     };
+    // DEPRECATED — the field an outdated mail plugin still reads (core/legacy-account-flags.ts).
+    Object.assign(projected, require('./legacy-account-flags').legacyProjectionFields(slug, projected.accountCapabilities));
     // The account's IDENTIFYING fields (email, login) are personal data: the same grant that lets a
     // plugin look accounts up through the users bridge (users:read) is required to see them here. Without
-    // it a route still gets everything a gate needs (id, role, the mailbox fact, its own capabilities).
+    // it a route still gets everything a gate needs (id, role, its own capabilities and account grants).
     if (routeUserPiiGranted(slug)) {
         projected.userEmail = user.userEmail;
         projected.userLogin = user.userLogin;
@@ -3121,12 +3126,8 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                         ...(isWebhook ? { rawBody: typeof req.rawBody === 'string' ? req.rawBody : '' } : {}),
                         // Saved-upload metadata (multer) — the isolate gets the path/name, not the stream.
                         file: req.file ? { path: req.file.path, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size, filename: req.file.filename } : undefined,
-                        // `hasProfessionalMailbox` is the ACTIVE CORPORATE MAILBOX grant
-                        // (user_meta.professional_mailbox, admin-owned — see core/mailbox.ts). It is
-                        // projected as a boolean so a plugin route gate reads the FACT instead of
-                        // re-deriving it from userEmail, which the account itself can write. Rebuilt per
-                        // request from req.user, so revoking the grant denies the very next request.
-                        // `pluginCapabilities` — see projectRouteUser.
+                        // `pluginCapabilities` / `accountCapabilities` — see projectRouteUser. Rebuilt per
+                        // request from req.user, so revoking a grant denies the very next request.
                         user: isWebhook ? null : projectRouteUser(req.user, slug)
                     };
                     try {

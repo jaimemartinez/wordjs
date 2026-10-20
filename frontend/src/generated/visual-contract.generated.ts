@@ -316,6 +316,40 @@ export const CHROME_CONTRACT = deepFreeze({
   "documentScopedBlocks": {
     "ChromeNav": "it mounts the mobile drawer, which owns document.body scroll-lock, a document keydown listener and a portal into document.body — two instances on one page fight over that single global"
   },
+  "rootProps": {
+    "sticky": {
+      "kind": "boolean"
+    },
+    "transparent": {
+      "kind": "boolean"
+    },
+    "overlayText": {
+      "kind": "enum",
+      "values": [
+        "light",
+        "dark"
+      ]
+    },
+    "width": {
+      "kind": "enum",
+      "values": [
+        "container",
+        "full"
+      ]
+    }
+  },
+  "commonProps": {
+    "hideMobile": {
+      "kind": "boolean"
+    },
+    "hideTablet": {
+      "kind": "boolean"
+    },
+    "hideDesktop": {
+      "kind": "boolean"
+    }
+  },
+  "slugPattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
   "blocks": {
     "ChromeLogo": {
       "props": {
@@ -326,6 +360,9 @@ export const CHROME_CONTRACT = deepFreeze({
             "md",
             "lg"
           ]
+        },
+        "showTitle": {
+          "kind": "boolean"
         }
       }
     },
@@ -353,6 +390,19 @@ export const CHROME_CONTRACT = deepFreeze({
             "vertical"
           ],
           "required": true
+        },
+        "collapse": {
+          "kind": "enum",
+          "values": [
+            "mobile",
+            "tablet",
+            "always",
+            "never"
+          ]
+        },
+        "title": {
+          "kind": "string",
+          "sanitize": "plain-text"
         }
       }
     },
@@ -371,6 +421,10 @@ export const CHROME_CONTRACT = deepFreeze({
             "settings"
           ],
           "required": true
+        },
+        "title": {
+          "kind": "string",
+          "sanitize": "plain-text"
         }
       }
     },
@@ -445,6 +499,117 @@ export const CHROME_CONTRACT = deepFreeze({
         },
         "wrap": {
           "kind": "boolean"
+        },
+        "direction": {
+          "kind": "enum",
+          "values": [
+            "row",
+            "column"
+          ]
+        },
+        "stack": {
+          "kind": "enum",
+          "values": [
+            "never",
+            "mobile",
+            "tablet"
+          ]
+        },
+        "tone": {
+          "kind": "enum",
+          "values": [
+            "none",
+            "muted",
+            "primary",
+            "inverse"
+          ]
+        }
+      }
+    },
+    "ChromeColumns": {
+      "props": {
+        "items": {
+          "kind": "slot",
+          "required": true
+        },
+        "columns": {
+          "kind": "enum",
+          "values": [
+            "2",
+            "3",
+            "4",
+            "5"
+          ],
+          "required": true
+        },
+        "gap": {
+          "kind": "enum",
+          "values": [
+            "sm",
+            "md",
+            "lg"
+          ],
+          "required": true
+        }
+      }
+    },
+    "ChromeHeading": {
+      "props": {
+        "text": {
+          "kind": "string",
+          "required": true,
+          "sanitize": "plain-text"
+        },
+        "level": {
+          "kind": "enum",
+          "values": [
+            "h2",
+            "h3",
+            "h4"
+          ]
+        }
+      }
+    },
+    "ChromeRichText": {
+      "props": {
+        "html": {
+          "kind": "string",
+          "required": true,
+          "sanitize": "html"
+        }
+      }
+    },
+    "ChromeCopyright": {
+      "props": {
+        "text": {
+          "kind": "string",
+          "sanitize": "plain-text"
+        }
+      }
+    },
+    "ChromeLanguageSwitcher": {
+      "props": {
+        "style": {
+          "kind": "enum",
+          "values": [
+            "inline",
+            "dropdown"
+          ]
+        },
+        "labels": {
+          "kind": "enum",
+          "values": [
+            "native",
+            "code"
+          ]
+        }
+      }
+    },
+    "ChromeWidgets": {
+      "props": {
+        "area": {
+          "kind": "slug",
+          "required": true
         }
       }
     }
