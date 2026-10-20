@@ -596,15 +596,17 @@ jobs:
     #
     # Timeout: the unsharded instrumented job took 20-28 min whole on 2026-10-12 (nine runs that day were
     # cancelled at a 30-minute wall while still passing). A shard is install (~3.5 min warm, ~9 cold),
-    # build, and a quarter of that suite with the same uneven-split margin as backend-test. 25 covers it
-    # and still turns a hang red.
+    # build, and a quarter of that suite with the same uneven-split margin as backend-test. 25 covered it
+    # until the conference-manager suites (#516) grew one shard to 18.6 min on main and past 25 on a
+    # branch carrying the multisite engine suites as well; several of those suites take 3-4 minutes each
+    # under coverage. 35 leaves that margin and still turns a hang red.
     name: Backend coverage (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    timeout-minutes: 25
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:16
