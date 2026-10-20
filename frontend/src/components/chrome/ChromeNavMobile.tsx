@@ -69,10 +69,21 @@ export function MobileNavItems({
     );
 }
 
-export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) {
+// Below which width the hamburger stands in for the desktop row (ChromeNav `collapse`). Static literal
+// maps so Tailwind sees every class; `always` keeps the hamburger at every width (the classic
+// "minimal" header), and the resize-close threshold follows the same breakpoint.
+export type ChromeNavCollapse = "mobile" | "tablet" | "always";
+const HIDE_ABOVE: Record<ChromeNavCollapse, string> = { mobile: " md:hidden", tablet: " lg:hidden", always: "" };
+const CLOSE_AT: Record<ChromeNavCollapse, number> = { mobile: 768, tablet: 1024, always: Number.POSITIVE_INFINITY };
+
+export default function ChromeNavMobile({ items, collapse = "mobile" }: { items: ChromeMenuItem[]; collapse?: ChromeNavCollapse }) {
+    const hideAbove = HIDE_ABOVE[collapse] ?? HIDE_ABOVE.mobile;
+    const closeAt = CLOSE_AT[collapse] ?? CLOSE_AT.mobile;
     // Any nesting in the tree switches the drawer to the recursive (indented) renderer; a flat menu
     // keeps its original per-link markup.
     const hasSubmenus = items.some((item) => (item.children?.length ?? 0) > 0);
+    // Default `mobile` collapse + submenus: on a touch screen the drawer stays up to lg (see ChromeNav).
+    const touchSubmenus = hasSubmenus && collapse === "mobile";
     // Current-page marking for the FLAT branch below (the nested branch reads it in MobileNavItems).
     const pathname = usePathname();
     const [open, setOpen] = useState(false);
@@ -89,16 +100,16 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
     // Mount-gated so the server and the first client render agree.
     useEffect(() => setMounted(true), []);
 
-    // Close on resize to desktop, like Header.tsx (the desktop nav takes over at md — at lg on a touch
-    // screen when the menu has submenus, see ChromeNav).
+    // Close on resize past the collapse breakpoint, like Header.tsx (the desktop nav takes over there —
+    // at lg on a touch screen when a `mobile`-collapse menu has submenus, see ChromeNav).
     useEffect(() => {
         const handleResize = () => {
-            const coarseSubmenus = hasSubmenus && window.matchMedia("(pointer: coarse)").matches;
-            if (window.innerWidth >= (coarseSubmenus ? 1024 : 768)) setOpen(false);
+            const coarse = touchSubmenus && window.matchMedia("(pointer: coarse)").matches;
+            if (window.innerWidth >= (coarse ? Math.max(closeAt, 1024) : closeAt)) setOpen(false);
         };
         window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
-    }, [hasSubmenus]);
+    }, [closeAt, touchSubmenus]);
 
     // Drawer semantics: Escape dismisses it and the page behind stays put (as in Header.tsx), plus the
     // two halves of a modal focus contract — while it is open Tab CYCLES inside the panel (it covers the
@@ -146,7 +157,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
         // .wjs-header-actions: the hook Header.tsx puts on the <div> holding this same hamburger, which
         // themes target as `.wjs-header-actions button`. Same classes as that div so the theme's flex
         // tweaks (order / margin-left:auto) land identically.
-        <div className={`wjs-chrome-nav-mobile wjs-header-actions flex items-center gap-4 md:hidden${hasSubmenus ? " pointer-coarse:max-lg:flex" : ""}`}>
+        <div className={`wjs-chrome-nav-mobile wjs-header-actions flex items-center gap-4${hideAbove}${touchSubmenus ? " pointer-coarse:max-lg:flex" : ""}`}>
             <button
                 ref={triggerRef}
                 className="w-11 h-11 rounded-full bg-[var(--wjs-color-primary,#2F6D86)] text-[var(--wjs-color-on-primary,#ffffff)] flex items-center justify-center shadow-lg hover:bg-[var(--wjs-color-primary-dark,#266073)] transition-colors"
@@ -169,7 +180,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
             {mounted && createPortal(<>
             {/* Overlay */}
             <div
-                className={`wjs-header-mobile-overlay fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300 md:hidden${hasSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+                className={`wjs-header-mobile-overlay fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300${hideAbove}${touchSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
                 onClick={() => setOpen(false)}
             />
 
@@ -179,7 +190,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                 id={panelId}
                 inert={!open}
                 aria-hidden={!open}
-                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden${hasSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "translate-x-0" : "translate-x-full rtl:-translate-x-full"}`}
+                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out${hideAbove}${touchSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "translate-x-0" : "translate-x-full rtl:-translate-x-full"}`}
             >
                 <div className="p-6">
                     <button

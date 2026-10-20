@@ -758,7 +758,7 @@ Larger features have a guide of their own; this page only places them in the pic
 | **Multisite** — a network of sites, each with its own database, uploads, users and settings | `backend/src/core/network*.ts`, `site-context.ts`, `site-resolver.ts`, `site-keys.ts`, `multisite-guards.ts`; frontend `src/proxy.ts` + `app/wjs-site/` | [multisite.md](multisite.md), design: [multisite-design.md](multisite-design.md) |
 | **AI agents (MCP server)** — AI assistants read and draft content through granted capabilities | `backend/src/core/mcp-server.ts`, `agent-capabilities.ts`, `models/AgentConnection.ts`; `/admin/agents` | [ai-agents.md](ai-agents.md) |
 | **AI provider** — one place that holds the provider credentials; editor suggestions and `ai:use` plugins | `backend/src/core/ai-provider.ts`, `ai-suggest.ts`; `/admin/settings/ai` | [ai-provider.md](ai-provider.md) |
-| **GraphQL** — read-only endpoint where every field is a REST read | `backend/src/core/graphql/` | [graphql.md](graphql.md) |
+| **GraphQL** — queries, mutations and SSE subscriptions, every field a REST call as the same caller | `backend/src/core/graphql/` | [graphql.md](graphql.md) |
 | **Media storage** — local disk or an S3-compatible bucket + CDN | `backend/src/core/media-storage.ts`, `media-storage-migrate.ts`; `/admin/settings/media-storage` | [media-storage.md](media-storage.md) |
 | **Outgoing webhooks** — HMAC-signed event deliveries | `backend/src/core/webhooks.ts`, `webhook-payloads.ts` | [webhooks.md](webhooks.md) |
 | **Observability** — structured logs, request ids, Prometheus metrics | `backend/src/core/logger.ts`, `module-logger.ts`, `metrics.ts`, `middleware/request-context.ts` | [observability.md](observability.md) |

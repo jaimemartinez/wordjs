@@ -264,7 +264,7 @@ function Mailboxes({ t, locale, toast }: any) {
                                                     <div className="truncate font-medium text-slate-900">{m.name}</div>
                                                     <div className="truncate text-xs text-slate-500">{m.address || m.email}</div>
                                                     {!m.hasMailbox && <Pill tone="slate" className="mt-1">{t('srv.mbx.noMailbox')}</Pill>}
-                                                    {m.hasMailbox && !m.address && <Pill tone="amber" className="mt-1">{t('srv.mbx.offDomain', { domain: data.mailDomain })}</Pill>}
+                                                    {m.missingAddress && <Pill tone="amber" className="mt-1">{t('srv.mbx.offDomain', { domain: data.mailDomain })}</Pill>}
                                                 </div>
                                             </div>
                                         </td>
@@ -290,6 +290,7 @@ function Mailboxes({ t, locale, toast }: any) {
                                     </div>
                                 </div>
                                 {!m.hasMailbox && <Pill tone="slate" className="mt-2">{t('srv.mbx.noMailbox')}</Pill>}
+                                {m.missingAddress && <Pill tone="amber" className="mt-2">{t('srv.mbx.offDomain', { domain: data.mailDomain })}</Pill>}
                                 <div className="mt-3"><UsageBar {...m} /></div>
                                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                                     <span>{m.messages} {t('srv.messages').toLowerCase()} · {m.unread} {t('srv.mbx.unread').toLowerCase()}</span>

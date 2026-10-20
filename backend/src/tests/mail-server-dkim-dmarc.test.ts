@@ -232,8 +232,8 @@ function loadPluginModule(): any {
     return moduleObj.exports;
 }
 
-const BOB = { id: 3, role: 'author', userEmail: `bob@${DOMAIN}`, userLogin: 'bob', displayName: 'Bob', hasProfessionalMailbox: true };
-const BOSS = { id: 1, role: 'administrator', userEmail: `boss@${DOMAIN}`, userLogin: 'boss', displayName: 'Boss', hasProfessionalMailbox: true };
+const BOB = { id: 3, role: 'author', userEmail: `bob@${DOMAIN}`, userLogin: 'bob', displayName: 'Bob', accountCapabilities: ['mail_server_mailbox'] };
+const BOSS = { id: 1, role: 'administrator', userEmail: `boss@${DOMAIN}`, userLogin: 'boss', displayName: 'Boss', accountCapabilities: ['mail_server_mailbox'] };
 const USERS = [BOSS, BOB];
 
 async function boot(extraOptions: Record<string, string> = {}, dnsRecords: Txt = BASE_DNS) {
