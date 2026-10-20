@@ -579,6 +579,13 @@ the boot error links there too.
 
 ### Changed
 
+- **The admin works on a phone and a tablet.** Every core list (posts, pages, media, comments, users,
+  categories, tags, audit log, form submissions, API tokens, backups, site addresses) renders through one
+  responsive table: labelled cards on a phone, columns that wait for room on a tablet, row actions that never
+  hide behind hover on a touch screen and a keyboard-accessible *More actions* menu. The sidebar is a drawer
+  below 1024 px, so a tablet gets the whole width; core screens have 44 px touch targets, phone-sized gutters
+  and readable 11 px labels; dialogs fit the viewport. Labels are tied to their fields, icon-only buttons are
+  named, and the media library and two sidebar entries that were Spanish-only are translated.
 - **conference-manager 2.30.0: the conference portal is the plugin's own page.** The coordinators' portal
   (`/portal/conference`), «Mi inscripción» (`/portal/conference/yo`) and the badge links
   (`/portal/conference/badge`) were pages of the core (`frontend/src/app/portal/conference`); they are now the
