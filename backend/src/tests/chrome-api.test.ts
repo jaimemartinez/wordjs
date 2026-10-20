@@ -83,6 +83,27 @@ const invalidVectors: Array<[string, any, string]> = [
             ] } }
         ] } }]
     }, 'CHROME_TOO_DEEP'],
+    // Root props (header/footer wrapper behaviour) are type-checked like block props.
+    ['root sticky not a boolean', { root: { props: { sticky: 'yes' } }, content: [] }, 'CHROME_INVALID_PROP'],
+    ['root width outside its enum', { root: { props: { width: 'huge' } }, content: [] }, 'CHROME_INVALID_PROP'],
+    ['root overlayText outside its enum', { root: { props: { overlayText: 'white' } }, content: [] }, 'CHROME_INVALID_PROP'],
+    // Per-breakpoint visibility is a boolean on every block.
+    ['visibility flag not a boolean', { root: { props: {} }, content: [{ type: 'ChromeLogo', props: { hideMobile: 'true' } }] }, 'CHROME_INVALID_PROP'],
+    // A widget area name becomes part of a request path: a plain slug, nothing else.
+    ['widget area with a path', { root: { props: {} }, content: [{ type: 'ChromeWidgets', props: { area: '../admin' } }] }, 'CHROME_INVALID_PROP'],
+    ['widget area missing', { root: { props: {} }, content: [{ type: 'ChromeWidgets', props: {} }] }, 'CHROME_MISSING_PROP'],
+    ['columns outside its enum', { root: { props: {} }, content: [{ type: 'ChromeColumns', props: { columns: '9', gap: 'md', items: [] } }] }, 'CHROME_INVALID_PROP'],
+    // ChromeColumns nests like ChromeRow — and counts toward the same depth budget.
+    ['depth 4 via columns', {
+        root: { props: {} },
+        content: [{ type: 'ChromeColumns', props: { columns: '2', gap: 'sm', items: [
+            { type: 'ChromeRow', props: { align: 'start', gap: 'sm', items: [
+                { type: 'ChromeRow', props: { align: 'start', gap: 'sm', items: [
+                    { type: 'ChromeSpacer', props: { size: 'sm' } }
+                ] } }
+            ] } }
+        ] } }]
+    }, 'CHROME_TOO_DEEP'],
     ['101 blocks', {
         root: { props: {} },
         content: Array.from({ length: 101 }, () => ({ type: 'ChromeSpacer', props: { size: 'sm' } }))
@@ -230,6 +251,36 @@ describe('chrome API (PUT/DELETE /api/v1/chrome/:part)', () => {
         assert.deepStrictEqual(res.body.site_chrome_header, validComposition(),
             'the renderer needs the composition in the public settings payload');
         assert.strictEqual(res.body.site_chrome_footer, null);
+    });
+
+    it('PUT accepts the full block set: multi-column footer, root props, per-breakpoint visibility (200)', async () => {
+        const data = {
+            // `title` is not a root prop: an older editor's root may carry anything, and unknown root keys
+            // stay ignored rather than failing the whole composition closed.
+            root: { props: { sticky: true, transparent: true, overlayText: 'light', width: 'full', title: 'legacy editor key' } },
+            content: [
+                { type: 'ChromeWidgets', props: { area: 'footer-1', hideTablet: true } },
+                { type: 'ChromeColumns', props: { columns: '4', gap: 'lg', items: [
+                    { type: 'ChromeRow', props: { direction: 'column', align: 'start', gap: 'md', items: [
+                        { type: 'ChromeLogo', props: { size: 'sm', showTitle: true } },
+                        { type: 'ChromeRichText', props: { html: '<p>About <a href="/about">us</a></p>' } },
+                    ] } },
+                    { type: 'ChromeRow', props: { direction: 'column', align: 'start', gap: 'md', items: [
+                        { type: 'ChromeHeading', props: { text: 'Links', level: 'h3' } },
+                        { type: 'ChromeNav', props: { location: 'footer', orientation: 'vertical', title: 'More', collapse: 'never' } },
+                    ] } },
+                    { type: 'ChromeSocials', props: { source: 'settings', title: 'Follow' } },
+                    { type: 'ChromeLanguageSwitcher', props: { style: 'dropdown', labels: 'code' } },
+                ] } },
+                { type: 'ChromeRow', props: { align: 'between', gap: 'md', stack: 'mobile', tone: 'muted', items: [
+                    { type: 'ChromeCopyright', props: { text: '© {year} {site}', hideMobile: true, hideDesktop: false } },
+                ] } },
+            ],
+        };
+        const res = await asAdmin(request(app).put('/api/v1/chrome/footer')).send({ data });
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.deepStrictEqual(JSON.parse((await optionRow('footer')).option_value), data);
+        await asAdmin(request(app).delete('/api/v1/chrome/footer'));
     });
 
     it('a second PUT replaces the stored composition', async () => {

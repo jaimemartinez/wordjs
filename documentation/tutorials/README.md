@@ -24,6 +24,7 @@ any order once you have a site; links point back to earlier ones where they buil
 | 5 | [Your first page with the Verso editor](05-your-first-page-with-verso.md) | A published page built from blocks |
 | 6 | [Move a WordPress site to WordJS](06-import-a-wordpress-site.md) | Posts, pages, terms, comments, images and menus imported from a WordPress export |
 | 8 | [Create a theme](08-create-a-theme.md) | Your own theme from four colors, checked by the theme doctor and installed |
+| 17 | [Design your header and footer](17-design-your-header-and-footer.md) | A two-row header and a four-column footer from templates, checked at three widths, and the old footer settings converted |
 | 11 | [Store your media in an S3-compatible bucket](11-media-in-an-s3-bucket.md) | Uploads served from a bucket or CDN, with the existing library moved |
 
 ## Extend and connect

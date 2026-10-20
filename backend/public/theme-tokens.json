@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 778,
-    "varUses": 1779,
+    "tokens": 781,
+    "varUses": 1790,
     "elements": 51
   },
   "tokens": {
@@ -3355,6 +3355,32 @@
         }
       ]
     },
+    "--wjs-chrome-header-h": {
+      "group": "chrome",
+      "declaredDefault": null,
+      "fallbacks": [
+        "6rem"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-shell:has(> .wjs-chrome-header[data-transparent=\"true\"]) > main",
+          "property": "padding-top"
+        }
+      ]
+    },
+    "--wjs-chrome-title-size": {
+      "group": "chrome",
+      "declaredDefault": null,
+      "fallbacks": [
+        "1rem"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-chrome-footer .wjs-chrome-block-title",
+          "property": "font-size"
+        }
+      ]
+    },
     "--wjs-col-bg": {
       "group": "col",
       "declaredDefault": null,
@@ -4574,6 +4600,10 @@
         {
           "selector": ".wjs-footer-logo",
           "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-footer .wjs-chrome-block-title",
+          "property": "color"
         }
       ]
     },
@@ -4641,6 +4671,14 @@
         },
         {
           "selector": ".wp-block-site-logo .wjs-site-title",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-header-nav a",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-header-logo, .wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-chrome-text",
           "property": "color"
         },
         {
@@ -7453,6 +7491,32 @@
       "fallbacks": [],
       "consumers": []
     },
+    "--wjs-header-overlay-text": {
+      "group": "header",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-nav-color, var(--wjs-color-text-main))",
+        "var(--wjs-logo-color, var(--wjs-color-text-main))"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-header-nav a",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-header[data-overlay-text][data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-chrome-button--ghost",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-header[data-overlay-text][data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-chrome-button--ghost",
+          "property": "border-color"
+        },
+        {
+          "selector": ".wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-header-logo, .wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-chrome-text",
+          "property": "color"
+        }
+      ]
+    },
     "--wjs-heading-bg": {
       "group": "heading",
       "declaredDefault": null,
@@ -8706,6 +8770,10 @@
         {
           "selector": ".wjs-header-logo",
           "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-header-logo, .wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-chrome-text",
+          "property": "color"
         }
       ]
     },
@@ -8856,6 +8924,10 @@
         },
         {
           "selector": ".wp-block-site-logo .wjs-site-title",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-header[data-transparent=\"true\"][data-scrolled=\"false\"] .wjs-header-nav a",
           "property": "color"
         }
       ]

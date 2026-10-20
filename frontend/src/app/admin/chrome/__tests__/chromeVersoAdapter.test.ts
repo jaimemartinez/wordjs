@@ -16,7 +16,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VersoData as Data } from "@/lib/verso/types";
 import { chromeApi, type ChromePart } from "@/lib/api";
 import { parseChromeData, STARTER_TEMPLATES, type ChromeData } from "@/lib/chromeData";
-import { ALIGN_CLASS, GAP_CLASS } from "@/components/chrome/ChromeRow";
+import { createElement } from "react";
+import type React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ALIGN_CLASS, GAP_CLASS, chromeRowClass } from "@/components/chrome/ChromeRow";
+import { chromeColumnsClass } from "@/components/chrome/ChromeColumns";
+import { ChromeDeviceContext, type ChromeDevice } from "../chromeEditorDevice";
 import { createEditor } from "@/lib/verso/store";
 import type { VersoData, VersoItem } from "@/lib/verso/types";
 import { buildChromeEditorConfig } from "../chromeEditorConfig";
@@ -71,30 +76,48 @@ describe("adaptación de bloques de chrome (anti-drift contra chromeEditorConfig
         expect(footer?.defaultProps).toEqual({ location: "footer", orientation: "vertical" });
     });
 
-    it("render: reutilizado por referencia salvo ChromeRow (adaptado al slot-función de Verso)", () => {
+    it("render: reutilizado por referencia salvo los contenedores (adaptados al slot-función de Verso)", () => {
         const config = buildChromeEditorConfig("header") as unknown as LegacyChromeConfigShape;
         const defs = adaptChromeComponents(config);
         for (const def of defs) {
             const legacy = config.components[def.type];
-            if (def.type === "ChromeRow") expect(def.render).not.toBe(legacy.render);
+            if (def.type === "ChromeRow" || def.type === "ChromeColumns") expect(def.render).not.toBe(legacy.render);
             else expect(def.render).toBe(legacy.render);
         }
     });
 
-    it("ChromeRow (Verso) pinta el slot con las MISMAS clases literales que el legacy/público", () => {
-        const row = buildChromeBlockDefinitions("header").find((d) => d.type === "ChromeRow");
-        expect(row).toBeDefined();
-        const slot = vi.fn(() => null);
-        const render = row!.render as (props: Record<string, unknown>) => unknown;
-        render({ items: slot, align: "between", gap: "md", wrap: false });
-        expect(slot).toHaveBeenCalledWith(
-            `wjs-chrome-row flex items-center w-full min-h-12 ${ALIGN_CLASS.between} ${GAP_CLASS.md}`,
+    // The Verso renders read the preview device from context (a block hidden on that device is drawn
+    // dimmed), so they are rendered as COMPONENTS here, exactly as VersoBlock mounts them.
+    const renderSlotClass = (type: string, props: Record<string, unknown>, device: ChromeDevice = "desktop") => {
+        const def = buildChromeBlockDefinitions("header").find((d) => d.type === type);
+        expect(def).toBeDefined();
+        const slot = vi.fn((_className?: string) => null);
+        const Render = def!.render as (props: Record<string, unknown>) => React.ReactNode;
+        renderToStaticMarkup(createElement(ChromeDeviceContext.Provider, { value: device }, createElement(Render, { ...props, items: slot })));
+        expect(slot).toHaveBeenCalledTimes(1);
+        return slot.mock.calls[0][0];
+    };
+
+    it("ChromeRow (Verso) pinta el slot con las MISMAS clases que el ChromeRow público (+ altura mínima del lienzo)", () => {
+        expect(renderSlotClass("ChromeRow", { align: "between", gap: "md", wrap: false })).toBe(
+            `wjs-chrome-row flex items-center w-full ${ALIGN_CLASS.between} ${GAP_CLASS.md} min-h-12`,
         );
-        slot.mockClear();
-        render({ items: slot, align: "center", gap: "lg", wrap: true });
-        expect(slot).toHaveBeenCalledWith(
-            `wjs-chrome-row flex items-center w-full min-h-12 ${ALIGN_CLASS.center} ${GAP_CLASS.lg} flex-wrap`,
+        expect(renderSlotClass("ChromeRow", { align: "center", gap: "lg", wrap: true })).toBe(
+            `wjs-chrome-row flex items-center w-full ${ALIGN_CLASS.center} ${GAP_CLASS.lg} flex-wrap min-h-12`,
         );
+        const props = { align: "start", gap: "sm", direction: "column", tone: "muted" } as const;
+        expect(renderSlotClass("ChromeRow", props)).toBe(`${chromeRowClass(props)} min-h-12`);
+    });
+
+    it("ChromeColumns (Verso) pinta la rejilla con las MISMAS clases que el ChromeColumns público", () => {
+        expect(renderSlotClass("ChromeColumns", { columns: "4", gap: "lg" })).toBe(`${chromeColumnsClass({ columns: "4", gap: "lg" })} min-h-24`);
+    });
+
+    it("un contenedor oculto en el dispositivo de la vista previa se ATENÚA en el lienzo, no desaparece", () => {
+        const props = { align: "between", gap: "md", hideMobile: true };
+        expect(renderSlotClass("ChromeRow", props, "desktop")).not.toContain("opacity-35");
+        expect(renderSlotClass("ChromeRow", props, "phone")).toContain("opacity-35");
+        expect(renderSlotClass("ChromeRow", props, "tablet")).not.toContain("opacity-35");
     });
 
     it("resolutor de slots: items de ChromeRow es slot; el resto de props no; tipo desconocido undefined", () => {

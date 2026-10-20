@@ -8,6 +8,22 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Header & footer editor, out of beta.** Admin → *Header & footer* (`/admin/chrome`) now covers
+  everything the built-in header and footer did, and more: a mobile hamburger that can collapse on
+  phones, phones and tablets, or always; a sticky header and a header that is **transparent over the
+  hero** and turns solid on scroll; multi-row headers (a toned top bar) and multi-column footers
+  (`ChromeColumns`); per-breakpoint visibility on every block (hide on phones / tablets / desktop);
+  and new blocks — heading, formatted text (sanitized on every render), copyright with `{year}` and
+  `{site}` tokens, a language switcher that links the current page's translations and stays hidden on a
+  monolingual site, and widget areas. The editor previews at desktop, tablet and phone widths, offers a
+  gallery of starter templates, shows where the current design comes from (this site, the theme, or
+  the built-in chrome) with a one-click restore, has undo/redo buttons, explains validation problems in
+  plain language, edits the site's social profiles, and is translated into English, Spanish and
+  Portuguese. Chrome is per site in a network. The contract additions are optional (`root.props`
+  `sticky` / `transparent` / `width`, the `hide*` flags, the new blocks and props), so every theme's
+  `chrome/*.json` and every stored composition keep validating and rendering as before. See
+  [themes.md](documentation/themes.md#composable-chrome-chromejson) and
+  [tutorial 17](documentation/tutorials/17-design-your-header-and-footer.md).
 - **Multisite: a network administrator can open any other site's admin as administrator.** Admin → Network →
   *Open as administrator* re-checks the password and sends the browser to the site's own address with a
   one-time link (signed with that site's key, bound to its address, valid once and for one minute). It starts a
@@ -571,6 +587,14 @@ the boot error links there too.
 
 ### Changed
 
+- **The Footer settings page was retired.** `/admin/footer` redirects to the footer in the header &
+  footer editor. Its settings are converted into the site footer composition by
+  `POST /api/v1/chrome/migrate-legacy` (the editor's *Convert* button): losslessly (the old options are
+  kept, so *Restore* brings the built-in footer back) and idempotently (it never overwrites an existing
+  composition). A site whose theme ships `chrome/footer.json` is not converted — that file is what
+  renders there — and the editor offers the old footer text as blocks to insert instead. The social
+  profiles moved to the editor's *Social profiles* panel. New read-only route:
+  `GET /api/v1/chrome/:part/legacy`.
 - **conference-manager 2.30.0: the conference portal is the plugin's own page.** The coordinators' portal
   (`/portal/conference`), «Mi inscripción» (`/portal/conference/yo`) and the badge links
   (`/portal/conference/badge`) were pages of the core (`frontend/src/app/portal/conference`); they are now the

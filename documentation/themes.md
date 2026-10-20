@@ -268,7 +268,9 @@ did-you-mean suggestion) and invalid enum/type values as `LAYOUT_INVALID_VALUE`.
 Beyond the layout *variants* above, a theme (or the site itself) can compose the header/footer
 from blocks. A composition is an **editor document JSON** — `{ "root": { "props": {} }, "content": [ { "type", "props" } ] }` —
 validated on the backend by `core/chrome-validate.ts` (contract v1, the write authority) and
-rendered by the public SSR layout without mounting any editor runtime.
+rendered by the public SSR layout without mounting any editor runtime. Site owners build theirs in
+**Appearance → Header & footer** (`/admin/chrome`, see [the editor](#the-header--footer-editor-adminchrome)
+below and [tutorial 17](tutorials/17-design-your-header-and-footer.md)).
 
 **Effective chrome precedence** (header, footer and the optional [announcement bar](#announcement--top-bar-chromeannouncementjson)
 resolve independently; any invalid/unreadable level falls through to the next — fail-closed, never a
@@ -281,29 +283,61 @@ partial render):
    it (see below).
 2. **Theme composition** — `chrome/header.json` / `chrome/footer.json` inside the active theme,
    served statically at `/themes/<slug>/chrome/*.json`.
-3. **Layout variant** — `theme.json` `layout` (v2, previous section).
-4. **Default** — today's built-in chrome.
+3. **Built-in chrome** — `Header.tsx` / `Footer.tsx` in the theme's `layout` v2 variant (previous
+   section), with the site's legacy footer settings (`footer_text`, `footer_copyright`,
+   `footer_socials`). Absent `layout` ≡ the classic header and the 4-column footer. The editor shows
+   this level converted to a composition (`GET /api/v1/chrome/:part/legacy`), so a first save keeps
+   today's look.
 
 **Block allowlist (closed)** — a type outside it invalidates the whole composition. Props marked
 `?` are optional; every block also accepts the editor's per-instance `id` string:
 
 | Block | Props |
 | --- | --- |
-| `ChromeLogo` | `size?: "sm" \| "md" \| "lg"` |
+| `ChromeLogo` | `size?: "sm" \| "md" \| "lg"`, `showTitle?: boolean` (site name printed next to the logo image) |
 | `ChromeSiteTitle` | `showTagline?: boolean` |
-| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"` — **site chrome only**, see the position rule below. Renders the menu's **parent→child hierarchy** as submenus (below) |
+| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"`, `collapse?: "mobile" \| "tablet" \| "always" \| "never"` (from which width the hamburger replaces a header row; default `mobile`), `title?: string` (heading shown only when the menu has items) — **site chrome only**, see the position rule below. Renders the menu's **parent→child hierarchy** as submenus (below) |
 | `ChromeSearch` | `placeholder?: string` |
-| `ChromeSocials` | `source: "settings"` |
+| `ChromeSocials` | `source: "settings"`, `title?: string` — the site's social profiles (`footer_socials`, edited in the editor's **Social profiles** panel) |
 | `ChromeText` | `text: string` (plain text — always rendered escaped) |
+| `ChromeHeading` | `text: string`, `level?: "h2" \| "h3" \| "h4"` (default `h3`; block titles are `h4`, like the built-in footer — the levels themes colour in a footer) |
+| `ChromeRichText` | `html: string` — links/bold/line breaks; **sanitized on every render** (the same `sanitizeHTML` as all rich text); `{year}`/`{site}` tokens |
+| `ChromeCopyright` | `text?: string` — plain text with `{year}` (current year) and `{site}` (site name); default `© {year} {site}` |
 | `ChromeButton` | `label: string`, `href: string`, `variant: "primary" \| "ghost"` |
+| `ChromeLanguageSwitcher` | `style?: "inline" \| "dropdown"`, `labels?: "native" \| "code"` — links to the current page in its other languages; renders **nothing** on a monolingual site or a page without translations |
+| `ChromeWidgets` | `area: string` (a widget-area slug, e.g. `footer-1`) — the widgets placed in that area, sanitized; nothing when the area is empty |
 | `ChromeSpacer` | `size: "sm" \| "md" \| "lg"` |
-| `ChromeRow` | `items` (slot: array of blocks), `align: "start" \| "center" \| "end" \| "between"`, `gap: "sm" \| "md" \| "lg"`, `wrap?: boolean` |
+| `ChromeRow` | `items` (slot), `align: "start" \| "center" \| "end" \| "between"`, `gap: "sm" \| "md" \| "lg"`, `wrap?: boolean`, `direction?: "row" \| "column"`, `stack?: "never" \| "mobile" \| "tablet"` (becomes a column below that breakpoint), `tone?: "none" \| "muted" \| "primary" \| "inverse"` (a band with its own surface — a top bar) |
+| `ChromeColumns` | `items` (slot — one cell per block), `columns: "2" \| "3" \| "4" \| "5"`, `gap: "sm" \| "md" \| "lg"` — one column on phones, two on tablets, `columns` from 1024px |
 
-**Budgets & security**: JSON ≤ **64KB**, ≤ **100 blocks**, nesting depth ≤ **3** (only via
-`ChromeRow.items`); `ChromeButton.href` must be site-relative (`/…`, never `//`) or `http(s)://`
-— `javascript:` and every other scheme are rejected. Blocks are presentational: data (menus,
-logo, socials) is resolved by the renderer from already-fetched settings, never fetched by a
-block. Styling rides the existing `.wjs-chrome-*` hook classes + `--wjs-*` tokens.
+**Every block** also accepts `hideMobile?`, `hideTablet?`, `hideDesktop?` (booleans) — per-breakpoint
+visibility on the site's breakpoints: phone < 768px, tablet 768–1023px, desktop ≥ 1024px. The block is
+wrapped in a `display: contents` box hidden in that range, so it stays a direct child of its row.
+
+**Root props** (`root.props`) set how the part sits on the page. Known keys are type-checked; unknown
+root keys are ignored (an older editor's root may carry anything):
+
+| Root prop | Applies to | Effect |
+| --- | --- | --- |
+| `sticky?: boolean` | header | `position: sticky` — stays at the top while scrolling. Unset ⇒ the theme's `layout.header.sticky` decides, as before root props existed. |
+| `transparent?: boolean` | header | **Transparent over the hero**: the header is laid over the top of the page with no surface of its own, and turns solid once the page scrolls (a small client island mirrors scrolling onto `data-scrolled`). A page whose content opens with a Hero block slides under it; any other page keeps the header's room (`--wjs-chrome-header-h`, default `6rem`). Link/brand colour over the hero: `--wjs-header-overlay-text`. |
+| `overlayText?: "light" \| "dark"` | header (transparent) | The text colour while the header sits over the hero — light over a dark image, dark over a pale one. Unset ⇒ the theme's colours (or its `--wjs-header-overlay-text`). |
+| `width?: "container" \| "full"` | header, footer | `full` drops the centred container: rows span the viewport. |
+
+**Budgets & security**: JSON ≤ **64KB**, ≤ **100 blocks**, nesting depth ≤ **3** (only via the
+`items` slot of `ChromeRow` / `ChromeColumns`); `ChromeButton.href` must be site-relative (`/…`, never `//`) or `http(s)://`
+— `javascript:` and every other scheme are rejected; `ChromeWidgets.area` must be a slug. Blocks are
+presentational: data (menus, logo, socials) is resolved by the renderer from already-fetched
+settings, never fetched by a block — the two exceptions are client islands that only READ
+(the language switcher reads the page's own `<link rel="alternate" hreflang>` set; the widget area
+loads that area's rendered HTML and sanitizes it). A theme still ships **no JavaScript**: every island
+is core code. Styling rides the existing `.wjs-chrome-*` hook classes + `--wjs-*` tokens.
+
+**Accessibility.** The composed header renders inside `<header>` and the footer inside `<footer>`
+(landmarks); every page starts with a "Skip to content" link to `<main id="main-content">`. Navs are
+`<nav aria-label>` (a titled nav is labelled by its title), the current page's link carries
+`aria-current="page"`, submenus open on `:focus-within` (keyboard-reachable without JS), and the
+mobile drawer is a modal: Escape closes it, Tab cycles inside it and focus returns to the hamburger.
 
 Minimal `chrome/header.json`:
 
@@ -334,6 +368,49 @@ before — a flat list of links, no `<ul>`. Submenu hooks: `.wjs-has-submenu` (p
 `node backend/cli/wordjs.js doctor theme <slug>` validates shipped compositions: contract
 violations are **errors** (`CHROME_INVALID`, with the offending block path); a file that cannot
 be read or parsed is a **warning** (`CHROME_UNREADABLE`).
+
+#### The header & footer editor (`/admin/chrome`)
+
+Site owners compose the site-level header, footer and announcement bar in the admin (capability
+`edit_theme_options`). What it offers:
+
+- **Source indicator** — the badge says where what you are editing comes from: *Customized on this
+  site* (level 1), *From the theme* (2), *Built-in* (3, converted) or *Starter template* (the
+  announcement bar has no built-in form). **Restore** deletes the site composition
+  (`DELETE /api/v1/chrome/:part`) and the site falls back to the theme's file or the built-in chrome.
+- **Live preview at three widths** — desktop, tablet (820px) and phone (390px). The canvas is
+  resized for real, so the blocks' own breakpoints react (the hamburger appears, rows stack); a block
+  hidden on the previewed device is drawn dimmed, never removed.
+- **Starter templates** — classic, with CTA and search, centered, two rows (top bar), minimal
+  (hamburger everywhere), transparent over the hero; four footers (four columns, simple, centered,
+  minimal); two announcement bars. Applying one is a single undoable step.
+- **Undo / redo** — buttons and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
+- **Plain-language validation** — both validators' errors are shown as "Button (Row 1 › block 2):
+  The link must start with / or https://."
+- **Social profiles** panel — edits the `footer_socials` list every `ChromeSocials` block shows.
+- Fully translated (English, Spanish, Portuguese). Multisite: every site has its own compositions
+  and social profiles (they are site options).
+
+#### Migrating from the legacy footer settings
+
+The old **Footer** settings page (`/admin/footer`) was retired; its address redirects to the editor's
+footer. Its three options are converted by `POST /api/v1/chrome/migrate-legacy` (also the editor's
+**Convert** button), which builds the composition that reproduces `Footer.tsx` — the `footer-1` widget
+area, a `ChromeColumns` grid in the theme's column count (logo + name and your footer text, the
+footer menu under "Quick Links", your social links under "Connect"), and your copyright line — and
+stores it as the site footer. It is:
+
+- **lossless** — `footer_text` and `footer_copyright` become `ChromeRichText` verbatim; the legacy
+  options themselves are never modified, so *Restore* brings the built-in footer back byte-for-byte;
+- **idempotent** — it only writes when the site has no footer composition yet (a re-run, or a run
+  after you edited the result, answers `site-composition` and changes nothing);
+- **honest about themes** — when the active theme ships `chrome/footer.json`, that file is what
+  visitors see and the legacy text never reached the page, so nothing is written
+  (`theme-composition`); the editor instead offers the old text as blocks to insert.
+
+The header has no legacy *site* settings: its look is the theme's `layout.header`, which keeps working,
+and the editor opens it converted (classic / centered / minimal, sticky, transparent) so the first
+save keeps it. Themes that ship `chrome/*.json` are unaffected.
 
 **`chrome/` can hold more than those two files.** `header.json` and `footer.json` are the *site*
 chrome — the only two the public layout resolves on every page. Any other `chrome/<name>.json` is a
