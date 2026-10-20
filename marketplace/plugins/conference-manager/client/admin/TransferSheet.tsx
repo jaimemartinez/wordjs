@@ -40,7 +40,7 @@ import { toCents } from "../lib/feeSplit";
 import { REVIEW_REASONS, RELOAD_CODES, actorText, expectedOf, feeErrorText, fmtDay, fmtStamp, isReused, recorderKind, transferActions, validationBlocked } from "../lib/feePayments";
 import { Overlay, useShortTouch } from "./Overlay";
 import { ProofThumb, forgetProof } from "./ProofViewer";
-import { RefText, StatusPill, SumState, Spinner, factsOf, money } from "./FeeBits";
+import { StatusPill, SumState, Spinner, factsOf, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
 
 /** The people of a payment (to refresh their rows after an action). */
@@ -271,7 +271,6 @@ export function TransferPanel({ id, canManage, onChanged, onEdit, onDuplicate, q
         ? tx('fees.flag.cancelled.block', 'Persona cancelada: ya no debe nada. Corrige el reparto, reactívala o rechaza el pago.')
         : tx('fees.flag.over', 'Supera lo que debe: corrige el reparto antes de validar');
     const sumC = (t.allocations || []).reduce((s, a) => s + toCents(a.amount), 0);
-    const exact = sumC === toCents(t.amount);
     const recorder = recorderKind(t);
     const who = recorder === 'portal' ? tx('fees.by.portal', 'Portal de {location}', { location: t.location || tx('no.location', 'Sin localidad') })
         : recorder === 'legacy' ? tx('fees.by.legacy', 'el sistema anterior') : (t.recorded_by || tx('fees.by.admin', 'Administración'));

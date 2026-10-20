@@ -29,7 +29,7 @@ function parseGeo(text) {
     if (!s) return { ok: false, code: 'empty' };
     if (s.length > 2000) return { ok: false, code: 'no_coords' };
     if (SHORT_LINK.test(s)) return { ok: false, code: 'short_link' };
-    let decoded = s;
+    let decoded;
     try { decoded = decodeURIComponent(s); } catch (e) { decoded = s; }
     for (const re of PATTERNS) {
         const m = decoded.match(re);

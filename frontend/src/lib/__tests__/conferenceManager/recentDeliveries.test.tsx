@@ -76,7 +76,9 @@ const elementOf = (html: string, attr: string) => {
     while (depth > 0 && (m = re.exec(html))) depth += m[0].startsWith('</') ? -1 : 1;
     return html.slice(start, re.lastIndex);
 };
-const textOf = (html: string, attr: string) => elementOf(html, attr).replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+// Tags out until none is left, then the entities React writes — &amp; last, so nothing is unescaped twice.
+const stripTags = (html: string) => { let out = html, prev; do { prev = out; out = out.replace(/<[^>]*>/g, ''); } while (out !== prev); return out; };
+const textOf = (html: string, attr: string) => stripTags(elementOf(html, attr)).replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
 /** The markup without the card's own stylesheet (its selectors name every part). */
 const noStyle = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, '');
 

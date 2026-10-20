@@ -157,7 +157,6 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
         setSel(s => s.filter(id => next.elements.some((e: any) => e.id === id)));
     };
     const update = (ids: string[], patch: (el: any) => any) => commit({ ...dRef.current, elements: dRef.current.elements.map((e: any) => (ids.includes(e.id) ? { ...e, ...patch(e) } : e)) }, selRef.current);
-    const patchSel = (p: any) => update(sel, () => p);
 
     // ── faces: every face the design uses, loaded; the layout runs again when one arrives ──
     useEffect(() => {
