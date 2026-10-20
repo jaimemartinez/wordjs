@@ -3029,7 +3029,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         // Purge the plugin's persisted footprint. ALWAYS clear grants (else a re-uploaded slug inherits
         // old, possibly-revoked grants) + crash strikes; only DROP the plugin's data tables when the
         // admin explicitly asked (dropData) — WordPress-parity: keep data by default on delete.
-        const cleanup = await uninstallPluginData(slug, { dropTables: !!dropData });
+        const cleanup = await uninstallPluginData(slug, { dropTables: !!dropData, networkWide: true });
 
         // The roles this plugin declared go with it: removed when nobody holds them, otherwise kept as
         // ORPHANED (their holders keep only read/access_admin_panel). Deliberately here and not in
