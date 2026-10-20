@@ -30,11 +30,15 @@ async function initSiteRuntime(): Promise<void> {
     require('./adminMenu').initCoreMenus();
     // Its own recurring core events (collaboration sweep, analytics retention, its backups).
     await require('./cron').initSiteCronEvents();
-    // Phase 2: the site's own plugin workers and theme worker (core/plugins, core/theme-engine). Neither
-    // throws: a site whose plugins or theme code fail to start still serves its content.
-    await require('./plugins').loadSitePlugins();
-    try { await require('./theme-engine').init(); }
-    catch (e: any) { log.warn(`[multisite] site ${siteContext.currentSiteIdOrNull()}: theme engine not started: ${e && e.message}`); }
+    // Its plugin grants and egress policy (they are its options): the host gates read them for any work
+    // of the site. Its plugin workers and theme worker are NOT started here: core/site-workers starts them
+    // on the site's first need (a request, a due cron or outbox event) and stops them when it is idle, so
+    // a background pass that only prepares the site spawns nothing.
+    try {
+        const perms = require('./plugin-permissions');
+        await perms.loadGrants();
+        await perms.loadEgressHosts();
+    } catch (e: any) { log.warn(`[multisite] site ${siteContext.currentSiteIdOrNull()}: plugin policy not loaded: ${e && e.message}`); }
 }
 
 /**
@@ -164,23 +168,9 @@ async function createSite(input: CreateSiteInput) {
     return network.getSite(record.id);
 }
 
-/** Stop every plugin and theme worker THIS process runs for site `id`. */
-function stopSiteWorkers(id: number): void {
-    try {
-        const iso = require('./plugin-isolate');
-        for (const key of iso.listIsolateKeys()) {
-            if (iso.splitIsolateKey(key).siteId === id) { try { iso.unloadIsolateKey(key); } catch { /* already gone */ } }
-        }
-    } catch { /* isolate layer unavailable */ }
-}
-
-/** Start the workers of a site this process had prepared, after a resume (in the background). */
-function restartSiteWorkers(id: number): void {
-    if (!prepared.has(id)) return;
-    siteContext.runWithSite(id, async () => {
-        await require('./plugins').loadSitePlugins();
-        try { await require('./theme-engine').init(); } catch { /* logged by the engine */ }
-    }).catch(() => { /* loadSitePlugins never throws */ });
+/** Stop every plugin and theme worker THIS process runs for site `id` (core/site-workers). */
+function stopSiteWorkers(id: number, reason = 'suspended'): Promise<void> {
+    return require('./site-workers').sleep(id, reason);
 }
 
 /**
@@ -188,7 +178,8 @@ function restartSiteWorkers(id: number): void {
  * its database connection closes, and its in-memory runtime is dropped with the preparation.
  */
 async function forgetSite(id: number): Promise<void> {
-    stopSiteWorkers(id);
+    await stopSiteWorkers(id, 'forgotten');
+    require('./site-workers').forget(id);
     prepared.delete(id);
     try { await require('../config/database').closeSiteDatabase(id); } catch { /* already closed */ }
 }
@@ -196,10 +187,9 @@ async function forgetSite(id: number): Promise<void> {
 async function setSiteStatus(id: number, status: 'active' | 'suspended', actorUserId: number | null = null) {
     const site = await network.setSiteStatus(id, status);
     // A suspended site answers nothing, so its plugin and theme workers have nothing to do: stop them.
-    // Resumed after this process had prepared it: start them again (a site prepared later starts them in
-    // initSiteRuntime). The other nodes do the same when the registry change reaches them.
-    if (status === 'suspended') stopSiteWorkers(id);
-    else restartSiteWorkers(id);
+    // A resumed site starts them again on its next need, like any idle site (core/site-workers). The
+    // other nodes do the same when the registry change reaches them.
+    if (status === 'suspended') await stopSiteWorkers(id);
     await network.audit(status === 'suspended' ? 'site.suspended' : 'site.resumed', { actor: actorUserId, siteId: id });
     afterRegistryChange();
     return site;
@@ -251,7 +241,7 @@ async function deleteSite(id: number, opts: { confirmSlug?: unknown; actorUserId
     if (site.status !== 'suspended') throw codedError('network_site_active', 'Suspend the site before deleting it.', 409);
     if (opts.confirmSlug !== site.slug) throw codedError('network_confirm_mismatch', 'Type the slug of the site to confirm its deletion.');
     const database = require('../config/database');
-    stopSiteWorkers(id);
+    await stopSiteWorkers(id, 'deleted');
     const warnings: string[] = [];
     await siteContext.runWithSite(id, async () => {
         // Its database only: preparing the whole site would start the workers it is losing.
@@ -276,6 +266,7 @@ async function deleteSite(id: number, opts: { confirmSlug?: unknown; actorUserId
         try { await require('./cache').flush(); } catch (e: any) { warnings.push(`cache: ${e && e.message}`); }
     });
     prepared.delete(id);
+    require('./site-workers').forget(id);
     warnings.push(...await retireSiteWorkers(id));
     try { await database.dropSiteDatabase(id); } catch (e: any) { warnings.push(`database: ${e && e.message}`); }
     try { fs.rmSync(network.siteDataDir(id), { recursive: true, force: true }); } catch (e: any) { warnings.push(`files: ${e && e.message}`); }
@@ -288,8 +279,8 @@ async function deleteSite(id: number, opts: { confirmSlug?: unknown; actorUserId
 
 /**
  * Another node changed the registry (core/network reloads its mirror from the shared store): make THIS
- * node match it. A site suspended there stops its workers here; one resumed starts them again here if
- * this node had prepared it; one deleted is forgotten. New sites need nothing: they are prepared on their
+ * node match it. A site suspended there stops its workers here; one resumed starts them again on its next
+ * need here; one deleted is forgotten. New sites need nothing: they are prepared on their
  * first request. The gateway is told the new addresses as after a local change.
  */
 function followRegistryChanges(): void {
@@ -299,9 +290,8 @@ function followRegistryChanges(): void {
             if (old.id === siteContext.PRIMARY_SITE_ID) continue;
             const cur = now.get(old.id);
             if (!cur) { forgetSite(old.id).catch(() => { /* best-effort */ }); continue; }
-            if (cur.status !== old.status) {
-                if (cur.status === 'suspended') stopSiteWorkers(old.id);
-                else restartSiteWorkers(old.id);
+            if (cur.status !== old.status && cur.status === 'suspended') {
+                stopSiteWorkers(old.id).catch(() => { /* logged by core/site-workers */ });
             }
         }
         afterRegistryChange();
