@@ -15,23 +15,21 @@ const os = require('os');
 const path = require('path');
 const tls = require('tls');
 const https = require('https');
-const forge = require('node-forge');
+const x509 = require('../src/x509');
 const siteCerts = require('../src/site-certs');
 
-/** A self-signed certificate for `host` (CN and SAN), as PEM. */
+/** A self-signed certificate for `host` (CN and SAN), as PEM (src/x509, Node's crypto). */
 function selfSigned(host) {
-    const keys = forge.pki.rsa.generateKeyPair(2048);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = String(Math.floor(Math.random() * 1e9));
-    cert.validity.notBefore = new Date(Date.now() - 60000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    const attrs = [{ name: 'commonName', value: host }];
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs);
-    cert.setExtensions([{ name: 'subjectAltName', altNames: [{ type: 2, value: host }] }]);
-    cert.sign(keys.privateKey, forge.md.sha256.create());
-    return { key: forge.pki.privateKeyToPem(keys.privateKey), cert: forge.pki.certificateToPem(cert) };
+    const keys = x509.generateRsaKeyPair(2048);
+    const cert = x509.createCertificate({
+        subject: [['CN', host]],
+        publicKey: keys.publicKey,
+        signingKey: keys.privateKey,
+        notBefore: new Date(Date.now() - 60000),
+        notAfter: new Date(Date.now() + 86400000),
+        altNames: [host],
+    });
+    return { key: keys.privateKeyPem, cert };
 }
 
 let dir;
