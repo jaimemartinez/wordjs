@@ -8,6 +8,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Multisite: an idle site's plugin and theme workers stop, and start again on its next need.** On a network,
+  the workers of a site other than the main one now start on the site's first request, due scheduled event
+  or content event (not when a background pass opens the site) and stop once the site has been idle for
+  `multisite.workerIdleMinutes` (default 15; `0` keeps them running), so many quiet sites no longer keep one
+  process per site and plugin. The next request waits for them to start and is answered as usual; the site's
+  activations, grants, egress allowlist and the network's ceiling are kept. Each node stops its own. The main
+  site and single-site installs are unchanged. See
+  [multisite.md](documentation/multisite.md#idle-sites-stop-their-workers).
+
 - **conference-manager 2.30.0: everything since 2.17.2, in one release.** Versions 2.18.0 to 2.29.0 were built
   and tried on a test site but never released; they ship together now, and the entries below keep the version
   each change was made in: «Pagos de cuotas», split fee payments in the admin and the portal (2.18.0); rooms
