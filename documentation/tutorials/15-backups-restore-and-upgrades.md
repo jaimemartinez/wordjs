@@ -36,7 +36,23 @@ every one).
 
 ## 2. Upgrade
 
-Take a backup first (step 1). Then, on the server:
+**From the admin panel:** **Admin → Updates** says whether a newer WordJS is out and shows its release
+notes. Enter your password and a code from your authenticator app and click **Update to …**. WordJS:
+
+1. makes a backup (it appears in Settings → Backups);
+2. runs the same official upgrade as the command below — it downloads the release and checks its
+   SHA-256 before installing anything;
+3. restarts itself; the page follows the update and reloads when the new version is up.
+
+If the update fails, the previous version is put back by itself; if the new version does not start, its
+supervisor puts the previous one back on the next start. Database schema changes are applied
+automatically. Site Health (Admin → Site Health) also says when an update is available.
+
+The panel offers this on the standard install (the monolith started by its service, with its own files).
+When it cannot update this way — a Docker container, a git checkout, split or separate mode, or code files
+that belong to another account — the Updates screen says so and gives the command to use instead.
+
+**From a terminal instead:** take a backup first (step 1). Then, on the server:
 
 ```bash
 sudo npx -y create-wordjs@latest upgrade /srv/wordjs --yes

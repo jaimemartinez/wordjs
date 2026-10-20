@@ -70,6 +70,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     certificates: '/system/certs',
     serverSettings: '/system/server',
     cluster: '/system/cluster',
+    update: '/system/update',
     health: '/health',
     seo: '/seo',
     hooks: '/hooks',
@@ -146,12 +147,14 @@ router.use('/system/certs', multisiteGuards.mainSiteOnly);
 router.use('/system/server', multisiteGuards.mainSiteOnly);
 // The cluster (the gateway's nodes and join tokens) is the whole network's.
 router.use('/system/cluster', multisiteGuards.mainSiteOnly);
+// Updating WordJS replaces the code every site runs.
+router.use('/system/update', multisiteGuards.mainSiteOnly);
 router.use('/health/details', multisiteGuards.mainSiteOnly);
 router.use('/health/site', multisiteGuards.mainSiteOnly);
 router.use('/hooks', multisiteGuards.mainSiteOnly);
 // On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
 // administrator of the main site (the plugin and theme guards above apply the same rule to code changes).
-for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/cluster', '/hooks']) {
+for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/cluster', '/system/update', '/hooks']) {
     router.use(subtree, multisiteGuards.networkAdminOnMainSite);
 }
 // The network itself: its sites and administrators (main site, network administrators only).
@@ -199,6 +202,8 @@ router.use('/system/certs', certsRoutes);
 router.use('/system/server', require('./server-settings'));
 // Admin → Servers: join tokens, the nodes and their health, removal (zero config for multi-node).
 router.use('/system/cluster', require('./cluster'));
+// Admin → Updates: newer releases, their notes, and the one-click update (core/updater).
+router.use('/system/update', require('./update'));
 router.use('/health', healthRoutes);
 router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
