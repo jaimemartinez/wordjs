@@ -1,20 +1,24 @@
 "use client";
 
-import React from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { RowActionsMenu } from "./RowActionsMenu";
 
 /**
  * DataTable — the one responsive table every core admin list renders through.
  *
- * It is a single semantic `<table>` at every width. Below its `stackBelow` breakpoint each row turns into a
- * card: the primary column becomes the card's title, every other column a labelled line, and the row's
- * actions a row of labelled 44px buttons. Display changes on table elements make browsers drop their
+ * It is a single semantic `<table>` at every width, and it fits the room it is GIVEN, not the window: the
+ * same screen can be 1280px wide with a 320px sidebar, a two-column layout or a dialog. It measures its own
+ * container and steps down — full table → table without its low-priority columns (`showFrom`) → cards —
+ * as soon as the current step would overflow, and back up when the room it needed is there again, so it
+ * never scrolls sideways. Below `stackBelow` (a phone, or a tablet for wide tables) it is cards outright.
+ * In a card the primary column is the title, every other column a labelled line, and the row's actions a
+ * row of labelled 44px buttons. Display changes on table elements make browsers drop their
  * implicit table semantics, so every element carries its ARIA role explicitly and the header row stays in
  * the accessibility tree (visually hidden) — a screen reader still announces "Email, column 2" in the card.
  *
- * In table mode a column can wait for room (`showFrom`): it is left out until the viewport reaches that
- * width, and is back as a labelled line in the card. Less frequent row actions can wait in a "More actions"
+ * The step is `data-dt` on the wrapper ("table" | "compact" | "cards"); the card layout is plain
+ * Tailwind under `in-data-[dt=cards]:`. Less frequent row actions can wait in a "More actions"
  * menu (`menu: true`), so a narrow table keeps one or two buttons per row. Nothing scrolls the page
  * sideways; as a last resort the table scrolls inside its own box.
  *
@@ -33,7 +37,8 @@ export interface DataTableColumn<T> {
     cell: (row: T) => React.ReactNode;
     /** The row's title: rendered first and unlabelled in the card. One per table. */
     primary?: boolean;
-    /** Table mode only shows this column from this width up (the card always shows it). */
+    /** Low priority: the first column(s) to leave the TABLE when it runs out of room (the card always
+     *  shows it). The value is kept for compatibility; any value marks the column as low priority. */
     showFrom?: "lg" | "xl";
     /** Leave this column out of the card (e.g. an avatar the primary cell already shows). */
     hideWhenStacked?: boolean;
@@ -95,55 +100,98 @@ export interface DataTableProps<T, K extends React.Key = React.Key> {
     className?: string;
 }
 
-// Literal class sets per breakpoint (Tailwind only generates classes it can read in the source).
-const STACK = {
-    md: {
-        table: "max-md:block",
-        thead: "max-md:sr-only",
-        tbody: "max-md:block max-md:space-y-3 max-md:p-3",
-        tr: "max-md:flex max-md:flex-wrap max-md:items-start max-md:rounded-2xl max-md:border max-md:border-gray-100 max-md:p-4 max-md:shadow-sm",
-        td: "max-md:flex max-md:basis-full max-md:items-start max-md:justify-between max-md:gap-4 max-md:px-0 max-md:py-1.5 max-md:text-right",
-        label: "md:hidden",
-        primary: "max-md:order-first max-md:block max-md:min-w-0 max-md:px-0 max-md:pt-0 max-md:pb-2 max-md:text-left",
-        // Beside the checkbox the title takes the rest of the line; alone, the whole line.
-        primaryWithSelect: "max-md:flex-1 max-md:basis-0",
-        primaryAlone: "max-md:basis-full",
-        select: "max-md:order-first max-md:w-11 max-md:shrink-0 max-md:p-0 max-md:-ml-2",
-        actions: "max-md:basis-full max-md:px-0 max-md:pt-3 max-md:pb-0 max-md:mt-2 max-md:border-t max-md:border-gray-100",
-        actionsInner: "max-md:justify-start max-md:flex-wrap",
-        actionText: "md:sr-only",
-        actionButton: "max-md:w-auto max-md:px-4 max-md:flex-1 whitespace-nowrap",
-        inMenu: "md:hidden",
-        menuButton: "max-md:hidden",
-        hiddenStacked: "max-md:hidden",
-        expandedCell: "max-md:block max-md:border-0 max-md:p-0",
-        // Card actions always show; table actions fade in on hover only where a pointer can hover.
-        hoverGate: "opacity-100 md:[@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-        showFrom: { lg: "md:max-lg:hidden", xl: "md:max-xl:hidden" },
-    },
-    lg: {
-        table: "max-lg:block",
-        thead: "max-lg:sr-only",
-        tbody: "max-lg:grid max-lg:gap-3 max-lg:p-3 md:max-lg:grid-cols-2",
-        tr: "max-lg:flex max-lg:flex-wrap max-lg:items-start max-lg:content-start max-lg:rounded-2xl max-lg:border max-lg:border-gray-100 max-lg:p-4 max-lg:shadow-sm",
-        td: "max-lg:flex max-lg:basis-full max-lg:items-start max-lg:justify-between max-lg:gap-4 max-lg:px-0 max-lg:py-1.5 max-lg:text-right",
-        label: "lg:hidden",
-        primary: "max-lg:order-first max-lg:block max-lg:min-w-0 max-lg:px-0 max-lg:pt-0 max-lg:pb-2 max-lg:text-left",
-        primaryWithSelect: "max-lg:flex-1 max-lg:basis-0",
-        primaryAlone: "max-lg:basis-full",
-        select: "max-lg:order-first max-lg:w-11 max-lg:shrink-0 max-lg:p-0 max-lg:-ml-2",
-        actions: "max-lg:basis-full max-lg:px-0 max-lg:pt-3 max-lg:pb-0 max-lg:mt-auto max-lg:border-t max-lg:border-gray-100",
-        actionsInner: "max-lg:justify-start max-lg:flex-wrap",
-        actionText: "lg:sr-only",
-        actionButton: "max-lg:w-auto max-lg:px-4 max-lg:flex-1 whitespace-nowrap",
-        inMenu: "lg:hidden",
-        menuButton: "max-lg:hidden",
-        hiddenStacked: "max-lg:hidden",
-        expandedCell: "max-lg:block max-lg:border-0 max-lg:p-0",
-        hoverGate: "opacity-100 lg:[@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-        showFrom: { lg: "", xl: "lg:max-xl:hidden" },
-    },
+// The card layout, applied when the wrapper says `data-dt="cards"`. Literal strings: Tailwind only generates
+// the classes it can read in the source.
+const S = {
+    table: "in-data-[dt=cards]:block",
+    thead: "in-data-[dt=cards]:sr-only",
+    tbody: "in-data-[dt=cards]:grid in-data-[dt=cards]:gap-3 in-data-[dt=cards]:p-3 in-data-[dt=cards]:divide-y-0 in-data-[dt=cards]:@2xl:grid-cols-2",
+    tr: "in-data-[dt=cards]:flex in-data-[dt=cards]:flex-wrap in-data-[dt=cards]:items-start in-data-[dt=cards]:content-start in-data-[dt=cards]:rounded-2xl in-data-[dt=cards]:border in-data-[dt=cards]:border-gray-100 in-data-[dt=cards]:p-4 in-data-[dt=cards]:shadow-sm",
+    td: "in-data-[dt=cards]:flex in-data-[dt=cards]:basis-full in-data-[dt=cards]:items-start in-data-[dt=cards]:justify-between in-data-[dt=cards]:gap-4 in-data-[dt=cards]:px-0 in-data-[dt=cards]:py-1.5 in-data-[dt=cards]:text-right",
+    label: "hidden in-data-[dt=cards]:inline",
+    primary: "in-data-[dt=cards]:order-first in-data-[dt=cards]:block in-data-[dt=cards]:min-w-0 in-data-[dt=cards]:px-0 in-data-[dt=cards]:pt-0 in-data-[dt=cards]:pb-2 in-data-[dt=cards]:text-left",
+    // Beside the checkbox the title takes the rest of the line; alone, the whole line.
+    primaryWithSelect: "in-data-[dt=cards]:flex-1 in-data-[dt=cards]:basis-0",
+    primaryAlone: "in-data-[dt=cards]:basis-full",
+    select: "in-data-[dt=cards]:order-first in-data-[dt=cards]:w-11 in-data-[dt=cards]:shrink-0 in-data-[dt=cards]:p-0 in-data-[dt=cards]:-ml-2",
+    actions: "in-data-[dt=cards]:basis-full in-data-[dt=cards]:px-0 in-data-[dt=cards]:pt-3 in-data-[dt=cards]:pb-0 in-data-[dt=cards]:mt-auto in-data-[dt=cards]:border-t in-data-[dt=cards]:border-gray-100",
+    actionsInner: "in-data-[dt=cards]:justify-start in-data-[dt=cards]:flex-wrap",
+    actionText: "sr-only in-data-[dt=cards]:not-sr-only",
+    actionButton: "in-data-[dt=cards]:w-auto in-data-[dt=cards]:px-4 in-data-[dt=cards]:flex-1 whitespace-nowrap",
+    // A `menu` action is a button in the card and an entry of «More actions» in the table.
+    inMenu: "hidden in-data-[dt=cards]:inline-flex",
+    menuButton: "in-data-[dt=cards]:hidden",
+    hiddenStacked: "in-data-[dt=cards]:hidden",
+    expandedCell: "in-data-[dt=cards]:block in-data-[dt=cards]:border-0 in-data-[dt=cards]:p-0",
+    // Card actions always show; table actions fade in on hover only where a pointer can hover.
+    hoverGate: "opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 in-data-[dt=cards]:!opacity-100",
+    // A low-priority column leaves the table first («compact»), and is back as a line in the card.
+    lowPriority: "in-data-[dt=compact]:hidden",
 } as const;
+
+export type DtMode = "table" | "compact" | "cards";
+
+/**
+ * One step of the fit: in table/compact mode `natural` is the table's measured width in that mode (it is
+ * remembered in `need`); overflowing steps down; otherwise it steps up only to a mode whose measured
+ * need fits the room. Pure, so the rule is testable without a DOM.
+ */
+export function nextFitMode(m: DtMode, room: number, natural: number | null, need: Partial<Record<DtMode, number>>, hasLowPriority: boolean): DtMode {
+    if (m !== "cards" && natural !== null) {
+        need[m] = natural;
+        if (natural > room + 1) return m === "table" && hasLowPriority ? "compact" : "cards";
+    }
+    const up: DtMode | null = m === "cards" ? (hasLowPriority ? "compact" : "table") : m === "compact" ? "table" : null;
+    if (up && need[up] !== undefined && room >= (need[up] as number)) return up;
+    return m;
+}
+
+/** Below this viewport width the table is cards outright (a phone; a tablet for wide tables). */
+const FORCE_QUERY: Record<DataTableBreakpoint, string> = { md: "(max-width: 767.98px)", lg: "(max-width: 1023.98px)" };
+function useForcedCards(bp: DataTableBreakpoint): boolean {
+    const query = FORCE_QUERY[bp];
+    const subscribe = useCallback((cb: () => void) => {
+        const mq = window.matchMedia(query);
+        mq.addEventListener("change", cb);
+        return () => mq.removeEventListener("change", cb);
+    }, [query]);
+    return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches, () => false);
+}
+const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+/**
+ * The step that fits: measures the table's natural width against its container in the current step,
+ * steps down when it overflows, and steps back up only when the container has the width the upper step
+ * was MEASURED to need (never on a guess, so it cannot oscillate). Content changes re-measure from the
+ * top, before paint.
+ */
+function useFitMode(wrapRef: React.RefObject<HTMLDivElement | null>, forced: boolean, hasLowPriority: boolean, contentKey: unknown): DtMode {
+    const [mode, setMode] = useState<DtMode>("table");
+    const need = useRef<Partial<Record<DtMode, number>>>({});
+    const measure = useCallback(() => {
+        const wrap = wrapRef.current;
+        const table = wrap?.querySelector("table");
+        if (!wrap || !table) return;
+        if (forced) { setMode("cards"); return; }
+        const room = wrap.clientWidth;
+        setMode((m) => nextFitMode(m, room, m === "cards" ? null : table.scrollWidth, need.current, hasLowPriority));
+    }, [wrapRef, forced, hasLowPriority]);
+    // New content: forget what the old content needed and measure again from the full table.
+    useIsoLayoutEffect(() => {
+        need.current = {};
+        setMode(forced ? "cards" : "table");
+    }, [contentKey, forced, hasLowPriority]);
+    // Each step re-measures before paint (a step down is never seen overflowing).
+    useIsoLayoutEffect(() => { measure(); }, [mode, measure, contentKey]);
+    useEffect(() => {
+        const wrap = wrapRef.current;
+        if (!wrap || typeof ResizeObserver === "undefined") return;
+        const ro = new ResizeObserver(() => measure());
+        ro.observe(wrap);
+        return () => ro.disconnect();
+    }, [wrapRef, measure]);
+    return mode;
+}
 
 const TONE: Record<DataTableActionTone, string> = {
     neutral: "hover:bg-gray-700 hover:text-white focus-visible:bg-gray-700 focus-visible:text-white",
@@ -156,8 +204,8 @@ const TONE: Record<DataTableActionTone, string> = {
 const ALIGN = { left: "text-left", right: "text-right", center: "text-center" } as const;
 
 /** One row action: an icon button in the table, an icon + text button in the card (44px either way). */
-export function RowActionButton({ action, stackBelow = "md", className = "" }: { action: DataTableAction; stackBelow?: DataTableBreakpoint; className?: string }) {
-    const s = STACK[stackBelow];
+export function RowActionButton({ action, className = "" }: { action: DataTableAction; stackBelow?: DataTableBreakpoint; className?: string }) {
+    const s = S;
     const cls = `${className} h-11 min-w-11 w-11 shrink-0 inline-flex items-center justify-center gap-2 rounded-xl bg-gray-50 text-gray-500 text-xs font-bold transition-all shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:opacity-50 disabled:pointer-events-none ${s.actionButton} ${TONE[action.tone ?? "neutral"]}`;
     const content = (
         <>
@@ -195,16 +243,23 @@ export function DataTable<T, K extends React.Key = React.Key>({
     rowProps,
     className = "",
 }: DataTableProps<T, K>) {
-    const s = STACK[stackBelow];
+    const s = S;
+    const wrapRef = useRef<HTMLDivElement | null>(null);
+    const forced = useForcedCards(stackBelow);
+    const hasLowPriority = columns.some((c) => c.showFrom);
+    // Re-measure when the rows or columns change — by identity of their keys, not of the array (a caller may
+    // pass a fresh array on every render).
+    const contentKey = rows.map((r) => String(rowKey(r))).join("|") + "#" + columns.map((c) => c.key).join(",");
+    const mode = useFitMode(wrapRef, forced, hasLowPriority, contentKey);
     const pad = density === "compact" ? "px-4 py-3" : "px-4 xl:px-6 py-5";
     const headPad = density === "compact" ? "px-4 py-3" : "px-4 xl:px-6 py-4";
     const allSelected = !!selection && rows.length > 0 && rows.every((r) => selection.selected.has(rowKey(r)));
     const someSelected = !!selection && !allSelected && rows.some((r) => selection.selected.has(rowKey(r)));
     const labelOf = (c: DataTableColumn<T>) => c.label ?? (typeof c.header === "string" ? c.header : c.key);
-    const showFromCls = (c: DataTableColumn<T>) => (c.showFrom ? s.showFrom[c.showFrom] : "");
+    const showFromCls = (c: DataTableColumn<T>) => (c.showFrom ? s.lowPriority : "");
 
     return (
-        <div className={`overflow-x-auto ${className}`} data-wjs-data-table="">
+        <div ref={wrapRef} data-dt={mode} className={`@container overflow-x-auto ${className}`} data-wjs-data-table="">
             <table role="table" className={`w-full text-left ${s.table}`}>
                 <caption className="sr-only">{caption}</caption>
                 <thead role="rowgroup" className={s.thead}>
@@ -288,7 +343,7 @@ export function DataTable<T, K extends React.Key = React.Key>({
                                             aria-label={`${actionsLabel}: ${name}`}
                                             className={`flex items-center justify-end gap-2 ${s.hoverGate} transition-opacity duration-200 ${s.actionsInner}`}
                                         >
-                                            {rowActions.map((a) => <RowActionButton key={a.key} action={a} stackBelow={stackBelow} className={a.menu ? s.inMenu : ""} />)}
+                                            {rowActions.map((a) => <RowActionButton key={a.key} action={a} className={a.menu ? s.inMenu : ""} />)}
                                             {rowActions.some((a) => a.menu) && (
                                                 <span className={s.menuButton}>
                                                     <RowActionsMenu
