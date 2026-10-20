@@ -37,7 +37,7 @@
 
 const privateMedia = require('./private-media');
 const {
-    canReadPostRecord, canReadUnpublishedPostRecord, canReadPostContent, canEditPostRecord, isInternalPostType,
+    canReadPostRecord, canReadUnpublishedPostRecord, canReadPostContent, canEditPostRecord, isInternalPostType, canManagePostRecord,
     withTypePolicyMemo, builtinPostTypeNames,
 } = require('./post-capabilities');
 
@@ -82,7 +82,25 @@ const {
 function parentAllowsAttachment(user: any, parent: any): boolean {
     if (!parent) return true; // unattached, or the parent row is gone
     if (isInternalPostType(parent.type || parent.postType)) return canReadUnpublishedPostRecord(user, parent);
-    return canReadPostContent(user, parent);
+    if (!canReadPostContent(user, parent)) return false;
+    // A MEMBERS-ONLY parent (core/content-access) hides its attachments like a password-protected one: the
+    // files of a gated entry (a premium download) are not listed or served by id to a caller who does not
+    // manage it. Its members reach them through the entry's body. (The entry's own featured image stays
+    // part of its teaser: Post.toJSON projects it without asking this.)
+    return !gatedParents.has(parent) || canManagePostRecord(user, parent);
+}
+
+/**
+ * Parents known to be members-only, as LOADED OBJECTS (the gate is a meta row, not a column, so the rule
+ * cannot read it off the row): every async path that resolves a parent for this rule marks it here first
+ * (resolveAttachmentParent, filterVisibleMediaItems). The SQL form reads the meta row itself.
+ */
+const gatedParents: WeakSet<object> = new WeakSet();
+async function noteGatedParents(parents: any[]): Promise<void> {
+    const list = (parents || []).filter((p) => p && typeof p === 'object' && p.id);
+    if (!list.length) return;
+    const levels = await contentAccess().gatedLevelsForIds(list.map((p) => Number(p.id)));
+    for (const p of list) if (levels.has(Number(p.id))) gatedParents.add(p);
 }
 
 /**
@@ -125,7 +143,9 @@ async function resolveAttachmentParent(row: any): Promise<any> {
     if (!row || row.postType !== 'attachment' || !row.postParent) return null;
     // Required here, not at the top: models/Post requires this module for its featured-image projection.
     const Post = require('../models/Post');
-    return (await Post.findById(row.postParent)) || null;
+    const parent = (await Post.findById(row.postParent)) || null;
+    if (parent) await noteGatedParents([parent]);
+    return parent;
 }
 
 /**
@@ -186,6 +206,7 @@ async function filterVisibleMediaItems(user: any, items: any[]): Promise<any[]> 
     const Post = require('../models/Post');
     const parentIds: number[] = [...new Set<number>(items.map((m: any) => m.parent).filter((id: any) => !!id))];
     const parentById: Map<number, any> = await Post.findByIds(parentIds);
+    await noteGatedParents([...parentById.values()]);
     return items.filter((m: any) => canViewAttachment(user, {
         id: m.id,
         postType: 'attachment',
@@ -226,6 +247,14 @@ function sqlExactText(): any {
     if (sqlExactTextModule) return sqlExactTextModule;
     const mod = require('./sql-exact-text');
     if (mod && typeof mod.exactTextExpr === 'function') sqlExactTextModule = mod;
+    return mod;
+}
+/** core/content-access, resolved once like the two above (the attachment rule runs on every list). */
+let contentAccessModule: any = null;
+function contentAccess(): any {
+    if (contentAccessModule) return contentAccessModule;
+    const mod = require('./content-access');
+    if (mod && typeof mod.gatedPostSql === 'function') contentAccessModule = mod;
     return mod;
 }
 let postTypesModule: any = null;
@@ -380,11 +409,18 @@ function buildAttachmentVisibilityTemplate(user: any): SqlFragment {
 
     // ── the parent's half, per type ────────────────────────────────────────────────────────────────
     const parentStatus = exactText(`COALESCE(par.post_status, '')`);
+    const gatedPar = contentAccess().gatedPostSql('par.id');
     const parentDims: SqlFragment[][] = [
         [{ sql: `${parentStatus} = ?`, params: ['publish'] }, { sql: `${parentStatus} <> ?`, params: ['publish'] }],
+        // (gatedPar: core/content-access gatedPostSql for the parent row.)
+        // PROTECTED: a password, or a members-only gate — the JS rule treats the two alike (its attachments
+        // only for who manages the entry), so they share the probe below.
         // LENGTH, not `<> ''`: MySQL's PAD SPACE collations call ' ' equal to '', and a one-space password
         // is a password to the JS rule.
-        [{ sql: `LENGTH(COALESCE(par.post_password, '')) > 0`, params: [] }, { sql: `LENGTH(COALESCE(par.post_password, '')) = 0`, params: [] }],
+        [
+            { sql: `(LENGTH(COALESCE(par.post_password, '')) > 0 OR ${gatedPar})`, params: [] },
+            { sql: `(LENGTH(COALESCE(par.post_password, '')) = 0 AND NOT ${gatedPar})`, params: [] },
+        ],
     ];
     if (viewer) {
         parentDims.push([
@@ -451,4 +487,5 @@ module.exports = {
     canViewAttachment, parentAllowsAttachment, parentAllowsAttachmentWrite, attachmentAllowsItself,
     attachmentReadable, attachmentWriteRefusal, resolveAttachmentParent, canReadRecordThroughRest,
     filterVisibleMediaItems, attachmentVisibilityCondition, attachmentReferenceCondition, decisionToSql,
+    noteGatedParents,
 };

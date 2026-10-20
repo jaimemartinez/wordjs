@@ -185,6 +185,9 @@ function commonPrefix(schemas: Schema[]): string[] {
         // Password protection (WordPress REST content.protected). For a caller who cannot edit the
         // entry, content/excerpt/meta._puck_data arrive empty when this is true.
         '    protected?: boolean;',
+        // Members-only content (core/content-access). Present only on a gated entry: the level it requires
+        // and whether THIS caller reads it in full; when not, content/excerpt/meta._puck_data are its teaser.
+        '    access?: { level: string; gated: boolean; granted: boolean };',
         '    featuredMedia?: { id: number; url: string; title?: string };',
         '    categories?: ContentTermRef[];',
         '    tags?: ContentTermRef[];',

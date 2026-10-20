@@ -577,6 +577,10 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     // ai:use — ask the site's AI provider (core/ai-provider) for a text completion through wordjs.ai.complete.
     // The plugin gets text back, never the provider's key or settings. A special verb: `admin` never implies it.
     ai: ['use'],
+    // content_access:provider — answer the members-only content filters (core/content-access): which
+    // access levels a signed-in account HOLDS, and which levels the post editor offers. What a provider
+    // answers unlocks gated bodies site-wide, so it is a special verb nothing implies.
+    content_access: ['provider'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
 
