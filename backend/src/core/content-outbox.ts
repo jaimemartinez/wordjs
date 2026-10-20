@@ -289,7 +289,13 @@ let pumping = false;
 const pruneClock = require('./site-context').perSite(() => ({ lastPruneAt: 0 }));
 async function pumpCurrentSite(): Promise<void> {
     const now = await databaseNowSeconds();
-    await dispatchIds(await dueIds(now));
+    const ids = await dueIds(now);
+    // Multisite: an event replays content hooks that plugins listen to — a site whose workers stopped
+    // while it was idle starts them first (core/site-workers; a no-op on the main site).
+    if (ids.length && require('./multisite-guards').onSecondarySite()) {
+        await require('./site-workers').wake(require('./site-context').currentSiteId());
+    }
+    await dispatchIds(ids);
     const clock = pruneClock.get();
     if (now - clock.lastPruneAt >= PRUNE_INTERVAL_SECONDS) {
         // Advance before the query so a broken table/connection cannot produce a 2-second error

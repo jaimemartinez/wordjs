@@ -97,7 +97,10 @@ function siteResolver(opts: { getPolicy: () => any }) {
         stateSite(res, site.mainHost);
         siteContext.runWithSite(id, () => {
             siteContext.bindRequestToCurrentSite(req);
+            // Prepared, then its plugin and theme workers running (started now if the site was idle, and
+            // kept up until this response is over — core/site-workers), so the request reaches them.
             require('./network-sites').prepareSite(id)
+                .then(() => require('./site-workers').enterRequest(id, res))
                 .then(() => next())
                 .catch((e: any) => next(e));
         });

@@ -601,9 +601,24 @@ next section.
   principal. On Postgres and MySQL networks each site's role / user is granted only that site's plugin
   tables (in the site's schema / database); SQLite has no principals.
 - **Theme workers per site.** `core/theme-engine` keeps its active theme and its re-init lock per site;
-  each site runs its own `functions.js` worker, started when the site is prepared and on a theme switch.
-- **Not yet**: idle reaping of workers (a site's workers start with the site and stay up).
+  each site runs its own `functions.js` worker, started with the site's plugin workers and on a theme switch.
+- **Workers start on need and stop when idle** (`core/site-workers`). Preparing a site (its database,
+  roles, content types, plugin grants and egress policy) starts no worker; a site's plugin and theme
+  workers are a state of their own — asleep, waking, awake, stopping — per node. A need wakes them and is
+  held until they run: every request that enters the site (`core/site-resolver`, after `prepareSite`,
+  before `next()`; concurrent requests share one start), a due cron event other than the workerless core
+  ones (collaboration sweep, analytics retention, backups), a due content-outbox event. A bus message for
+  the site only moves its last activity forward, and a cross-node `activate` for an asleep site starts
+  nothing (its next wake loads the whole active set). A request in flight holds its site awake. The reaper
+  (every quarter of the period, at most a minute) stops the workers of a site idle for
+  `multisite.workerIdleMinutes` (default 15, `0` = never); a need arriving during a stop waits for it and
+  starts them again, so two workers of one key never overlap. The main site and single-site installs are
+  untouched. Grants, egress allowlists and ceilings are options and the network store, so a woken worker
+  is spawned under the current policy; suspension uses the same stop, and a resumed site wakes on its next
+  need.
 - **Tests**: `backend/src/tests/multisite-plugins.test.ts` (real plugin workers: I5 and I8),
+  `backend/src/tests/multisite-idle-workers.test.ts` (real workers stopped when idle and started again by
+  the next route, cron event and request burst; the main site never reaped; policy kept),
   `backend/src/tests/multisite-appcontainer-retire.test.ts` (profile retirement; a live half on Windows).
 
 ## Phase 2 as built (engines, nodes, certificates, backups, collaboration)
@@ -663,7 +678,7 @@ The rest of phase 2, as built.
   listener).
 - **The network administrator's handoff into a site** (`core/network-handoff`): see
   [The handoff into a site](#the-handoff-into-a-site-as-built) below.
-- **Still open in phase 2**: a root layout per site in the frontend, and idle reaping of a site's workers.
+- **Still open in phase 2**: a root layout per site in the frontend.
 
 ### The handoff into a site (as built)
 
