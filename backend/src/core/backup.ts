@@ -608,9 +608,16 @@ async function restoreBackup(filename: string) {
                 for (const sidecar of [dbFile + '-wal', dbFile + '-shm']) {
                     try { if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar); } catch { /* best-effort */ }
                 }
-                const tmp = dbFile + '.restore-tmp';
-                fs.writeFileSync(tmp, physEntry.getData());
-                fs.renameSync(tmp, dbFile);
+                // A private directory (mkdtemp: unpredictable name, created 0700 in one call) beside the
+                // file, so the snapshot is renamed into place on the same file system.
+                const tmpDir = fs.mkdtempSync(path.join(path.dirname(dbFile), '.restore-'));
+                try {
+                    const tmp = path.join(tmpDir, 'wordjs.db');
+                    fs.writeFileSync(tmp, physEntry.getData(), { mode: 0o600, flag: 'wx' });
+                    fs.renameSync(tmp, dbFile);
+                } finally {
+                    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+                }
             });
             physicalRestored = true;
             log.info('   ✓ Physical database snapshot of the site restored (all tables).');

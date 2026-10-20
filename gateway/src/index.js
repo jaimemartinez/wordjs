@@ -784,7 +784,7 @@ if (cluster.isPrimary) {
                     const { host, key, cert } = req.body || {};
                     try {
                         const stored = siteCerts.writeSiteCert(siteCerts.defaultSitesDir(), host, key, cert);
-                        if (stored === 'written') logger.info(`[Gateway] [Internal] Site certificate installed for ${siteCerts.cleanHost(host)}.`);
+                        if (stored === 'written') logger.info(`[Gateway] [Internal] Site certificate installed for ${String(siteCerts.cleanHost(host)).replace(/\n/g, '').replace(/\r/g, '')}.`);
                         res.json({ success: true, stored });
                     } catch (e) {
                         res.status(400).json({ error: e.message });
@@ -794,7 +794,7 @@ if (cluster.isPrimary) {
                     const { host } = req.body || {};
                     if (!siteCerts.cleanHost(host)) return res.status(400).json({ error: 'not a site address' });
                     const removed = siteCerts.removeSiteCert(siteCerts.defaultSitesDir(), host);
-                    if (removed) logger.info(`[Gateway] [Internal] Site certificate removed for ${siteCerts.cleanHost(host)}.`);
+                    if (removed) logger.info(`[Gateway] [Internal] Site certificate removed for ${String(siteCerts.cleanHost(host)).replace(/\n/g, '').replace(/\r/g, '')}.`);
                     res.json({ success: true, removed });
                 });
 

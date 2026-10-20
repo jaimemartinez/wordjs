@@ -298,24 +298,45 @@ exports.CORE_TABLES = CORE_TABLES;
 
 const SITE_NAME_RE = /^[a-z_][a-z0-9_]*$/;
 
-/** Where site `id` (or the network store, id null) lives on the target engine. */
+/** A site id from the network registry, checked: a positive integer. */
+function checkedSiteId(id) {
+    const n = Number(id);
+    if (!Number.isSafeInteger(n) || n < 2) throw new Error(`Not a secondary site id: ${String(id)}`);
+    return n;
+}
+
+/** Where site `id` (or the network store, id null) lives on a SERVER target: its schema / database name. */
 function targetNamespace(targetDriver, dbName, id) {
-    if (targetDriver === 'postgres') return id === null ? 'wordjs_network' : `wordjs_site_${id}`;
-    if (targetDriver === 'mysql') {
-        if (!SITE_NAME_RE.test(String(dbName || ''))) throw new Error(`A network on MySQL needs a database name of lower-case letters, digits and underscores (got ${JSON.stringify(dbName)}).`);
-        const n = id === null ? `${dbName}_network` : `${dbName}_site_${id}`;
-        if (n.length > 64) throw new Error(`The MySQL database name ${n} is longer than 64 characters.`);
-        return n;
-    }
-    return id === null ? path.resolve('./data', 'network.db') : path.resolve('./data', 'sites', String(id), 'wordjs-native.db');
+    const site = id === null ? null : checkedSiteId(id);
+    if (targetDriver === 'postgres') return site === null ? 'wordjs_network' : `wordjs_site_${site}`;
+    if (!SITE_NAME_RE.test(String(dbName || ''))) throw new Error(`A network on MySQL needs a database name of lower-case letters, digits and underscores (got ${JSON.stringify(dbName)}).`);
+    const n = site === null ? `${dbName}_network` : `${dbName}_site_${site}`;
+    if (n.length > 64) throw new Error(`The MySQL database name ${n} is longer than 64 characters.`);
+    return n;
+}
+
+/**
+ * The file of site `id` (or of the network store, id null) on a SQLite target, under data/. Built only
+ * from the checked id and constant segments, and proved contained (core/safe-path resolveWithin): no
+ * part of the request names a path.
+ */
+function sqliteTargetFile(id) {
+    const { resolveWithin } = require('../safe-path');
+    const root = path.resolve('./data');
+    const file = id === null
+        ? resolveWithin(root, 'network.db')
+        : resolveWithin(root, 'sites', String(checkedSiteId(id)), 'wordjs-native.db');
+    if (!file) throw new Error('The target database file could not be placed under data/.');
+    return file;
 }
 
 /**
  * Open the target namespace: a connected Postgres/MySQL driver pinned to it (created first through the
  * main target connection), or a fresh SQLite file at `<file>.tmp` that `commit()` moves into place.
  */
-async function openTargetNamespace(targetDriver, mainTarget, conn, ns) {
+async function openTargetNamespace(targetDriver, mainTarget, conn, id) {
     if (targetDriver === 'postgres' || targetDriver === 'mysql') {
+        const ns = targetNamespace(targetDriver, conn && conn.name, id);
         const q = (s) => (targetDriver === 'postgres' ? `"${s}"` : `\`${s}\``);
         await mainTarget.pool.query(targetDriver === 'postgres'
             ? `CREATE SCHEMA IF NOT EXISTS ${q(ns)}`
@@ -328,6 +349,7 @@ async function openTargetNamespace(targetDriver, mainTarget, conn, ns) {
     }
     const Database = require('better-sqlite3');
     const { NativeWrapper } = require('../../drivers/sqlite-native');
+    const ns = sqliteTargetFile(id);
     fs.mkdirSync(path.dirname(ns), { recursive: true });
     const tmp = ns + '.tmp';
     for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch (_) { /* not there */ } }
@@ -400,8 +422,7 @@ async function migrateNetwork({ currentDriver, targetDriver, mainTarget, conn, o
     let rows = 0;
     const sites = network.listSites().filter((s) => s.id !== siteContext.PRIMARY_SITE_ID);
     for (const site of sites) {
-        const ns = targetNamespace(targetDriver, conn && conn.name, site.id);
-        const target = await openTargetNamespace(targetDriver, mainTarget, conn, ns);
+        const target = await openTargetNamespace(targetDriver, mainTarget, conn, site.id);
         try {
             rows += await siteContext.runWithSite(site.id, async () => {
                 await dbManager.openSiteDatabase(site.id, sourceIsSql ? null : (site.dbPath || network.siteDbPath(site.id)));
@@ -416,8 +437,7 @@ async function migrateNetwork({ currentDriver, targetDriver, mainTarget, conn, o
         }
     }
     // The network store: the same records, in the target's network store.
-    const storeNs = targetNamespace(targetDriver, conn && conn.name, null);
-    const store = await openTargetNamespace(targetDriver, mainTarget, conn, storeNs);
+    const store = await openTargetNamespace(targetDriver, mainTarget, conn, null);
     try {
         const exec = store.isAsync ? (s) => store.module.exec(s) : (s) => store.wrapper.exec(s);
         for (const ddl of network.TABLES) await exec(ddl);
@@ -448,6 +468,7 @@ async function migrateNetwork({ currentDriver, targetDriver, mainTarget, conn, o
 
 exports.migrateNetwork = migrateNetwork;
 exports.targetNamespace = targetNamespace;
+exports.sqliteTargetFile = sqliteTargetFile;
 
 // ── What belongs to the database the site is running on ─────────────────────────────────────────
 //
