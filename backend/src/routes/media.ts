@@ -522,7 +522,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  * /media/{id}:
  *   get:
  *     summary: Read one media item
- *     description: An attachment inherits its visibility from its parent entry - it is visible only to a caller who may READ that entry under its type's read policy, exactly as GET /posts/{id} decides. A parent that is unpublished, or a published entry of a non-public type, hides the item from anyone who is neither the entry's author nor a holder of that type's edit_others / read_private capability; an internal parent (a menu item, a revision) never makes it public; a password-protected parent shows it only to a caller who manages that entry (its author, or edit_others for its type). The answer is 404 rather than 403, so a hidden attachment does not reveal that it exists. An unattached attachment has no parent to inherit from and stays public. A PRIVATE item (visibility private) is likewise 404 to anyone who may not edit it, and its sourceUrl is the authenticated /media/{id}/file route, never a public /uploads path. An attachment row in any other status (for example a draft created through POST /posts) is read like that unpublished post - 404 to anyone who may not read it. The featuredMedia of every post applies this same rule for its reader.
+ *     description: An attachment inherits its visibility from its parent entry - it is visible only to a caller who may READ that entry under its type's read policy, exactly as GET /posts/{id} decides. A parent that is unpublished, or a published entry of a non-public type, hides the item from anyone who is neither the entry's author nor a holder of that type's edit_others / read_private capability; an internal parent (a menu item, a revision) never makes it public; a password-protected or members-only parent shows it only to a caller who manages that entry (its author, or edit_others for its type). The answer is 404 rather than 403, so a hidden attachment does not reveal that it exists. An unattached attachment has no parent to inherit from and stays public. A PRIVATE item (visibility private) is likewise 404 to anyone who may not edit it, and its sourceUrl is the authenticated /media/{id}/file route, never a public /uploads path. An attachment row in any other status (for example a draft created through POST /posts) is read like that unpublished post - 404 to anyone who may not read it. The featuredMedia of every post applies this same rule for its reader.
  *     tags: [Media]
  *     security: []
  *     parameters:
@@ -551,8 +551,8 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
     // featured-image projection of every post ask, so the surfaces cannot disagree again. In short: a
     // PRIVATE item is visible only to someone who may edit it; an attachment is visible only to a caller
     // who may READ its PARENT entry (that type's read policy: a published entry of a non-public type
-    // hides it as surely as a draft does; an internal parent is never public; a password-protected
-    // parent shows it only to who manages that entry; unattached or dangling hides nothing); and an
+    // hides it as surely as a draft does; an internal parent is never public; a password-protected or
+    // members-only parent shows it only to who manages that entry; unattached or dangling hides nothing); and an
     // attachment row in any other status (a draft created through the generic /posts surface, a trashed
     // one) is read like the unpublished post it is. Every refusal is the 404 of "no such item"
     // (mirroring GET /posts/:id), so a hidden attachment's existence is not revealed.

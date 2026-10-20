@@ -1156,6 +1156,13 @@ app.use(config.api.prefix, (req: Request, res: Response, next: NextFunction) => 
                 && !res.getHeader('Cache-Control')
                 && res.statusCode >= 200 && res.statusCode < 300) {
                 res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+            } else if (credentialed && !res.getHeader('Cache-Control')) {
+                // The SAME URLs answer differently per reader (a members-only entry's full body, a draft the
+                // reader may edit): a credentialed answer is never for a shared cache, and a cache that keys
+                // on the URL alone must not hand it to the next anonymous visitor.
+                res.setHeader('Cache-Control', 'private, no-cache');
+                res.vary('Cookie');
+                res.vary('Authorization');
             }
             return origJson(data);
         };

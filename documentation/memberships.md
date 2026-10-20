@@ -50,15 +50,21 @@ The teaser is the part of the body **before the access break**:
   memberships plugin's **Muro de pago** block does. The items before it are kept, the break item itself is
   kept (it draws the call-to-action) and annotated with `accessState: 'locked' | 'granted'` and
   `accessLevel`, and everything after it is removed — legacy `zones` included, except those owned by kept
-  items. A break nested inside a container cuts before that container and is lifted to the top level.
-  No break → no items.
+  items. A break nested inside a container (a slot, or a legacy zone the container owns) cuts before that
+  container and is lifted to the top level. No break → no items. A stored tree this rule cannot read (not
+  `{ content: [...] }`, or JSON-encoded twice) is withheld whole. The root props stay (title, template,
+  SEO) except `excerpt`, which the editor fills from the full body.
 - **Excerpt**: the author's own excerpt, or one generated from the teaser — never from the body.
+- **The level value**: a string. Any other stored value (`null`, `[]`, a number) gates with a level
+  nobody holds, so a malformed value fails closed on every surface alike.
 
 ### 1.4 Every read surface
 
 | Surface | Behaviour for a reader without the level |
 | --- | --- |
-| REST `GET /posts`, `/posts/:id`, `?slug=` (and GraphQL, which dispatches REST) | Teaser `content`, teaser-derived `excerpt`, teaser `_puck_data`, and `access: { level, gated: true, granted: false }`. Public entries carry no `access` key. |
+| REST `GET /posts`, `/posts/:id`, `?slug=` (and GraphQL and the MCP tools, which dispatch REST) | Teaser `content`, teaser-derived `excerpt`, teaser `_puck_data`, and `access: { level, gated: true, granted: false }`. Public entries carry no `access` key. |
+| `GET /posts/:id/meta` | The same teaser `_puck_data` (one projection for both routes). |
+| Media (`/media`, `/media/:id`, `/posts?type=attachment`) | The files attached to a gated entry are listed and served by id only to who manages the entry, like a password-protected entry's. Members reach them through the body; the entry's featured image stays part of its teaser. Use private media for files that must not be downloadable by URL. |
 | Public pages (SSR) | Rendered anonymously and cached (ISR), so the cached HTML only ever contains the teaser. `MembersOnlyGate` re-reads the entry in the browser of a signed-in visitor with their own session and swaps in the full body (and the comments) when the answer is `granted`. Signed-out visitors cause no request. |
 | RSS / Atom / JSON feeds, category / tag / author feeds | The entry is listed; its summary is the author's excerpt or the teaser. |
 | Search (`/posts?search=`) | A gated entry matches on its **title** only (no oracle on the withheld body), unless the searcher is its author or may edit others' entries. |
@@ -78,9 +84,14 @@ wordjs.hooks.addFilter('content_access_levels', async (levels) => [...levels, { 
 wordjs.hooks.addFilter('content_access_grants', async (grants, ctx) => [...grants, ...(await lookup(ctx.userId))]);
 ```
 
-Level slugs match `^[a-z0-9][a-z0-9:_-]{0,63}$`; anything else a provider returns is dropped. Subscribing
-to `content_access_grants` requires the `users:read` grant (it identifies the reader); the levels filter
-is public. A provider that times out (2 s, like every isolated hook) answers "nothing".
+Level slugs match `^[a-z][a-z0-9:_-]{0,63}$` and are never `null`, `true` or `false`; anything else a
+provider returns is dropped. Being a provider takes the explicit **`content_access:provider`** grant — what
+the grants filter answers opens gated entries site-wide, so no other grant implies it — and the grants
+filter also requires `users:read` (it identifies the reader). A provider that times out (2 s, like every
+isolated hook) answers "nothing".
+
+Responses to a signed-in reader (`/posts`, `/comments`, …) are sent `Cache-Control: private, no-cache` with
+`Vary: Cookie, Authorization`, so a shared cache never keeps a member's full body for anyone else.
 
 ---
 
