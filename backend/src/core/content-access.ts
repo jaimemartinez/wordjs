@@ -85,7 +85,7 @@ function requiredLevel(meta: Record<string, unknown> | null | undefined): string
 /** requiredLevel for a STORED meta_value (raw text), decoded the way Post.getAllMeta decodes it. */
 function requiredLevelFromStored(text: unknown): string {
     if (text === undefined || text === null) return '';
-    let value: unknown = text;
+    let value: unknown;
     try { value = JSON.parse(String(text)); } catch { value = text; }
     return requiredLevel({ [ACCESS_META_KEY]: value });
 }
