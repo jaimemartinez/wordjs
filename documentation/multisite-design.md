@@ -540,10 +540,20 @@ Phase 1 follows the plan above with these narrowings and departures, each delibe
   backend response names the site that answered (`X-WordJS-Site-Host`), and another site's page refuses
   data from any other site, so a deployment path that loses the site fails closed (not found) instead of
   showing one site's content under another's address.
-  The root layout cannot know the site (it takes no params): another site's pages override its metadata
-  (title, description, icon, base URL), and the admin sets its own title from the request; the `lang`
-  attribute of `<html>`, the server-rendered `@font-face` rules and the title of the sign-in pages still
-  come from the main site. A root layout per site is a phase 2 item.
+- **A root layout per site.** There is no `app/layout.tsx`: every top-level tree's layout is a root
+  layout and renders `app/_root/RootDocument.tsx` (the document and its metadata), and
+  `wjs-site/[siteHost]/layout.tsx` is another site's root layout. It declares the site from its route
+  param before the document reads anything, so `<html lang dir>` comes from that site's locale options,
+  the server-rendered `@font-face` rules from its fonts, and the title (and title template), description,
+  icon and canonical base from its settings — all through the same site-qualified Data Cache reads. Its
+  sign-in screens (`/login`, `/login/handoff`, `/register`, `/reset-password`, `/verify-email`) are routed to the tree too
+  (`wjs-site/[siteHost]/login`, …, the main screens in that site's document), and its public pages sit in
+  `wjs-site/[siteHost]/(public)` under the public chrome. The admin declares its site from the edge's
+  header (it is dynamic anyway), so another site's admin gets that site's document as well. The main site
+  and single-site installs render exactly the document they did, with no rewrite and nothing dynamic
+  added. Moving between two root layouts (the public site, the admin, the sign-in screens) is a full page
+  load, Next's rule for root layouts; a URL no route matches renders `app/global-not-found.tsx` (the main
+  site's document, as the 404 always was).
 - **Email**: the mail provider is a main-site plugin, so the other sites have none; password recovery
   there fails closed, as on any site without one. (Phase 2: a site's own mail plugin provides its mail.)
 
@@ -678,7 +688,6 @@ The rest of phase 2, as built.
   listener).
 - **The network administrator's handoff into a site** (`core/network-handoff`): see
   [The handoff into a site](#the-handoff-into-a-site-as-built) below.
-- **Still open in phase 2**: a root layout per site in the frontend.
 
 ### The handoff into a site (as built)
 

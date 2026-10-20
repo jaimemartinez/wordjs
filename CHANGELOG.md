@@ -549,6 +549,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **Deleting a site** (`DELETE /network/sites/:id`, Admin → Network): a suspended site and everything it
   holds are removed; its id is never reused. See the upgrade notes in
   [multisite.md](documentation/multisite.md#upgrading-from-27).
+- **Every site of a network has its own document.** Another site's pages, its sign-in, registration and
+  password screens and its admin now carry that site's `<html lang>` and text direction, the `@font-face`
+  rules of its own uploaded fonts and its own name in every title; before, all three came from the main
+  site. The frontend has a root layout per tree instead of a single `app/layout.tsx`
+  (`app/_root/RootDocument.tsx`), so moving between the public site, the admin and the sign-in screens is
+  a full page load. The main site and single-site installs render the same document as before. See
+  [frontend.md](documentation/frontend.md).
 
 ### ⚠️ Upgrade note — Node.js 22 or newer is required
 
@@ -823,6 +830,8 @@ the boot error links there too.
 - Dependency updates: next 16.4.2, react 19.3.1, @anthropic-ai/sdk 0.135, @modelcontextprotocol/sdk 1.32,
   zod 4.6, nodemailer 10.1, smtp-server 3.20, mailparser 3.10, mysql2 3.24.6, sql.js 1.15,
   sanitize-html 2.18.1, dotenv 18.0.8, express-rate-limit 8.7.1, puppeteer-core 25.14 and patch updates.
+- file-type 22 (upload MIME detection; its single entry replaces the `file-type/core` subpath). The unused
+  `dnsbl` dependency is removed: the mail-server plugin has done its own DNSBL lookups for a while.
 - **Password-reset and verification email has its own transport.** WordJS now sends these links itself
   through an SMTP relay you configure in **Settings → Account email** (host, port, TLS mode, credentials,
   test message). A mail provider plugin carries them only if an administrator allows that plugin by name

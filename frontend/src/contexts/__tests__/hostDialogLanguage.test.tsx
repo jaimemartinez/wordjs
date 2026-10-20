@@ -4,7 +4,7 @@
  * Live finding: every `useModal().confirm(message, title, isDanger)` in a Spanish admin — core pages and
  * plugin admin pages such as conference-manager — showed «Confirm» / «Cancel» next to a
  * Spanish message, and `alert()` showed «OK». ModalProvider passed hard-coded English labels to
- * ConfirmationModal, whose own defaults were English too. ModalProvider is mounted in app/layout.tsx, ABOVE
+ * ConfirmationModal, whose own defaults were English too. ModalProvider is mounted in app/_root/RootDocument.tsx, ABOVE
  * the admin's and the portals' I18nProvider, so the dialog reads the language every provider reads and
  * writes ('wordjs-lang' in localStorage, 'es' when unset).
  *
