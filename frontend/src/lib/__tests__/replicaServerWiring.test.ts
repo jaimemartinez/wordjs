@@ -16,7 +16,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import http from 'node:http';
 import https from 'node:https';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,52 +28,40 @@ import mod from '../../../backend-proxy-target.js';
 const { isGatewayPeer } = mod as any;
 const FRONTEND_DIR = fileURLToPath(new URL('../../../', import.meta.url));
 const SERVER_JS = path.join(FRONTEND_DIR, 'server.js');
-// node-forge ships with the backend's production dependencies (CI installs them for this job too); the
-// certificates below follow gateway/src/cluster-ca.js's recipe: CN = identity, SAN localhost/127.0.0.1,
+// The certificates are made by the gateway's own X.509 toolkit (gateway/src/x509.js: Node's crypto, no
+// dependencies) following gateway/src/cluster-ca.js's recipe: CN = identity, SAN localhost/127.0.0.1,
 // serverAuth + clientAuth.
-const forge = createRequire(path.join(FRONTEND_DIR, '..', 'backend', 'package.json'))('node-forge');
+const x509 = createRequire(path.join(FRONTEND_DIR, '..', 'gateway', 'package.json'))('./src/x509.js');
 
 type Pem = { key: string; cert: string };
-function keypair() {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
-        modulusLength: 2048,
-        publicKeyEncoding: { type: 'spki', format: 'pem' },
-        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+function makeCa(): { pem: Pem; priv: any } {
+    const k = x509.generateRsaKeyPair(2048);
+    const cert = x509.createCertificate({
+        subject: [['CN', 'WordJS Test Cluster Root CA']],
+        publicKey: k.publicKey,
+        signingKey: k.privateKey,
+        notBefore: new Date(Date.now() - 60_000),
+        notAfter: new Date(Date.now() + 86_400_000),
+        ca: true,
+        keyUsage: ['keyCertSign', 'cRLSign'],
     });
-    return { pub: forge.pki.publicKeyFromPem(publicKey), privPem: privateKey as string, priv: forge.pki.privateKeyFromPem(privateKey) };
+    return { pem: { key: k.privateKeyPem, cert }, priv: k.privateKey };
 }
-function serial() { return '0' + crypto.randomBytes(15).toString('hex'); }
-function makeCa(): { pem: Pem; cert: any; priv: any } {
-    const k = keypair();
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = k.pub;
-    cert.serialNumber = serial();
-    cert.validity.notBefore = new Date(Date.now() - 60_000);
-    cert.validity.notAfter = new Date(Date.now() + 86_400_000);
-    const attrs = [{ name: 'commonName', value: 'WordJS Test Cluster Root CA' }];
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs);
-    cert.setExtensions([{ name: 'basicConstraints', cA: true }, { name: 'keyUsage', keyCertSign: true, cRLSign: true }]);
-    cert.sign(k.priv, forge.md.sha256.create());
-    return { pem: { key: k.privPem, cert: forge.pki.certificateToPem(cert) }, cert, priv: k.priv };
-}
-function issue(ca: { cert: any; priv: any }, cn: string): Pem {
-    const k = keypair();
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = k.pub;
-    cert.serialNumber = serial();
-    cert.validity.notBefore = new Date(Date.now() - 60_000);
-    cert.validity.notAfter = new Date(Date.now() + 86_400_000);
-    cert.setSubject([{ name: 'commonName', value: cn }]);
-    cert.setIssuer(ca.cert.subject.attributes);
-    cert.setExtensions([
-        { name: 'basicConstraints', cA: false },
-        { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-        { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
-        { name: 'subjectAltName', altNames: [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }] },
-    ]);
-    cert.sign(ca.priv, forge.md.sha256.create());
-    return { key: k.privPem, cert: forge.pki.certificateToPem(cert) };
+function issue(ca: { pem: Pem; priv: any }, cn: string): Pem {
+    const k = x509.generateRsaKeyPair(2048);
+    const cert = x509.createCertificate({
+        subject: [['CN', cn]],
+        issuerCertPem: ca.pem.cert,
+        publicKey: k.publicKey,
+        signingKey: ca.priv,
+        notBefore: new Date(Date.now() - 60_000),
+        notAfter: new Date(Date.now() + 86_400_000),
+        ca: false,
+        keyUsage: ['digitalSignature', 'keyEncipherment'],
+        extKeyUsage: ['serverAuth', 'clientAuth'],
+        altNames: ['localhost', '127.0.0.1'],
+    });
+    return { key: k.privateKeyPem, cert };
 }
 
 // What the GATEWAY sends a replica: Host is the replica's internal host (changeOrigin), and the

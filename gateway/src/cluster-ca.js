@@ -14,23 +14,15 @@
  *
  * The token authorizes exactly the FIRST communication (enrollment); everything after is mTLS.
  *
- * node-forge builds and signs the certs — no openssl binary on the gateway. Reuses the same cert recipe
- * as setup/index.js so the issued certs are interchangeable with a single-host `npm run setup`. The one
- * signature VERIFICATION done here (an enrolment CSR's self-signature) goes through Node's own crypto
- * (OpenSSL, built into Node), not node-forge — see verifyCsrSignature().
+ * ./x509.js builds and signs the certs with Node's crypto — no openssl binary on the gateway and no
+ * third-party X.509 code. Reuses the same cert recipe as setup/index.js so the issued certs are
+ * interchangeable with a single-host `npm run setup`, and a cluster CA made by an older release (with
+ * node-forge) keeps signing: its key is read as-is and its subject is copied verbatim as the issuer.
  */
-const forge = require('node-forge');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { pki, md } = forge;
-
-const IP_RE = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-
-// A SAN entry: type 7 (IP) for a dotted-quad, type 2 (DNS) otherwise.
-function sanEntry(host) {
-    return IP_RE.test(host) ? { type: 7, ip: host } : { type: 2, value: host };
-}
+const x509 = require('./x509');
 
 // Unique certificate serial number: a positive, MINIMALLY encoded DER INTEGER — 16 random bytes whose
 // first byte is 0x01-0x7f. The old '0' + 15 random bytes relied on node-forge stripping ONE leading zero
@@ -60,23 +52,21 @@ function ensureClusterCA(certsDir) {
             created: false, caCrtPath, caKeyPath
         };
     }
-    const caKeys = pki.rsa.generateKeyPair(2048);
-    const caCert = pki.createCertificate();
-    caCert.publicKey = caKeys.publicKey;
-    caCert.serialNumber = serial();
-    caCert.validity.notBefore = new Date();
-    caCert.validity.notAfter = new Date();
-    caCert.validity.notAfter.setFullYear(caCert.validity.notBefore.getFullYear() + 10);
-    const caAttrs = [{ name: 'commonName', value: 'WordJS Cluster Root CA' }];
-    caCert.setSubject(caAttrs);
-    caCert.setIssuer(caAttrs);
-    caCert.setExtensions([
-        { name: 'basicConstraints', cA: true },
-        { name: 'keyUsage', keyCertSign: true, cRLSign: true }
-    ]);
-    caCert.sign(caKeys.privateKey, md.sha256.create());
-    const caCertPem = pki.certificateToPem(caCert);
-    const caKeyPem = pki.privateKeyToPem(caKeys.privateKey);
+    const caKeys = x509.generateRsaKeyPair(2048);
+    const notBefore = new Date();
+    const notAfter = new Date(notBefore);
+    notAfter.setFullYear(notBefore.getFullYear() + 10);
+    const caCertPem = x509.createCertificate({
+        subject: [['CN', 'WordJS Cluster Root CA']],
+        publicKey: caKeys.publicKey,
+        signingKey: caKeys.privateKey,
+        serialHex: serial(),
+        notBefore,
+        notAfter,
+        ca: true,
+        keyUsage: ['keyCertSign', 'cRLSign'],
+    });
+    const caKeyPem = caKeys.privateKeyPem;
     fs.writeFileSync(caCrtPath, caCertPem);
     fs.writeFileSync(caKeyPath, caKeyPem, { mode: 0o600 });
     try { fs.chmodSync(caKeyPath, 0o600); } catch { /* chmod unsupported (Windows) */ }
@@ -85,7 +75,7 @@ function ensureClusterCA(certsDir) {
 
 // SHA-256 fingerprint (hex) of the CA certificate's DER, for out-of-band pinning at join time
 // (kubeadm-style --ca-hash), so a bootstrapping node can detect a MITM before trusting the returned CA.
-// Hash the DER decoded straight from the PEM body (NOT a forge re-encoding) so it matches byte-for-byte
+// Hash the DER decoded straight from the PEM body (NOT a re-encoding) so it matches byte-for-byte
 // what scripts/node-join.js computes from the same PEM it receives — otherwise --ca-hash never matches.
 function caFingerprint(caCertPem) {
     const b64 = String(caCertPem).replace(/-----(BEGIN|END) CERTIFICATE-----/g, '').replace(/\s+/g, '');
@@ -98,47 +88,43 @@ function caFingerprint(caCertPem) {
  * Returns { keyPem, certPem }.
  */
 function issueIdentity({ caKeyPem, caCertPem, cn, sans = [], days = 825 }) {
-    const keys = pki.rsa.generateKeyPair(2048);
+    const keys = x509.generateRsaKeyPair(2048);
     const certPem = signPublicKey({ caKeyPem, caCertPem, publicKey: keys.publicKey, cn, sans, days });
-    return { keyPem: pki.privateKeyToPem(keys.privateKey), certPem };
+    return { keyPem: keys.privateKeyPem, certPem };
 }
 
 // The ONE CSR signature algorithm enrolment accepts: sha256WithRSAEncryption (RSASSA-PKCS1-v1_5 over
 // SHA-256). It is what `openssl req` signs with by default and what scripts/node-join.js asks for
 // explicitly. Anything else — sha1/sha384/sha512WithRSAEncryption, RSASSA-PSS, … — is refused by name,
 // never verified. A Map, so an OID string can never resolve to an inherited Object property.
-const CSR_SIGNATURE_HASHES = new Map([[pki.oids.sha256WithRSAEncryption, 'sha256']]);
+const CSR_SIGNATURE_HASHES = new Map([[x509.OID.sha256WithRSAEncryption, 'sha256']]);
 
 /**
  * Verify a parsed CSR's self-signature — the proof that the enrolling node holds the private key of the
- * public key we are about to certify — with Node's crypto (OpenSSL), NOT node-forge's csr.verify().
+ * public key we are about to certify — with Node's crypto (OpenSSL).
  *
- * WHY. node-forge's RSASSA-PKCS1-v1_5 verifier (every release up to and including 1.4.0, no fixed
- * version: npm advisory 1240912) accepts a DigestInfo whose DigestAlgorithm carries extra nested
- * elements — attacker-chosen bytes inside the signed block, the raw material of a Bleichenbacher-style
- * forgery. OpenSSL builds the one DigestInfo that is valid for the hash and compares it byte for byte.
+ * WHY OPENSSL. node-forge's RSASSA-PKCS1-v1_5 verifier (every release up to and including 1.4.0, npm
+ * advisory 1240912) accepted a DigestInfo whose DigestAlgorithm carries extra nested elements —
+ * attacker-chosen bytes inside the signed block, the raw material of a Bleichenbacher-style forgery.
+ * OpenSSL builds the one DigestInfo that is valid for the hash and compares it byte for byte.
  *
- * forge is still used to PARSE the request and to produce the exact bytes that were signed: the DER of
- * the CertificationRequestInfo — the subtree captured when the PEM was parsed (re-encoding it reproduces
- * the original bytes, attributes and extensionRequest included), or, when absent, one rebuilt from the
- * parsed fields. That is the same input forge's own verify() digested, so only the RSA check changes.
+ * The bytes verified are the DER of the CertificationRequestInfo exactly as it arrived (x509.parseCsr
+ * slices it out of the request; nothing is re-encoded), attributes and extensionRequest included.
  *
  * Throws for an unsupported signature algorithm; returns false for a signature that does not verify.
  */
 function verifyCsrSignature(csr) {
     const hash = CSR_SIGNATURE_HASHES.get(csr.signatureOid);
     if (!hash) {
-        const name = pki.oids[csr.signatureOid] || 'unknown algorithm';
+        const name = csr.signatureAlgorithm || 'unknown algorithm';
         throw new Error(`CSR signature algorithm ${name} (${csr.signatureOid}) is not supported — only sha256WithRSAEncryption is accepted`);
     }
-    const requestInfo = csr.certificationRequestInfo || pki.getCertificationRequestInfo(csr);
-    const signedBytes = Buffer.from(forge.asn1.toDer(requestInfo).getBytes(), 'binary');
-    const signature = Buffer.from(String(csr.signature || ''), 'binary');
+    if (csr.publicKey.asymmetricKeyType !== 'rsa') return false; // sha256WithRSAEncryption needs an RSA key
     try {
-        return crypto.verify(hash, signedBytes, {
-            key: pki.publicKeyToPem(csr.publicKey),
+        return crypto.verify(hash, csr.info, {
+            key: csr.publicKey,
             padding: crypto.constants.RSA_PKCS1_PADDING
-        }, signature);
+        }, csr.signature);
     } catch {
         return false; // a key or signature OpenSSL cannot even process is not a proof of possession
     }
@@ -151,38 +137,41 @@ function verifyCsrSignature(csr) {
  * (after verifying its sha256WithRSAEncryption self-signature with OpenSSL). Returns the cert PEM.
  */
 function signCsr({ caKeyPem, caCertPem, csrPem, cn, sans = [], days = 825 }) {
-    const csr = pki.certificationRequestFromPem(csrPem);
-    if (!csr.publicKey) throw new Error('CSR has no public key');
+    let csr;
+    try {
+        csr = x509.parseCsr(csrPem);
+    } catch (e) {
+        throw new Error(`CSR could not be parsed: ${e.message}`);
+    }
     if (!verifyCsrSignature(csr)) throw new Error('CSR self-signature is invalid');
     return signPublicKey({ caKeyPem, caCertPem, publicKey: csr.publicKey, cn, sans, days });
 }
 
 // Shared leaf-signing core: build a serverAuth+clientAuth leaf for `publicKey` with CN=cn and the given
-// SANs (always plus localhost/127.0.0.1 so the same cert still works for loopback/health checks).
+// SANs (always plus localhost/127.0.0.1 so the same cert still works for loopback/health checks). The
+// issuer is the CA certificate's subject, copied byte for byte (x509.certificateSubject).
 function signPublicKey({ caKeyPem, caCertPem, publicKey, cn, sans = [], days = 825 }) {
-    const caKey = pki.privateKeyFromPem(caKeyPem);
-    const caCert = pki.certificateFromPem(caCertPem);
-    const cert = pki.createCertificate();
-    cert.publicKey = publicKey;
-    cert.serialNumber = serial();
-    cert.validity.notBefore = new Date();
-    cert.validity.notAfter = new Date();
-    cert.validity.notAfter.setDate(cert.validity.notBefore.getDate() + days);
-    cert.setSubject([{ name: 'commonName', value: cn }]);
-    cert.setIssuer(caCert.subject.attributes);
-    const altNames = [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }];
-    const seen = new Set(['localhost', '127.0.0.1']);
+    const notBefore = new Date();
+    const notAfter = new Date(notBefore);
+    notAfter.setDate(notBefore.getDate() + days);
+    const altNames = ['localhost', '127.0.0.1'];
+    const seen = new Set(altNames);
     for (const h of sans) {
-        if (h && !seen.has(h)) { altNames.push(sanEntry(h)); seen.add(h); }
+        if (h && !seen.has(h)) { altNames.push(h); seen.add(h); }
     }
-    cert.setExtensions([
-        { name: 'basicConstraints', cA: false },
-        { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-        { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
-        { name: 'subjectAltName', altNames }
-    ]);
-    cert.sign(caKey, md.sha256.create());
-    return pki.certificateToPem(cert);
+    return x509.createCertificate({
+        subject: [['CN', cn]],
+        issuerCertPem: caCertPem,
+        publicKey,
+        signingKey: caKeyPem,
+        serialHex: serial(),
+        notBefore,
+        notAfter,
+        ca: false,
+        keyUsage: ['digitalSignature', 'keyEncipherment'],
+        extKeyUsage: ['serverAuth', 'clientAuth'],
+        altNames,
+    });
 }
 
 /**

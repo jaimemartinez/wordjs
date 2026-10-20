@@ -79,7 +79,12 @@ export async function extraValidationRules(): Promise<ValidationRule[]> {
     return rules;
 }
 
-/** graphql-js parse with the token cap (a cheap guard against huge documents before validation runs). */
+/**
+ * graphql-js parse with the token cap (a cheap guard against huge documents before validation runs).
+ * graphql 17's experimental fragment arguments (`...F(a: 1)` / `fragment F($a: Int)`) stay OFF whatever
+ * a caller passes: the cost walk (core/graphql/limits) measures each fragment once per type and reuses
+ * the figure at every spread, which is only sound while a fragment cannot vary with its arguments.
+ */
 export function parseWithLimits(source: any, options?: any) {
-    return graphqlParse(source, { ...(options || {}), maxTokens: limitOptions().maxTokens });
+    return graphqlParse(source, { ...(options || {}), maxTokens: limitOptions().maxTokens, experimentalFragmentArguments: false });
 }

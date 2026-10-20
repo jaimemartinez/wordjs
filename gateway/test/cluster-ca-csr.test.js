@@ -1,13 +1,14 @@
 /**
- * WordJS Gateway — the enrolment CSR's self-signature is verified by OpenSSL, not by node-forge.
+ * WordJS Gateway — the enrolment CSR's self-signature is verified by OpenSSL.
  *
  * `/enroll` turns a join token plus a CSR into a cluster-CA identity cert, and the CSR's self-signature
  * is the proof that the enrolling node holds the private key of the public key being certified.
- * node-forge's RSASSA-PKCS1-v1_5 verifier — every release up to 1.4.0, no fixed version (npm advisory
- * 1240912) — accepts a DigestInfo whose DigestAlgorithm carries extra nested elements. signCsr() now
+ * node-forge's RSASSA-PKCS1-v1_5 verifier — every release up to 1.4.0 (npm advisory 1240912) — accepted a
+ * DigestInfo whose DigestAlgorithm carries extra nested elements; WordJS no longer uses node-forge at all.
+ * signCsr() parses the request with src/x509.js (slicing out the signed bytes, never re-encoding them),
  * checks the signature with Node's crypto (OpenSSL) and accepts sha256WithRSAEncryption only.
  *
- * The CSRs here are built WITHOUT node-forge: two fixtures straight out of `openssl req`, and requests
+ * The CSRs here are built WITHOUT src/x509.js: two fixtures straight out of `openssl req`, and requests
  * assembled from raw DER with Node's crypto doing the signing, so the tests never share an encoder with
  * the code under test.
  *
@@ -15,15 +16,10 @@
  *   · drop the `verifyCsrSignature` check in signCsr     → 7 fail: flipped signature, altered request
  *                                                            info, other key, advisory shape, and the
  *                                                            sha1/sha384/sha512 refusals;
- *   · put back the old `csr.verify()` (node-forge)       → 6 fail: forge ACCEPTS the advisory shape and
- *                                                            the sha1/sha384/sha512 requests; on the
- *                                                            flipped / other-key signatures it throws its
- *                                                            own "Encryption block is invalid." instead;
  *   · let every algorithm through as sha256              → 3 fail: the refusals (they assert the "not
  *                                                            supported" reason, not just any throw);
- *   · rebuild the request info from the parsed fields    → 1 fails: the extensionRequest CSR, because
- *     only (pki.getCertificationRequestInfo)                  forge's rebuild of its attributes is not
- *                                                            byte-identical to what openssl signed.
+ *   · verify a re-encoding of the request info instead   → the extensionRequest CSR fails: the bytes
+ *     of the bytes as received                              openssl signed are only the original ones.
  */
 
 const test = require('node:test');

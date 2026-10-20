@@ -1,8 +1,9 @@
-const forge = require('node-forge');
 const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
-const { pki, md } = forge;
+// Certificates are built and signed with Node's crypto (./x509.js — the same toolkit the gateway's
+// cluster CA uses), so the PKI made here is interchangeable with a cluster-enrolled one.
+const x509 = require('./x509');
 
 // Private keys and config files (which hold jwtSecret, dbPassword, gatewaySecret…) are written
 // owner-only. A `mode` passed to a write applies only when the file is CREATED, and fs.copy keeps the
@@ -55,22 +56,20 @@ class WordJSSetup {
         process.stdout.write('🔐 Generating Cluster Infrastructure...\n');
 
         // 1. Generate CA
-        const caKeys = pki.rsa.generateKeyPair(2048);
-        const caCert = pki.createCertificate();
-        caCert.publicKey = caKeys.publicKey;
-        caCert.serialNumber = '01';
-        caCert.validity.notBefore = new Date();
-        caCert.validity.notAfter = new Date();
-        caCert.validity.notAfter.setFullYear(caCert.validity.notBefore.getFullYear() + 10);
-
-        const caAttrs = [{ name: 'commonName', value: 'WordJS Cluster Root CA' }];
-        caCert.setSubject(caAttrs);
-        caCert.setIssuer(caAttrs);
-        caCert.setExtensions([{ name: 'basicConstraints', cA: true }, { name: 'keyUsage', keyCertSign: true, cRLSign: true }]);
-        caCert.sign(caKeys.privateKey, md.sha256.create());
-
-        const caKeyPem = pki.privateKeyToPem(caKeys.privateKey);
-        const caCertPem = pki.certificateToPem(caCert);
+        const caKeys = x509.generateRsaKeyPair(2048);
+        const caNotBefore = new Date();
+        const caNotAfter = new Date(caNotBefore);
+        caNotAfter.setFullYear(caNotBefore.getFullYear() + 10);
+        const caCertPem = x509.createCertificate({
+            subject: [['CN', 'WordJS Cluster Root CA']],
+            publicKey: caKeys.publicKey,
+            signingKey: caKeys.privateKey,
+            notBefore: caNotBefore,
+            notAfter: caNotAfter,
+            ca: true,
+            keyUsage: ['keyCertSign', 'cRLSign'],
+        });
+        const caKeyPem = caKeys.privateKeyPem;
 
         await writeSecretFile(path.join(this.genCertsDir, 'cluster-ca.key'), caKeyPem);
         await fs.writeFile(path.join(this.genCertsDir, 'cluster-ca.crt'), caCertPem);
@@ -96,38 +95,24 @@ class WordJSSetup {
     }
 
     async _generateServiceCert(name, caKeyPem, caCertPem, serviceHost) {
-        const caKey = pki.privateKeyFromPem(caKeyPem);
-        const caCert = pki.certificateFromPem(caCertPem);
-        const keys = pki.rsa.generateKeyPair(2048);
-        const cert = pki.createCertificate();
+        const keys = x509.generateRsaKeyPair(2048);
+        const notBefore = new Date();
+        const notAfter = new Date(notBefore);
+        notAfter.setFullYear(notBefore.getFullYear() + 2);
 
-        cert.publicKey = keys.publicKey;
-        cert.serialNumber = Date.now().toString();
-        cert.validity.notBefore = new Date();
-        cert.validity.notAfter = new Date();
-        cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 2);
-
-        cert.setSubject([{ name: 'commonName', value: name }]);
-        cert.setIssuer(caCert.subject.attributes);
-
-        const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(serviceHost);
-        const altNames = [
-            { type: 2, value: 'localhost' },
-            { type: 7, ip: '127.0.0.1' },
-            isIp ? { type: 7, ip: serviceHost } : { type: 2, value: serviceHost }
-        ];
-
-        cert.setExtensions([
-            { name: 'basicConstraints', cA: false },
-            { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-            { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
-            { name: 'subjectAltName', altNames }
-        ]);
-
-        cert.sign(caKey, md.sha256.create());
-
-        const keyPem = pki.privateKeyToPem(keys.privateKey);
-        const certPem = pki.certificateToPem(cert);
+        const certPem = x509.createCertificate({
+            subject: [['CN', name]],
+            issuerCertPem: caCertPem,
+            publicKey: keys.publicKey,
+            signingKey: caKeyPem,
+            notBefore,
+            notAfter,
+            ca: false,
+            keyUsage: ['digitalSignature', 'keyEncipherment'],
+            extKeyUsage: ['serverAuth', 'clientAuth'],
+            altNames: [...new Set(['localhost', '127.0.0.1', serviceHost])],
+        });
+        const keyPem = keys.privateKeyPem;
 
         await writeSecretFile(path.join(this.genCertsDir, `${name}.key`), keyPem);
         await fs.writeFile(path.join(this.genCertsDir, `${name}.crt`), certPem);
@@ -267,6 +252,12 @@ class WordJSSetup {
 
 // CLI Entry Point
 if (require.main === module) {
+    // Preflight: WordJS needs Node >= 22 (graphql 17 and the native modules declare it).
+    if (Number(process.versions.node.split('.')[0]) < 22) {
+        console.error(`\n✖ WordJS requires Node.js >= 22 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 22 LTS or 24 LTS (https://nodejs.org) and try again.\n');
+        process.exit(1);
+    }
     const orchestrator = new WordJSSetup(process.cwd());
     const args = process.argv.slice(2);
 

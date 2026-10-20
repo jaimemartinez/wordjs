@@ -26,44 +26,38 @@ const test = require('node:test');
 const assert = require('node:assert');
 const https = require('node:https');
 const express = require('express');
-const forge = require('node-forge');
+const x509 = require('../src/x509');
 
 const purge = require('../src/purge');
 
-// --- Cert helpers (node-forge), same shape as proxy.integration.test.js -------------------------
+// --- Cert helpers (src/x509), same shape as proxy.integration.test.js --------------------------
 
 function makeCA() {
-    const keys = forge.pki.rsa.generateKeyPair(2048);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = '01';
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    const attrs = [{ name: 'commonName', value: 'WordJS Cluster Root CA' }];
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs);
-    cert.setExtensions([{ name: 'basicConstraints', cA: true }]);
-    cert.sign(keys.privateKey, forge.md.sha256.create());
-    return { keys, cert, pem: forge.pki.certificateToPem(cert) };
+    const keys = x509.generateRsaKeyPair(2048);
+    const pem = x509.createCertificate({
+        subject: [['CN', 'WordJS Cluster Root CA']],
+        publicKey: keys.publicKey,
+        signingKey: keys.privateKey,
+        serialHex: '01',
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+        ca: true,
+    });
+    return { keys, pem };
 }
 
 function makeLeaf(ca, cn, withLoopbackSan = false) {
-    const keys = forge.pki.rsa.generateKeyPair(2048);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = String(Date.now()) + Math.floor(Math.random() * 1000);
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    cert.setSubject([{ name: 'commonName', value: cn }]);
-    cert.setIssuer(ca.cert.subject.attributes);
-    if (withLoopbackSan) {
-        cert.setExtensions([{
-            name: 'subjectAltName',
-            altNames: [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }]
-        }]);
-    }
-    cert.sign(ca.keys.privateKey, forge.md.sha256.create());
-    return { key: forge.pki.privateKeyToPem(keys.privateKey), cert: forge.pki.certificateToPem(cert) };
+    const keys = x509.generateRsaKeyPair(2048);
+    const cert = x509.createCertificate({
+        subject: [['CN', cn]],
+        issuerCertPem: ca.pem,
+        publicKey: keys.publicKey,
+        signingKey: ca.keys.privateKey,
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+        ...(withLoopbackSan ? { altNames: ['localhost', '127.0.0.1'] } : {}),
+    });
+    return { key: keys.privateKeyPem, cert };
 }
 
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));

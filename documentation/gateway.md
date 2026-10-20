@@ -147,4 +147,4 @@ cd gateway
 npm test
 ```
 
-`node-forge` is a gateway **dependency** (not dev-only): it is used at boot by `gateway/src/cluster-ca.js` to mint the cluster CA and sign join-token enrollment certs, and by this integration test to generate test certificates.
+The cluster CA (`gateway/src/cluster-ca.js`) builds and signs certificates with `gateway/src/x509.js` — Node's own `crypto`, no dependency — to mint the cluster CA and sign join-token enrollment certs; the integration tests use the same toolkit for their test certificates. A cluster CA made by an older release (with node-forge) keeps working unchanged: its key is read as-is and its subject is copied verbatim as the issuer of every certificate it signs.
