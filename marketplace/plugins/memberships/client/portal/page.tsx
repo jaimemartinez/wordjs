@@ -4,7 +4,8 @@
 /**
  * /portal/memberships — the newsletter preference page a member reaches from the link in every newsletter
  * (?u=<account id>&t=<token>). Opening the link unsubscribes at once (one click); the page then offers to
- * subscribe again. The token is checked server-side (an HMAC of the account id), so the page needs no
+ * subscribe again. With &c=<token> it is instead the CONFIRMATION link mailed to a new subscriber: it
+ * confirms that address for newsletters. The token is checked server-side (an HMAC of the account id), so the page needs no
  * session. Opened without a token it explains where to manage newsletters instead.
  */
 
@@ -51,9 +52,10 @@ export default function MembershipsPortal() {
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         if (!params.get("u") || !params.get("t")) { setState({ phase: "nolink", subscribed: null, error: "" }); return; }
-        // One click: the link itself unsubscribes.
-        call("POST", { subscribed: false }).then((r) => {
-            if (r.ok) setState({ phase: "done", subscribed: !!r.body.subscribed, error: "" });
+        // The confirmation link confirms; any other link unsubscribes (one click).
+        const c = params.get("c");
+        call("POST", c ? { confirm: true, c } : { subscribed: false }).then((r) => {
+            if (r.ok) setState({ phase: r.body.confirmed ? "confirmed" : "done", subscribed: !!r.body.subscribed, error: "" });
             else setState({ phase: "error", subscribed: null, error: r.body.error || "Este enlace no es válido." });
         }).catch(() => setState({ phase: "error", subscribed: null, error: "No se pudo contactar con el sitio." }));
     }, []);
@@ -83,6 +85,13 @@ export default function MembershipsPortal() {
                     <>
                         <h1 className="wjnl-title">No pudimos usar este enlace</h1>
                         <p className="wjnl-msg wjnl-error">{state.error}</p>
+                        <a className="wjnl-btn" href="/">Ir al sitio</a>
+                    </>
+                )}
+                {state.phase === "confirmed" && (
+                    <>
+                        <h1 className="wjnl-title">Correo confirmado</h1>
+                        <p className="wjnl-msg">Recibirás las newsletters de este sitio en esta dirección. Puedes darte de baja desde cualquiera de ellas.</p>
                         <a className="wjnl-btn" href="/">Ir al sitio</a>
                     </>
                 )}

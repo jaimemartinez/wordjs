@@ -35,7 +35,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   backoff and the admin sees a send log with delivered / failed counts, approves sends requested by
   authors, retries failures and sends tests. A post that requires an access level goes out in full only to
   members who hold it — everyone else gets the teaser and a link. Every mail has a one-click unsubscribe
-  link (an HMAC token per account) and members manage newsletters from their account block.
+  link (an HMAC token per account) plus RFC 8058 `List-Unsubscribe` / `List-Unsubscribe-Post` headers, and
+  members manage newsletters from their account block. Newsletters go only to addresses the member has
+  confirmed (a fixed-text confirmation mail, at most once every 30 days); what each member receives is
+  decided when their mail is sent, and every step is claimed in the database, so several workers never
+  send the same mail twice.
 - **Plugin fields in the post editor.** Through the new `post_editor_fields` filter a plugin declares a
   field (select, radio or text, validated by core) that the editor shows in the entry's settings and saves
   as unprefixed post meta (`GET /api/v1/editor/fields`).

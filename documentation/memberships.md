@@ -164,18 +164,38 @@ Publishing a post can email it to members, Ghost-style (`lib/newsletter.js`):
   the recipient list and sends at most **N mails per minute** (Ajustes, default 60) through `wordjs.mail`,
   i.e. the site's mail provider plugin (`mail-server`): there is no transport of its own. A failed mail is
   retried after 1 and 2 more minutes, then counted as failed; the admin can retry failed deliveries.
-- **Who receives what.** `all` = every subscribed member with an address; `free` = members without a paid
-  level; `paid` = members with one. For a post that requires an access level, only members who **hold that
-  level** get the full body; everyone else gets the **teaser** (the body before the access break, or the
-  author's own excerpt when there is none — never an excerpt derived from the body) plus *Leer en el sitio*.
-  Site-relative links and images are made absolute; shortcodes are dropped.
+- **Only confirmed addresses.** An account's e-mail is whatever was typed at sign-up, which proves nothing
+  when the site does not require e-mail verification. A newsletter goes only to an address **confirmed for
+  that account** (the member clicked a link mailed to exactly that address — the portal page with
+  `&c=<token>`, an HMAC of the account and the address). A subscribed member whose address is not confirmed
+  gets, instead of the newsletter, one fixed-text confirmation mail at most every 30 days, and can ask for
+  the link from the account block (once a day); changing the address un-confirms it. Nothing a visitor
+  writes is ever in that mail.
+- **Who receives what.** `all` = every subscribed member with a confirmed address; `free` = members without
+  a paid level; `paid` = members with one. For a post that requires an access level, only members who
+  **hold that level** get the full body; everyone else gets the **teaser** (the body before the access
+  break, or the author's own excerpt when there is none — never an excerpt derived from the body) plus
+  *Leer en el sitio*. This is decided **when each mail is sent**, not when the list is built: a post gated
+  after its send started goes out as a teaser to the rest, and an address that unsubscribed or changed in
+  the meantime is skipped. Site-relative links and images are made absolute; shortcodes are dropped; the
+  subject is one line.
+- **Once, even with several workers.** Each step is claimed in the database before it is done — a trigger
+  by deleting it, a send by leaving `queued`, a delivery by moving to `sending` — so the timer, the admin's
+  button and a second server never mail the same delivery twice; a delivery whose run died is retried after
+  15 minutes. One newsletter per post is a unique key, so a double click cannot create two sends (a
+  discarded send frees it).
 - **Who may send.** Any author can set a meta value, so a post written by an administrator or editor is
   queued at once, while any other author's request waits in the send log for an admin to approve or
   discard it. Each post is emailed once.
 - **Unsubscribe.** Every mail ends with a one-click link to `/portal/memberships?u=<id>&t=<token>` (the
   plugin's portal page); the token is an HMAC of the account id under a per-install secret, so it works for
   that account only. The page unsubscribes on open and offers to subscribe again; members can also switch
-  newsletters on and off in the **Mi membresía** block. Default: subscribed.
+  newsletters on and off in the **Mi membresía** block. Every mail also carries the RFC 8058 headers
+  `List-Unsubscribe: <…/api/v1/plugin/memberships/public/newsletter/one-click?u=…&t=…>` and
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, so mail clients offer an unsubscribe button that
+  works without opening anything (a core webhook route: no session, CSRF-exempt, the token is the proof).
+  The `mail-server` plugin sends them; another mail provider may drop caller headers, and the link in the
+  body still works. Default: subscribed (once confirmed).
 - **Admin.** Membresías → Newsletter: send log with status and delivered / failed counts (failed
   addresses with the error), approve / discard, retry failed, a **test send** (as a member with or without
   access receives it) and sending an already published post.
@@ -183,11 +203,9 @@ Publishing a post can email it to members, Ghost-style (`lib/newsletter.js`):
 Without a mail provider nothing is delivered: every delivery fails with the provider's error and shows up
 in the log.
 
-### 2.7 Not included (follow-ups)
+### 2.7 Outside this version
 
 - Stripe **live mode**, the Stripe customer portal, coupons/trials, and per-member analytics.
-- `List-Unsubscribe` / `List-Unsubscribe-Post` headers: the mail provider plugin does not accept caller
-  headers yet; the one-click link is in the body.
 - Newsletter open/click tracking and a separate (non-post) campaign editor.
 
 ---
