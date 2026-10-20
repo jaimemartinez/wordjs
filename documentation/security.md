@@ -833,7 +833,7 @@ On a [multisite](multisite.md) network, **tenant isolation is the product**: one
 
 ## 12. GraphQL Limits 🔷
 
-The [GraphQL endpoint](graphql.md) (`/api/v1/graphql`, read-only) adds no second authorization layer: every field resolves through an internal REST sub-request (`core/graphql/dispatch.ts`), so it sees exactly what the same caller would see through REST. What it adds is protection against abusive documents, checked at **validation** time — before any resolver or REST sub-request runs — with fragments expanded (`backend/src/core/graphql/limits.ts`, `index.ts`):
+The [GraphQL endpoint](graphql.md) (`/api/v1/graphql`) adds no second authorization layer: every field resolves through an internal REST sub-request (`core/graphql/dispatch.ts`) — a read for a query field, the named REST write for a mutation, a fresh read as the subscriber for every subscription event — so it sees and changes exactly what the same caller could through REST. Mutations are accepted over `POST` only (a `GET` mutation is a `405`, and `ctx.rest.write` refuses on any other method), so a cookie-authenticated browser can only mutate with a same-origin `Origin` and the `X-CSRF-Token` header; the subscription stream applies the collaboration stream's same-origin rule to a cookie `GET`. What it adds is protection against abusive documents, checked at **validation** time — before any resolver or REST sub-request runs — with fragments expanded (`backend/src/core/graphql/limits.ts`, `index.ts`):
 
 | Guard | Default | Configure |
 |---|---|---|

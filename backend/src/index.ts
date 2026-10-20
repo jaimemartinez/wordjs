@@ -573,6 +573,10 @@ app.use(`${config.api.prefix}/auth/forgot-password`, authLimiter); // public, un
 app.use(`${config.api.prefix}/auth/reset-password`, authLimiter);
 app.use(`${config.api.prefix}/auth/verify-email`, authLimiter); // public token-consume — throttle abuse
 app.use(`${config.api.prefix}/media`, uploadLimiter);
+// A GraphQL upload (the multipart request spec, `uploadMedia`) is POST /media dispatched in process, which
+// does not pass the mount above again: the same budget applies to the multipart GraphQL request itself.
+app.use(`${config.api.prefix}/graphql`, (req: Request, res: Response, next: NextFunction) =>
+    (req.method === 'POST' && /^multipart\/form-data/i.test(String(req.headers['content-type'] || '')) ? uploadLimiter(req, res, next) : next()));
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/:slug/update`, uploadLimiter);
