@@ -3127,8 +3127,30 @@ async function respawnOnSecondarySites(slug: string): Promise<void> {
     }
 }
 
-async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false }: { dropTables?: boolean; keepGrants?: boolean } = {}) {
-    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; appContainerRetired: boolean } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false };
+/**
+ * Retire the AppContainer profile (and its SID's ACEs) of `slug`'s worker on every site other than the
+ * main one. Windows only — the other platforms keep no persistent profile. Every site of the registry is
+ * covered, suspended ones too (a suspended site's worker had a profile as well). Returns the site ids
+ * whose profile was removed. Never throws.
+ */
+async function retireOnSecondarySites(slug: string): Promise<number[]> {
+    const retired: number[] = [];
+    // No platform check here: retireAppContainerPlugin is the no-op off Windows (one place decides it).
+    if (!siteContext.multisiteEnabled()) return retired;
+    let ids: number[];
+    try { ids = require('./network').listSites().map((s: any) => Number(s.id)).filter((id: number) => id !== siteContext.PRIMARY_SITE_ID); }
+    catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] could not list the network's sites`); return retired; }
+    const appRoot = path.resolve(__dirname, '..', '..');
+    const win = require('./sandbox-windows');
+    for (const id of ids) {
+        try { if (await win.retireAppContainerPlugin(appRoot, slug, id)) retired.push(id); }
+        catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] AppContainer cleanup on site ${id} failed`); }
+    }
+    return retired;
+}
+
+async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false, networkWide = false }: { dropTables?: boolean; keepGrants?: boolean; networkWide?: boolean } = {}) {
+    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; appContainerRetired: boolean; appContainerRetiredSites: number[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false, appContainerRetiredSites: [] };
     if (!keepGrants) {
         try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
         catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] removeGrants failed`); }
@@ -3164,12 +3186,15 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
             result.appContainerRetired = await require('./sandbox-windows').retireAppContainerPlugin(appRoot, slug);
         } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] AppContainer ACL/profile cleanup failed`); }
     }
+    // The plugin is leaving the NETWORK (deleted, not updated in place — an update keeps the other sites'
+    // workers running on the new code): every other site's worker had its own profile, keyed s<id>:<slug>.
+    if (networkWide) result.appContainerRetiredSites = await retireOnSecondarySites(slug);
     log.info({ slug: logSafe(slug), grantsRemoved: logSafe(result.grantsRemoved), strikesCleared: logSafe(result.strikesCleared) }, `[uninstall ${logSafe(slug)}] grants=${logSafe(result.grantsRemoved)} strikes=${logSafe(result.strikesCleared)} tablesDropped=${logSafe(result.tablesDropped.length)}`);
     return result;
 }
 
 module.exports = {
-    loadSitePlugins, deactivatePluginOnSecondarySites, offerPluginToSites, withdrawPluginFromSites, respawnOnSecondarySites, onSecondarySite,
+    loadSitePlugins, deactivatePluginOnSecondarySites, retireOnSecondarySites, offerPluginToSites, withdrawPluginFromSites, respawnOnSecondarySites, onSecondarySite,
     scanPlugins,
     getActivePlugins,
     isPluginActive,

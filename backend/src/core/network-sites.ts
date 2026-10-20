@@ -196,9 +196,40 @@ async function setSiteStatus(id: number, status: 'active' | 'suspended', actorUs
 }
 
 /**
+ * What site `id`'s plugin and theme workers kept outside its data directory: on Windows each one's
+ * AppContainer profile (and the ACEs of its SID), keyed `s<id>:<slug>` / `s<id>:theme:<slug>`, and on
+ * every platform its private storage (`data|logs|os-tmp/plugins/<storage key>`, core/sandbox-paths).
+ * Every installed plugin and theme is covered, whether or not it ever ran on the site — a profile that
+ * was never created is not derived, a directory that does not exist is skipped. Only names computed for
+ * THIS site are touched, so no other site's (nor the main site's) worker loses anything. Returns the
+ * warnings for the audit record.
+ */
+async function retireSiteWorkers(id: number): Promise<string[]> {
+    const warnings: string[] = [];
+    if (id === siteContext.PRIMARY_SITE_ID) return warnings;
+    const appRoot = path.resolve(__dirname, '..', '..');
+    const keys: string[] = [];
+    try { keys.push(...require('./plugins').scanPlugins().map((p: any) => String(p.slug))); }
+    catch (e: any) { warnings.push(`plugin list: ${e && e.message}`); }
+    try { keys.push(...require('./themes').scanThemes().map((t: any) => `theme:${t.slug}`)); }
+    catch (e: any) { warnings.push(`theme list: ${e && e.message}`); }
+    const { privateStorageDirs } = require('./sandbox-paths');
+    for (const key of Array.from(new Set(keys))) {
+        // Profile first: its revoke walks the storage directories it was granted while they still exist.
+        // (A no-op off Windows: retireAppContainerPlugin decides that.)
+        try { await require('./sandbox-windows').retireAppContainerPlugin(appRoot, key, id); }
+        catch (e: any) { warnings.push(`AppContainer ${key}: ${e && e.message}`); }
+        for (const dir of privateStorageDirs(appRoot, key, id)) {
+            try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e: any) { warnings.push(`storage ${key}: ${e && e.message}`); }
+        }
+    }
+    return warnings;
+}
+
+/**
  * Delete site `id` and everything it holds: its media objects in the bucket, its database (file,
  * Postgres schema or MySQL database), its directory of uploads and private files, the database principals
- * of its plugins, its cached entries, its certificates and its record and addresses. The site must be
+ * of its plugins, its plugin and theme workers' AppContainer profiles and private storage, its cached entries, its certificates and its record and addresses. The site must be
  * suspended first (nothing is serving it while it goes) and `confirmSlug` must repeat its slug. The
  * main site is never deleted. Its id is never reused (core/network keeps a high-water mark), so nothing
  * a failed step leaves behind can ever surface in a later site.
@@ -236,6 +267,7 @@ async function deleteSite(id: number, opts: { confirmSlug?: unknown; actorUserId
     });
     prepared.delete(id);
     require('./site-workers').forget(id);
+    warnings.push(...await retireSiteWorkers(id));
     try { await database.dropSiteDatabase(id); } catch (e: any) { warnings.push(`database: ${e && e.message}`); }
     try { fs.rmSync(network.siteDataDir(id), { recursive: true, force: true }); } catch (e: any) { warnings.push(`files: ${e && e.message}`); }
     try { await require('./site-certs').forgetSiteCertificates(id, site.mainHost); } catch (e: any) { warnings.push(`certificates: ${e && e.message}`); }
@@ -323,6 +355,7 @@ module.exports = {
     createSite,
     setSiteStatus,
     deleteSite,
+    retireSiteWorkers,
     forgetSite,
     followRegistryChanges,
     isPrepared: (id: number) => prepared.has(id),

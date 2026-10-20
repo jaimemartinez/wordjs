@@ -589,7 +589,13 @@ next section.
 - **Private storage per site.** `core/sandbox-paths` keys a worker's storage directories by
   `s<id>:<slug>` on another site, and only site 1's worker may write the plugin's own (shared) code
   directory — the native sandboxes, Node's permission model and `core/io-guard` all read that one
-  declaration. On Windows each (site, plugin) worker has its own AppContainer profile.
+  declaration. On Windows each (site, plugin) worker has its own AppContainer profile, named for its worker
+  key (`core/sandbox-windows` `appContainerProfileNameForSite`). Deleting a plugin retires that profile on
+  every site of the registry, suspended ones included (`core/plugins` `retireOnSecondarySites`, after its
+  workers have stopped; an in-place update keeps the other sites' workers and their profiles). Deleting a
+  site retires the profile of every installed plugin's and theme's worker of that site and removes their
+  private storage (`network-sites` `retireSiteWorkers`). Only names derived for that (site, worker) are
+  touched, so no other site's or plugin's profile is. Linux and macOS keep no persistent profile.
 - **Database principals.** `core/plugin-db-isolation` names the Postgres role / MySQL user of another site
   `…__s<id>` (a slug can never produce a double underscore), so each site's worker queries under its own
   principal. On Postgres and MySQL networks each site's role / user is granted only that site's plugin
@@ -610,10 +616,10 @@ next section.
   untouched. Grants, egress allowlists and ceilings are options and the network store, so a woken worker
   is spawned under the current policy; suspension uses the same stop, and a resumed site wakes on its next
   need.
-- **Not yet**: removing a secondary site's AppContainer profiles when a plugin is deleted.
 - **Tests**: `backend/src/tests/multisite-plugins.test.ts` (real plugin workers: I5 and I8),
   `backend/src/tests/multisite-idle-workers.test.ts` (real workers stopped when idle and started again by
-  the next route, cron event and request burst; the main site never reaped; policy kept).
+  the next route, cron event and request burst; the main site never reaped; policy kept),
+  `backend/src/tests/multisite-appcontainer-retire.test.ts` (profile retirement; a live half on Windows).
 
 ## Phase 2 as built (engines, nodes, certificates, backups, collaboration)
 
@@ -662,7 +668,8 @@ The rest of phase 2, as built.
   not the envelope's. The 404 off the main site is gone, and each site's sweep runs from its own cron.
 - **Site deletion** (`network-sites.deleteSite`): suspended first, slug confirmed; media objects,
   principals (installed plugins', this process's, and every role / user with the site's suffix on the
-  server), cache keys, database, files, certificate and record are removed.
+  server), its workers' AppContainer profiles (Windows) and private storage, cache keys, database, files,
+  certificate and record are removed.
 - **The engine migration moves the network** (`db-admin/migration.js migrateNetwork`): every site into its
   namespace on the target and the network store, fail-closed before the config switches.
 - **Tests**: `multisite-engine-{sqlite,postgres,mysql}.test.ts` (the same suite on each engine, in the
@@ -671,8 +678,7 @@ The rest of phase 2, as built.
   listener).
 - **The network administrator's handoff into a site** (`core/network-handoff`): see
   [The handoff into a site](#the-handoff-into-a-site-as-built) below.
-- **Still open in phase 2**: a root layout per site in the frontend, and removing a site's AppContainer
-  profiles when a plugin is deleted.
+- **Still open in phase 2**: a root layout per site in the frontend.
 
 ### The handoff into a site (as built)
 

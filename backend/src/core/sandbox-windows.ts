@@ -100,7 +100,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { sandboxPaths } = require('./sandbox-paths');
+const { sandboxPaths, siteStorageSlug } = require('./sandbox-paths');
 const log = require('./module-logger').moduleLogger('core/sandbox-windows');
 
 /** Strip line breaks before a value reaches a log line (same reason as plugin-isolate's logSafe). */
@@ -1332,8 +1332,8 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
  * kernel's write set and the JS guard's write set disagree, one of them is wrong, and it is always the
  * looser one that matters. Provided here so the integration derives both from one declaration.
  */
-function appContainerZones(appRoot: string, slug: string, coreDir: string = __dirname): { traverse: string[]; readExec: string[]; write: string[] } {
-    const p = sandboxPaths(appRoot, slug, coreDir);
+function appContainerZones(appRoot: string, slug: string, coreDir: string = __dirname, siteId: number = 1): { traverse: string[]; readExec: string[]; write: string[] } {
+    const p = sandboxPaths(appRoot, slug, coreDir, siteId);
     return {
         traverse: p.traverse,
         readExec: p.readOnly,
@@ -1341,17 +1341,46 @@ function appContainerZones(appRoot: string, slug: string, coreDir: string = __di
     };
 }
 
-/** Remove the persistent SID authority when a plugin is actually uninstalled (not merely restarted). */
-async function retireAppContainerPlugin(appRoot: string, slug: string): Promise<boolean> {
-    if (process.platform !== 'win32') return false;
-    const profile = appContainerProfileNameForPlugin(appRoot, slug);
+/**
+ * The profile of one (site, plugin) worker. core/plugin-isolate launches each worker under the profile of
+ * its worker key — `<slug>` on site 1 (single-site installs keep theirs), `s<id>:<slug>` on another site,
+ * `theme:<slug>` / `s<id>:theme:<slug>` for a theme — which is sandbox-paths' siteStorageSlug.
+ */
+function appContainerProfileNameForSite(appRoot: string, slug: string, siteId: number = 1): string {
+    return appContainerProfileNameForPlugin(appRoot, siteStorageSlug(slug, siteId));
+}
+
+/**
+ * The profile API retirement goes through. A seam for the tests (they replace these members instead of
+ * registering real profiles); production never reassigns it.
+ */
+const profileApi = {
+    platform: (): string => process.platform,
+    deriveSid: (name: string): Promise<string | null> => deriveAppContainerSid(name),
+    deleteProfile: (name: string): Promise<boolean> => deleteAppContainerProfile(name),
+    revoke: (sid: string, dirs: string[]): Promise<boolean> => revokeAppContainerAccess(sid, dirs),
+    grantIsCached: (sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): boolean => aclGrantIsCached(sid, dir, mode),
+};
+
+/**
+ * Remove the persistent SID authority of one (site, plugin) worker when it is gone for good — the plugin
+ * uninstalled (on every site) or the site deleted — not merely restarted. `slug` may be `theme:<slug>`.
+ * Touches only that worker's profile and the ACEs of its SID: the SID is derived from the profile name,
+ * so another site's or another plugin's worker is never named. Linux and macOS keep no persistent profile
+ * (Landlock, seccomp and Seatbelt live and die with the process), so there it is a no-op.
+ */
+async function retireAppContainerPlugin(appRoot: string, slug: string, siteId: number = 1): Promise<boolean> {
+    if (profileApi.platform() !== 'win32') return false;
+    const profile = appContainerProfileNameForSite(appRoot, slug, siteId);
     // Never CREATE a profile while uninstalling a plugin that was never isolated. Derivation is pure.
-    const sid = await deriveAppContainerSid(profile);
+    const sid = await profileApi.deriveSid(profile);
     if (!sid) return false;
-    const zones = appContainerZones(appRoot, slug, __dirname);
+    const zones = appContainerZones(appRoot, slug, __dirname, siteId);
     const candidates: Array<{ dir: string; mode: Exclude<AclMode, 'revoke'> }> = [
         ...zones.traverse.map((dir) => ({ dir, mode: 'traverse' as const })),
         ...zones.readExec.map((dir) => ({ dir, mode: 'rx' as const })),
+        // Private storage is granted rx (readable) or full (writable), depending on the plugin's grants.
+        ...zones.write.map((dir) => ({ dir, mode: 'rx' as const })),
         ...zones.write.map((dir) => ({ dir, mode: 'full' as const })),
         { dir: path.dirname(getAppContainerRuntimePath()), mode: 'rx' as const },
     ];
@@ -1359,10 +1388,10 @@ async function retireAppContainerPlugin(appRoot: string, slug: string): Promise<
     // walk paths whose successful grant marker proves this SID was actually installed there. Deleting
     // the profile still retires the SID if a crash happened in the tiny ACL-before-marker window.
     const touched = Array.from(new Map(candidates
-        .filter(({ dir, mode }) => aclGrantIsCached(sid, dir, mode))
+        .filter(({ dir, mode }) => profileApi.grantIsCached(sid, dir, mode))
         .map(({ dir }) => [path.resolve(dir).toLowerCase(), path.resolve(dir)] as const)).values());
-    const revoked = touched.length === 0 || await revokeAppContainerAccess(sid, touched);
-    const deleted = await deleteAppContainerProfile(profile);
+    const revoked = touched.length === 0 || await profileApi.revoke(sid, touched);
+    const deleted = await profileApi.deleteProfile(profile);
     return revoked && deleted;
 }
 
@@ -1390,6 +1419,7 @@ module.exports = {
     DEFAULT_PROFILE_NAME,
     appContainerProfileNameForRoot,
     appContainerProfileNameForPlugin,
+    appContainerProfileNameForSite,
     deriveAppContainerSid,
     defaultAppContainerProfileName,
     // Test seams: pure builders, so a test can assert the ASCII guard and the argv quoting without
@@ -1397,6 +1427,7 @@ module.exports = {
     __buildRelayScript: buildRelayScript,
     __buildJobCapsScript: buildJobCapsScript,
     __buildProfileScript: buildProfileScript,
+    __profileApi: profileApi,
     __buildIcaclsScript: buildIcaclsScript,
     __aclCacheKey: appContainerAclCacheKey,
     __aclCacheRoot: appContainerAclCacheRoot,

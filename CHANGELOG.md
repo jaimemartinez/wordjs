@@ -847,6 +847,13 @@ the boot error links there too.
 
 ### Fixed
 
+- **Multisite on Windows: a plugin's or a site's AppContainer profiles go with it.** Each (site, plugin)
+  worker of a network runs under its own AppContainer profile. Deleting a plugin removed only the main
+  site's; it now removes the profile (and the folder permissions given to it) of the plugin's worker on
+  every site. Deleting a site now removes the profiles of all its plugin and theme workers and their private
+  storage under `data/`, `logs/` and `os-tmp/plugins/`, which stayed behind on every platform. No other
+  site's or plugin's profile is touched; Linux and macOS have no persistent profile to remove.
+
 - **A Postgres or MySQL site installed with the wizard reaches its database after a restart.** The wizard
   wrote the database as `db.database`, which the configuration never read (the install itself ran against
   the user's default database), and wrote the password only in the nested `db.password`, which a flat
