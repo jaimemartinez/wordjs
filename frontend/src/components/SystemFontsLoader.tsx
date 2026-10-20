@@ -16,7 +16,7 @@ export function isFontLoadFailure(error: unknown): boolean {
 }
 
 // Client-side @font-face injector. The public <head> already carries these faces from SSR (see
-// app/layout.tsx) so first paint is correct; this refreshes them on the client to pick up fonts
+// app/_root/RootDocument.tsx) so first paint is correct; this refreshes them on the client to pick up fonts
 // uploaded after the SSR cache window and to cover the admin editor. Uses the SAME builder as SSR so
 // the declarations are identical (no divergence in weight/format between server and client).
 export function SystemFontsLoader() {

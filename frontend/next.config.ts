@@ -142,6 +142,10 @@ const nextConfig: NextConfig = {
     // see "a local proxy rewriting Host" (its proxy-collapse notice). The edge refuses the other spelling
     // that did this, dot segments (gateway/src/host-edge.js).
     caseSensitiveRoutes: true,
+    // There is no app/layout.tsx: every top-level tree has its own root layout, so a multisite network's
+    // other sites get a document of their own (src/app/_root/RootDocument.tsx). A URL no route matches
+    // then has no single layout to render a 404 inside, and app/global-not-found.tsx is that page.
+    globalNotFound: true,
   },
   turbopack: {
     // We must include the parent directory as root because we import from ../plugins

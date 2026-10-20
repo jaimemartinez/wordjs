@@ -6779,7 +6779,7 @@ export function registerTranslations(newTranslations: Record<string, Record<stri
  * (contexts/ModalContext.tsx) reads it outside any I18nProvider, where a blocked storage or a
  * stale value such as 'fr' would otherwise crash t() for every confirm() on the site.
  *
- * The site's language is `<html lang>`, which app/layout.tsx renders from the site's locale option
+ * The site's language is `<html lang>`, which app/_root/RootDocument.tsx renders from the site's locale option
  * (lib/documentLanguage.ts). Before it was consulted, an admin who never opened the language menu got
  * Spanish screens on an English site, mixed with the screens whose copy is still English-only.
  */
