@@ -175,6 +175,7 @@ const POLICY_TABLE: Record<string, HookPolicy> = {
         why: 'offers access levels to the post editor (a members-only content provider)',
         sanitize: (_slug, [value, ...rest]) => [Array.isArray(value) ? value.slice() : [], ...rest],
     },
+    'post_editor_fields': PUBLIC('carries only the field declarations plugins contribute to the post editor'),
     'content_access_grants': {
         kind: 'data', requires: [['content_access', 'provider'], ['users', 'read']],
         why: 'decides which members-only content the account reading the site may read (user id and role)',

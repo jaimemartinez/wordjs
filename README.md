@@ -87,7 +87,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - Drag-and-drop visual editor (**Verso**, built in-house) with **39 blocks** & edit-in-place text
 - **Token-driven themes** + a live customizer
 - **32 plugins** in the marketplace, one-click install; **4 bundled themes**
-- **Members-only content**: per-post access levels honoured by every surface (REST, pages, feeds, search, comments), with free and paid tiers, a paywall block and Stripe subscriptions in the `memberships` plugin ([guide](documentation/memberships.md))
+- **Members-only content**: per-post access levels honoured by every surface (REST, pages, feeds, search, comments), with free and paid tiers, a paywall block, Stripe subscriptions and newsletters to members in the `memberships` plugin ([guide](documentation/memberships.md))
 - Real **SEO**: server-rendered pages, category/tag/author/date **archives**, sitemap index, RSS/Atom/JSON feeds, social cards
 - Media library with automatic **AVIF/WebP** optimization
 

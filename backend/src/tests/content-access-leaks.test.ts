@@ -386,6 +386,59 @@ describe('the provider contract', () => {
     });
 });
 
+describe('the posts bridge and the editor-field seam', () => {
+    const PROBE = 'wjs-posts-bridge-probe';
+    const probeDir = path.join(path.resolve(__dirname, '../../plugins'), PROBE);
+    const { createPluginApi } = require('../core/plugin-api');
+    const { runWithContext } = require('../core/plugin-context');
+
+    test('posts.get: published public entries only, full body + access level; denied without posts:read', async () => {
+        fs.mkdirSync(probeDir, { recursive: true });
+        fs.writeFileSync(path.join(probeDir, 'manifest.json'), JSON.stringify({ name: PROBE, permissions: [{ scope: 'posts', access: 'read' }] }));
+        const grants = require('../core/plugin-permissions');
+        try {
+            grants._setGrantsInMemory(PROBE, []);
+            await runWithContext(PROBE, async () => {
+                await assert.rejects(() => createPluginApi(PROBE).posts.get(P.paid));
+            });
+            grants._setGrantsInMemory(PROBE, ['posts:read']);
+            await runWithContext(PROBE, async () => {
+                const api = createPluginApi(PROBE);
+                const paid = await api.posts.get(P.paid);
+                assert.strictEqual(paid.accessLevel, 'paid');
+                assert.ok(paid.content.includes(SECRET.paid), 'the full body: the plugin decides per recipient');
+                assert.strictEqual(paid.excerpt, '', 'never an excerpt derived from the body');
+                assert.ok(paid.url.endsWith(paid.path) && paid.path.startsWith('/gated-paid-'));
+                assert.ok(!('_wjs_access' in paid.meta) && !('_puck_data' in paid.meta), 'public meta only');
+                const draft = (await db.run(`INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name) VALUES (?, 'D', 'draft body', 'draft', 'post', 'pb-draft')`, [U.author])).lastID;
+                const locked = (await db.run(`INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name, post_password) VALUES (?, 'L', 'pw body', 'publish', 'post', 'pb-pw', 'x')`, [U.author])).lastID;
+                for (const id of [draft, locked, 999999, 'x']) assert.strictEqual(await api.posts.get(id), null, String(id));
+            });
+        } finally {
+            try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* */ }
+        }
+    });
+
+    test('GET /editor/fields: validated plugin declarations for the post type, editors only', async () => {
+        const decl = async (fields: any[]) => [...fields,
+            { metaKey: 'newsletter_audience', label: 'Send', type: 'select', options: [{ value: '', label: 'No' }, { value: 'all', label: 'All' }] },
+            { metaKey: '_internal', label: 'x', type: 'text' },
+            { metaKey: 'page_only', label: 'P', type: 'text', postTypes: ['page'] },
+        ];
+        hooks.addFilter('post_editor_fields', decl);
+        try {
+            const r = await as('author', 'get', '/editor/fields?type=post');
+            assert.strictEqual(r.status, 200);
+            assert.deepStrictEqual(r.body.fields.map((f: any) => f.metaKey), ['newsletter_audience']);
+            assert.deepStrictEqual((await as('author', 'get', '/editor/fields?type=page')).body.fields.map((f: any) => f.metaKey), ['page_only']);
+            assert.strictEqual((await as('free', 'get', '/editor/fields')).status, 403);
+            assert.strictEqual((await anon('get', '/editor/fields')).status, 401);
+        } finally {
+            hooks.removeFilter('post_editor_fields', decl);
+        }
+    });
+});
+
 describe('every twin of the REST projection (second audit)', () => {
     /** A published post by the author with this raw `_puck_data` text and this raw `_wjs_access` text. */
     async function seedRaw(title: string, html: string, puckText: string | null, levelText: string) {
