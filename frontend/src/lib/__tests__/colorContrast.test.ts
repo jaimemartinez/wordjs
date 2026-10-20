@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contrastRatio, onColor, readableColor } from "../colorContrast";
+import { contrastRatio, onColor, readableColor, surfaceOf } from "../colorContrast";
 import { contrastPairs } from "../../app/admin/themes/CreateThemeDialog";
 
 describe("colorContrast (the theme generator's live WCAG check)", () => {
@@ -20,8 +20,18 @@ describe("colorContrast (the theme generator's live WCAG check)", () => {
     it("the generator flags an unreadable pair and its fix makes every pair pass", () => {
         const seeds = { primary: "#2563eb", secondary: "#9333ea", bg: "#ffffff", text: "#d1d5db" };
         expect(contrastPairs(seeds).find((p) => p.id === "text")!.ratio).toBeLessThan(4.5);
-        const fixed = { ...seeds, text: readableColor(seeds.text, seeds.bg) };
+        const fixed = { ...seeds, text: readableColor(readableColor(seeds.text, seeds.bg), surfaceOf(seeds.bg)) };
         expect(contrastPairs(fixed).every((p) => p.ratio >= p.min)).toBe(true);
         expect(onColor("#ffffff")).toBe("#111111");
+    });
+});
+
+describe("the surface a generated theme paints (core/theme-derive --wjs-bg-surface)", () => {
+    it("matches the backend derivation, and a text that passes on the page can still fail on it", () => {
+        expect(surfaceOf("#ffffff")).toBe("#f7f7f7");
+        expect(surfaceOf("#0b1020")).toBe("#1a1e2d");
+        // 4.74:1 on white is 4.43:1 on its surface: the pair the theme doctor refused in the browser check.
+        expect(contrastRatio("#737373", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+        expect(contrastPairs({ primary: "#2563eb", secondary: "#9333ea", bg: "#ffffff", text: "#737373" }).find((p) => p.id === "text")!.ratio).toBeLessThan(4.5);
     });
 });
