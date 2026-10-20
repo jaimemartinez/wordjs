@@ -98,6 +98,13 @@ const INSERT_SELECT_RE = /^\s*INSERT\s+INTO\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)\s*(S
 const TEXT_COLUMN_RE = /^(\s*[A-Za-z_][A-Za-z0-9_]*\s+(?:TEXT|VARCHAR\(\d+\)))(?![^,]*\bCOLLATE\b)/i;
 const ALTER_ADD_TEXT_RE = /^(\s*ALTER\s+TABLE\s+[A-Za-z0-9_]+\s+ADD\s+COLUMN\s+[A-Za-z_][A-Za-z0-9_]*\s+(?:TEXT|VARCHAR\(\d+\)))/i;
 
+/**
+ * Plugins whose index.js keeps no state at module level (every lock, map and timer is created inside init()),
+ * so one loaded module serves every boot. conference-manager: only requires and `metadata` at module level
+ * (see fixtures/conference-manager-harness.ts, which loads it once too).
+ */
+const MODULE_STATELESS = new Set(['conference-manager']);
+
 export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Promise<BootedPlugin> {
     const sdb = new Database(':memory:');
     const prefix = 'wjp_' + slug.replace(/-/g, '_') + '_';
@@ -199,9 +206,10 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
         site: { url: async () => 'http://site.test', domain: async () => 'site.test', adminEmail: async () => 'admin@site.test' },
     };
 
-    // Load a FRESH copy of the entry so module-level state (timers, maps) is per boot.
+    // Load a FRESH copy of the entry so module-level state (timers, maps) is per boot — except for a plugin
+    // known to keep none (MODULE_STATELESS): re-requiring a large module costs seconds per boot under V8 coverage.
     const entry = path.join(PLUGINS_DIR, slug, 'index.js');
-    delete require.cache[require.resolve(entry)];
+    if (!MODULE_STATELESS.has(slug)) delete require.cache[require.resolve(entry)];
     const mod = require(entry);
 
     const timers: any[] = [];
