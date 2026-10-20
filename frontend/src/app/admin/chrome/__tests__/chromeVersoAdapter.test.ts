@@ -91,7 +91,7 @@ describe("adaptación de bloques de chrome (anti-drift contra chromeEditorConfig
     const renderSlotClass = (type: string, props: Record<string, unknown>, device: ChromeDevice = "desktop") => {
         const def = buildChromeBlockDefinitions("header").find((d) => d.type === type);
         expect(def).toBeDefined();
-        const slot = vi.fn((_className?: string) => null);
+        const slot = vi.fn<(className?: string) => null>(() => null);
         const Render = def!.render as (props: Record<string, unknown>) => React.ReactNode;
         renderToStaticMarkup(createElement(ChromeDeviceContext.Provider, { value: device }, createElement(Render, { ...props, items: slot })));
         expect(slot).toHaveBeenCalledTimes(1);

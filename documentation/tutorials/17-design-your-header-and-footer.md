@@ -27,7 +27,9 @@ The blue line under the toolbar says the same in a sentence. Nothing you do in t
 site until you click **Save**.
 
 The editor has three panes: **Blocks** and **Outline** on the left, the canvas in the middle, and
-**Properties** on the right. With no block selected, **Properties** shows the part's own settings.
+**Properties** on the right. With no block selected, **Properties** shows the part's own settings. On a
+tablet or phone the panes open from a tab bar at the bottom — **Blocks**, **Outline**, **Properties**
+and **Settings** — and close with **Esc** or by tapping the canvas.
 
 ## 2. Start the header from a template
 
@@ -47,7 +49,8 @@ Change the top bar's text: click it on the canvas, and in **Properties** type
 
 Click the device buttons above the canvas: **Desktop**, **Tablet** and **Phone**. The canvas is drawn
 at 1280, 768 and 375 pixels wide and scaled to fit, so you see the real layout for each: on **Phone**
-the menu becomes a round menu button.
+the menu becomes a round menu button. (On a phone or tablet the preview opens at your own device's
+size.)
 
 The template hides the top bar and the **Contact** button on phones. Select the button and look at
 **Visibility** in **Properties**: **Hide on phones** is **Yes** (set any block's three switches the same
@@ -122,4 +125,5 @@ the public site at the three widths (top bar hidden on phones, menu button and s
 footer in four, two and one columns); a legacy footer (text, copyright, two social links) converted
 with Convert and shown on the site with the same content, and the theme-footer case offering Add
 them; Restore; a `javascript:` link refused with the plain-language message above; a transparent
-header with light text over a page opening with a Hero block, turning solid on scroll.*
+header with light text over a page opening with a Hero block, turning solid on scroll; the editor
+itself at 375, 768, 1024 and 1440 pixels (tab bar and sheets, templates and social profiles dialogs).*

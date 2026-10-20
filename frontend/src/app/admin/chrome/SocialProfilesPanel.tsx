@@ -124,9 +124,9 @@ export default function SocialProfilesPanel({ onClose, onSaved }: { onClose: () 
                             <li key={`${link.platform}-${i}`} className="flex items-center gap-3 rounded-xl border border-gray-100 px-3 py-2">
                                 <i className={`${link.icon || "fa-solid fa-link"} text-gray-500 w-5 text-center`} aria-hidden="true"></i>
                                 <span className="flex-1 min-w-0 text-xs text-gray-700 truncate" title={link.url}>{link.url}</span>
-                                <button type="button" onClick={() => move(i, -1)} disabled={i === 0} className="text-gray-400 hover:text-gray-700 disabled:opacity-30" aria-label={t("chrome.socials.up")}><i className="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
-                                <button type="button" onClick={() => move(i, 1)} disabled={i === links.length - 1} className="text-gray-400 hover:text-gray-700 disabled:opacity-30" aria-label={t("chrome.socials.down")}><i className="fa-solid fa-arrow-down" aria-hidden="true"></i></button>
-                                <button type="button" onClick={() => setLinks(links.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600" aria-label={t("chrome.socials.remove")}><i className="fa-solid fa-trash" aria-hidden="true"></i></button>
+                                <button type="button" onClick={() => move(i, -1)} disabled={i === 0} className="w-11 h-11 -my-2 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-50 disabled:opacity-30" aria-label={t("chrome.socials.up")}><i className="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
+                                <button type="button" onClick={() => move(i, 1)} disabled={i === links.length - 1} className="w-11 h-11 -my-2 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-50 disabled:opacity-30" aria-label={t("chrome.socials.down")}><i className="fa-solid fa-arrow-down" aria-hidden="true"></i></button>
+                                <button type="button" onClick={() => setLinks(links.filter((_, j) => j !== i))} className="w-11 h-11 -my-2 flex items-center justify-center rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50" aria-label={t("chrome.socials.remove")}><i className="fa-solid fa-trash" aria-hidden="true"></i></button>
                             </li>
                         ))}
                     </ul>

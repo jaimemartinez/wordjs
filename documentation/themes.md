@@ -385,6 +385,9 @@ Site owners compose the site-level header, footer and announcement bar in the ad
   (hamburger everywhere), transparent over the hero; four footers (four columns, simple, centered,
   minimal); two announcement bars. Applying one is a single undoable step.
 - **Undo / redo** — buttons and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
+- **Works on any screen**, like the page editor: below 1280px the side panes become sheets opened from
+  a bottom tab bar (Blocks · Outline · Properties · Settings), the preview opens at the device you are
+  holding, and the toolbar wraps instead of scrolling sideways.
 - **Plain-language validation** — both validators' errors are shown as "Button (Row 1 › block 2):
   The link must start with / or https://."
 - **Social profiles** panel — edits the `footer_socials` list every `ChromeSocials` block shows.

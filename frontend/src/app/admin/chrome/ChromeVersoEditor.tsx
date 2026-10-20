@@ -15,6 +15,12 @@
  * menú hamburguesa, una fila se apila) — no es una simulación. Sin bloque seleccionado, el panel
  * derecho edita las props de la RAÍZ (cabecera fija / transparente sobre el hero / ancho).
  *
+ * RESPONSIVE COMO VERSO: por debajo de xl (1280 px) los dos paneles laterales dejan de estar acoplados y
+ * pasan a ser HOJAS que se abren desde una barra de pestañas inferior (Bloques · Estructura ·
+ * Propiedades · Ajustes), igual que el editor de páginas. Las hojas viven DENTRO del área del editor
+ * (absolutas, no fixed), así que no compiten con la cabecera móvil ni la barra lateral del admin.
+ * Escape o tocar el velo las cierra; insertar un bloque desde la hoja la cierra para ver el resultado.
+ *
  * El dato de chrome NO es _puck_data: este componente solo emite `onChange(VersoData)` en cada
  * transacción committeada / undo / redo (el store Verso no tiene el deep-equal guard de Puck, así
  * que el ref del padre nunca queda stale); guardar/restaurar/dirty viven en page.tsx.
@@ -81,6 +87,13 @@ const selectSelection = (s: VersoEditorState) => s.selection.nodeId;
 const selectRoot = (s: VersoEditorState) => s.doc.root;
 const selectDoc = (s: VersoEditorState) => s.doc;
 const VISIBILITY = new Set<string>(VISIBILITY_FIELDS);
+/** The sheet open on a compact screen (below xl). null = only the canvas. */
+type ChromeSheet = "blocks" | "outline" | "props" | null;
+
+/** Same breakpoint as the page editor's sheets (Verso: max-width 1279px). */
+const COMPACT_QUERY = "(max-width: 1279.98px)";
+const isCompact = () => typeof window !== "undefined" && window.matchMedia(COMPACT_QUERY).matches;
+
 const DEVICES: { id: ChromeDevice; icon: string }[] = [
     { id: "desktop", icon: "fa-desktop" },
     { id: "tablet", icon: "fa-tablet-screen-button" },
@@ -196,6 +209,47 @@ function RootProvider({ handle, children }: { handle: EditorHandle; children: Re
     return <ChromeRootContext.Provider value={value}>{children}</ChromeRootContext.Provider>;
 }
 
+/** The compact screen's bottom tab bar (below xl). Subscribes to the selection so Properties vs Settings is right. */
+type SheetTabId = "blocks" | "outline" | "props" | "settings";
+
+function SheetTabs({
+    handle,
+    sheet,
+    tabs,
+    onTab,
+    label,
+}: {
+    handle: EditorHandle;
+    sheet: ChromeSheet;
+    tabs: { id: SheetTabId; icon: string; label: string }[];
+    onTab: (id: SheetTabId) => void;
+    label: string;
+}) {
+    // Properties (a block selected) and Settings (nothing selected) share the right sheet.
+    const selected = useStoreSlice(handle, selectSelection) !== null;
+    const isActive = (id: SheetTabId) =>
+        id === "props" ? sheet === "props" && selected : id === "settings" ? sheet === "props" && !selected : sheet === id;
+    return (
+        <nav className="xl:hidden shrink-0 flex items-stretch border-t border-gray-100 bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)]" aria-label={label} data-wjs-chrome-tabs="">
+            {tabs.map((tab) => ({ ...tab, active: isActive(tab.id) })).map((tab) => (
+                <button
+                    key={tab.id}
+                    type="button"
+                    aria-pressed={tab.active}
+                    onClick={() => onTab(tab.id)}
+                    data-wjs-chrome-tab={tab.id}
+                    className="flex-1 min-w-0 min-h-[52px] flex flex-col items-center justify-center gap-1 px-1"
+                >
+                    <span className={`w-11 h-7 rounded-lg flex items-center justify-center ${tab.active ? "bg-indigo-100 text-indigo-700" : "text-gray-500"}`}>
+                        <i className={`fa-solid ${tab.icon} text-sm`} aria-hidden="true"></i>
+                    </span>
+                    <span className={`text-[10px] leading-none truncate max-w-full ${tab.active ? "text-indigo-700 font-semibold" : "text-gray-500"}`}>{tab.label}</span>
+                </button>
+            ))}
+        </nav>
+    );
+}
+
 /** Undo / redo buttons, enabled from the store's own history after every document change. */
 function HistoryButtons({ handle }: { handle: EditorHandle }) {
     const { t } = useI18n();
@@ -216,6 +270,16 @@ function HistoryButtons({ handle }: { handle: EditorHandle }) {
 export default function ChromeVersoEditor({ part, initialData, onChange, onInit, onApi, rootDefaults }: ChromeVersoEditorProps) {
     const { t } = useI18n();
     const [device, setDevice] = React.useState<ChromeDevice>("desktop");
+    // Open the preview at the device the author is holding: on a phone the desktop canvas would be a
+    // quarter-size thumbnail. Read once on mount (the window is an external system); the device
+    // buttons still switch freely afterwards.
+    React.useEffect(() => {
+        const w = window.innerWidth;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- lectura única del ancho de la ventana (sistema externo) al montar
+        if (w < 768) setDevice("phone");
+        else if (w < 1024) setDevice("tablet");
+    }, []);
+    const [sheet, setSheet] = React.useState<ChromeSheet>(null);
     // Scale-to-fit, the page editor's contract (viewport.ts): the iframe keeps the device's CSS width
     // (so its media queries are the real ones) and the box is shrunk with a transform. The overlay is a
     // sibling inside the same transformed box, so selection geometry stays 1:1 at any scale.
@@ -337,6 +401,14 @@ export default function ChromeVersoEditor({ part, initialData, onChange, onInit,
         return () => frameDoc.removeEventListener("click", onClick, true);
     }, [frameDoc, handle]);
 
+    // Escape cierra la hoja abierta (pantalla compacta), como en el editor de páginas.
+    React.useEffect(() => {
+        if (!sheet) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSheet(null); };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [sheet]);
+
     // Undo/redo por teclado en la ventana Y en el iframe.
     React.useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
@@ -386,6 +458,8 @@ export default function ChromeVersoEditor({ part, initialData, onChange, onInit,
             const index = node ? node.index + 1 : doc.rootChildren.length;
             if (handle.transact((tx) => tx.insertNode(item, parentId, slotKey, index), { label: `Insertar ${type}` })) {
                 handle.select(id);
+                // On a compact screen the palette sheet covers the canvas: close it to show the result.
+                if (isCompact()) setSheet(null);
             }
         },
         [setup, handle],
@@ -393,32 +467,54 @@ export default function ChromeVersoEditor({ part, initialData, onChange, onInit,
 
     const RootWrapper = setup.RootWrapper;
 
+    // Docked side panes from xl; below it they are sheets over the canvas (see the header comment).
+    const sheetBase = "absolute inset-y-0 z-30 w-[min(420px,100%)] bg-white shadow-2xl overflow-y-auto custom-scrollbar xl:static xl:z-auto xl:shadow-none xl:block";
+    const leftOpen = sheet === "blocks" || sheet === "outline";
+    const tabs: { id: SheetTabId; icon: string; label: string }[] = [
+        { id: "blocks", icon: "fa-shapes", label: t("chrome.admin.pane.blocks") },
+        { id: "outline", icon: "fa-layer-group", label: t("chrome.admin.pane.outline") },
+        { id: "props", icon: "fa-sliders", label: t("chrome.admin.pane.fields") },
+        { id: "settings", icon: "fa-gear", label: t("chrome.admin.tab.settings") },
+    ];
+
     return (
-        <div className="flex h-full min-h-0 w-full" data-wjs-chrome-verso={part}>
-            {/* Izquierda: paleta de bloques (drag + tap) y estructura — paridad C08 */}
+        <div className="flex flex-col h-full min-h-0 w-full" data-wjs-chrome-verso={part}>
+        <div className="relative flex flex-1 h-full min-h-0 w-full overflow-hidden">
+            {/* Velo de las hojas (solo pantalla compacta): tocarlo cierra la hoja. */}
+            {sheet && (
+                <button
+                    type="button"
+                    aria-label={t("close")}
+                    onClick={() => setSheet(null)}
+                    className="xl:hidden absolute inset-0 z-20 bg-gray-900/30 backdrop-blur-[1px]"
+                />
+            )}
+
+            {/* Izquierda: paleta de bloques (drag + tap) y estructura — acoplada en xl, hoja debajo */}
             <aside
-                className="w-64 shrink-0 border-r border-gray-100 bg-white overflow-y-auto custom-scrollbar hidden md:block"
+                className={`${sheetBase} left-0 xl:w-64 xl:shrink-0 border-r border-gray-100 ${leftOpen ? "block" : "hidden"}`}
                 data-wjs-palette=""
+                data-wjs-chrome-sheet={leftOpen ? sheet : undefined}
             >
-                <div className="p-3 border-b border-gray-50">
+                <div className={`p-3 border-b border-gray-50 ${sheet === "outline" ? "max-xl:hidden" : ""}`}>
                     <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
                         {t("chrome.admin.pane.blocks")}
                     </h3>
-                    <div className="flex flex-col gap-1">
+                    <div className="grid grid-cols-2 xl:grid-cols-1 gap-1">
                         {setup.registry.list().map((def) => (
                             <button
                                 key={def.type}
                                 type="button"
                                 data-wjs-palette-type={def.type}
                                 onClick={() => insertType(def.type)}
-                                className="w-full text-left px-3 py-2 rounded-lg border border-gray-100 bg-white text-xs font-semibold text-gray-600 hover:border-indigo-200 hover:text-indigo-600 transition-colors cursor-grab"
+                                className="w-full text-left px-3 py-2 max-xl:min-h-11 rounded-lg border border-gray-100 bg-white text-xs font-semibold text-gray-600 hover:border-indigo-200 hover:text-indigo-600 transition-colors cursor-grab"
                             >
                                 {def.label ?? def.type}
                             </button>
                         ))}
                     </div>
                 </div>
-                <div className="p-3">
+                <div className={`p-3 ${sheet === "blocks" ? "max-xl:hidden" : ""}`}>
                     <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
                         {t("chrome.admin.pane.outline")}
                     </h3>
@@ -429,7 +525,7 @@ export default function ChromeVersoEditor({ part, initialData, onChange, onInit,
             {/* Centro: barra (deshacer/rehacer + dispositivo) y canvas en card. `relative` para que la
                 capa overlay hermana del iframe comparta su sistema de coordenadas 1:1. */}
             <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
-                <div className="shrink-0 flex items-center justify-between gap-3 px-4 md:px-6 py-2 border-b border-gray-100 bg-white">
+                <div className="shrink-0 flex items-center justify-between gap-2 px-3 md:px-6 py-2 border-b border-gray-100 bg-white">
                     <HistoryButtons handle={handle} />
                     <div className="flex items-center bg-gray-100 rounded-xl p-1 gap-1" role="group" aria-label={t("chrome.admin.device")}>
                         {DEVICES.map((d) => (
@@ -438,12 +534,13 @@ export default function ChromeVersoEditor({ part, initialData, onChange, onInit,
                                 type="button"
                                 onClick={() => setDevice(d.id)}
                                 aria-pressed={device === d.id}
+                                aria-label={t(`chrome.admin.device.${d.id}`)}
                                 data-wjs-chrome-device={d.id}
                                 title={t(`chrome.admin.device.${d.id}`)}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${device === d.id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}
+                                className={`flex items-center justify-center gap-2 px-3 py-1.5 max-xl:min-h-9 max-xl:min-w-11 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${device === d.id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}
                             >
                                 <i className={`fa-solid ${d.icon}`} aria-hidden="true"></i>
-                                <span className="hidden xl:inline">{t(`chrome.admin.device.${d.id}`)}</span>
+                                <span className="hidden 2xl:inline">{t(`chrome.admin.device.${d.id}`)}</span>
                             </button>
                         ))}
                     </div>
@@ -502,15 +599,34 @@ export default function ChromeVersoEditor({ part, initialData, onChange, onInit,
                 </div>
             </div>
 
-            {/* Derecha: campos del bloque seleccionado (o de la raíz) — paridad C08 (Puck.Fields) */}
-            <aside className="w-72 shrink-0 border-l border-gray-100 bg-white overflow-y-auto custom-scrollbar hidden lg:block">
+            {/* Derecha: campos del bloque seleccionado (o de la raíz) — acoplada en xl, hoja debajo */}
+            <aside
+                className={`${sheetBase} right-0 xl:w-72 xl:shrink-0 border-l border-gray-100 ${sheet === "props" ? "block" : "hidden"}`}
+                data-wjs-chrome-sheet={sheet === "props" ? "props" : undefined}
+            >
                 <div className="p-3">
-                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
-                        {t("chrome.admin.pane.fields")}
-                    </h3>
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                            {t("chrome.admin.pane.fields")}
+                        </h3>
+                        <button type="button" onClick={() => setSheet(null)} className="xl:hidden w-11 h-11 -m-2 rounded-lg text-gray-400 hover:text-gray-700" aria-label={t("close")}>
+                            <i className="fa-solid fa-xmark" aria-hidden="true"></i>
+                        </button>
+                    </div>
                     <SelectedBlockFields handle={handle} registry={setup.registry} part={part} rootDefaults={rootDefaults} />
                 </div>
             </aside>
+        </div>
+
+            {/* Navegación compacta — móvil y tableta, como la del editor de páginas. */}
+            <SheetTabs handle={handle} sheet={sheet} tabs={tabs} onTab={(id) => {
+                if (id === "settings") {
+                    handle.select(null);
+                    setSheet("props");
+                    return;
+                }
+                setSheet((current) => (current === id ? null : id));
+            }} label={t("chrome.admin.tabs")} />
         </div>
     );
 }

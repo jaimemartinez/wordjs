@@ -286,9 +286,11 @@ export default function ChromeEditorPage() {
     return (
         <div className="flex flex-col h-full w-full overflow-hidden bg-white">
             {/* PREMIUM HEADER (h-20) */}
-            <div className="min-h-20 flex flex-wrap items-center justify-between bg-white/80 backdrop-blur-md px-6 md:px-8 py-3 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-x-6 gap-y-3">
-                <div className="flex items-center gap-6 min-w-0 flex-wrap">
-                    <div className="flex items-center gap-3 text-gray-900">
+            {/* Wraps onto two lines on narrow screens; the action buttons keep only their icon below sm
+                (each carries its name as aria-label/title), so the bar never scrolls sideways. */}
+            <div className="min-h-16 md:min-h-20 flex flex-wrap items-center justify-between bg-white/80 backdrop-blur-md px-3 sm:px-6 md:px-8 py-2 md:py-3 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-x-4 gap-y-2">
+                <div className="flex items-center gap-3 md:gap-6 min-w-0 flex-wrap">
+                    <div className="hidden md:flex items-center gap-3 text-gray-900">
                         <div className="w-10 h-10 shrink-0 bg-gradient-to-br from-indigo-600 to-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
                             <i className="fa-solid fa-window-maximize text-lg"></i>
                         </div>
@@ -319,7 +321,7 @@ export default function ChromeEditorPage() {
 
                     {/* Effective source — what visitors see right now, and where it comes from */}
                     <span
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-50 border border-gray-100 text-[10px] font-black uppercase tracking-widest text-gray-500"
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-50 border border-gray-100 text-[10px] font-black uppercase tracking-widest text-gray-500 max-w-full min-w-0"
                         title={t(`chrome.admin.sourceHint.${source}`)}
                         data-wjs-chrome-source={source}
                     >
@@ -329,46 +331,52 @@ export default function ChromeEditorPage() {
                     </span>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     <button
                         type="button"
                         onClick={() => setShowTemplates(true)}
                         disabled={loading || !initialData}
-                        className="px-4 py-3 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2 border bg-white border-gray-200 text-gray-600 hover:border-indigo-200 hover:text-indigo-600 disabled:opacity-50"
+                        className="min-h-11 min-w-11 px-3 sm:px-4 py-2 sm:py-3 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 border bg-white border-gray-200 text-gray-600 hover:border-indigo-200 hover:text-indigo-600 disabled:opacity-50"
                         aria-haspopup="dialog"
+                        aria-label={t("chrome.template.open")}
+                        title={t("chrome.template.open")}
                     >
                         <i className="fa-solid fa-swatchbook" aria-hidden="true"></i>
-                        {t("chrome.template.open")}
+                        <span className="hidden sm:inline">{t("chrome.template.open")}</span>
                     </button>
                     <button
                         type="button"
                         onClick={() => setShowSocials(true)}
-                        className="px-4 py-3 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2 border bg-white border-gray-200 text-gray-600 hover:border-indigo-200 hover:text-indigo-600"
+                        className="min-h-11 min-w-11 px-3 sm:px-4 py-2 sm:py-3 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 border bg-white border-gray-200 text-gray-600 hover:border-indigo-200 hover:text-indigo-600"
                         aria-haspopup="dialog"
+                        aria-label={t("chrome.socials.open")}
+                        title={t("chrome.socials.open")}
                     >
                         <i className="fa-solid fa-share-nodes" aria-hidden="true"></i>
-                        {t("chrome.socials.open")}
+                        <span className="hidden sm:inline">{t("chrome.socials.open")}</span>
                     </button>
                     {source === "site" && (
                         <button
                             type="button"
                             onClick={handleRestore}
                             disabled={restoring || loading}
-                            className={`px-4 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 border ${confirmRestore
+                            aria-label={confirmRestore ? t("chrome.admin.restoreConfirm") : restoreLabel}
+                            className={`min-h-11 min-w-11 px-3 sm:px-4 py-2 sm:py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 border ${confirmRestore
                                 ? "bg-red-50 border-red-200 text-red-600 hover:bg-red-100"
                                 : "bg-white border-gray-200 text-gray-500 hover:border-purple-200 hover:text-purple-600"
                                 } ${restoring || loading ? "opacity-50 cursor-not-allowed" : ""}`}
                             title={t(themeHasPart ? "chrome.admin.restoreHint" : "chrome.admin.restoreBuiltInHint")}
                         >
                             {restoring ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-rotate-left"></i>}
-                            {confirmRestore ? t("chrome.admin.restoreConfirm") : restoreLabel}
+                            {/* The confirmation keeps its words at every width — it is the one place a label matters. */}
+                            <span className={confirmRestore ? "" : "hidden sm:inline"}>{confirmRestore ? t("chrome.admin.restoreConfirm") : restoreLabel}</span>
                         </button>
                     )}
                     <button
                         type="button"
                         onClick={handleSave}
                         disabled={saving || loading}
-                        className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${saving || loading
+                        className={`min-h-11 px-5 sm:px-8 py-2 sm:py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${saving || loading
                             ? "bg-gray-100 text-gray-400 cursor-not-allowed shadow-none"
                             : "bg-gray-900 hover:bg-indigo-600 text-white shadow-gray-200 hover:shadow-indigo-500/30 hover:-translate-y-0.5"
                             }`}
@@ -381,7 +389,7 @@ export default function ChromeEditorPage() {
 
             {/* Validation problems — local check or the backend validator's 400, in plain language */}
             {errors.length > 0 && (
-                <div role="alert" className="shrink-0 bg-red-50 border-b border-red-100 px-6 md:px-8 py-3 flex items-start gap-3">
+                <div role="alert" className="shrink-0 bg-red-50 border-b border-red-100 px-3 sm:px-6 md:px-8 py-3 flex items-start gap-3">
                     <i className="fa-solid fa-triangle-exclamation text-red-500 mt-0.5" aria-hidden="true"></i>
                     <div className="flex-1 min-w-0">
                         <p className="text-xs font-black uppercase tracking-widest text-red-600 mb-1">{t("chrome.admin.contractError")}</p>
@@ -398,7 +406,7 @@ export default function ChromeEditorPage() {
             {/* Pending part switch — the edits are still in memory, nothing is discarded until the
                 explicit confirmation. Gated on `dirty` so saving while it is open dismisses it. */}
             {pendingPart && dirty && (
-                <div role="alert" className="shrink-0 bg-amber-50 border-b border-amber-100 px-6 md:px-8 py-3 flex items-center flex-wrap gap-3">
+                <div role="alert" className="shrink-0 bg-amber-50 border-b border-amber-100 px-3 sm:px-6 md:px-8 py-3 flex items-center flex-wrap gap-3">
                     <i className="fa-solid fa-triangle-exclamation text-amber-500" aria-hidden="true"></i>
                     <p className="flex-1 min-w-0 text-xs text-amber-700 font-medium">{t("chrome.admin.discardPrompt")}</p>
                     <div className="flex items-center gap-2 shrink-0">
@@ -423,7 +431,7 @@ export default function ChromeEditorPage() {
             {/* Legacy footer: converted from the retired /admin/footer settings (source "legacy"), or —
                 when a theme footer is in effect — the old text is offered as blocks to insert. */}
             {!loading && part === "footer" && source === "legacy" && hasLegacyText && (
-                <div className="shrink-0 bg-amber-50/80 border-b border-amber-100 px-6 md:px-8 py-2.5 flex items-center flex-wrap gap-3" data-wjs-chrome-legacy="convert">
+                <div className="shrink-0 bg-amber-50/80 border-b border-amber-100 px-3 sm:px-6 md:px-8 py-2.5 flex items-center flex-wrap gap-3" data-wjs-chrome-legacy="convert">
                     <i className="fa-solid fa-clock-rotate-left text-amber-500" aria-hidden="true"></i>
                     <p className="flex-1 min-w-0 text-xs text-amber-800">{t("chrome.migrate.legacyNotice")}</p>
                     <button type="button" onClick={handleMigrate} disabled={migrating} className="px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50">
@@ -432,7 +440,7 @@ export default function ChromeEditorPage() {
                 </div>
             )}
             {!loading && part === "footer" && source === "theme" && hasLegacyText && !legacyInserted && (
-                <div className="shrink-0 bg-amber-50/80 border-b border-amber-100 px-6 md:px-8 py-2.5 flex items-center flex-wrap gap-3" data-wjs-chrome-legacy="insert">
+                <div className="shrink-0 bg-amber-50/80 border-b border-amber-100 px-3 sm:px-6 md:px-8 py-2.5 flex items-center flex-wrap gap-3" data-wjs-chrome-legacy="insert">
                     <i className="fa-solid fa-circle-info text-amber-500" aria-hidden="true"></i>
                     <p className="flex-1 min-w-0 text-xs text-amber-800">{t("chrome.migrate.themeNotice")}</p>
                     <button type="button" onClick={insertLegacyText} className="px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest bg-white border border-amber-200 text-amber-700 hover:bg-amber-100">
@@ -441,15 +449,8 @@ export default function ChromeEditorPage() {
                 </div>
             )}
 
-            {/* Narrow viewport: the fields pane is hidden under lg and the block drawer under md, so
-                say so instead of silently dropping panes. Non-blocking — the canvas still works. */}
-            <div className="lg:hidden shrink-0 bg-amber-50/70 border-b border-amber-100 px-6 md:px-8 py-2 flex items-center gap-2">
-                <i className="fa-solid fa-display text-amber-400 text-xs" aria-hidden="true"></i>
-                <p className="text-[11px] text-amber-600 font-medium">{t("chrome.admin.narrowScreen")}</p>
-            </div>
-
             {/* Source explanation + purge note */}
-            <div className="shrink-0 bg-indigo-50/60 border-b border-indigo-100/60 px-6 md:px-8 py-2 flex items-center gap-2">
+            <div className="shrink-0 bg-indigo-50/60 border-b border-indigo-100/60 px-3 sm:px-6 md:px-8 py-2 flex items-center gap-2">
                 <i className="fa-solid fa-circle-info text-indigo-400 text-xs" aria-hidden="true"></i>
                 <p className="text-[11px] text-indigo-600 font-medium">
                     {t(`chrome.admin.sourceHint.${source}`)} {t("chrome.admin.purgeNote")}
