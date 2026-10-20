@@ -798,7 +798,9 @@ if (cluster.isPrimary) {
                     const readmitted = host ? removedNodes.clearHost(host) : 0;
                     const enrollPort = config.gatewayEnrollPort || ((config.gatewayInternalPort || 3100) + 1);
                     const gatewayHost = config.gatewayAdvertiseHost || '127.0.0.1';
-                    logger.info(`[Gateway] [Cluster] join token minted from the admin panel: role=${role} host=${logSafe(host || '-')} ttl=${ttl}min`);
+                    // Only values the gateway chose are logged (the request's own fields are in the backend's audit log).
+                    const roleLabel = role === 'backend' ? 'backend' : 'frontend';
+                    logger.info(`[Gateway] [Cluster] join token minted from the admin panel: role=${roleLabel} ${host ? 'host-pinned' : 'unpinned'}`);
                     res.json({
                         token, role, host, readmitted,
                         expiresAt: new Date(Date.now() + ttl * 60000).toISOString(),
@@ -812,16 +814,18 @@ if (cluster.isPrimary) {
                 });
                 internalApp.post('/cluster/nodes/remove', requireIdentity(['backend']), (req, res) => {
                     const url = String((req.body && req.body.url) || '');
-                    const known = clusterAdmin.describeNodes(registry, targetOwner).some((n) => n.url === url);
+                    // The node as the registry knows it: what is removed and logged is the registry's own value.
+                    const known = clusterAdmin.describeNodes(registry, targetOwner).find((n) => n.url === url);
                     if (!known) return res.status(404).json({ error: 'No registered node has that address.', code: 'cluster_node_not_found' });
+                    const nodeUrl = known.url;
                     // A request through this very node removing it is still fine: the registry changes for the
                     // NEXT requests; the backend answering now finishes its answer.
-                    const routes = clusterAdmin.removeNode(registry, targetOwner, url);
-                    removedNodes.add(url);
+                    const routes = clusterAdmin.removeNode(registry, targetOwner, nodeUrl);
+                    removedNodes.add(nodeUrl);
                     saveRegistry();
                     broadcastRegistry();
-                    logger.info(`[Gateway] [Cluster] node ${logSafe(url)} removed from the admin panel (${routes} route(s))`);
-                    res.json({ removed: url, routes });
+                    logger.info(`[Gateway] [Cluster] a ${known.role === 'frontend' ? 'frontend' : 'backend'} node was removed from the admin panel (${Number(routes)} route(s))`);
+                    res.json({ removed: nodeUrl, routes });
                 });
 
                 // New Cert Upload Endpoint

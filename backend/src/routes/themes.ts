@@ -117,6 +117,8 @@ const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null &
 // Same on-disk cap theme-compile enforces; checked here BEFORE anything is written.
 const MAX_THEME_JSON = 256 * 1024;
 const DECLARATIVE_KEYS = ['seeds', 'archetype', 'tokens', 'styles'];
+// The theme generator's build directory inside its temp root (POST /themes).
+const BUILD_DIR_NAME = 'theme-build';
 // Written ONCE at creation. The API never writes functions.js again (PUT rebuilds only
 // theme.json + the marked style.css block) — theme logic stays hand-owned.
 const FUNCTIONS_STUB = `/**
@@ -462,10 +464,11 @@ router.post('/', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (r
     // Build in a system temp dir; installThemeFromDir is the ONLY materialization path into
     // THEMES_DIR (budgets, symlink refusal, THEME_EXISTS, rollback). A rejected payload must
     // leave no trace on disk.
-    // The build directory is named after the slug inside a private temp root, so the theme doctor can
-    // judge the built theme exactly as it will judge the installed one (analyzeTheme resolves by slug).
+    // The build directory has a FIXED name inside a private temp root (never one derived from the request),
+    // so the theme doctor can judge the built theme the way it judges an installed one: by a slug that
+    // resolves under a themes directory (analyzeTheme(BUILD_DIR_NAME, { themesDir: tmpRoot })).
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-theme-build-'));
-    const tmpDir = path.join(tmpRoot, slug);
+    const tmpDir = path.join(tmpRoot, BUILD_DIR_NAME);
     fs.mkdirSync(tmpDir);
     try {
         fs.writeFileSync(path.join(tmpDir, 'theme.json'), serialized);
@@ -479,7 +482,7 @@ router.post('/', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (r
         // background pair the doctor judges meets WCAG AA (4.5:1 body text, 3:1 large text). The same
         // LOW_CONTRAST findings Check theme shows, judged before anything reaches THEMES_DIR.
         if (body.enforceContrast === true) {
-            const report = analyzeTheme(slug, { themesDir: tmpRoot });
+            const report = analyzeTheme(BUILD_DIR_NAME, { themesDir: tmpRoot });
             const low = (report.warnings || []).filter((w: any) => w.code === 'LOW_CONTRAST');
             if (low.length) {
                 return res.status(400).json({ code: 'theme_low_contrast', error: 'Some colours are too close to read (WCAG AA).', details: { findings: low } });

@@ -64,10 +64,9 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     { href: "/admin/pages", label: "nav.pages", icon: "fa-file-lines", cap: "edit_pages" },
     { href: "/admin/media", label: "nav.media", icon: "fa-images", cap: "upload_files" },
     { href: "/admin/menus", label: "nav.menus", icon: "fa-bars", cap: "edit_theme_options" },
-    { href: "/admin/footer", label: "nav.footer", icon: "fa-shoe-prints", cap: "edit_theme_options" },
-    // Composable chrome editor (beta) — literal label like "Formularios" below (no pre-navigation
-    // i18n). The legacy /admin/footer page stays alongside it during the beta.
-    { href: "/admin/chrome", label: "Cabecera y Pie (beta)", icon: "fa-window-maximize", cap: "edit_theme_options" },
+    // Header & footer editor. It replaced the legacy /admin/footer page (which now redirects here,
+    // to the footer part): its settings were converted into the footer composition.
+    { href: "/admin/chrome", label: "nav.chrome", icon: "fa-window-maximize", cap: "edit_theme_options" },
     { href: "/admin/widgets", label: "nav.widgets", icon: "fa-shapes", cap: "edit_theme_options" },
     { href: "/admin/comments", label: "nav.comments", icon: "fa-comments", cap: "moderate_comments" },
     // Form submissions viewer — literal label (its page registers forms.* i18n keys at runtime, which
@@ -125,7 +124,7 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
 ];
 
 /** Entries [0, CORE_SECTION_SIZE) of CORE_MENU_ITEMS form the sidebar's core section (up to the chrome editor). */
-export const CORE_SECTION_SIZE = 7;
+export const CORE_SECTION_SIZE = 6;
 
 export interface AdminRouteRule {
     /** The route; it also covers every sub-path (`/admin/posts` covers `/admin/posts/12`). */
@@ -159,6 +158,9 @@ export const ADMIN_ROUTE_RULES: AdminRouteRule[] = (() => {
         { path: "/admin/canvas-frame", anyOf: ["access_admin_panel"] },
         // The editor's test bench (dev, or ?lab=1): synthetic documents only.
         { path: "/admin/verso-lab", anyOf: ["edit_posts", "edit_pages"] },
+        // The retired footer settings page — now only a redirect to the footer in the header & footer
+        // editor, gated like the editor so the redirect never reveals more than its target would.
+        { path: "/admin/footer", anyOf: ["edit_theme_options"] },
         // The theme customizer, reached from the Themes screen.
         { path: "/admin/themes/customize", anyOf: ["edit_theme_options"] },
         // Site notices — the screen itself is administrators-only; the guard keeps it to option managers.

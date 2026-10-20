@@ -1,9 +1,9 @@
 # Tutorial 14 — Read your content with GraphQL
 
-WordJS has a read-only GraphQL endpoint at `/api/v1/graphql`, next to the REST API. With it, a static
+WordJS has a GraphQL endpoint at `/api/v1/graphql`, next to the REST API. With it, a static
 site generator, a mobile app or another site can ask for exactly the fields it needs in one request.
 In this tutorial you send a few queries with `curl`, then write a small script that builds a static
-page from your posts.
+page from your posts. Writes (mutations) and live updates (subscriptions) are in [graphql.md](../graphql.md).
 
 **Time:** about 15 minutes.
 **You need:** a WordJS site with some posts, such as the ones from
@@ -111,8 +111,9 @@ REST API would:
   else.
 - Authors expose only their display name and slug, never the login or email.
 
-The endpoint is **read-only**: there are no mutations (`mutation { … }` is refused), and writes go
-through the REST API.
+Writes are **mutations**, accepted over `POST` only and authorized exactly like the REST write each one
+names, so an anonymous `mutation { … }` is refused just as the REST write would be. They are covered in
+[graphql.md](../graphql.md#mutations-every-mutation-is-a-rest-write).
 
 ## Good to know
 
