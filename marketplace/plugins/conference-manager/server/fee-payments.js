@@ -1628,7 +1628,7 @@ function createFeePayments(base) {
             for (const t of todo) {
                 let gen = t.gen;
                 let done = false;
-                for (let attempt = 0; attempt < 4 && !done; attempt++) {
+                for (let attempt = 0; attempt < 4; attempt++) {
                     const del = await db.run(`DELETE FROM ${T.transfers} WHERE id = ? AND alloc_gen = ?`, [t.id, gen]);
                     if (del && del.changes) { done = true; break; }
                     const now = await plannedNow(iid, t.id);

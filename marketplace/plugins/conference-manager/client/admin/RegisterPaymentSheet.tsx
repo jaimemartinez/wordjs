@@ -26,7 +26,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { PAYMENT_METHODS, feePaymentsApi } from "../lib/conference";
 import { LAYER, revealFocused } from "../lib/overlay";
-import { MAX_PARTS, centsToInput, fromCents, parseMoneyInput, splitEqual, tidyMoneyInput, toCents } from "../lib/feeSplit";
+import { MAX_PARTS, centsToInput, parseMoneyInput, splitEqual, tidyMoneyInput, toCents } from "../lib/feeSplit";
 import { buildFeeBody, checkDraft, chosenPersonLine, draftIsDirty, expectedOf, feeErrorText, localDay, manualOnSwitch, maxPaidOn, newClientKey, partAfterKind, proofRequired, RELOAD_CODES, sumMismatchText } from "../lib/feePayments";
 import type { FeeDraft } from "../lib/feePayments";
 import { personBalance } from "../lib/feePayments";

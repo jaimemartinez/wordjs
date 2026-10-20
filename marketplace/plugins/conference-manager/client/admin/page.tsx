@@ -32,7 +32,7 @@ import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStr
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
 import LodgingExplorer from "./LodgingExplorer";
-import { fieldVal, fillVars, genderKey, hotelStats, lodgingStatusMeta, personDisplayName, withName, indexOccupants, moveAdjustments, occupantLocationIds, reviewedLocationOf, reviewedLocationsAmong, runSummaryOf, sharedBedFree, lockMismatch, lockText, pinnedHere } from "../lib/lodgingView";
+import { fillVars, genderKey, hotelStats, lodgingStatusMeta, personDisplayName, indexOccupants, moveAdjustments, occupantLocationIds, reviewedLocationOf, reviewedLocationsAmong, runSummaryOf, sharedBedFree, lockMismatch, lockText, pinnedHere } from "../lib/lodgingView";
 // Staff & permissions (2.15.0): who sees which view and which controls (perms.tsx); «Equipo y permisos».
 import { PermsProvider, usePerms, hasAnySection, ReadOnlyNotice, canReadRoster, canReadHotels } from "./perms";
 import type { Perms } from "./perms";
