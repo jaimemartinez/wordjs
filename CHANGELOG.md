@@ -51,6 +51,10 @@ the boot error links there too.
   Encrypt issuance uses a built-in RFC 8555 client (`backend/src/core/acme-client.ts`). Nothing to do on
   upgrade: cluster CAs, keys, identities and ACME account keys made by earlier releases keep working
   and keep signing (covered by tests on PEMs produced by v2.7.0). node-forge is no longer installed.
+- **The two-step DNS-01 flow finishes from the server's own record.** Step 1 stores the order it opened
+  (`backend/data/ssl/pending-dns-01.json`, owner-only), and step 2 acts on that copy. The URLs the
+  browser sends back are no longer used, and the ACME client only ever requests URLs on its CA's origin.
+  A request started before the upgrade has to be started again.
 - **graphql 17.** The GraphQL endpoint runs on graphql-js 17; its depth and cost limits are unchanged, and
   graphql 17's experimental fragment arguments stay disabled (the cost walk measures each fragment once).
 - Dependency updates: next 16.4.2, react 19.3.1, @anthropic-ai/sdk 0.135, @modelcontextprotocol/sdk 1.32,

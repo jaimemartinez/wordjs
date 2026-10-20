@@ -257,6 +257,8 @@ describe('core/acme-client against a strict RFC 8555 CA, through cert-manager', 
         saved.accountKeyPath = certManager.accountKeyPath;
         saved.push = certManager.pushCertToGateway;
         saved.update = certManager.updateSSLConfig;
+        saved.pending = certManager.pendingDnsPath;
+        certManager.pendingDnsPath = path.join(tmp, 'pending-dns-01.json');
         // initClient addresses acme.directory.letsencrypt.production for a production order: point it at
         // the strict CA. Nothing else about the flow is changed.
         acme.directory.letsencrypt.production = ca.directoryUrl;
@@ -268,6 +270,7 @@ describe('core/acme-client against a strict RFC 8555 CA, through cert-manager', 
         certManager.accountKeyPath = saved.accountKeyPath;
         certManager.pushCertToGateway = saved.push;
         certManager.updateSSLConfig = saved.update;
+        certManager.pendingDnsPath = saved.pending;
         await ca.stop();
         fs.rmSync(tmp, { recursive: true, force: true });
         for (const n of [...names, 'dns-e2e.example.test']) fs.rmSync(path.join(LIVE, n), { recursive: true, force: true });
@@ -366,19 +369,56 @@ describe('core/acme-client against a strict RFC 8555 CA, through cert-manager', 
         assert.strictEqual(pushed.length, 0);
     });
 
-    it('a two-step flow cannot name a directory this site never uses', async () => {
-        const step1 = await certManager.startDNSChallenge('dns-e2e.example.test', 'ops@example.test', false);
+    it('step 2 acts on what THIS server minted: the URLs in the request body are ignored', async () => {
+        // A browser (or anyone holding an admin session) posts back step-1 data whose every URL points
+        // at another server. Nothing is requested there, and the real order still completes.
+        const seen: string[] = [];
+        const elsewhere = http.createServer((req: any, res: any) => { seen.push(req.url); res.writeHead(500); res.end(); });
+        await new Promise<void>((r) => elsewhere.listen(0, '127.0.0.1', () => r()));
+        try {
+            certManager.accountKeyPath = path.join(tmp, 'fresh-account.key');
+            const step1 = await certManager.startDNSChallenge('dns-e2e.example.test', 'ops@example.test', false);
+            ca.state.published.set('dns-e2e.example.test', step1.txtValue);
+            const other = `http://127.0.0.1:${elsewhere.address().port}`;
+            const forged = {
+                ...step1,
+                directoryUrl: `${other}/dir`, orderUrl: `${other}/order`, authzUrl: `${other}/authz`,
+                challenge: { ...step1.challenge, url: `${other}/chal` },
+            };
+            const done = await certManager.finishDNSChallenge(forged, 'ops@example.test', false);
+            assert.strictEqual(done.success, true);
+            assert.deepStrictEqual(seen, [], 'the server requested a URL taken from the request body');
+            assert.strictEqual(certManager.readPendingDns()['dns-e2e.example.test'], undefined, 'a finished request is forgotten');
+        } finally {
+            await new Promise<void>((r) => elsewhere.close(() => r()));
+        }
+    });
+
+    it('step 2 without a request this server started is refused before any CA work', async () => {
+        const all = certManager.readPendingDns();
+        delete all['dns-e2e.example.test'];
+        fs.writeFileSync(certManager.pendingDnsPath, JSON.stringify(all));
         const requestsBefore = ca.state.requests.length;
-        await assert.rejects(certManager.finishDNSChallenge({ ...step1, directoryUrl: 'https://169.254.169.254/latest/meta-data/' }, 'ops@example.test', false),
+        await assert.rejects(certManager.finishDNSChallenge({ domain: 'dns-e2e.example.test', challenge: { url: 'x' } }, 'ops@example.test', false),
+            /No certificate request is pending for this domain/);
+        assert.strictEqual(ca.state.requests.length, requestsBefore);
+    });
+
+    it('a stored request naming a directory this site never uses is refused', async () => {
+        const step1 = await certManager.startDNSChallenge('dns-e2e.example.test', 'ops@example.test', false);
+        certManager.rememberDnsChallenge({ ...step1, directoryUrl: 'https://169.254.169.254/latest/meta-data/' });
+        const requestsBefore = ca.state.requests.length;
+        await assert.rejects(certManager.finishDNSChallenge(step1, 'ops@example.test', false),
             /names a certificate authority this site does not use/);
         assert.strictEqual(ca.state.requests.length, requestsBefore);
     });
 
-    it('a challenge the CA does not know maps to the "start again" explanation', async () => {
+    it('a challenge the CA no longer knows maps to the "start again" explanation', async () => {
         certManager.accountKeyPath = path.join(tmp, 'fresh-account.key');
         const step1 = await certManager.startDNSChallenge('dns-e2e.example.test', 'ops@example.test', false);
-        const forged = { ...step1, challenge: { ...step1.challenge, url: step1.challenge.url.replace(/\/chal\/\d+$/, '/chal/999999') } };
-        await assert.rejects(certManager.finishDNSChallenge(forged, 'ops@example.test', false), /this challenge is no longer valid at the certificate authority/);
+        // The order expired at the CA: its challenge URL is gone there.
+        certManager.rememberDnsChallenge({ ...step1, challenge: { ...step1.challenge, url: step1.challenge.url.replace(/\/chal\/\d+$/, '/chal/999999') } });
+        await assert.rejects(certManager.finishDNSChallenge(step1, 'ops@example.test', false), /this challenge is no longer valid at the certificate authority/);
     });
 });
 

@@ -188,8 +188,16 @@ class CertManager {
     accountKeyPath: string;
     directoryUrl: any;
 
+    /**
+     * Where a two-step DNS-01 request waits between its steps. The ORDER, authorization and challenge
+     * URLs live here, on the server, and step 2 reads them from here; the copy the browser carries back
+     * is display data only. Otherwise the request body would choose which URLs this server POSTs to.
+     */
+    pendingDnsPath: string;
+
     constructor() {
         this.client = null;
+        this.pendingDnsPath = path.join(DATA_DIR, 'pending-dns-01.json');
         this.accountKeyPath = path.join(DATA_DIR, 'account.key');
         // Let's Encrypt URLs
         this.directoryUrl = acme.directory.letsencrypt.production;
@@ -397,6 +405,45 @@ class CertManager {
         }
     }
 
+    /** Every pending two-step DNS-01 request, by domain. Unreadable or absent → none. */
+    readPendingDns(): Record<string, any> {
+        try {
+            const all = JSON.parse(fs.readFileSync(this.pendingDnsPath, 'utf8'));
+            return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+        } catch { return {}; }
+    }
+
+    private writePendingDns(all: Record<string, any>) {
+        writePrivateKey(this.pendingDnsPath, JSON.stringify(all, null, 2));
+    }
+
+    /**
+     * Remember what step 1 minted for `domain` (the CA's own URLs, the directory it was minted at).
+     * A newer request for the same domain replaces the older one; entries older than a CA order's
+     * lifetime (7 days at Let's Encrypt) are dropped.
+     */
+    rememberDnsChallenge(step1: any) {
+        const all = this.readPendingDns();
+        const cutoff = Date.now() - 7 * 864e5;
+        for (const k of Object.keys(all)) if (!(all[k] && all[k].createdAt > cutoff)) delete all[k];
+        all[String(step1.domain).toLowerCase()] = {
+            orderUrl: step1.orderUrl,
+            authzUrl: step1.authzUrl,
+            challenge: step1.challenge,
+            directoryUrl: step1.directoryUrl,
+            alreadyValid: !!step1.alreadyValid,
+            createdAt: Date.now(),
+        };
+        this.writePendingDns(all);
+    }
+
+    private forgetDnsChallenge(domain: string) {
+        const all = this.readPendingDns();
+        if (!(domain.toLowerCase() in all)) return;
+        delete all[domain.toLowerCase()];
+        this.writePendingDns(all);
+    }
+
     async startDNSChallenge(domain: string, email: string, useStaging = false) {
         try {
             // Gate the NAME here, at step 1, even though step 2 is what writes to disk: the domain
@@ -414,7 +461,7 @@ class CertManager {
             // Nothing left to prove — the CA still holds a valid authorization for this domain. There
             // is no TXT record to publish; the caller can finish immediately.
             if (orderData.alreadyValid) {
-                return {
+                const result = {
                     domain,
                     alreadyValid: true,
                     txtRecord: `_acme-challenge.${domain}`,
@@ -425,6 +472,8 @@ class CertManager {
                     keyAuthorization: null,
                     directoryUrl: this.directoryUrl
                 };
+                this.rememberDnsChallenge(result);
+                return result;
             }
 
             // getChallengeKeyAuthorization() ALREADY returned the RFC 8555 §8.4 TXT value for dns-01
@@ -433,8 +482,8 @@ class CertManager {
             // match and DNS-01 issuance was permanently broken.
             const txtValue = orderData.keyAuthorization;
 
-            // Return data for UI
-            return {
+            // Return data for UI (and remember it: step 2 acts on the server's copy, see pendingDnsPath)
+            const result = {
                 domain,
                 txtRecord: `_acme-challenge.${domain}`,
                 txtValue,
@@ -449,6 +498,8 @@ class CertManager {
                 // mutating the shared singleton, and not through a restart in the middle of the flow.
                 directoryUrl: this.directoryUrl
             };
+            this.rememberDnsChallenge(result);
+            return result;
         } catch (e) {
             log.error({ err: e }, '[CertManager] DNS Start Error');
             throw new Error(`DNS challenge start failed: ${e.message}`, { cause: e });
@@ -469,12 +520,18 @@ class CertManager {
             if (domainDir === null) {
                 throw new Error(`Invalid domain ${JSON.stringify(String(step1Data && step1Data.domain))} — expected a DNS name such as "example.com" or "*.example.com".`);
             }
-            // Re-init against THE CA THAT MINTED THIS CHALLENGE (step1Data.directoryUrl), not against
-            // the caller's `staging` flag. The order/authz/challenge URLs in step1Data exist at exactly
-            // one endpoint; talking to the other one gets "No such challenge" from boulder after the
-            // operator has already published the TXT record — the failure this pairing removes.
-            // `useStaging` remains the fallback for a step1Data minted before this field existed.
-            await this.initClient(email, useStaging, step1Data && step1Data.directoryUrl);
+            // The URLs to act on are the ones step 1 minted and this server stored — never the ones in
+            // the request body. Only the domain (validated above) comes from the browser.
+            const domain: string = String(step1Data.domain).toLowerCase();
+            const flow = this.readPendingDns()[domain];
+            if (!flow) {
+                throw new Error('No certificate request is pending for this domain on this server. Start the certificate request again.');
+            }
+            // Re-init against THE CA THAT MINTED THIS CHALLENGE (flow.directoryUrl), not against the
+            // caller's `staging` flag. The order/authz/challenge URLs exist at exactly one endpoint;
+            // talking to the other one gets "No such challenge" from boulder after the operator has
+            // already published the TXT record — the failure this pairing removes.
+            await this.initClient(email, useStaging, flow.directoryUrl || null);
 
             // Best-effort LOCAL pre-flight only — the CA performs the authoritative validation from
             // the outside after completeChallenge. Failing hard here strands setups whose local
@@ -482,10 +539,10 @@ class CertManager {
             // lookups), so a pre-verify miss logs and continues instead of aborting the order.
             // Skipped entirely when the authorization is already valid — there is no challenge to check.
             try {
-                if (!step1Data.challenge) throw new Error('authorization already valid — nothing to pre-verify');
+                if (!flow.challenge) throw new Error('authorization already valid — nothing to pre-verify');
                 await this.client.verifyChallenge(
-                    { url: step1Data.authzUrl, identifier: { type: 'dns', value: step1Data.domain } },
-                    step1Data.challenge
+                    { url: flow.authzUrl, identifier: { type: 'dns', value: domain } },
+                    flow.challenge
                 );
             } catch (preErr: any) {
                 log.warn({ err: preErr }, '[CertManager] Local dns-01 pre-verify inconclusive (continuing — the CA decides)');
@@ -493,24 +550,24 @@ class CertManager {
 
             // Complete and wait — unless the CA already holds a valid authorization, in which case
             // there is no challenge object and nothing to complete; go straight to finalization.
-            if (step1Data.challenge) {
-                await this.client.completeChallenge(step1Data.challenge);
-                await this.client.waitForValidStatus(step1Data.challenge);
+            if (flow.challenge) {
+                await this.client.completeChallenge(flow.challenge);
+                await this.client.waitForValidStatus(flow.challenge);
             }
 
             // Create CSR and finalize
             const [key, csr] = await acme.crypto.createCsr({
-                commonName: step1Data.domain,
+                commonName: domain,
             });
 
             // Finalize the order
-            const finalized = await this.finalizeOrderByUrl(step1Data.orderUrl, csr);
+            const finalized = await this.finalizeOrderByUrl(flow.orderUrl, csr);
 
             // Get certificate — checked against our key and the domain before anything is written
-            const cert = verifiedChain(key, await this.client.getCertificate(finalized), [step1Data.domain]);
+            const cert = verifiedChain(key, await this.client.getCertificate(finalized), [domain]);
 
             // Save to files — `domainDir` is the value resolved and proved contained at the top of
-            // this method, never a fresh join of step1Data.domain.
+            // this method, never a fresh join of domain.
             if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
 
             const keyPath = certFile(domainDir, 'privkey.pem');
@@ -521,6 +578,7 @@ class CertManager {
             // Update config to use new cert. AWAIT it: un-awaited, a failed gateway push still
             // reported success to the admin and the rejection went unhandled.
             await this.updateSSLConfig(keyPath, chainPath);
+            this.forgetDnsChallenge(domain);
 
             return {
                 success: true,

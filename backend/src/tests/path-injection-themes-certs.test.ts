@@ -131,8 +131,10 @@ describe('cert-manager stores certificates only under ssl/live', () => {
         getChallengeKeyAuthorization: async () => 'txt-value',
     });
 
-    let origInit: any, origClient: any, origUpdate: any, origPush: any;
+    let origInit: any, origClient: any, origUpdate: any, origPush: any, origPending: any;
     before(() => {
+        origPending = certManager.pendingDnsPath;
+        certManager.pendingDnsPath = path.join(require('os').tmpdir(), `wjs-pending-dns-pi-${process.pid}.json`);
         origInit = certManager.initClient;
         origClient = certManager.client;
         origUpdate = certManager.updateSSLConfig;
@@ -143,6 +145,8 @@ describe('cert-manager stores certificates only under ssl/live', () => {
         certManager.client = stubClient();
     });
     after(() => {
+        fs.rmSync(certManager.pendingDnsPath, { force: true });
+        certManager.pendingDnsPath = origPending;
         certManager.initClient = origInit;
         certManager.client = origClient;
         certManager.updateSSLConfig = origUpdate;
@@ -214,12 +218,14 @@ describe('cert-manager stores certificates only under ssl/live', () => {
 
     it('a real domain still issues, and the files land inside ssl/live (the legitimate case)', async () => {
         const domain = 'unit-test-contained.invalid';
-        const res = await certManager.finishDNSChallenge({
+        const step1 = {
             domain,
             authzUrl: 'https://ca.example/authz/1',
             orderUrl: 'https://ca.example/order/1',
             challenge: { type: 'dns-01', url: 'https://ca.example/chal/1', token: 't' },
-        }, 'a@b.c');
+        };
+        certManager.rememberDnsChallenge(step1); // what step 1 stores on the server
+        const res = await certManager.finishDNSChallenge(step1, 'a@b.c');
         assert.strictEqual(res.success, true);
         const dir = path.join(LIVE_DIR, domain);
         assert.strictEqual(res.path, dir, 'the reported path is the resolved one');

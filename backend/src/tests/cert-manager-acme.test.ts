@@ -23,6 +23,15 @@ const fs = require('fs');
 const certManager = require('../core/cert-manager');
 const x509 = require('../core/x509');
 
+// Step 2 of the DNS flow acts on the record step 1 stored on the server (cert-manager pendingDnsPath),
+// never on the URLs in the request body — so a test that starts at step 2 stores that record first.
+certManager.pendingDnsPath = path.join(require('os').tmpdir(), `wjs-pending-dns-acme-${process.pid}.json`);
+test.after(() => fs.rmSync(certManager.pendingDnsPath, { force: true }));
+function seededFinish(step1: any, email: string, staging = false) {
+    certManager.rememberDnsChallenge(step1);
+    return certManager.finishDNSChallenge(step1, email, staging);
+}
+
 // What a CA hands back for a CSR: a certificate for the CSR's own key naming `names`. cert-manager checks
 // the chain against the key it generated before writing anything, so a placeholder PEM is refused.
 const stubCa = x509.generateRsaKeyPair(2048);
@@ -113,7 +122,7 @@ test('finishDNSChallenge treats local pre-verify as advisory and AWAITS the gate
             finalizeOrder: async (_o: any, csr: any) => { calls.push('finalizeOrder'); lastCsr = csr; return { url: 'https://ca.example/order/1' }; },
             getCertificate: async () => { calls.push('getCertificate'); return issueFor(lastCsr, [domain]); },
         };
-        const res = await certManager.finishDNSChallenge({
+        const res = await seededFinish({
             domain,
             authzUrl: 'https://ca.example/authz/1',
             orderUrl: 'https://ca.example/order/1',
@@ -216,7 +225,7 @@ test('finishDNSChallenge re-inits against the minting CA, not the callers stagin
         };
         // The caller says "production" (staging=false) — exactly what the UI always sends — while the
         // challenge was minted at staging. The minting CA must win.
-        await certManager.finishDNSChallenge(step1Data, 'a@b.c', false).catch(() => { /* expected: stops later */ });
+        await seededFinish(step1Data, 'a@b.c', false).catch(() => { /* expected: stops later */ });
 
         assert.ok(seen, 'initClient must have been called');
         assert.strictEqual(seen.override, 'https://staging.ca.example/dir',
@@ -303,7 +312,7 @@ test('finishDNSChallenge finalizes directly when the authorization is already va
             finalizeOrder: async (o: any, csr: any) => { calls.push('finalizeOrder'); lastCsr = csr; return { url: o.url }; },
             getCertificate: async () => { calls.push('getCertificate'); return issueFor(lastCsr, [domain]); },
         };
-        const res = await certManager.finishDNSChallenge({
+        const res = await seededFinish({
             domain, alreadyValid: true, challenge: null,
             orderUrl: 'https://ca.example/order/valid',
             authzUrl: 'https://ca.example/authz/valid',
