@@ -37,11 +37,12 @@ const rowsLeft = (p: any, cid: number) => ({
     conference: Number(p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}conferences WHERE id = ?`, cid).n),
     inscriptions: count(p, 'inscriptions'),
     payments: count(p, 'payments'),
-    transport_payments: count(p, 'transport_payments'),
+    // 2.26.0: transport is sold as packages; their payments are transport money (the old ticket payments too).
+    transport_payments: count(p, 'transport_payments') + count(p, 'transport_package_payments'),
     ledger: count(p, 'ledger_entries'),
 });
 
-/** A conference holding money of every kind: a validated fee payment (100), a paid ticket (30), a ledger entry (500). */
+/** A conference holding money of every kind: a validated fee payment (100), a paid transport package (30), a ledger entry (500). */
 async function conferenceWithMoney(p: any) {
     const conf = await p.call('post', '/create', { body: { name: 'Congreso', fee_default: 100 } });
     assert.strictEqual(conf.status, 200, JSON.stringify(conf.body));
@@ -53,9 +54,11 @@ async function conferenceWithMoney(p: any) {
     assert.strictEqual((await p.call('post', `/payments/${pay.lastInsertRowid}/validate`)).status, 200);
     const bus = await p.call('post', '/buses', { body: { conference_id: cid, name: 'Bus 1', capacity: 40, price: 30 } });
     assert.strictEqual(bus.status, 200, JSON.stringify(bus.body));
-    assert.strictEqual((await p.call('post', `/buses/${bus.body.id}/passengers`, { body: { inscription_ids: [iid] } })).status, 200);
-    const ticket = p.one(`SELECT id FROM ${PREFIX}transport_tickets WHERE inscription_id = ?`, iid);
-    assert.strictEqual((await p.call('post', `/tickets/${ticket.id}/payments`, { body: { amount: 30, method: 'Efectivo' } })).status, 200);
+    const pkg = await p.call('post', '/transport/packages', { body: { conference_id: cid, name: 'Ida y vuelta', price: 30, bus_ids: [bus.body.id] } });
+    assert.strictEqual(pkg.status, 200, JSON.stringify(pkg.body));
+    assert.strictEqual((await p.call('post', `/transport/packages/${pkg.body.id}/sales`, { body: { inscription_ids: [iid] } })).status, 200);
+    const sale = p.one(`SELECT id FROM ${PREFIX}transport_package_sales WHERE inscription_id = ?`, iid);
+    assert.strictEqual((await p.call('post', `/transport/package-sales/${sale.id}/payments`, { body: { amount: 30, method: 'Efectivo' } })).status, 200);
     const led = await p.call('post', '/accounting/entries', { body: { conference_id: cid, kind: 'income', amount: 500, date: '2026-10-01', description: 'Donación' } });
     assert.strictEqual(led.status, 200, JSON.stringify(led.body));
     const acc = await p.call('get', `/accounting?conference_id=${cid}`);
@@ -156,13 +159,13 @@ test('GET /meals/people: the kitchen gets no ID document and finds a person only
 });
 
 test('the ID document reaches inscriptions:view only: roster, its search, the CSV export, the lodging review, the meals card', async () => {
-    const PAY = member(70, 'pay');        // payments:view opens the roster to NAME people
+    const PAY = member(70, 'pay');        // transport:view opens the roster to NAME people (payments:view no longer does, 2.18.0)
     const REP = member(71, 'rep');        // reports:view opens the export
     const LOC = member(72, 'loc');        // locations:view opens the lodging review
     const COOK = member(73, 'cook2');     // the kitchen: the confirmation card
     const DESK = member(74, 'desk2');     // inscriptions:view: everything, as before
     const p = await bootPlugin({ users: [PAY, REP, LOC, COOK, DESK] });
-    await addMember(p, PAY, { payments: 'view' });
+    await addMember(p, PAY, { transport: 'view' });
     await addMember(p, REP, { reports: 'view' });
     await addMember(p, LOC, { locations: 'view' });
     await addMember(p, COOK, { meals_delivery: 'manage' });
@@ -210,4 +213,68 @@ test('the ID document reaches inscriptions:view only: roster, its search, the CS
         assert.ok(JSON.stringify((await lodging(u)).body).includes(DOC));
         assert.strictEqual((await card(u)).body.person.fields.find((f: any) => f.key === 'document_number').value, DOC);
     }
+});
+
+// 2.30.0 (2.18.0–2.29.0 brought fee payments, badges, packages, boarding and its notices): the twin surfaces of
+// the rule above, swept. A role holding every section at its highest level EXCEPT «Inscripciones» calls every
+// GET route the plugin registers (each `:param` tried with every id of the world) and the scan routes; no answer
+// may carry the ID document. The same sweep as the administrator does find it — the sweep reaches it.
+test('no route answers the ID document to a role without «Inscripciones»: every GET, the scans, the boarding check', async () => {
+    const ALL_BUT = member(80, 'allbut');
+    const p = await bootPlugin({ users: [ALL_BUT] });
+    await addMember(p, ALL_BUT, {
+        dashboard: 'view', payments: 'manage', locations: 'manage', lodging: 'manage', transport: 'manage', accounting: 'manage',
+        meals: 'manage', meals_delivery: 'manage', badges: 'manage', reports: 'view', settings: 'manage',
+    });
+    const DOC = 'Z-55443322';
+    const cid = (await p.call('post', '/create', { body: { name: 'C', fee_default: 50 } })).body.id;
+    for (const t of ['first_name', 'last_name']) assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, template: t } })).status, 200);
+    assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, name: 'document_number', label: 'DNI', type: 'text', is_unique: true } })).status, 200);
+    const lid = (await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 10 } })).body.id;
+    const ins = await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: 'Ana', last_name: 'Pérez', document_number: DOC, location_id: lid } });
+    assert.strictEqual(ins.status, 200, JSON.stringify(ins.body));
+    const iid = ins.body.id;
+    const code = String(p.one(`SELECT reg_code FROM ${PREFIX}inscriptions WHERE id = ?`, iid).reg_code);
+    const hotel = (await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Hotel' } })).body.id;
+    const room = (await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: '101', capacity: 2 } })).body.id;
+    assert.strictEqual((await p.call('post', `/inscriptions/${iid}/assign`, { body: { room_id: room } })).status, 200);
+    const bus = (await p.call('post', '/buses', { body: { conference_id: cid, name: 'Bus 1', capacity: 40, price: 30 } })).body.id;
+    const pkg = (await p.call('post', '/transport/packages', { body: { conference_id: cid, name: 'Ida', price: 30, bus_ids: [bus] } })).body.id;
+    assert.strictEqual((await p.call('post', `/transport/packages/${pkg}/sales`, { body: { inscription_ids: [iid] } })).status, 200);
+    const sale = Number(p.one(`SELECT id FROM ${PREFIX}transport_package_sales WHERE inscription_id = ?`, iid).id);
+    const svc = (await p.call('post', '/meals/services', { body: { conference_id: cid, service_date: '2027-03-01', meal: 'almuerzo', location_ids: [lid] } })).body.id;
+    assert.strictEqual((await p.call('put', '/meals/display-fields', { body: { conference_id: cid, keys: ['@name', 'document_number'] } })).status, 200);
+    p.exec(`INSERT INTO ${PREFIX}payments (inscription_id, amount, method, proof, status) VALUES (?, 20, 'Efectivo', 'x', 'pending')`, iid);
+
+    const ids = [...new Set([cid, lid, iid, hotel, room, bus, svc, pkg, sale])];
+    const query = `conference_id=${cid}&location_id=${lid}&service_id=${svc}&bus_id=${bus}`;
+    const sweep = async (user: HarnessUser | undefined) => {
+        const seen: { url: string; status: number; body: string }[] = [];
+        for (const r of p.routes.filter((x: any) => x.method === 'get' && !/^\/(public|portal)\//.test(x.path))) {
+            const params = (r.path.match(/:[a-z_]+/gi) || []);
+            const urls = params.length ? ids.map((id) => r.path.replace(/:[a-z_]+/gi, String(id))) : [r.path];
+            for (const u of urls) {
+                const res = await p.call('get', `${u}?${query}`, { user });
+                seen.push({ url: u, status: res.status as number, body: JSON.stringify(res.body) });
+            }
+        }
+        for (const [path, body] of [
+            ['/meals/check', { service_id: svc, code }], ['/meals/check', { service_id: svc, inscription_id: iid }],
+            ['/transport/check', { bus_id: bus, code }],
+        ] as const) {
+            const res = await p.call('post', path, { user, body });
+            seen.push({ url: `POST ${path}`, status: res.status as number, body: JSON.stringify(res.body) });
+        }
+        return seen;
+    };
+    const admin = await sweep(undefined);
+    assert.ok(admin.filter((s) => s.body.includes(DOC)).length >= 3, 'the sweep does not reach the document at all');
+    const role = await sweep(ALL_BUT);
+    assert.ok(role.filter((s) => s.status === 200).length >= 20, `the role reaches too few routes: ${role.filter((s) => s.status === 200).length}`);
+    const leaks = role.filter((s) => s.body.includes(DOC));
+    assert.deepStrictEqual(leaks.map((s) => s.url), [], `the ID document reaches a role without «Inscripciones»: ${leaks.map((s) => `${s.url} ${s.body.slice(0, 300)}`).join('\n')}`);
+    // The boarding check names the person; the registration code stays with «Inscripciones», as everywhere.
+    const boarding = role.find((s) => s.url === 'POST /transport/check');
+    assert.ok(boarding && boarding.status === 200 && boarding.body.includes('Ana'), JSON.stringify(boarding));
+    assert.ok(!boarding.body.includes(code), `the boarding check echoes the registration code: ${boarding.body}`);
 });

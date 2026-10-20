@@ -53,6 +53,7 @@ export const sectionMeta = (tx): Record<StaffSection, { name: string; desc: stri
     accounting: { name: tx('staff.section.accounting', 'Contabilidad'), desc: tx('staff.section.accounting.desc', 'Ingresos y egresos del congreso.'), icon: 'fa-scale-balanced' },
     meals: { name: tx('staff.section.meals', 'Alimentación'), desc: tx('staff.section.meals.desc', 'Plan de comidas por localidad, ajustes por persona y reporte.'), icon: 'fa-utensils' },
     meals_delivery: { name: tx('staff.section.meals_delivery', 'Entrega de comidas'), desc: tx('staff.section.meals_delivery.desc', 'Registrar entregas con el escáner o por nombre (la cocina).'), icon: 'fa-barcode' },
+    badges: { name: tx('staff.section.badges', 'Escarapelas'), desc: tx('staff.section.badges.desc', 'Ver y compartir las escarapelas (con Inscripciones › ver); gestionar: su diseño y anular enlaces.'), icon: 'fa-id-badge' },
     reports: { name: tx('staff.section.reports', 'Reportes'), desc: tx('staff.section.reports.desc', 'Reportes y exportaciones a Excel y CSV.'), icon: 'fa-file-lines' },
     settings: { name: tx('staff.section.settings', 'Configuración'), desc: tx('staff.section.settings.desc', 'Congresos, formulario de inscripción, precios y reglas de cuota.'), icon: 'fa-gear' },
 });

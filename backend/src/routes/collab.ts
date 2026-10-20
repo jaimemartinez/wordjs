@@ -36,13 +36,9 @@ const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/collab');
 const router = express.Router();
 
-// Real-time collaboration keeps its rooms, replica ids and streams per process, keyed by post id. In a
-// multisite network those ids repeat across sites, so phase 1 serves collaboration on the main site
-// only: on any other site every collab route answers 404, and the editor falls back to plain saving.
-router.use((req: Request, res: Response, next: NextFunction) => {
-    if (require('../core/site-context').isPrimarySite()) return next();
-    return res.status(404).json({ code: 'rest_no_route', message: 'Real-time collaboration is not available on this site.', data: { status: 404 } });
-});
+// MULTISITE: every site of a network has real-time collaboration. Rooms, replica ids, per-user caps and
+// the cluster bus are kept per site (core/collab-rooms siteScoped), and each site's operation log is in
+// that site's own database, so the post 5 of one site and the post 5 of another are two rooms.
 
 const { authenticate: authenticateAny, isHeadless, trustedHost, trustedScheme, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');

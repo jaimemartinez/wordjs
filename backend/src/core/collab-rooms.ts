@@ -90,6 +90,7 @@ const crypto = require('crypto');
 const { dbAsync } = require('../config/database');
 const cache = require('./cache');
 const appConfig = require('../config/app');
+const siteContext = require('./site-context');
 const { validateFrame, sanitizeVersionVector, vvCovers, LIMITS } = require('./collab-ops');
 const mlog = require('./module-logger').moduleLogger('core/collab-rooms');
 
@@ -382,9 +383,32 @@ type Room = {
     presence: Map<string, PresenceEntry>;
 };
 
-const rooms = new Map<number, Room>();
-/** userId → nº de conexiones colaborativas vivas en ESTE proceso. */
-const perUser = new Map<number, number>();
+/*
+ * MULTISITIO. Cada sitio de una red tiene su propia base de datos, así que el mismo `postId` y el mismo
+ * `userId` existen en todos los sitios y son OTRAS filas, OTRAS personas. Todo lo que este módulo guarda
+ * por post o por usuario vive en un contenedor POR SITIO (`siteScoped`): la sala del post 5 del sitio 2 no
+ * es la del post 5 del sitio 3, ni comparten topes ni presupuestos. El contenedor del sitio 1 se crea al
+ * cargar y nunca se reemplaza (una instalación de un solo sitio y los tests ven el mismo Map de siempre).
+ */
+function siteScoped<T>(make: () => T): { get(): T; all(): T[]; primary: T } {
+    const byId = new Map<number, T>();
+    const primary = make();
+    byId.set(siteContext.PRIMARY_SITE_ID, primary);
+    return {
+        get(): T {
+            const id = siteContext.currentSiteId();
+            let v = byId.get(id);
+            if (v === undefined) { v = make(); byId.set(id, v); }
+            return v;
+        },
+        all: () => Array.from(byId.values()),
+        primary,
+    };
+}
+
+const roomsBySite = siteScoped(() => new Map<number, Room>());
+/** userId → nº de conexiones colaborativas vivas en ESTE proceso, por sitio. */
+const perUserBySite = siteScoped(() => new Map<number, number>());
 let totalConns = 0;
 let busReady = false;
 
@@ -438,7 +462,11 @@ function cleanDisplayName(raw: any, userId: number): string {
  * así que sobrevive a una reconexión y no hace falta reservar nada en el clúster.
  */
 function replicaId(userId: number, clientNonce: string): string {
-    const mac = crypto.createHmac('sha256', SITE_KEY).update(`${Number(userId) || 0}:${String(clientNonce)}`).digest();
+    // En una red, el MISMO userId de dos sitios son dos personas: el sitio entra en la derivación (salvo
+    // en el sitio 1, que conserva las identidades que ya tenía).
+    const site = siteContext.currentSiteIdOrNull();
+    const scope = site !== null && site !== siteContext.PRIMARY_SITE_ID ? `site${site}:` : '';
+    const mac = crypto.createHmac('sha256', SITE_KEY).update(`${scope}${Number(userId) || 0}:${String(clientNonce)}`).digest();
     let out = '';
     for (let i = 0; i < 16; i++) out += SITE_ALPHABET[mac[i] % 32];
     return `s_${out}`;
@@ -725,7 +753,7 @@ async function logSize(postId: number, epoch: number): Promise<{ count: number; 
 type LogSizeCache = { epoch: number; count: number; bytes: number; at: number; frames: number };
 
 /** Tamaño del log por sala. Se olvida al retirar la sala y al vaciarse (ver `forgetLogSize`). */
-const logSizes = new Map<number, LogSizeCache>();
+const logSizesBySite = siteScoped(() => new Map<number, LogSizeCache>());
 
 /**
  * EL TAMAÑO DEL LOG SIN PAGARLO EN CADA FRAME.
@@ -744,13 +772,13 @@ const logSizes = new Map<number, LogSizeCache>();
  * ops diminutas tampoco pueda alejar la cuenta indefinidamente). Ver `LOG_SIZE_RESEED_MS`.
  */
 async function logSizeCached(postId: number, epoch: number, now: number): Promise<LogSizeCache> {
-    const c = logSizes.get(postId);
+    const c = logSizesBySite.get().get(postId);
     if (c && c.epoch === epoch
         && now - c.at < CONFIG.LOG_SIZE_RESEED_MS
         && c.frames < CONFIG.LOG_SIZE_RESEED_FRAMES) return c;
     const fresh = await logSize(postId, epoch);
     const next: LogSizeCache = { epoch, count: fresh.count, bytes: fresh.bytes, at: now, frames: 0 };
-    logSizes.set(postId, next);
+    logSizesBySite.get().set(postId, next);
     return next;
 }
 
@@ -760,7 +788,7 @@ async function logSizeCached(postId: number, epoch: number, now: number): Promis
  * `truncated` una sala que no lo está.
  */
 function noteLogGrowth(postId: number, epoch: number, rows: number, bytes: number): void {
-    const c = logSizes.get(postId);
+    const c = logSizesBySite.get().get(postId);
     if (!c || c.epoch !== epoch) return;
     c.count += rows;
     c.bytes += bytes;
@@ -768,7 +796,7 @@ function noteLogGrowth(postId: number, epoch: number, rows: number, bytes: numbe
 }
 
 /** El epoch cambió o la sala se fue: la cuenta ya no habla de nada. */
-function forgetLogSize(postId: number): void { logSizes.delete(postId); }
+function forgetLogSize(postId: number): void { logSizesBySite.get().delete(postId); }
 
 /**
  * `SELECT COUNT(*)` que distingue CERO de NO SÉ.
@@ -834,7 +862,7 @@ async function liveMembers(
 
 /** Miembros vivos de la sala EN ESTE PROCESO. Cinturón local de las decisiones destructivas. */
 function localMembers(postId: number, exceptConnId?: string | null): number {
-    const room = rooms.get(postId);
+    const room = roomsBySite.get().get(postId);
     if (!room) return 0;
     let n = 0;
     for (const c of room.conns.values()) if (c.ready && !c.closed && c.connId !== exceptConnId) n++;
@@ -936,7 +964,7 @@ export type RetireOutcome = 'retired' | 'noop' | 'error';
  * nodo recorre el catálogo por su cuenta y retirar dos veces la misma sala ya es un no-op
  * (`retireRoom` mira `base_doc <> ''`).
  */
-let sweepCursor = 0;
+const sweepCursorBySite = siteScoped(() => ({ v: 0 }));
 
 async function retireRoom(
     postId: number,
@@ -992,7 +1020,7 @@ const WARNING_MESSAGES = {
  * nada porque su `welcome` ya trae el estado nuevo.
  */
 async function announceReset(postId: number, exceptConnId?: string | null): Promise<boolean> {
-    const room = rooms.get(postId);
+    const room = roomsBySite.get().get(postId);
     const exceptSite = exceptConnId ? (room && room.conns.get(exceptConnId)?.siteId) || null : null;
     const entregado = await broadcast(postId, 'warning', {
         code: 'room_reset',
@@ -1043,7 +1071,7 @@ function writeEvent(conn: Conn, event: string, data: any): boolean {
 
 /** Entrega a las conexiones de ESTE proceso. `exceptSite` evita devolverle al emisor su propio eco. */
 function deliverLocal(postId: number, event: string, data: any, exceptSite?: string | null): void {
-    const room = rooms.get(postId);
+    const room = roomsBySite.get().get(postId);
     if (!room) return;
     for (const conn of [...room.conns.values()]) {
         if (exceptSite && conn.siteId === exceptSite) continue;
@@ -1102,7 +1130,9 @@ function busMac(body: string): string {
  * literalmente los mismos bytes (re-serializar en el receptor podría reordenar claves).
  */
 async function publishBus(msg: { p: number; e: string; d: any; x?: string | null }): Promise<boolean> {
-    const body = JSON.stringify({ o: NODE_ID, t: Date.now(), ...msg });
+    // El sitio va DENTRO de lo firmado: el sobre de sitio que añade core/cache está fuera del HMAC, y
+    // quien alcanza Redis no debe poder llevar el mensaje de una sala a la sala del mismo post de otro sitio.
+    const body = JSON.stringify({ o: NODE_ID, t: Date.now(), s: siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID, ...msg });
     return (await cache.publish(CHANNEL, { b: body, m: busMac(body) })) !== false;
 }
 
@@ -1195,6 +1225,13 @@ function handleBusMessage(msg: string): void {
     let body: any;
     try { body = JSON.parse(parsed.b); } catch { return; }
     if (!body || body.o === NODE_ID) return; // eco propio: ya entregado localmente
+    // Se maneja en el contexto del sitio que nombra el sobre (core/cache); lo firmado tiene que nombrar
+    // el MISMO. Un mensaje sin sitio firmado es de un nodo anterior: vale solo para el sitio 1.
+    const signedSite = body.s === undefined ? siteContext.PRIMARY_SITE_ID : Number(body.s);
+    if (signedSite !== (siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID)) {
+        mlog.warn('[collab] bus: el sitio firmado no es el del sobre, mensaje descartado');
+        return;
+    }
     if (!(Math.abs(Date.now() - Number(body.t)) <= CONFIG.BUS_MAX_SKEW_MS)) return; // fuera de ventana
     const event = String(body.e);
 
@@ -1229,7 +1266,7 @@ type RecheckScope = { userId?: number; postId?: number; all?: boolean };
  * ya no existe): no hay nada que re-autorizar contra una fila borrada.
  */
 function runRecheck(scope: RecheckScope, closePost = false): void {
-    for (const room of [...rooms.values()]) {
+    for (const room of [...roomsBySite.get().values()]) {
         if (scope.postId !== undefined && room.postId !== scope.postId) continue;
         for (const conn of [...room.conns.values()]) {
             if (scope.userId !== undefined && conn.userId !== scope.userId) continue;
@@ -1347,7 +1384,7 @@ async function join(params: {
     const siteId = replicaId(userId, params.siteId);
 
     if (totalConns >= CONFIG.MAX_CONNS_TOTAL) return { ok: false, refusal: 'server-full' };
-    if ((perUser.get(userId) || 0) >= CONFIG.MAX_CONNS_PER_USER) return { ok: false, refusal: 'too-many-connections' };
+    if ((perUserBySite.get().get(userId) || 0) >= CONFIG.MAX_CONNS_PER_USER) return { ok: false, refusal: 'too-many-connections' };
     // ENTRAR TAMBIÉN LEE EL LOG, y por esa puerta se rodeaba el cobro que se le puso a `resync`: el
     // atacante que quiere repetir la lectura no pide una reanudación, cierra el stream y lo reabre —
     // reconectar con el mismo `siteId` desaloja la conexión anterior y la nueva nace con el cubo
@@ -1358,8 +1395,8 @@ async function join(params: {
         return { ok: false, refusal: 'read-budget', retryAfterMs: readRetryMs(userId) };
     }
 
-    let room = rooms.get(postId);
-    if (!room) rooms.set(postId, (room = { postId, conns: new Map(), sites: new Map(), presence: new Map() }));
+    let room = roomsBySite.get().get(postId);
+    if (!room) roomsBySite.get().set(postId, (room = { postId, conns: new Map(), sites: new Map(), presence: new Map() }));
 
     // Esta réplica ya tenía conexión: por construcción es del MISMO usuario (el HMAC lleva dentro su
     // id), así que reconectar DESALOJA a la vieja en vez de rechazar. Rechazar dejaba al editor
@@ -1411,7 +1448,7 @@ async function join(params: {
     // dejaba la conexión contabilizada para siempre.
     room.conns.set(conn.connId, conn);
     room.sites.set(siteId, conn.connId);
-    perUser.set(userId, (perUser.get(userId) || 0) + 1);
+    perUserBySite.get().set(userId, (perUserBySite.get().get(userId) || 0) + 1);
     totalConns++;
     startKeepalive(conn);
 
@@ -1735,11 +1772,11 @@ async function leave(conn: Conn, opts?: { closeSocket?: boolean }): Promise<void
     if (conn.left) return;
     conn.left = true;
 
-    const room = rooms.get(conn.postId);
+    const room = roomsBySite.get().get(conn.postId);
     closeConn(conn, 'leave', opts?.closeSocket !== false);
 
-    const n = (perUser.get(conn.userId) || 1) - 1;
-    if (n <= 0) perUser.delete(conn.userId); else perUser.set(conn.userId, n);
+    const n = (perUserBySite.get().get(conn.userId) || 1) - 1;
+    if (n <= 0) perUserBySite.get().delete(conn.userId); else perUserBySite.get().set(conn.userId, n);
     totalConns = Math.max(0, totalConns - 1);
 
     await releaseMember(conn.connId);
@@ -1751,8 +1788,8 @@ async function leave(conn: Conn, opts?: { closeSocket?: boolean }): Promise<void
 
     await broadcast(conn.postId, 'members', { left: { siteId: conn.siteId, userId: conn.userId } }, conn.siteId);
 
-    if (room.conns.size === 0 && rooms.get(conn.postId) === room) {
-        rooms.delete(conn.postId);
+    if (room.conns.size === 0 && roomsBySite.get().get(conn.postId) === room) {
+        roomsBySite.get().delete(conn.postId);
         // Sala vacía: la cuenta del log deja de tener quien la mantenga al día, y la próxima entrada
         // vuelve a medir. Guardarla sería quedarse con una cifra que otro nodo puede mover a solas.
         forgetLogSize(conn.postId);
@@ -1828,16 +1865,16 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
         const rows = await dbAsync.all(
             "SELECT post_id, updated_ms FROM collab_docs WHERE base_doc <> '' AND updated_ms <= ? " +
             'AND post_id > ? ORDER BY post_id ASC LIMIT ?',
-            [cutoff, sweepCursor, CONFIG.MAX_SWEEP_ROOMS]);
+            [cutoff, sweepCursorBySite.get().v, CONFIG.MAX_SWEEP_ROOMS]);
         const lote: any[] = Array.isArray(rows) ? rows : [];
         // El cursor se mueve ANTES de examinar el lote: si algo revienta a mitad, la pasada siguiente
         // continúa por donde iba en vez de reintentar eternamente las mismas filas.
-        sweepCursor = lote.length > 0 && lote.length >= CONFIG.MAX_SWEEP_ROOMS
+        sweepCursorBySite.get().v = lote.length > 0 && lote.length >= CONFIG.MAX_SWEEP_ROOMS
             ? Number(lote[lote.length - 1].post_id) || 0
             : 0;                                             // vuelta completa: se recomienza
         for (const r of lote) {
             const postId = Number(r.post_id);
-            if (rooms.has(postId)) continue;                       // viva en ESTE nodo
+            if (roomsBySite.get().has(postId)) continue;                       // viva en ESTE nodo
             const ms = Number(r.updated_ms) || 0;
             if (!ms) {
                 mlog.warn({ postId }, `[collab] sala ${postId} sin marca de tiempo legible: no se retira`);
@@ -1875,8 +1912,8 @@ type RateVerdict =
 type ReadBucket = { tokens: number; last: number };
 
 /** userId -> cubo. Sobrevive a la conexión A PROPÓSITO: la conexión es justo lo que el atacante recicla. */
-const readBuckets = new Map<number, ReadBucket>();
-let lastReadPrune = 0;
+const readBucketsBySite = siteScoped(() => new Map<number, ReadBucket>());
+const lastReadPruneBySite = siteScoped(() => ({ v: 0 }));
 
 function refillRead(b: ReadBucket, now: number): void {
     const dt = Math.max(0, now - b.last) / 1000;
@@ -1895,8 +1932,10 @@ function refillRead(b: ReadBucket, now: number): void {
  * intentarlo igualmente, o el tope no es un tope (ver `readBucket`).
  */
 function pruneReadBuckets(now: number, forzado = false): void {
-    if (!forzado && now - lastReadPrune < 1000) return;
-    lastReadPrune = now;
+    const prune = lastReadPruneBySite.get();
+    if (!forzado && now - prune.v < 1000) return;
+    prune.v = now;
+    const readBuckets = readBucketsBySite.get();
     for (const [userId, b] of readBuckets) {
         refillRead(b, now);
         if (b.tokens >= CONFIG.USER_READ_BURST) readBuckets.delete(userId);
@@ -1923,6 +1962,7 @@ function pruneReadBuckets(now: number, forzado = false): void {
  * puede reciclar. Queda REGISTRADO como riesgo residual, no como propiedad.
  */
 function readBucket(userId: number, now: number): ReadBucket {
+    const readBuckets = readBucketsBySite.get();
     let b = readBuckets.get(userId);
     if (b) return b;
     if (readBuckets.size >= CONFIG.MAX_READ_BUCKETS) {
@@ -1945,7 +1985,7 @@ function readBucket(userId: number, now: number): ReadBucket {
 /* --- PRESUPUESTO DE ESCRITURA EN EL LOG, POR USUARIO (ver CONFIG.USER_WRITE_BYTES_PER_SEC) ------- */
 
 /** userId -> cubo de escritura. Cuelga del USUARIO por lo mismo que el de lectura: sobrevive a la conexión. */
-const writeBuckets = new Map<number, ReadBucket>();
+const writeBucketsBySite = siteScoped(() => new Map<number, ReadBucket>());
 
 function refillWrite(b: ReadBucket, now: number): void {
     const dt = Math.max(0, now - b.last) / 1000;
@@ -1961,22 +2001,22 @@ function refillWrite(b: ReadBucket, now: number): void {
  */
 function takeUserWrite(userId: number, bytes: number): { ok: true } | { ok: false; retryAfterMs: number } {
     const now = Date.now();
-    let b = writeBuckets.get(userId);
+    let b = writeBucketsBySite.get().get(userId);
     if (!b) {
-        if (writeBuckets.size >= CONFIG.MAX_READ_BUCKETS) {
-            for (const [id, otro] of writeBuckets) {
+        if (writeBucketsBySite.get().size >= CONFIG.MAX_READ_BUCKETS) {
+            for (const [id, otro] of writeBucketsBySite.get()) {
                 refillWrite(otro, now);
-                if (otro.tokens >= CONFIG.USER_WRITE_BURST) writeBuckets.delete(id);
+                if (otro.tokens >= CONFIG.USER_WRITE_BURST) writeBucketsBySite.get().delete(id);
             }
-            while (writeBuckets.size >= CONFIG.MAX_READ_BUCKETS) {
+            while (writeBucketsBySite.get().size >= CONFIG.MAX_READ_BUCKETS) {
                 let victima = -1;
                 let mejor = -Infinity;
-                for (const [id, otro] of writeBuckets) if (otro.tokens > mejor) { mejor = otro.tokens; victima = id; }
+                for (const [id, otro] of writeBucketsBySite.get()) if (otro.tokens > mejor) { mejor = otro.tokens; victima = id; }
                 if (victima === -1) break;
-                writeBuckets.delete(victima);
+                writeBucketsBySite.get().delete(victima);
             }
         }
-        writeBuckets.set(userId, (b = { tokens: CONFIG.USER_WRITE_BURST, last: now }));
+        writeBucketsBySite.get().set(userId, (b = { tokens: CONFIG.USER_WRITE_BURST, last: now }));
     }
     refillWrite(b, now);
     if (b.tokens < bytes) {
@@ -2011,7 +2051,7 @@ function canReadLog(userId: number): boolean {
  * `canReadLog` exige) y se traduce a milisegundos con SU ritmo de recarga.
  */
 function readRetryMs(userId: number, now = Date.now()): number {
-    const b = readBuckets.get(userId);
+    const b = readBucketsBySite.get().get(userId);
     if (!b) return 0;
     refillRead(b, now);
     if (b.tokens > 0) return 0;
@@ -2022,15 +2062,15 @@ function readRetryMs(userId: number, now = Date.now()): number {
 /* --- TURNO DE LECTURA: las lecturas de un usuario NO se solapan (ver READ_CONCURRENCY_PER_USER) --- */
 
 type ReadSlot = { corriendo: number; cola: (() => void)[] };
-const readSlots = new Map<number, ReadSlot>();
+const readSlotsBySite = siteScoped(() => new Map<number, ReadSlot>());
 
 /**
  * Pide turno. `false` = la cola de este usuario está llena y la lectura se rechaza como cualquier otro
  * exceso de presupuesto (una cola sin tope sería el mismo amplificador con otro nombre).
  */
 function acquireReadSlot(userId: number): Promise<boolean> {
-    let s = readSlots.get(userId);
-    if (!s) readSlots.set(userId, (s = { corriendo: 0, cola: [] }));
+    let s = readSlotsBySite.get().get(userId);
+    if (!s) readSlotsBySite.get().set(userId, (s = { corriendo: 0, cola: [] }));
     if (s.corriendo < CONFIG.READ_CONCURRENCY_PER_USER) { s.corriendo++; return Promise.resolve(true); }
     if (s.cola.length >= CONFIG.MAX_QUEUED_READS_PER_USER) return Promise.resolve(false);
     const slot = s;
@@ -2038,12 +2078,12 @@ function acquireReadSlot(userId: number): Promise<boolean> {
 }
 
 function releaseReadSlot(userId: number): void {
-    const s = readSlots.get(userId);
+    const s = readSlotsBySite.get().get(userId);
     if (!s) return;
     s.corriendo = Math.max(0, s.corriendo - 1);
     const siguiente = s.cola.shift();
     if (siguiente) { siguiente(); return; }
-    if (s.corriendo === 0) readSlots.delete(userId);
+    if (s.corriendo === 0) readSlotsBySite.get().delete(userId);
 }
 
 /**
@@ -2072,7 +2112,7 @@ function observeReadService(ms: number): void {
 
 /** La espera que anuncia LA COLA: lo que hay por delante × lo que cuesta servir una lectura. */
 function queueRetryMs(userId: number): number {
-    const s = readSlots.get(userId);
+    const s = readSlotsBySite.get().get(userId);
     const delante = s ? (s.corriendo + s.cola.length) : 1;
     return Math.max(1, Math.ceil(Math.max(1, delante) * readServiceMs));
 }
@@ -2695,7 +2735,7 @@ async function setPresence(
     const verdict = rateGate(conn, 0, 0, 1);
     if (!verdict.ok) return { ok: false, ...rateFailure(verdict) };
 
-    const room = rooms.get(conn.postId);
+    const room = roomsBySite.get().get(conn.postId);
     if (!room) return { ok: false, code: 'collab_no_room', message: 'La sala ya no existe.' };
 
     const entry: PresenceEntry = {
@@ -2804,9 +2844,13 @@ async function resync(conn: Conn, rawVv: any, clientEpoch: number): Promise<Resy
  */
 const { AsyncLocalStorage } = require('async_hooks');
 
-/** La colaboración solo existe en el sitio principal (ver routes/collab.ts): en los demás no hay salas. */
+/**
+ * ¿Hay un sitio al que pertenezca este trabajo? La colaboración existe en TODOS los sitios de una red,
+ * cada uno con sus salas (ver `siteScoped`); un trabajo sin sitio no toca ninguna. En una instalación de
+ * un solo sitio la respuesta es siempre sí.
+ */
 function collabSite(): boolean {
-    try { return require('./site-context').isPrimarySite(); } catch { return true; }
+    return siteContext.currentSiteIdOrNull() !== null;
 }
 const collabSaveScope: { run: (store: any, fn: () => any) => any; getStore: () => any } = new AsyncLocalStorage();
 
@@ -2901,7 +2945,7 @@ async function purgePostRows(postId: number): Promise<void> {
  * (`replicaId`), y aun así se comprueba aquí que la conexión viva sea suya.
  */
 function findConn(postId: number, siteId: any, userId: number): Conn | null {
-    const room = rooms.get(postId);
+    const room = roomsBySite.get().get(postId);
     if (!room || typeof siteId !== 'string') return null;
     const connId = room.sites.get(siteId);
     if (!connId) return null;
@@ -2912,25 +2956,32 @@ function findConn(postId: number, siteId: any, userId: number): Conn | null {
 
 /** Métricas mínimas para el panel de operador y para los tests. */
 function stats() {
+    // De todo el proceso (todos los sitios): es una métrica del NODO.
     let members = 0;
-    for (const r of rooms.values()) members += r.conns.size;
-    return { nodeId: NODE_ID, rooms: rooms.size, members, totalConns };
+    let roomCount = 0;
+    for (const rooms of roomsBySite.all()) {
+        roomCount += rooms.size;
+        for (const r of rooms.values()) members += r.conns.size;
+    }
+    return { nodeId: NODE_ID, rooms: roomCount, members, totalConns };
 }
 
 /** Solo para tests: cierra todo sin tocar la BD. */
 function _resetForTests(): void {
-    for (const room of rooms.values()) {
-        for (const conn of room.conns.values()) { conn.left = true; closeConn(conn, 'test-reset'); }
+    for (const rooms of roomsBySite.all()) {
+        for (const room of rooms.values()) {
+            for (const conn of room.conns.values()) { conn.left = true; closeConn(conn, 'test-reset'); }
+        }
+        rooms.clear();
     }
-    rooms.clear();
-    perUser.clear();
+    for (const m of perUserBySite.all()) m.clear();
     totalConns = 0;
-    logSizes.clear();
-    readBuckets.clear();
-    writeBuckets.clear();
-    readSlots.clear();
-    lastReadPrune = 0;
-    sweepCursor = 0;
+    for (const m of logSizesBySite.all()) m.clear();
+    for (const m of readBucketsBySite.all()) m.clear();
+    for (const m of writeBucketsBySite.all()) m.clear();
+    for (const m of readSlotsBySite.all()) m.clear();
+    for (const c of lastReadPruneBySite.all()) c.v = 0;
+    for (const c of sweepCursorBySite.all()) c.v = 0;
 }
 
 module.exports = {
@@ -2954,7 +3005,7 @@ module.exports = {
     // Solo para los tests de DIALECTO: las ramas Postgres y MySQL de esta expresión no las ejercita
     // ninguna suite (todas corren en SQLite) y son SQL que se va a producción sin que nadie lo mire.
     _payloadBytesExpr: payloadBytesExpr,
-    _rooms: rooms,
+    _rooms: roomsBySite.primary,
     // Solo para el test de la COTA: `MAX_READ_BUCKETS` no se puede comprobar desde fuera sin ver el Map.
-    _readBuckets: readBuckets,
+    _readBuckets: readBucketsBySite.primary,
 };

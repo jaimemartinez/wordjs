@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { db, dbAsync } = require('../config/database');
 const config = require('../config/app');
-const forge = require('node-forge');
+const { X509Certificate } = require('crypto');
 
 class SystemHealth {
     static async getFullStatus() {
@@ -213,8 +213,9 @@ class SystemHealth {
             status.cert = 'FOUND';
             try {
                 const certPem = fs.readFileSync(certPath, 'utf8');
-                const cert = forge.pki.certificateFromPem(certPem);
-                status.expiry = cert.validity.notAfter;
+                const expiry = new Date(new X509Certificate(certPem).validTo);
+                if (Number.isNaN(expiry.getTime())) throw new Error('unreadable notAfter');
+                status.expiry = expiry;
                 const now = new Date();
                 status.status = (status.expiry > now) ? 'OK' : 'EXPIRED';
             } catch (e) {

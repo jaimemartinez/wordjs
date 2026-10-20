@@ -125,11 +125,12 @@ describe("admin shell per site", () => {
         expect(canOpenAdminPath("/admin/settings/site-address", single, [])).toBe(true);
     });
 
-    it("another site offers no plugin, backup, hooks or site-address screen, even to its administrator", () => {
+    it("another site offers no plugin-code, hooks or site-address screen, even to its administrator; its backups are its own", () => {
         const list = hrefs(otherSite);
-        for (const p of ["/admin/plugins", "/admin/settings/backups", "/admin/hooks", "/admin/db-migration", "/admin/network"]) {
+        for (const p of ["/admin/plugins", "/admin/hooks", "/admin/db-migration", "/admin/network"]) {
             expect(list, p).not.toContain(p);
         }
+        expect(list).toContain("/admin/settings/backups");
         expect(list).toContain("/admin/posts");
         expect(canOpenAdminPath("/admin/plugins", otherSite, [])).toBe(false);
         expect(canOpenAdminPath("/admin/settings/site-address", otherSite, [])).toBe(false);

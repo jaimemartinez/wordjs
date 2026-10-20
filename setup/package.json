@@ -4,14 +4,13 @@
     "description": "WordJS Cluster Orchestrator - Setup & Migration Utility",
     "license": "MIT",
     "engines": {
-        "node": ">=20.9.0"
+        "node": ">=22.0.0"
     },
     "main": "index.js",
     "bin": {
         "wordjs-setup": "index.js"
     },
     "dependencies": {
-        "fs-extra": "^11.4.1",
-        "node-forge": "^1.4.0"
+        "fs-extra": "^11.4.1"
     }
 }

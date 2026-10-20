@@ -728,8 +728,9 @@ jobs:
           done
       - name: Coverage ratchet (c8 report over all four shards)
         working-directory: backend
-        # c8 holds every shard's V8 profiles (~700) in memory at once; the default heap (~4 GB) is at its
-        # edge with today's suite, so the merge gets room instead of an out-of-memory abort.
+        # Merging every shard's V8 profiles (~2.5 GB of JSON: each process carries the TypeScript compiler's
+        # coverage and the transpiled source maps) outgrew Node's default heap — c8 died with "JavaScript heap
+        # out of memory" before evaluating anything. The runner has 16 GB; the thresholds are unchanged.
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: npm run test:coverage:report

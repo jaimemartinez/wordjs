@@ -32,6 +32,12 @@ export interface LvRoom {
     occupied?: number | null;
     location_id?: number | null;
     location_name?: string | null;
+    /** A shared room (2.18.0): each location's beds in it; the rest of the capacity are pool beds. */
+    shares?: { location_id: number; location_name?: string | null; beds: number; occupied?: number | null }[] | null;
+    pool_beds?: number | null;
+    pool_occupied?: number | null;
+    /** A shared room's class (2.21.0): see lockMismatch. */
+    lock?: { field: string; value: string }[] | null;
 }
 
 export interface LvHotel {
@@ -61,8 +67,12 @@ export interface LvField {
     is_unique?: number | boolean | null;
 }
 
-/** i18n keys of the reasons a move is refused (the same keys the old accommodation board used). */
-export type BlockKey = 'board.cancelled' | 'board.frozen' | 'board.moving' | 'board.room.foreign' | 'board.room.full';
+/**
+ * i18n keys of the reasons a move is refused (the same keys the old accommodation board used). A submitted /
+ * validated location is NOT one of them (2.17.0): the administration adjusts a reviewed arrangement directly
+ * — see reviewedLocationOf for the notice the explorer shows instead.
+ */
+export type BlockKey = 'board.cancelled' | 'board.moving' | 'board.room.foreign' | 'board.room.full' | 'board.room.shared.full' | 'board.room.locked';
 
 // ---------------------------------------------------------------------------------------------
 // Small shared helpers (moved here from admin/page.tsx so the explorer never imports the page)
@@ -95,8 +105,104 @@ export const LODGING_STATUS_META: Record<string, { key: string; fallback: string
 };
 export const lodgingStatusMeta = (status?: string | null) => LODGING_STATUS_META[status || 'draft'] || LODGING_STATUS_META.draft;
 
-/** Mirror of lib/conference.ts isLodgingFrozen: under review or validated = nobody but the admin's reopen changes it. */
+/**
+ * Mirror of lib/conference.ts isLodgingFrozen: under review or validated. The COORDINATOR cannot change it then
+ * (the portal answers 409 until the admin reopens it); the administration still can (2.17.0), and each such
+ * change is recorded on the location as an administration adjustment.
+ */
 export const isFrozenStatus = (status?: string | null): boolean => status === 'submitted' || status === 'validated';
+
+/**
+ * The location row behind `locationId` when its arrangement is submitted / validated, else null: what the
+ * explorer, the room pickers and the inscriptions' room modal name in their «adjustment» notice.
+ */
+export const reviewedLocationOf = <L extends LvLocation>(locationId: number | null | undefined, locations: L[] | null | undefined): L | null => {
+    if (locationId == null) return null;
+    const loc = (locations || []).find(l => Number(l.id) === Number(locationId)) || null;
+    return loc && isFrozenStatus(loc.lodging_status) ? loc : null;
+};
+
+/** What a lodging write answers (2.17.0): the submitted / validated locations it adjusted. */
+export interface LodgingAdjusted { location_id: number; name: string; status?: string | null }
+
+/** The names of the locations a write adjusted — «Norte», «Sur» — or '' when it adjusted none (no notice then). */
+export const adjustedNames = (result: { lodging_adjusted?: LodgingAdjusted[] | null } | null | undefined): string =>
+    (result && Array.isArray(result.lodging_adjusted) ? result.lodging_adjusted : [])
+        .filter(l => l && l.name != null && String(l.name) !== '')
+        .map(l => `«${l.name}»`).join(', ');
+
+/**
+ * The submitted / validated locations among the owners of `rooms` (and `extraLocationIds`), sorted by name —
+ * for a confirmation: deleting a hotel or a room, or re-allotting rooms, changes those arrangements.
+ */
+export function reviewedLocationsAmong<L extends LvLocation>(rooms: Pick<LvRoom, 'location_id'>[] | null | undefined, locations: L[] | null | undefined, extraLocationIds: (number | null | undefined)[] = []): L[] {
+    const ids = new Set<number>();
+    for (const r of rooms || []) if (r.location_id != null) ids.add(Number(r.location_id));
+    for (const id of extraLocationIds) if (id != null) ids.add(Number(id));
+    const out: L[] = [];
+    for (const id of ids) { const l = reviewedLocationOf(id, locations); if (l) out.push(l); }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * The location ids of whoever sleeps in `rooms` (through the occupant index). Deleting a POOL room or a hotel
+ * frees beds of THEIR locations' arrangements as well (`placed_elsewhere`), not only of the rooms' owners —
+ * the server stamps both (2.17.0), so the confirmation names both (`extraLocationIds` above).
+ */
+export function occupantLocationIds(rooms: Pick<LvRoom, 'id'>[] | null | undefined, idx: OccupantIndex | null | undefined): number[] {
+    const ids = new Set<number>();
+    for (const r of rooms || []) {
+        for (const p of (idx && idx.get(Number(r.id))) || []) {
+            const l = rawLocationId(p);
+            if (l != null) ids.add(l);
+        }
+    }
+    return [...ids];
+}
+
+/**
+ * The submitted / validated locations ONE room's adjustment notices name (2.17.0), once each: the room's own
+ * location first, then its occupants' (a pool room may hold attendees of several), by name. The room level
+ * shows one notice per location instead of repeating it on every occupant.
+ */
+export function reviewedInRoom<L extends LvLocation>(room: Pick<LvRoom, 'location_id'>, occupants: Pick<LvPerson, 'location_id'>[] | null | undefined, locations: L[] | null | undefined): L[] {
+    const own = reviewedLocationOf(room.location_id, locations);
+    const others = reviewedLocationsAmong([], locations, (occupants || []).map(p => rawLocationId(p)))
+        .filter(l => !own || Number(l.id) !== Number(own.id));
+    return own ? [own, ...others] : others;
+}
+
+/**
+ * What changing an attendee's location in the inscription form does to submitted / validated arrangements —
+ * the client mirror of PUT /inscriptions/:id (2.17.0), for the form's hint. The BED RULE: an arrangement is
+ * who sleeps where, so only an attendee who holds a bed changes one, in either direction:
+ *   - `out`: the reviewed location they leave HOLDING A BED (the move frees it, or they take a pool bed
+ *     along: either way that arrangement changes; Hospedaje › gestionar's);
+ *   - `into`: the reviewed location they enter WITH the bed they keep — a pool bed, or a room of that very
+ *     location. A bed of another location's room is freed by the move, and a cancellation frees any bed.
+ * Without a bed they leave and arrive like a new registration, and that is no adjustment either way (no hint).
+ * `original.room_location_id` is the location the attendee's room is allotted to (GET /inscriptions; null =
+ * a pool room); when it is unknown (undefined) no `into` is claimed.
+ */
+export function moveAdjustments<L extends LvLocation>(
+    original: { location_id?: number | null; room_id?: number | null; room_location_id?: number | null; room_shared?: number | boolean | null; status?: string | null } | null | undefined,
+    next: { location_id?: number | string | null; status?: string | null } | null | undefined,
+    locations: L[] | null | undefined,
+): { out: L | null; into: L | null; intoMaybe: L | null } {
+    if (!original || !next) return { out: null, into: null, intoMaybe: null };
+    const from = original.location_id == null ? null : Number(original.location_id);
+    const to = next.location_id == null || next.location_id === '' ? null : Number(next.location_id);
+    if (from === to) return { out: null, into: null, intoMaybe: null };
+    const cancelled = (next.status !== undefined ? next.status : original.status) === 'cancelled';
+    const roomLoc = original.room_location_id;
+    const hasBed = original.room_id != null;
+    const keepsBed = hasBed && !cancelled && roomLoc !== undefined && (roomLoc == null || Number(roomLoc) === to);
+    // A SHARED room (2.18.0): the bed stays only if one is free there for the new location (its own beds,
+    // or a pool bed) — the form cannot know, so it says «if it keeps the bed» instead of claiming it.
+    const shared = roomLoc == null && !!Number(original.room_shared || 0);
+    const target = keepsBed ? reviewedLocationOf(to, locations) : null;
+    return { out: hasBed ? reviewedLocationOf(from, locations) : null, into: shared ? null : target, intoMaybe: shared ? target : null };
+}
 
 /**
  * The registration form is the source of truth: attendee data lives in real columns named after each
@@ -238,6 +344,15 @@ export function hotelStats(hotel: LvHotel, idx?: OccupantIndex | null, locations
         beds += s.capacity; occupied += s.occupied; free += s.free;
         if (s.free === 0) full++; else withFree++;
         if (s.state === 'empty') empty++;
+        if (r.location_id == null && r.shares && r.shares.length) {
+            // A shared room (2.18.0): every location with beds in it, and a pool room too while it keeps pool beds.
+            for (const sh of r.shares) {
+                const id = Number(sh.location_id);
+                if (!locs.has(id)) locs.set(id, sh.location_name || (locations || []).find(l => Number(l.id) === id)?.name || `#${id}`);
+            }
+            if ((Number(r.pool_beds) || 0) > 0) poolRooms++;
+            continue;
+        }
         if (r.location_id == null) { poolRooms++; continue; }
         const id = Number(r.location_id);
         if (!locs.has(id)) {
@@ -255,6 +370,20 @@ export function hotelStats(hotel: LvHotel, idx?: OccupantIndex | null, locations
 export const unassignedCount = (people: LvPerson[] | null | undefined): number =>
     (people || []).filter(p => p.room_id == null && p.status !== 'cancelled').length;
 
+/**
+ * The explorer's chip after a conference-wide run (POST /assignment/run). `remaining` is EVERYONE the run left
+ * without a bed: its own `remaining` (no room left in the scopes it covered) plus `skipped` — the attendees of
+ * the submitted / validated locations it does not touch (`skipped_unassigned`, 2.17.0; summed from
+ * `skipped_frozen[].unassigned` when absent). Once the run is done that is what «N sin asignar» counts, so the
+ * chip no longer says «Pendientes: 0» next to «2 sin asignar»; it says how many of them were not touched.
+ */
+export function runSummaryOf(report: { assignedCount?: unknown; remaining?: unknown; skipped_unassigned?: unknown; skipped_frozen?: { unassigned?: unknown }[] | null } | null | undefined): { assigned: number; remaining: number; skipped: number } {
+    const n = (v: unknown) => Math.max(0, Number(v) || 0);
+    const skipped = report && report.skipped_unassigned != null ? n(report.skipped_unassigned)
+        : (report && Array.isArray(report.skipped_frozen) ? report.skipped_frozen.reduce((s, l) => s + n(l && l.unassigned), 0) : 0);
+    return { assigned: n(report && report.assignedCount), remaining: n(report && report.remaining) + skipped, skipped };
+}
+
 export interface OverallStats { hotels: number; rooms: number; beds: number; occupied: number; free: number; unassigned: number }
 
 export function overallStats(hotels: LvHotel[] | null | undefined, people: LvPerson[] | null | undefined, idx?: OccupantIndex | null): OverallStats {
@@ -271,55 +400,103 @@ export function overallStats(hotels: LvHotel[] | null | undefined, people: LvPer
 // ---------------------------------------------------------------------------------------------
 
 export interface EligibilityCtx {
-    /** Location ids whose lodging is frozen (submitted / validated). */
-    frozen: Set<number>;
     /** Attendees with a move in flight. */
     pending?: Set<number> | null;
 }
 
-export const frozenLocationIds = (locations: LvLocation[] | null | undefined): Set<number> =>
-    new Set((locations || []).filter(l => isFrozenStatus(l.lodging_status)).map(l => Number(l.id)));
-
-/** Why `p` can't be moved at all (dragged, re-roomed) — null when it can. */
+/**
+ * Why `p` can't be moved at all (dragged, re-roomed) — null when it can. An attendee of a submitted /
+ * validated location CAN (2.17.0: an administration adjustment, recorded by the server).
+ */
 export function dragBlock(p: LvPerson, ctx: EligibilityCtx): BlockKey | null {
     if (p.status === 'cancelled') return 'board.cancelled';
-    const loc = rawLocationId(p);
-    if (loc != null && ctx.frozen.has(loc)) return 'board.frozen';
     if (ctx.pending && ctx.pending.has(p.id)) return 'board.moving';
     return null;
 }
 
 /**
  * Why `p` can't be taken OUT of their room — null when it can. A cancelled attendee CAN be unassigned
- * (that frees the bed they still hold); only a frozen location or a move in flight stops it.
+ * (that frees the bed they still hold); only a move in flight stops it.
  */
 export function unassignBlock(p: LvPerson, ctx: EligibilityCtx): BlockKey | null {
-    const loc = rawLocationId(p);
-    if (loc != null && ctx.frozen.has(loc)) return 'board.frozen';
     if (ctx.pending && ctx.pending.has(p.id)) return 'board.moving';
     return null;
 }
 
 /**
- * Why `p` can't be dropped into `room` — null when the move is allowed (or `p` is already there). The
- * attendee's own frozen location is dragBlock's business; an allotted room of a frozen location is
- * simply "foreign" to anyone else (the server answers 400 «asignada a la localidad …», not 409).
+ * A shared room (2.18.0): is there a bed for `p` — one of their location's beds there, or a pool bed? Mirror
+ * of the server's bedFreeFor (each location's people fill its beds first; everyone else, and the overflow,
+ * takes pool beds). `occupants` = who sleeps in the room now (`p` excluded here); null = trust the
+ * server's counts on the room. Not a shared room → true (the capacity / location checks decide).
+ */
+export function sharedBedFree(room: LvRoom, p: Pick<LvPerson, 'id' | 'location_id'>, occupants?: Pick<LvPerson, 'id' | 'location_id'>[] | null): boolean {
+    const shares = room.shares || [];
+    if (room.location_id != null || !shares.length) return true;
+    const cap = Math.max(1, Number(room.capacity) || 1);
+    const given = shares.reduce((n, s) => n + (Number(s.beds) || 0), 0);
+    const poolBeds = Math.max(0, cap - given);
+    const lid = rawLocationId(p);
+    const share = lid == null ? undefined : shares.find(s => Number(s.location_id) === lid);
+    const mine = share ? Number(share.beds) || 0 : 0;
+    if (!occupants) {
+        if (mine && (Number(share!.occupied) || 0) < mine) return true;
+        return (Number(room.pool_occupied) || 0) < poolBeds;
+    }
+    const byLoc = new Map<number | null, number>();
+    for (const o of occupants) {
+        if (Number(o.id) === Number(p.id)) continue;
+        const l = rawLocationId(o);
+        byLoc.set(l, (byLoc.get(l) || 0) + 1);
+    }
+    if (mine && (byLoc.get(lid) || 0) < mine) return true;
+    let poolUsed = 0;
+    for (const [l, n] of byLoc) {
+        const s = l == null ? undefined : shares.find(x => Number(x.location_id) === l);
+        poolUsed += Math.max(0, n - (s ? Number(s.beds) || 0 : 0));
+    }
+    return poolUsed < poolBeds;
+}
+
+/** Fixed in their room by the administration (2.21.0): `room_locked` names the room, and holds only while they are in it. */
+export const pinnedHere = (p: { room_id?: number | null; room_locked?: unknown } | null | undefined): boolean =>
+    !!(p && p.room_id != null && Number(p.room_locked) > 0 && Number(p.room_locked) === Number(p.room_id));
+
+/**
+ * A shared room's class (2.21.0; «la habitación compartida se queda con el género que le dio el reparto»): true when
+ * `p` has another value for a field «Sugerir reparto» fixed for the room — the server answers 409. A blank value is no
+ * value. Mirror of the server's lockAllows.
+ */
+export function lockMismatch(room: Pick<LvRoom, 'lock' | 'location_id'>, p: LvPerson | null | undefined): boolean {
+    if (!p || room.location_id != null) return false;
+    return (room.lock || []).some(x => {
+        const v = String(fieldVal(p, { name: x.field }) ?? '').trim().toLowerCase();
+        return v !== '' && v !== String(x.value ?? '').trim().toLowerCase();
+    });
+}
+
+/** A class as words: the gender as `words` («Mujeres» / «Hombres»), any other value as it is. */
+export function lockText(lock: { field: string; value: string }[] | null | undefined, words: { F: string; M: string }): string {
+    return (lock || []).map(x => { const k = x.field === 'gender' ? genderKey(x.value) : ''; return k ? words[k] : String(x.value); }).join(' · ');
+}
+
+/**
+ * Why `p` can't be dropped into `room` — null when the move is allowed (or `p` is already there). An
+ * allotted room is "foreign" to anyone of another location (the server answers 400 «asignada a la
+ * localidad …»).
  */
 export function dropBlock(p: LvPerson | null | undefined, room: LvRoom, idx?: OccupantIndex | null): BlockKey | null {
     if (!p) return null;
     if (Number(p.room_id) === Number(room.id)) return null;
     if (room.location_id != null && Number(room.location_id) !== rawLocationId(p)) return 'board.room.foreign';
     if (occupiedOf(room, idx) >= (Number(room.capacity) || 0)) return 'board.room.full';
+    if (!sharedBedFree(room, p, idx ? occupantsOf(room, idx) : null)) return 'board.room.shared.full';
+    if (lockMismatch(room, p)) return 'board.room.locked';
     return null;
 }
 
 /** dragBlock, then dropBlock: the full answer to "can `p` go to `room` right now?". */
 export const moveBlock = (p: LvPerson, room: LvRoom, ctx: EligibilityCtx, idx?: OccupantIndex | null): BlockKey | null =>
     dragBlock(p, ctx) || dropBlock(p, room, idx);
-
-/** A room allotted to a frozen location takes nobody until that location is reopened. */
-export const roomLock = (room: LvRoom, ctx: EligibilityCtx): BlockKey | null =>
-    room.location_id != null && ctx.frozen.has(Number(room.location_id)) ? 'board.frozen' : null;
 
 export interface CandidateOpts {
     q?: string;
@@ -358,18 +535,21 @@ export function genderKey(v: unknown): 'M' | 'F' | '' {
 
 /**
  * Attendees that can legally take a free bed of `room` (the «Asignar participante» picker): not
- * cancelled, not frozen, not mid-move, not already inside, and of the room's location when it is
+ * cancelled, not mid-move, not already inside, and of the room's location when it is
  * allotted. Room capacity is the caller's business (the picker is only offered while a bed is free).
  * Sorted by display name, people of a single-gender room's gender first.
  */
 export function assignCandidates(people: LvPerson[] | null | undefined, room: LvRoom, ctx: EligibilityCtx, opts: CandidateOpts): LvPerson[] {
     const q = normalizeText(opts.q);
     const out: { p: LvPerson; name: string }[] = [];
+    const inside = (people || []).filter(x => Number(x.room_id) === Number(room.id));
     for (const p of people || []) {
         if (Number(p.room_id) === Number(room.id)) continue;
         if (p.room_id != null && !opts.includePlaced) continue;
         if (dragBlock(p, ctx)) continue;
         if (room.location_id != null && Number(room.location_id) !== rawLocationId(p)) continue;
+        if (!sharedBedFree(room, p, inside)) continue;   // a shared room with no bed left for p's location
+        if (lockMismatch(room, p)) continue;             // a shared room fixed for another value (2.21.0)
         const name = opts.nameOf(p);
         if (q && !normalizeText(`${name} ${p.family_group || ''} ${opts.extraText ? opts.extraText(p) : ''}`).includes(q)) continue;
         out.push({ p, name });
@@ -380,22 +560,24 @@ export function assignCandidates(people: LvPerson[] | null | undefined, room: Lv
     return out.map(x => x.p);
 }
 
-export interface CandidateExclusions { cancelled: number; frozen: number; foreign: number; moving: number }
+export interface CandidateExclusions { cancelled: number; foreign: number; moving: number; noBed: number; locked: number }
 
 /**
  * Why attendees are missing from the picker (counted among the ones it would otherwise list: the
  * unassigned, plus the placed ones when `includePlaced`), so the picker never hides people silently.
  */
 export function candidateExclusions(people: LvPerson[] | null | undefined, room: LvRoom, ctx: EligibilityCtx, includePlaced = false): CandidateExclusions {
-    const out: CandidateExclusions = { cancelled: 0, frozen: 0, foreign: 0, moving: 0 };
+    const out: CandidateExclusions = { cancelled: 0, foreign: 0, moving: 0, noBed: 0, locked: 0 };
+    const inside = (people || []).filter(x => Number(x.room_id) === Number(room.id));
     for (const p of people || []) {
         if (Number(p.room_id) === Number(room.id)) continue;
         if (p.room_id != null && !includePlaced) continue;
         const why = dragBlock(p, ctx);
         if (why === 'board.cancelled') out.cancelled++;
-        else if (why === 'board.frozen') out.frozen++;
         else if (why === 'board.moving') out.moving++;
         else if (room.location_id != null && Number(room.location_id) !== rawLocationId(p)) out.foreign++;
+        else if (!sharedBedFree(room, p, inside)) out.noBed++;   // a shared room with no bed left for p's location
+        else if (lockMismatch(room, p)) out.locked++;            // a shared room fixed for another value (2.21.0)
     }
     return out;
 }
@@ -448,6 +630,14 @@ export interface FilterDeps {
  */
 export function roomMatchesLocation(room: LvRoom, location: string, deps: Pick<FilterDeps, 'idx' | 'locationIdOf'>): boolean {
     if (!location) return true;
+    // A SHARED room (2.18.0) by its beds: the pool while it keeps pool beds; a location that has beds in it,
+    // or any location while it keeps pool beds, or one of whose attendees sleeps there.
+    if (room.location_id == null && (room.shares || []).length) {
+        const poolBeds = (Number(room.pool_beds) || 0) > 0;
+        if (location === POOL_FILTER) return poolBeds;
+        if (poolBeds || (room.shares || []).some(s => String(s.location_id) === location)) return true;
+        return occupantsOf(room, deps.idx).some(p => String(deps.locationIdOf(p) ?? '') === location);
+    }
     if (room.location_id == null) return true;                 // pool rooms: in both the pool and every location
     if (location === POOL_FILTER) return false;
     if (String(room.location_id) === location) return true;
@@ -507,7 +697,8 @@ export function neighbors<T extends { id: number }>(list: T[], id: number | null
 // «Sin asignar» panel
 // ---------------------------------------------------------------------------------------------
 
-export interface UnassignedGroup { key: string; name: string; frozen: boolean; people: LvPerson[] }
+/** `reviewed`: the location's arrangement is submitted / validated (`status`) — the group header says so. */
+export interface UnassignedGroup { key: string; name: string; reviewed: boolean; status: string | null; people: LvPerson[] }
 
 /**
  * Non-cancelled attendees without a room, filtered by the search box and the location filter, grouped
@@ -537,7 +728,7 @@ export function groupUnassigned(
         const key = locId == null ? '' : String(locId);
         let g = groups.get(key);
         if (!g) {
-            g = { key, name: locName, frozen: !!loc && isFrozenStatus(loc.lodging_status), people: [], names: new Map() };
+            g = { key, name: locName, reviewed: !!loc && isFrozenStatus(loc.lodging_status), status: loc?.lodging_status || null, people: [], names: new Map() };
             groups.set(key, g);
         }
         g.people.push(p);

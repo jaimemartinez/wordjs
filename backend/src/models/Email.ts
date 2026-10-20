@@ -55,9 +55,10 @@ class Email {
             const { isPostgres, isMySQL } = getDbType();
             try {
                 if (isPostgres || isMySQL) {
-                    // Both expose an information_schema; PRAGMA table_info is SQLite-only.
+                    // Both expose an information_schema; PRAGMA table_info is SQLite-only. Scoped to the
+                    // connection's own schema / database: on a network every site has an `emails` table.
                     const res = await dbAsync.get(
-                        "SELECT column_name FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+                        `SELECT column_name FROM information_schema.columns WHERE table_schema = ${isPostgres ? 'current_schema()' : 'DATABASE()'} AND table_name = ? AND column_name = ?`,
                         [table, col]
                     );
                     return !!res;

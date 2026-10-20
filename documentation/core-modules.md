@@ -61,7 +61,7 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 *   **Custom Certs:** Supports uploading existing `.pem` files via the Admin UI.
 *   **Configuration:** Updates `wordjs-config.json` with paths to the active keys and certs.
 
-> **Not to be confused with `backend/src/core/certManager.ts`.** That module (camel-case, `node-forge`) generates the **internal** mTLS material, not public certificates: `generateClusterCA()` mints a self-signed cluster root CA and `generateServiceCert(name, caKey, caCert, altNames)` issues a service identity signed by it, writing private keys `0600` into `backend/certs/` (`0700`). Its caller is the install wizard (`issueLocalClusterIdentity()` in `routes/setup.ts`), which issues the single-host internal identities (`localhost` and `127.0.0.1` are always in their SANs). Separate-mode clusters use the gateway's own CA instead (§10).
+> **Not to be confused with `backend/src/core/certManager.ts`.** That module (camel-case, built on `core/x509.js`, Node's `crypto`) generates the **internal** mTLS material, not public certificates: `generateClusterCA()` mints a self-signed cluster root CA and `generateServiceCert(name, caKey, caCert, altNames)` issues a service identity signed by it, writing private keys `0600` into `backend/certs/` (`0700`). Its caller is the install wizard (`issueLocalClusterIdentity()` in `routes/setup.ts`), which issues the single-host internal identities (`localhost` and `127.0.0.1` are always in their SANs). Separate-mode clusters use the gateway's own CA instead (§10).
 
 ---
 
@@ -421,7 +421,7 @@ The modules that let one install serve a network of sites. The operator guide is
 *   **`site-keys.ts`** — each site's token signing key: site 1 keeps `config.jwt.secret`, every other site signs with a key derived from it (`HMAC-SHA256(secret, "wordjs-site:<id>")`), and its tokens also carry a `sid` claim that must match the site the request was addressed to.
 *   **`multisite-guards.ts`** — what only the main site may do (plugin and theme code on disk, backups of the main database, certificates, the main site's addresses, the installer). The guards are no-ops on a single site and on the main site.
 
-Per-site databases are opened by `openSiteDatabase()` in `config/database.ts` and require the `sqlite-native` driver; see [database.md §5](./database.md#5-multisite-storage).
+Per-site databases (a SQLite file, a Postgres schema or a MySQL database, named by `core/site-storage.ts`) are opened by `openSiteDatabase()` in `config/database.ts`; see [database.md §5](./database.md#5-multisite-storage).
 
 ---
 

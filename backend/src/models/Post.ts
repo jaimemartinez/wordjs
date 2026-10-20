@@ -1287,7 +1287,7 @@ class Post {
             if (driver === 'postgres') {
                 const row = await dbAsync.get(
                     `SELECT 1 AS ok FROM information_schema.columns ` +
-                    `WHERE table_name = 'posts' AND column_name = 'search_vector' LIMIT 1`
+                    `WHERE table_schema = current_schema() AND table_name = 'posts' AND column_name = 'search_vector' LIMIT 1`
                 );
                 return (Post._searchEngineCache = row ? 'pg' : null);
             }

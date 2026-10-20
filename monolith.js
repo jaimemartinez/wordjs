@@ -16,13 +16,13 @@
  * Usage: node monolith.js [dev|prod]   (default: prod)
  */
 
-// Preflight: Next 16 + the native modules need Node >= 20.9. Failing here with a clear message
+// Preflight: WordJS needs Node >= 22 (graphql 17 and the native modules declare it; Node 20 is EOL). Failing here with a clear message
 // beats the cryptic EBADENGINE/native-binding crash a newcomer would otherwise hit mid-boot.
 (() => {
-    const [maj, min] = process.versions.node.split('.').map(Number);
-    if (maj < 20 || (maj === 20 && min < 9)) {
-        console.error(`\n✖ WordJS requires Node.js >= 20.9 — you are running ${process.versions.node}.`);
-        console.error('  Install Node 20 LTS or 22 LTS (https://nodejs.org) and try again.\n');
+    const maj = Number(process.versions.node.split('.')[0]);
+    if (maj < 22) {
+        console.error(`\n✖ WordJS requires Node.js >= 22 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 22 LTS or 24 LTS (https://nodejs.org) and try again.\n');
         process.exit(1);
     }
 })();
@@ -364,7 +364,8 @@ function createAcmeHandler({ challengeBase, port, getPolicy, isInstalled }) {
                     res.writeHead(200, { 'Content-Type': 'text/plain' });
                     return res.end(fs.readFileSync(file));
                 }
-                res.writeHead(404); return res.end('Not found');
+                // Not a local file: an answer kept in the network's shared store (multisite, several
+                // nodes) is served by the backend over HTTPS — the redirect below takes the CA there.
             }
             const location = hostEdge.acmeRedirectLocation(req, { getPolicy, isInstalled, port });
             if (!location) {
@@ -425,6 +426,9 @@ async function main() {
 
     // 4) Public server: cross-cutting middleware (ported from the gateway worker) + path dispatch.
     const ssl = await resolveSSL();
+    // Multisite: each site's own certificate, selected by SNI (gateway/src/site-certs.js — the backend
+    // writes them there in embedded mode); the certificate above for every other name.
+    if (ssl) ssl.SNICallback = require('./gateway/src/site-certs.js').createSniSelector({}).SNICallback;
     const proto = ssl ? 'https' : 'http';
 
     // Raw connect-style chain — deliberately NOT an Express app. The root's Express is v5 while the

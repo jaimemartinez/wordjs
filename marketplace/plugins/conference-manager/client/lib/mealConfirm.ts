@@ -321,16 +321,19 @@ export type ConfirmFlow = ReturnType<typeof createConfirmFlow>;
 // ── «Entrega»: the decision is always in view ────────────────────────────────────────────────────────
 /**
  * What «Entrega»'s slot under the scan input shows NOW, as a key that changes exactly when something new
- * appears there: the check on its way, a card (each scan has its own seq), a delivery's result while the
- * confirmation is ON (and again when that result starts holding the queue). A re-render of the same thing
- * (the waiting count, «Registrando…») keeps the key. null = nothing to bring into view: an empty slot, or the
- * confirmation OFF (2.15's immediate delivery, whose verdict was never scrolled to).
+ * appears there: the check on its way, a card (each scan has its own seq), a delivery's result (and, with the
+ * confirmation ON, again when that result starts holding the queue). A re-render of the same thing (the waiting
+ * count, «Registrando…») keeps the key. null = nothing to bring into view: an empty slot.
+ * 2.17.0 live round: with the confirmation OFF (a USB wedge delivers at once) the verdict was never capped nor
+ * scrolled to — at 320×460 «Sin derecho» opened with «Entregar de todas formas» 570 px below the fold, «Entregado»
+ * with «Deshacer» 370 px below it, and on a 1280×800 desktop the card started at y 771. Now every result is,
+ * whichever way it was recorded (a scan, a name picked, «Sí, entregar»); the confirmation OFF has no card and
+ * no check of its own, so only its results count.
  */
 export function decisionSlotKey(s: { confirmOn: boolean; card?: { seq: number } | null; checking?: boolean; outcome?: { seq?: number } | null; held?: boolean }): string | null {
-    if (!s.confirmOn) return null;
-    if (s.card) return `card:${s.card.seq}`;
-    if (s.checking) return 'checking';
-    if (s.outcome) return `result:${s.outcome.seq ?? ''}${s.held ? ':held' : ''}`;
+    if (s.confirmOn && s.card) return `card:${s.card.seq}`;
+    if (s.confirmOn && s.checking) return 'checking';
+    if (s.outcome) return `result:${s.outcome.seq ?? ''}${s.confirmOn && s.held ? ':held' : ''}`;
     return null;
 }
 
@@ -338,7 +341,7 @@ export function decisionSlotKey(s: { confirmOn: boolean; card?: { seq: number } 
 export type RevealEl = {
     getBoundingClientRect(): { top: number; bottom: number };
     parentElement: RevealEl | null;
-    querySelector?: (selector: string) => { getBoundingClientRect(): { height: number } } | null;
+    querySelector?: (selector: string) => { getBoundingClientRect(): { height: number }; scrollHeight?: number; clientHeight?: number } | null;
     scrollIntoView?: (arg?: boolean | { block?: 'start' | 'center' | 'end' | 'nearest'; inline?: 'start' | 'center' | 'end' | 'nearest'; behavior?: 'auto' | 'smooth' }) => void;
     style?: { setProperty(name: string, value: string): void };
 };
@@ -375,12 +378,160 @@ export function visibleBand(el: RevealEl, win: RevealWin): { top: number; bottom
 }
 /**
  * What of a confirmation card inside `el` must stay on screen: its meal band, the header with the status and
- * the NAME, and the buttons (plus its 3 px borders) — the parts that never shrink. 0 = no card there.
+ * the NAME, and the buttons (plus its 3 px borders) — the parts that never shrink. 0 = no card there. The name
+ * gives way last, scrolling inside its header (2.17.0); measured while a cap squeezes it, the lines it hides
+ * count too — the card's essentials hold the WHOLE name.
+ * 2.17.0 — «Entrega»'s verdict card is capped the same way (live round at 320×460: 888 px tall, «Deshacer» far
+ * below the fold): everything of it but the part that gives way (the person's other data and «Más abajo» under
+ * them) — the head with the status and the meal, the NAME (whole), the buttons, an open question, its padding.
  */
 export function cardEssentials(el: RevealEl): number {
     const h = (selector: string) => { try { return el.querySelector?.(selector)?.getBoundingClientRect().height || 0; } catch { return 0; } };
+    const hiddenOf = (selector: string) => {
+        try {
+            const n = el.querySelector?.(selector);
+            return Math.max(0, (Number(n?.scrollHeight) || 0) - (Number(n?.clientHeight) || 0));
+        } catch { return 0; }     // detached node
+    };
+    const verdict = h('[data-verdict]');
+    if (verdict > 0) return Math.ceil(verdict - h('[data-verdict-scroll]') - h('[data-verdict-more]') + hiddenOf('[data-verdict-name]'));
     const parts = h('[data-confirm-meal]') + h('[data-confirm-head]') + h('[data-confirm-actions]');
-    return parts > 0 ? Math.ceil(parts + 6) : 0;
+    return parts > 0 ? Math.ceil(parts + hiddenOf('[data-confirm-name]') + 6) : 0;
+}
+
+/**
+ * 2.17.0 — the person's other data on both cards (the confirmation card and the phone scanner's verdict card)
+ * end on a WHOLE line. The live round on short phones found the part that scrolls ending anywhere: a lone
+ * faded «LOCALIDAD» with no value, an «EMAIL» with only the tops of its value, a sliver of a label above «Más
+ * abajo». Now, measured after layout: when everything fits, nothing changes; when it does not, the part is cut
+ * at the last line that fits together with the «Más abajo» line under it (MORE_CUE_PX) — after a whole entry,
+ * or inside one after a whole line of its VALUE (a label never stands alone) — and scrolls to show the rest;
+ * when not even that fits, the part is left out (height 0). The status, the name and the buttons never give
+ * way to it. Each entry: its `bottom` from the top of the part that scrolls, and the `lines` its value may be
+ * cut after (in order); `room`: the part's height as laid out; `content`: its scrollHeight — layout px, whole
+ * numbers (1 px is rounding, 2 px a cut line). `height` null = all of it, uncut; `hidden` = the entries not
+ * wholly shown.
+ */
+export const MORE_CUE_PX = 20;
+export type DetailsFit = { height: number | null; hidden: number };
+export type DetailEntry = { bottom: number; lines?: number[] };
+export function detailsCut(entries: DetailEntry[], room: number, content: number, cue = MORE_CUE_PX): DetailsFit {
+    if (content <= room + 1) return { height: null, hidden: 0 };
+    const last = entries.length ? entries[entries.length - 1].bottom : 0;
+    // Only the part's bottom padding is out of view: every entry is whole, nothing more to say.
+    if (entries.length && last <= room + 1) return { height: last, hidden: 0 };
+    const avail = room - cue;
+    let height = 0, whole = 0;
+    for (const e of entries) {
+        if (e.bottom <= avail) { height = e.bottom; whole++; continue; }
+        // It does not fit whole: up to the last line of its value that fits, if one does.
+        for (const l of e.lines || []) if (l <= avail && l > height) height = l;
+        break;
+    }
+    return { height, hidden: entries.length - whole };
+}
+/** The part that scrolls (`position: relative`: its entries' offsetParent), as measureDetails reads it. */
+export type DetailsEl = {
+    clientHeight: number; scrollHeight: number; offsetHeight?: number; scrollTop?: number;
+    getBoundingClientRect?: () => { top: number; height: number };
+    querySelectorAll(selector: string): ArrayLike<any>;
+};
+/** The entries: the configured ones (`data-field`: «LABEL value») and the card's own lines (`data-entry`). */
+export const DETAIL_ENTRY_SELECTOR = '[data-field],[data-entry]';
+/**
+ * Where an entry may be cut inside: the bottom of each line of its value — its last element (the value of
+ * «LABEL value»), or its own text — in the part's layout px (rects / the card's entry-animation scale +
+ * scrollTop). The bottom of a line's text, not of its line box: the next line's glyphs start below it.
+ */
+export function valueLineBottoms(entry: any, top: number, scale: number, scrollTop = 0): number[] {
+    try {
+        const target = entry.lastElementChild || entry;
+        const range = entry.ownerDocument?.createRange?.();
+        if (!range || !(scale > 0)) return [];
+        range.selectNodeContents(target);
+        const rects = Array.from(range.getClientRects() as ArrayLike<{ bottom: number; height: number }>).filter((r) => r.height > 0);
+        // Rounded up to a whole px (0.01 px of float noise is not a line).
+        return [...new Set(rects.map((r) => Math.ceil((r.bottom - top) / scale + scrollTop - 0.01)))].sort((a, b) => a - b);
+    } catch { return []; }
+}
+export function measureDetails(el: DetailsEl): DetailsFit {
+    let top = 0, scale = 0;
+    try {
+        const box = el.getBoundingClientRect?.();
+        if (box && el.offsetHeight) { top = box.top; scale = box.height / el.offsetHeight; }
+    } catch { /* no layout */ }
+    const entries = Array.from(el.querySelectorAll(DETAIL_ENTRY_SELECTOR)).map((e) => ({
+        bottom: e.offsetTop + e.offsetHeight,
+        lines: valueLineBottoms(e, top, scale, el.scrollTop || 0),
+    }));
+    return detailsCut(entries, el.clientHeight, el.scrollHeight);
+}
+/**
+ * The room changed since the part was measured (another layout capped the card — «Entrega» does it in its own
+ * layout effect, after the card's): measure it again. Uncut, it now overflows; cut, it is now shorter than the cut.
+ */
+export const detailsStale = (fit: DetailsFit, el: { scrollHeight: number; clientHeight: number }): boolean =>
+    (fit.height == null ? el.scrollHeight > el.clientHeight + 1 : el.clientHeight < fit.height - 1);
+
+/**
+ * 2.17.0 — the meal line shown whole on a tap (both cards). The live round at 320×460 found it cut mid-phrase
+ * with no cue: a fixed two-line cap («Almuerzo — Almuerzo / campestre en la finca del», the day that was on
+ * screen before the tap gone). Now it is WHOLE, and the person's other data give way to it; only when the card
+ * cannot hold it without cutting the essentials (the name scrolling inside itself, the card or its header
+ * clipping) does it keep the whole lines that fit, «Más abajo ↓» under them, and scroll to the rest.
+ * `textLineBottoms`: the bottom of each LINE of `el`'s text (an icon and the spans of one line merged), in its
+ * layout px from its top — rects un-scaled (the card's entry animation) and scrolled — rounded up; where a line's
+ * glyph box overlaps the next one's (line-height 1.1), halfway between them.
+ */
+export function textLineBottoms(el: any): number[] {
+    try {
+        const box = el.getBoundingClientRect();
+        const scale = el.offsetHeight ? box.height / el.offsetHeight : 0;
+        const range = el.ownerDocument?.createRange?.();
+        if (!range || !(scale > 0)) return [];
+        range.selectNodeContents(el);
+        const rects = Array.from(range.getClientRects() as ArrayLike<{ top: number; bottom: number; height: number }>)
+            .filter((r) => r.height > 0)
+            .map((r) => ({ top: (r.top - box.top) / scale + (el.scrollTop || 0), bottom: (r.bottom - box.top) / scale + (el.scrollTop || 0) }))
+            .sort((a, b) => a.top - b.top);
+        const lines: { top: number; bottom: number }[] = [];
+        for (const r of rects) {
+            const last = lines[lines.length - 1];
+            // The same line: it starts above the middle of the line so far.
+            if (last && r.top < (last.top + last.bottom) / 2) last.bottom = Math.max(last.bottom, r.bottom);
+            else lines.push({ ...r });
+        }
+        // A tight line-height (1.1) makes a line's glyph box overlap the next one's: the cut goes between them.
+        return lines.map((l, i) => {
+            const next = lines[i + 1];
+            return Math.ceil((next && next.top < l.bottom ? (l.bottom + next.top) / 2 : l.bottom) - 0.01);
+        });
+    } catch { return []; }
+}
+/**
+ * 2.17.0 — the most lines a button's whole label may take («Entregar sin derecho (autorizar)» of the
+ * confirmation card). The live round found it in four lines in a 118 px button on a 390×664 / 390×844 phone, and
+ * in three or four on a 412×915 one — the media rules gave «Autorizar» only up to 380 px wide or on a short
+ * screen. Now the whole label shows only while it takes at most this many lines, at whatever width, language or
+ * font; else the short one (its accessible name stays whole).
+ */
+export const LABEL_MAX_LINES = 2;
+/**
+ * Whether `el`'s text (the whole label, laid out) takes more than `max` lines (textLineBottoms). Without a layout
+ * (hidden by a media rule, no Range, a throw) it has no lines: never too long — what shows then is the CSS's call.
+ */
+export const labelTooLong = (el: any, max = LABEL_MAX_LINES): boolean => textLineBottoms(el).length > max;
+/**
+ * How tall the open meal line may be: up to the bottom of its last line that fits in its height less what the
+ * essentials lack (`over`) and less the «Más abajo» line it then needs (`cueShown`: already under it) — or 0,
+ * not even one line: it closes again (the name always wins). `over` ≤ 2 px is rounding: nothing to do (null).
+ */
+export function openMealCut(lines: number[], height: number, over: number, cueShown: boolean, cue = MORE_CUE_PX): number | null {
+    if (!(over > 2)) return null;
+    const room = height - over - (cueShown ? 0 : cue);
+    let cut = 0;
+    for (const b of lines) if (b <= room + 1 && b > cut) cut = b;
+    return cut;
 }
 /**
  * The max-height the card gets: the room inside `band` less a margin at each end (its middle scrolls below
@@ -414,11 +565,66 @@ export function revealSlot(el: RevealEl | null | undefined, win: RevealWin | nul
         const fit = fitHeight(visibleBand(el, win), cardEssentials(el));
         el.style?.setProperty(REVEAL_FIT_VAR, fit == null ? 'none' : `${fit}px`);
     } catch { /* no CSSOM */ }
-    if (typeof el.scrollIntoView !== 'function') return false;
+    return revealNearest(el, win);
+}
+/**
+ * Scroll `el`'s NEAREST edge into view (its scroll-margin kept): nothing moves when it is already on screen,
+ * one that opened below the fold comes up until its bottom is in view (a taller one shows its top). Instant
+ * under prefers-reduced-motion, smooth otherwise; the focus is never touched (a USB wedge keeps typing into
+ * the scan input). 2.17.0: «Últimas entregas»' inline «¿Deshacer…?» and «Entrega»'s «¿Entregar de todas
+ * formas?» open UNDER the button that was tapped — on an iPhone SE their buttons landed at, or below, the
+ * bottom edge. Returns whether it scrolled.
+ */
+export function revealNearest(el: Pick<RevealEl, 'scrollIntoView'> | null | undefined, win: Pick<RevealWin, 'matchMedia'> | null | undefined): boolean {
+    if (!el || !win || typeof el.scrollIntoView !== 'function') return false;
     try {
         el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: prefersReducedMotion(win) ? 'auto' : 'smooth' });
         return true;
     } catch { return false; }
+}
+/**
+ * An inline question that opened under the button that was tapped («Entrega»'s «¿Entregar de todas formas?»):
+ * the whole CARD it sits in into view when that fits in the visible band — the operator authorises seeing the
+ * status and the name (2.17.0 live round: with the question's own edge brought in, the status and the name sat
+ * above the top edge from 320×460 to 390×664) — else the whole question when it fits (revealNearest, its
+ * scroll-margins kept), else its BUTTONS (live round, 320×460: the question was taller than the screen, so its
+ * nearest edge was its top, and «Sí, entregar» / «Cancelar» stayed below the bottom edge). Returns whether it
+ * scrolled; never throws.
+ */
+export function revealAsk(el: RevealEl | null | undefined, win: RevealWin | null | undefined, buttons?: Pick<RevealEl, 'scrollIntoView'> | null, card?: RevealEl | null): boolean {
+    if (!el || !win) return false;
+    let target: Pick<RevealEl, 'scrollIntoView'> = el;
+    if (buttons || card) {
+        try {
+            // The band the page shows the card in — measured from the card when there is one: the card scrolls inside
+            // itself when it must, so from the question's side the card's own box clipped the band (live: a 353 px
+            // card in a 383 px band was «too tall» for the 310 px left of it under its top edge).
+            const band = visibleBand(card || el, win);
+            const room = band.bottom - band.top - 2 * REVEAL_MARGIN_PX;
+            const tall = (n: Pick<RevealEl, 'getBoundingClientRect'>) => { const r = n.getBoundingClientRect(); return r.bottom - r.top > room; };
+            if (card && !tall(card)) target = card;
+            else if (buttons && tall(el)) target = buttons;
+        } catch { /* no layout: the whole question */ }
+    }
+    return revealNearest(target, win);
+}
+/**
+ * 2.17.0 — «Últimas entregas»' «¿Deshacer…?» opens under the row whose undo was tapped. The live round at 320×460
+ * scrolled the question's nearest edge into view, and the top of the row — the person's name — was left above the
+ * band, sliced by the edge under the admin header. Now the WHOLE ROW is brought into view (revealAsk with the row as
+ * the card: the visible band below that header, the scroll-margins kept); for that it must fit the band. Level 0
+ * asks the whole question (the meal and the person); level 1 the short one («¿Deshacer la entrega de Almuerzo?» —
+ * the row right above names both; the whole question stays the dialog's accessible name), taken while the row with
+ * the whole question is taller than the band less a margin at each end (1 px is rounding). Never below level 1.
+ */
+export const UNDO_ASK_LEVELS = 2;
+export function undoAskStepDown(level: number, row: RevealEl | null | undefined, win: RevealWin | null | undefined, margin = REVEAL_MARGIN_PX): number {
+    if (!row || !win || level >= UNDO_ASK_LEVELS - 1) return level;
+    try {
+        const band = visibleBand(row, win);
+        const r = row.getBoundingClientRect();
+        return r.bottom - r.top > band.bottom - band.top - 2 * margin + 1 ? level + 1 : level;
+    } catch { return level; }      // detached node, no layout
 }
 
 // ── Phone: which badge to hold after its card closed ─────────────────────────────────────────────────

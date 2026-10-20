@@ -66,7 +66,7 @@ function scheduleReload(slug: string): void {
 function watchPlugin(slug: string, dir: string): boolean {
     if (watchers.has(slug)) return true;
     try {
-        // recursive fs.watch is supported on win32/darwin and on Linux since Node 20 (engines >= 20.9).
+        // recursive fs.watch is supported on win32/darwin and on Linux since Node 20 (engines >= 22).
         const watcher: FSWatcher = fs.watch(dir, { recursive: true }, (_event: string, filename: string | null) => {
             if (!isRelevantChange(filename)) return;
             scheduleReload(slug);

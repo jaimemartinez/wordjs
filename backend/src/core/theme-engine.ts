@@ -108,6 +108,8 @@ async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
 const siteContext = require('./site-context');
 const engineState = siteContext.perSite(() => ({
     activeTheme: null as any,
+    // What became of the active theme's functions.js at its last load (GET /themes/:slug/permissions shows it).
+    logic: { slug: null as string | null, state: 'none' as 'none' | 'running' | 'blocked' | 'error', reason: '' },
     initChain: Promise.resolve() as Promise<void>,
     pendingInit: null as Promise<void> | null,
 }));
@@ -259,9 +261,15 @@ class ThemeEngine {
         this.partialsLoaded = true;
     }
 
+    /** What became of the active theme's functions.js at its last load (this site). */
+    get logicStatus(): { slug: string | null; state: 'none' | 'running' | 'blocked' | 'error'; reason: string } {
+        return { ...engineState.get().logic };
+    }
+
     async loadThemeLogic() {
         const themeSlug = this.activeTheme.slug;
         const isoSlug = `${THEME_ISOLATE_PREFIX}${themeSlug}`;
+        const setLogic = (state: 'none' | 'running' | 'blocked' | 'error', reason = '') => { engineState.get().logic = { slug: themeSlug, state, reason }; };
 
         // TEAR DOWN FIRST — before the functions.js existence check and before the AST pre-scan below.
         // Reaching this method means init() already validated the incoming theme and committed
@@ -277,23 +285,39 @@ class ThemeEngine {
         await unloadThemeIsolates(isoSlug);
 
         const logicPath = path.join(this.activeTheme.path, 'functions.js');
-        if (!fs.existsSync(logicPath)) return;
+        if (!fs.existsSync(logicPath)) { setLogic('none'); return; }
         try {
-            // Static AST pre-scan (defense in depth). The REAL containment is the OS isolation below.
-            const { validatePluginPermissions } = require('./plugins');
-            // No manifest.json: the same default declaration the runtime gate applies (plugin-context).
-            const { DEFAULT_THEME_PERMISSIONS } = require('./plugin-context');
-            let manifest: any = { permissions: DEFAULT_THEME_PERMISSIONS.map((p: any) => ({ ...p })) };
-            const manifestPath = path.join(this.activeTheme.path, 'manifest.json');
-            if (fs.existsSync(manifestPath)) {
-                try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
-                catch (e) { log.warn({ err: e }, `[Theme] Failed to parse manifest for ${themeSlug}`); }
+            // THE DECLARATION, read fresh: theme.json `permissions` (or a legacy manifest.json), the one
+            // reader the runtime gates use too (core/theme-declaration). A theme that declares nothing gets
+            // the read-only default for the scan — and holds nothing: only what it declares can be granted.
+            const { themeDeclaredPermissions, declarationToken } = require('./theme-declaration');
+            const { DEFAULT_THEME_PERMISSIONS, forgetThemeDeclaration } = require('./plugin-context');
+            forgetThemeDeclaration(themeSlug);
+            const declared = themeDeclaredPermissions(this.activeTheme.path);
+            const manifest: any = { permissions: declared || DEFAULT_THEME_PERMISSIONS.map((p: any) => ({ ...p })) };
+
+            // A grant outlives the declaration that asked for it only until here: a theme UPDATE that stops
+            // declaring a permission loses its grant, so no gate that reads grants alone (io-guard,
+            // hook-access) can still answer yes for it.
+            const perms = require('./plugin-permissions');
+            const declaredTokens = (declared || []).map(declarationToken).filter(Boolean) as string[];
+            const held = perms.getThemeGrants(themeSlug);
+            if (held.some((t: string) => !declaredTokens.includes(t))) {
+                try { await perms.applyThemeGrants(themeSlug, held.filter((t: string) => declaredTokens.includes(t)), declaredTokens); }
+                catch (e) { log.warn({ err: e }, `[Theme] could not drop the grants '${themeSlug}' no longer declares`); }
             }
+
+            // Static AST pre-scan (defense in depth) in GRANT mode: the administrator has had the chance to
+            // grant what the theme declares, so code that needs a declared capability they left off is
+            // blocked here, as a plugin's activation is. The REAL containment is the OS isolation below.
+            const { validatePluginPermissions } = require('./plugins');
             try {
-                validatePluginPermissions(themeSlug, this.activeTheme.path, manifest);
-            } catch (securityError) {
-                log.error(`🚨 Security Block: Theme '${themeSlug}' contains unsafe code and was blocked.`);
+                validatePluginPermissions(isoSlug, this.activeTheme.path, manifest, { mode: 'grant' });
+            } catch (securityError: any) {
+                log.error(`🚨 Security Block: Theme '${themeSlug}' functions.js was blocked (unsafe code, or a capability it needs is not granted).`);
                 log.error(securityError);
+                const missing = securityError && Array.isArray(securityError.missingPermissions) ? securityError.missingPermissions.join('; ') : '';
+                setLogic('blocked', String(missing || (securityError && securityError.message) || securityError).slice(0, 500));
                 return; // STOP loading
             }
 
@@ -309,8 +333,10 @@ class ThemeEngine {
             // unloadThemeIsolates sweep at the top of this method, so this is always a clean start.
             const { loadIsolatedPlugin } = require('./plugin-isolate');
             await loadIsolatedPlugin(isoSlug, logicPath);
-        } catch (e) {
+            setLogic('running');
+        } catch (e: any) {
             log.error({ err: e }, '❌ Error loading theme functions.js (isolated)');
+            setLogic('error', String((e && e.message) || e).slice(0, 500));
         }
     }
 

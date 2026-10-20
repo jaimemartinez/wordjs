@@ -2965,7 +2965,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     // deactivation record) and stop offering it, before any of its files go away.
     try {
         await require('../core/plugins').deactivatePluginOnSecondarySites(slug);
-        if (require('../core/site-context').multisiteEnabled()) require('../core/network').clearPluginCeiling(slug);
+        if (require('../core/site-context').multisiteEnabled()) await require('../core/network').clearPluginCeiling(slug);
     } catch (e: any) { log.error({ slug: logSafe(slug), err: e }, `[plugin ${logSafe(slug)}] delete: could not stop it on the other sites: ${logSafe(e && e.message)}`); }
     if (!(await isolate.awaitOtherSitesStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
         return res.status(409).json({ message: `Plugin '${slug}' still runs on another site of the network; nothing was deleted. Try again in a moment.` });

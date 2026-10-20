@@ -366,7 +366,9 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/plugins/active`           | No    | Array of active plugin slugs                        |
 | `GET`  | `/plugins/assets`           | No    | Enqueued frontend scripts/styles of active plugins that hold `assets:write`. Sent `Cache-Control: private, no-cache` — no shared cache may keep it, since it changes the moment a plugin is deactivated or loses the grant (the public layout caches it in its own tag-purged Data Cache) |
 | `GET`  | `/plugins/:slug/bundle` (+`/manifest`, `/css`) | No | Pre-compiled client bundle of a plugin (`routes/plugin-bundles.ts`, mounted under `/plugins`) — served only while the plugin is **active** and granted **`browser:script`**, otherwise 404 — the same 404 as a slug that was never installed. The slug is the folder or the admin-page slug of an **active** plugin. `/manifest` returns only `{ bundles }`, never the rest of `dist/manifest.build.json` (no version) |
-| `GET`  | `/plugins/:slug/portal`     | No    | Head details of the standalone public page `/portal/<slug>` a plugin declares in `frontend.portalPage`: `{ slug, title?, themeColor?, viewportFit? }` (`Cache-Control: no-store`). `slug` is the portal slug, not necessarily the folder. Same gate as the bundles: an **active** plugin granted **`browser:script`**, otherwise the same 404 |
+| `GET`  | `/plugins/:slug/portal`     | No    | Head details of the standalone public page `/portal/<slug>` a plugin declares in `frontend.portalPage`: `{ slug, title?, themeColor?, viewportFit?, pages?, serviceWorker?, fileEndpoint? }` (`Cache-Control: no-store`) — `pages` the head of its sub-pages, `serviceWorker: true` when it has one, `fileEndpoint` the API path of its ticket file route. `slug` is the portal slug, not necessarily the folder. Same gate as the bundles: an **active** plugin granted **`browser:script`**, otherwise the same 404 |
+| `GET`  | `/plugins/:slug/portal/sw`  | No    | The portal's service worker (`frontend.portalPage.serviceWorker`, a `.js` file under `client/`) as-is, `text/javascript`, `Cache-Control: no-cache`; the frontend serves it at `/portal/<slug>/sw.js`. Same gate and same 404 as above |
+| `GET`  | `/plugins/portals`          | Signed in | The portals served right now, `[{ slug, title? }]` — what the menu editor offers as links. Same rule as `GET /plugins/:slug/portal` |
 | `GET`  | `/plugins/:slug/admin-style` (+`/css`) | Signed in (any role) | Styling of a plugin's admin page for the generated `/admin/plugin/<slug>` page: `{ style, theme, stylesheet }` (never the manifest), and `/css` = its `client/admin/admin.css` (`Cache-Control: private, no-cache`). **Active** plugins only; anonymous → 401 for every slug, inactive or unknown → the same 404 |
 | `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install); an installed one answers `409 plugin_exists` with both versions |
 | `POST` | `/plugins/:slug/update`     | Admin | Update an installed plugin in place from a ZIP (field `plugin`): staged and validated first, then swapped; keeps `data/`, tables, grants; reports `newPermissions` / `ungrantedPermissions` |
@@ -623,13 +625,14 @@ Base path: `/api/v1/widgets` (`backend/src/routes/widgets.ts`; core `backend/src
 
 | Method   | Endpoint                            | Auth  | Description                                                     |
 | :------- | :---------------------------------- | :---- | :--------------------------------------------------------------- |
-| `GET`    | `/`                                 | No    | Registered widget types (`id`, `name`, `description`)            |
+| `GET`    | `/`                                 | No    | Registered widget types (`id`, `name`, `description`, `fields` — the instance settings form, `null` when the widget declares none) |
 | `GET`    | `/sidebars`                         | No    | Registered sidebars, each with its resolved widget instances     |
 | `GET`    | `/sidebars/:id/render`              | No    | Server-rendered **HTML** of a sidebar (`text/html`, not JSON)    |
-| `POST`   | `/sidebars/:id`                     | Admin | Add a widget instance to a sidebar. Body `{ widgetId, settings }` |
+| `POST`   | `/sidebars/:id`                     | Admin | Add a widget instance to a sidebar. Body `{ widgetId, settings }`; `404` for an unregistered widget |
 | `POST`   | `/sidebars/:id/reorder`             | Admin | Reorder a sidebar. Body `{ widgets: [instanceKey, …] }`          |
 | `DELETE` | `/sidebars/:sidebarId/:instanceKey` | Admin | Remove one instance from a sidebar                              |
-| `PUT`    | `/:widgetId/instances/:instanceId`  | Admin | Update one instance's settings. Body `{ settings }`              |
+| `GET`    | `/:widgetId/instances/:instanceId`  | Admin | One instance's stored settings: `{ settings, fields }`            |
+| `PUT`    | `/:widgetId/instances/:instanceId`  | Admin | Update one instance's settings. Body `{ settings }`; answers the settings as stored |
 
 `/sidebars/:id/render` escapes every value the built-in widgets interpolate (term names, post titles and
 slugs, widget titles); only the `text` and `custom_html` widgets, which are admin-configured, emit their
@@ -638,6 +641,12 @@ setting as markup. The response carries `Content-Security-Policy: default-src 'n
 script; the public frontend fetches it as text and sanitizes it before inserting it. Plugins cannot
 filter it (`dynamic_sidebar` is a denied raw-HTML hook). Instance keys are `<widgetId>-<instanceId>`
 and are resolved against the registered widget ids, so UUID instance ids and hyphenated widget ids work.
+
+**Settings are the widget's declared fields.** Adding or updating an instance stores only the `fields` its
+widget declares (§12.1), each coerced to its type and bounded (`number` clamped to `min`/`max`, `checkbox`
+a boolean, text clipped); anything else in the body is dropped, and a body that is not an object is a `400`.
+A widget registered without `fields` stores a plain JSON object of at most 100 KB. The **Widgets** admin
+screen draws each instance's form from these fields.
 
 ### 6.14 Post Types 🗂️
 Base path: `/api/v1/types` (`backend/src/routes/post-types.ts`). Reads are public; mutations are `authenticate` + `isAdmin`.
@@ -909,9 +918,18 @@ const { registerWidget } = require('../../src/core/widgets');
 // Signature: registerWidget(id, name, options)
 registerWidget('clock_widget', 'Analog Clock', {
     description: 'Displays the current time',
-    render: (options) => `<div class="clock">...</div>`
+    // The instance settings form (Widgets admin screen). Types: text, textarea, html, number, checkbox.
+    fields: [
+        { name: 'title', label: 'Title', type: 'text', max: 200 },
+        { name: 'timezone', label: 'Time zone', type: 'text', default: 'UTC' },
+        { name: 'seconds', label: 'Show seconds', type: 'checkbox', default: false },
+    ],
+    render: (settings) => `<div class="clock">...</div>` // settings: { title, timezone, seconds }
 });
 ```
+
+`render(settings)` receives exactly the stored fields; `title`, when present, is printed escaped above
+the widget by the sidebar. Escape everything else you interpolate.
 
 
 ## 13. Developing Extensions

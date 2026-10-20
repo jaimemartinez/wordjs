@@ -12,10 +12,16 @@ or changes. The design, the isolation guarantees and the road ahead are in
 - [Creating a site](#creating-a-site)
 - [DNS, the gateway and TLS](#dns-the-gateway-and-tls)
 - [Suspending a site](#suspending-a-site)
-- [What stays on the main site in this version](#what-stays-on-the-main-site-in-this-version)
+- [Deleting a site](#deleting-a-site)
+- [What the network manages on the main site](#what-the-network-manages-on-the-main-site)
+- [Backups](#backups)
+- [Real-time collaboration](#real-time-collaboration)
 - [Where a site's data lives](#where-a-sites-data-lives)
+- [Several backend nodes](#several-backend-nodes)
+- [Changing the database engine](#changing-the-database-engine)
 - [REST API](#rest-api)
 - [Turning it off](#turning-it-off)
+- [Upgrading from 2.7](#upgrading-from-27)
 - [Troubleshooting](#troubleshooting)
 
 ## What a network is
@@ -23,11 +29,13 @@ or changes. The design, the isolation guarantees and the road ahead are in
 | | Main site (site 1) | Every other site |
 |---|---|---|
 | Address | `siteUrl` and its aliases ([Site address](site-address.md)) | One main address, set when the site is created |
-| Database | `dbPath`, as before | `<data dir>/sites/<id>/wordjs-native.db` |
+| Database | Its database, as before | Its own: a SQLite file, a Postgres schema or a MySQL database ([below](#where-a-sites-data-lives)) |
 | Uploads | `uploads/` and `data/private-uploads/`, as before | `<data dir>/sites/<id>/uploads/` and `…/private-uploads/` |
 | Users, roles, sessions | Its own | Its own. User ids repeat across sites; a session or API token of one site is refused on every other |
 | Plugins | Installed here, for the whole network; activated and granted here | Activated and granted per site, among the plugins the network offers ([below](#plugins-on-the-sites)) |
 | Themes | Installed and edited here | Chosen and customised per site; the theme files are shared; each site runs its own theme server code |
+| TLS certificate | Settings → Certificates, as before | Its own, for its address, served by SNI ([below](#dns-the-gateway-and-tls)) |
+| Backups | Settings → Backups (network administrators) | Its own, made and restored by its administrators ([below](#backups)) |
 
 A request is assigned to a site by the address it was sent to. An address no site declares is answered
 `421 Misdirected Request`, exactly as on a single site. Loopback addresses and IP literals always mean
@@ -49,10 +57,18 @@ restore it follows that login, and is dropped when the account is gone.
 
 ## Requirements
 
-- The `sqlite-native` database driver. Postgres and MySQL networks are planned; `npm run network --
-  enable` refuses other drivers today.
-- One backend host. In split and separate mode the gateway is told the network's addresses by the
-  backend, as it is told the main site's.
+- One of the `sqlite-native`, `postgres` or `mysql` (MariaDB too) database drivers. `npm run network --
+  enable` refuses `sqlite-legacy`.
+  - **Postgres**: the WordJS database user needs `CREATE` on its database (each site is a schema of it).
+    Without that right, create the schemas `wordjs_network` and `wordjs_site_<id>` for it beforehand.
+  - **MySQL / MariaDB**: the user needs `CREATE` (each site is a database named `<db.name>_site_<id>`, and
+    the network store is `<db.name>_network`), and `db.name` must be made of lower-case letters, digits
+    and underscores. Without the right, create those databases beforehand.
+  - To give each site's plugins their own database principals ([plugins](#plugins-on-the-sites)), the
+    user needs `CREATEROLE` (Postgres) or `CREATE USER` and `GRANT OPTION` (MySQL), as on a single site.
+- One backend host on `sqlite-native`; one or more on Postgres and MySQL ([Several backend
+  nodes](#several-backend-nodes)). In split and separate mode the gateway is told the network's addresses
+  by the backend, as it is told the main site's.
 - An installed site (the install wizard finished).
 
 ## Turning it on
@@ -65,8 +81,9 @@ npm run network -- enable --admin admin
 
 `--admin` names one or more administrators of the main site (comma-separated logins) who become network
 administrators. The command records the main site as site 1, creates the network store
-(`<data dir>/network.db`) and sets `multisite.enabled` in `wordjs-config.json`. **Restart the backend**
-(the monolith, or the backend process in split and separate mode): it reads the setting at start.
+(`<data dir>/network.db` on SQLite, the `wordjs_network` schema on Postgres, the `<db.name>_network`
+database on MySQL) and sets `multisite.enabled` in `wordjs-config.json`. **Restart the backend** (the
+monolith, or every backend process in split and separate mode): it reads the setting at start.
 
 Then sign in on the main site as one of those administrators; **Network** appears in the admin menu.
 
@@ -86,9 +103,11 @@ Admin → Network → New site:
 - **Site title**, and the **first administrator**'s username, email and password.
 - **Your current password** — creating a site publishes a new address, so it re-authenticates you.
 
-The site is provisioned all at once — its record and address, database, upload directories, default
-options, a default category and its first administrator — or not at all. Its administrator then signs
-in at `<site address>/login`. Within a few seconds the gateway answers the new address too.
+The site is provisioned all at once — its record and address, database (file, schema or database), upload
+directories, default options, a default category and its first administrator — or not at all. Its
+administrator then signs in at `<site address>/login`. Within a few seconds the gateway answers the new
+address too, and so does every other backend node of the network. A site's id is never given to another
+site, even after it is deleted.
 
 ## DNS, the gateway and TLS
 
@@ -100,10 +119,25 @@ Point the new name at the server the main site runs on, exactly as you did for t
   site by fetching that site's data through the gateway; the gateway lets a node it has registered name
   the site (only one of the network's addresses). A node registered by a DNS name rather than an IP
   address is not recognised that way: register nodes by address.
-- **TLS**: in this version a site's address is covered by the install's one certificate. With ACME, add
-  the new names to `acme.domains` (one certificate; WordJS enforces Let's Encrypt's limit of 100 names per
-  certificate), or terminate TLS in a reverse proxy
-  in front of WordJS. A certificate per site (SNI) is planned.
+- **TLS: one certificate per site.** The main site keeps its certificate (Settings → Certificates). Every
+  other site has a certificate of its own for its main address, which the gateway — and the monolith —
+  selects by the name the browser asks for (SNI); a name with no certificate of its own gets the main
+  site's. Admin → Network shows each site's certificate and offers two ways to get one:
+  - **Get certificate**: Let's Encrypt over HTTP-01, with the install's ACME account (the email of
+    Settings → Certificates). The address must already point at this server. With ACME enabled and the
+    `http-01` challenge, this happens on its own: when a site is created, and in the twice-daily renewal
+    pass, which renews each site's certificate inside `acme.renewBeforeDays` (30) of its expiry and leaves
+    an address whose last attempt failed alone for six hours.
+  - **Install your own**: paste a certificate (with its chain) and its key. It must name the site's
+    address, match the key and still be valid.
+
+  The certificates are kept in the network store and handed to the gateway, which keeps them under
+  `gateway/ssl/live/sites/<host>/` and picks a new or renewed one up within seconds, without a restart. A
+  gateway that restarts without them, or a new one, gets them back from the backend. The challenge
+  answers of HTTP-01 are kept in the network store too, so whichever backend node the edge sends the CA
+  to answers it; the gateway's own port-80 listener (`acme.http01Port`) redirects a token it does not
+  hold to HTTPS, where the backends answer it. You can also terminate TLS in a reverse proxy in front of
+  WordJS instead.
 
 ## Suspending a site
 
@@ -117,7 +151,7 @@ site sees the same installed plugins. What each site does with them is its own:
 
 1. **The network offers a plugin.** In Admin → Network → *Plugins for the sites*, a network administrator
    ticks the permissions any site may grant the plugin (its **ceiling**) and clicks *Offer to the sites*
-   (the password field above the list confirms it). Until then the plugin runs on the main site only, and
+   (the password field above the list confirms it). Until it is offered, only the main site can use it, and
    the other sites list it as *Not offered by the network*.
 2. **A site activates it.** The site's administrator opens Admin → Plugins on the site's own address,
    activates the plugin and grants it permissions, as on a single site — but never beyond the ceiling:
@@ -142,15 +176,26 @@ private network is accepted only on the main site).
 
 Each site's theme server code (`functions.js`) also runs per site, in its own worker.
 
-## What stays on the main site in this version
+## Deleting a site
 
-These screens are the main site's, and are not offered elsewhere: installing, updating and deleting
-plugins and themes, backups, the site address, certificates, the hooks inspector, the database migration
-tool, and the network screen. Real-time collaboration in the editor is available on the main site only.
+Suspend the site first, then Admin → Network → Delete: type the site's slug to confirm (your password
+confirms it too). Everything the site holds is removed for good: its database (its SQLite file, its
+Postgres schema or its MySQL database), its uploads and private files (on disk and in the media bucket),
+its backups, its plugin and theme workers, the database principals of its plugins, its cached entries,
+its certificate and its addresses. Every node of the network forgets it within seconds. The main site
+cannot be deleted, and the id of a deleted site is never given to a new one.
 
-On another site the API enforces this too. The site address, marketplace, certificates, system health
-details, hooks and backups routes answer `404 rest_no_route`, as if they did not exist. A write that would
-change network-wide files answers `403 rest_network_only`: uploading, deleting, packing or downloading
+## What the network manages on the main site
+
+What is the network's — not a site's — is managed on the main site by its network administrators, and is
+not offered on the other sites: installing, updating and deleting plugin and theme code (the code is
+shared by every site), the main site's address and its certificate (each site's own certificate is on the
+network screen), the hooks inspector, the database migration tool (it moves the whole network) and the
+network screen itself.
+
+On another site the API enforces this too. The site address, marketplace, the main site's certificate
+screen, system health details and hooks routes answer `404 rest_no_route`, as if they did not exist. A
+write that would change network-wide files answers `403 rest_network_only`: uploading, deleting, packing or downloading
 plugin code, installing a plugin's bundled theme or freeing a port for it, generating the sample plugin,
 creating, rebuilding, uploading, restoring or deleting theme files, and every write to the installer
 (`/setup`). Activating, deactivating, granting, setting the egress allowlist of and reloading the offered
@@ -173,15 +218,74 @@ destinations or port (each of which restarts its worker), share a rate limit per
 With S3 media storage, each site's objects live in its own space of the shared bucket
 ([media-storage.md](media-storage.md)), and moving the library to the bucket or back runs for every site.
 
+## Backups
+
+Every site has its own backups, in its own **Settings → Backups**:
+
+- On the **main site**, as before, for its network administrators: the main site's database, its uploads
+  and private files, and the network's plugin and theme code. On a network over Postgres, its dump holds
+  the main site's schema only, never the other sites'.
+- On **another site**, for that site's administrators: its database (a copy of its SQLite file, or a
+  `pg_dump` of its schema / a `mysqldump` of its database, which need the client tools on the backend
+  host as on a single site), its uploads and its private files — never plugin or theme code. The
+  archives are kept with the site, in `<data dir>/sites/<id>/backups/`, and an S3 copy goes under
+  `sites/<id>/` in the backup bucket. Its schedule and retention are the site's own settings.
+
+Restoring a site's backup replaces that site's database whole (its schema or database is dropped and
+restored from the archive) and writes its files back; the site's plugins are started again with fresh
+database principals. No other site is touched.
+
+## Real-time collaboration
+
+Co-editing in the editor works on every site. Rooms, presence, the operations log (kept in the site's own
+database) and the per-user limits are the site's: the post with id 5 on one site and the post with id 5
+on another are two rooms that never exchange an operation, even across backend nodes (the bus messages
+carry the site, signed). Each site's idle rooms are swept by its own hourly job.
+
 ## Where a site's data lives
 
-Everything a site other than the main one owns is in **one directory**, `<data dir>/sites/<id>/` (the data
-dir is the directory of `dbPath`, `backend/data` by default): its database (with its WAL files), its
-public uploads and its private uploads. Back it up, move it or remove it as one folder, with the backend
-stopped. The network's own records (sites, addresses, network administrators and their audit log) are
-in `<data dir>/network.db`.
+| Engine | Site 1 | Site N | Network store |
+|---|---|---|---|
+| `sqlite-native` | `dbPath`, as before | `<data dir>/sites/<N>/wordjs-native.db` | `<data dir>/network.db` |
+| `postgres` | the configured database's schema (`public`) | schema `wordjs_site_<N>` of the same database | schema `wordjs_network` |
+| `mysql` / `mariadb` | database `db.name` | database `<db.name>_site_<N>` | database `<db.name>_network` |
 
-The main site's backups (Settings → Backups) cover the main site only.
+Postgres connections of a site are pinned to its schema when they open (`search_path` is a startup
+parameter of the site's own small pool), and MySQL connections to its database, so every query of the
+site — the core's and its plugins' — resolves there and nowhere else. Each site's pool is small (4
+connections; `multisite.sitePoolMax` changes it), and is opened when the site is first used.
+
+A site's files are in **one directory**, `<data dir>/sites/<id>/` (the data dir is the directory of
+`dbPath`, `backend/data` by default): its uploads, its private uploads, its backups and, on SQLite, its
+database. On several nodes, keep the uploads in the media bucket ([media-storage.md](media-storage.md)) or
+the data directory on shared storage, as for a single site.
+
+## Several backend nodes
+
+On Postgres and MySQL a network runs on as many backend nodes as a single site does
+([multi-node.md](multi-node.md)): every node shares the database server (every site's schema or database,
+and the network store) and Redis.
+
+- **The registry.** Each node keeps the network store in memory and reads it again when another node
+  announces a change on the bus (`wordjs:network-changed`), and every 15 seconds in case an announcement
+  was lost. A site created on one node is answered by the others within moments; one suspended stops its
+  plugin and theme workers on every node; one deleted is forgotten by every node.
+- **Caches.** Every cache invalidation, option change and plugin change on the bus carries its site, and
+  a node applies it to that site only. A node that never served a site has nothing of it to update.
+- **Background work.** Each site has its own cron leader (a lease in the site's own database), so a
+  site's scheduled events run on one node at a time; the content outbox claims its events per site.
+- **Plugin and theme workers.** Each node runs the workers of the sites it serves, started when it first
+  serves a site and kept in step with the other nodes' activations, grants and reloads.
+- **Certificates.** Each site's certificate is in the network store; any node renews it (the main site's
+  cron leader runs the renewal pass) and the challenge answers are shared ([TLS](#dns-the-gateway-and-tls)).
+
+## Changing the database engine
+
+Settings → Database migration (network administrators, on the main site) moves the **whole network**:
+site 1, every other site into its own file / schema / database on the target, and the network store. The
+copy is complete and checked table by table; if any site fails, nothing switches and the network keeps
+running on the source. Moving a network onto `sqlite-legacy`, or onto the engine it already runs on, is
+refused.
 
 ## REST API
 
@@ -199,7 +303,11 @@ wrong one is `403 rest_bad_current_password`.
 | `POST` | `/sites` | `{ slug, url, title, adminUsername, adminEmail, adminPassword, currentPassword }` | `201 { site }`. `400` for an invalid field (`network_invalid_url`, `network_invalid_slug`, `network_invalid_title`, `network_invalid_admin`, `network_weak_password`), `409 network_host_taken` / `network_slug_taken` |
 | `POST` | `/sites/:id/suspend` | `{ currentPassword }` | `{ site }`. `400 network_primary_site` for the main site, `404 network_site_not_found` |
 | `POST` | `/sites/:id/resume` | `{ currentPassword }` | `{ site }` |
-| `GET` | `/audit` | — (`?limit=` 1–500, default 100) | `{ entries }`, newest first: sites created, suspended and resumed, network administrators |
+| `DELETE` | `/sites/:id` | `{ confirmSlug, currentPassword }` | `{ deleted: id }`. `409 network_site_active` unless suspended, `400 network_confirm_mismatch`, `400 network_primary_site` |
+| `GET` | `/certificates` | — | `{ autoIssue, certificates: [{ siteId, host, installed, notAfter, issuer, daysLeft }] }` — never a key |
+| `POST` | `/sites/:id/certificate` | `{ currentPassword }` | `{ certificate }`: issued now with Let's Encrypt (HTTP-01). `409 network_acme_unconfigured` / `network_acme_busy`, `502 network_acme_failed` |
+| `PUT` | `/sites/:id/certificate` | `{ certPem, keyPem, currentPassword }` | `{ certificate }`. `400 network_invalid_certificate` when the pair does not name the site's address, does not match or has expired |
+| `GET` | `/audit` | — (`?limit=` 1–500, default 100) | `{ entries }`, newest first: sites created, suspended, resumed and deleted, certificates, network administrators |
 | `GET` | `/plugins` | — | `{ plugins: [{ slug, name, version, requestedPermissions, ceiling }] }`; `ceiling: null` means not offered |
 | `PUT` | `/plugins/:slug/ceiling` | `{ tokens: ["scope:access" \| "network", …], currentPassword }` | `{ slug, ceiling }`. Offers the plugin to the sites up to that ceiling (replacing a previous one) and restarts its workers on the other sites. `400 network_invalid_ceiling` for a malformed token, `404 plugin_not_found` |
 | `DELETE` | `/plugins/:slug/ceiling` | `{ currentPassword }` | `{ slug, withdrawn, deactivatedOn }`. Stops offering it and deactivates it on every other site |
@@ -215,14 +323,32 @@ npm run network -- disable
 
 Allowed while the main site is the only site. Restart the backend afterwards.
 
+## Upgrading from 2.7
+
+Nothing changes for a single site, or for an existing network on `sqlite-native`: no migration, no new
+setting. What is new:
+
+- A network can run on Postgres or MySQL (`npm run network -- enable` on such an install), and on several
+  backend nodes there.
+- Each site other than the main one gets its own certificate (Admin → Network); with ACME on and
+  `http-01`, Let's Encrypt issues them on its own after the upgrade, at the next renewal pass.
+- Each site has its own backups and real-time collaboration.
+- A suspended site can be deleted.
+- The network store gains two tables (`network_acme_challenges`, `network_site_certs`), created at boot.
+- Moving a SQLite network onto Postgres or MySQL: Settings → Database migration on the main site moves
+  every site and the network store (above). Make sure the target user may create schemas or databases.
+
 ## Troubleshooting
 
 | What you see | Why |
 |---|---|
 | `421` on a new site's address | The backend was not restarted after `enable`, or the address is not the site's main address, or (separate mode) the gateway has not received the network's addresses yet: check the backend log for "could not tell the gateway". |
-| `npm run network -- enable` refuses | The install is not finished, the driver is not `sqlite-native`, or a login given to `--admin` is not an administrator of the main site. |
+| `npm run network -- enable` refuses | The install is not finished, the driver is `sqlite-legacy`, the MySQL `db.name` is not made of lower-case letters, digits and underscores, or a login given to `--admin` is not an administrator of the main site. |
+| Creating a site fails with "could not be created" | The database user may not create the site's Postgres schema or MySQL database: grant `CREATE`, or create `wordjs_site_<id>` / `<db.name>_site_<id>` for it. |
+| A site's certificate is not served | Admin → Network shows it as installed? Then check the gateway log for "Site certificate installed"; a name must reach the gateway with SNI (any modern browser sends it). "Get certificate" fails while the address does not point at this server, or port 80 does not reach it. |
+| Another node does not answer a new site | Its Redis connection is down: it catches up within 15 seconds (the periodic re-read of the network store). |
 | A site answers `503` | It is suspended (Admin → Network). |
 | A site's admin cannot activate a plugin ("Not offered by the network") | A network administrator has not offered it to the sites (Admin → Network → Plugins for the sites). |
 | `403 plugin_grant_beyond_ceiling` | The permission is outside the ceiling the network set for that plugin. |
 | Another site's pages are "not found" while its API answers | The frontend's server-side reads reached the backend as another site (they are refused rather than shown). In separate mode, check that the frontend node is registered with the gateway by IP address. |
-| Log: "the network store could not be opened" | `<data dir>/network.db` is unreadable; only the main site is answered until it is fixed. |
+| Log: "the network store could not be opened" | `<data dir>/network.db` is unreadable, or (Postgres/MySQL) the `wordjs_network` schema / `<db.name>_network` database cannot be reached or created; only the main site is answered until it is fixed. |

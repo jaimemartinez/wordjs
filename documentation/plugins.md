@@ -763,19 +763,41 @@ Always use unique paths (e.g., `/admin/plugin/my-plugin-media`) unless you inten
 The backend marks standard menus with `plugin: 'core'`. The frontend filters these out from the dynamic list.
 
 ### 10.2 Widgets API
-Core can register "Widgets" (they appear in the `Widgets` admin panel and can be assigned to sidebars):
+A plugin registers sidebar widgets with `wordjs.widgets.register(id, def)`. They appear in **Appearance →
+Widgets**, where an administrator drops them into a sidebar and fills in the settings form `fields`
+declares; `render(settings)` runs in the plugin's sandbox and returns the widget's HTML:
 
 ```javascript
-const { registerWidget } = require('../../src/core/widgets'); // core / non-isolated context only
-registerWidget('my_weather_widget', 'Weather Widget', {
-    description: 'Shows local weather',
-    render: (options) => `<div>It is sunny!</div>`
-});
+const escapeHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+exports.init = (wordjs) => {
+    wordjs.widgets.register('my_weather', {
+        name: 'Weather',
+        description: 'Shows the local weather',
+        // The instance settings form. Types: text, textarea, html, number (min/max), checkbox.
+        fields: [
+            { name: 'title', label: 'Title', type: 'text' },
+            { name: 'city', label: 'City', type: 'text', default: 'Lima' },
+        ],
+        render: async (settings) => `<div class="weather">Sunny in ${escapeHtml(settings.city)}</div>`,
+    });
+};
 ```
 
-> ⚠️ **Not yet bridge-exposed.** `registerWidget` is NOT on the `wordjs` bridge, so an isolated plugin
-> cannot register a widget today (there is no `wordjs.widgets.*`). Expose data via a route + an admin
-> page instead, or open an issue to add a `widgets` bridge capability.
+- Only the declared fields are stored, coerced to their type and bounded; `title` is printed (escaped)
+  above the widget by the sidebar. Escape whatever else you interpolate: the public site sanitizes the
+  sidebar HTML, but your output should not rely on it.
+- `render` is capped at 2 s, like a shortcode: a slow or crashed child renders the widget empty, never
+  holds the page.
+- Ids are letters, digits, `_` and `-` (64 at most), at most 50 widgets per plugin. An id that core or
+  another plugin already registered is refused (the core `text`, `recent_posts`, `categories`, `search`
+  and `custom_html` widgets cannot be replaced). Widgets are registered per site and disappear when the
+  plugin is deactivated; the instances placed in sidebars render nothing until it is back.
+- No permission is needed to register a widget; what `render` reads goes through the bridge and its
+  own grants (e.g. `settings:read` for `wordjs.options.get`).
+
+Core code (not a plugin) registers widgets with `registerWidget(id, name, { description, fields, render })`
+from `backend/src/core/widgets.ts` — see [api.md §12](api.md#12-widgets-system-).
 
 ### 10.3 Sending Notifications 🔔
 Plugins push real-time alerts to the Admin UI via `wordjs.notify(n)` (`notifications:send` permission).
@@ -884,6 +906,23 @@ coordinators, a vendor, a field team opening a QR link. Declare it in the manife
   name="theme-color">` (a hex colour) and `viewport-fit` (`auto`, `cover` or `contain`). Use `cover` only
   if your page pads itself with `env(safe-area-inset-*)`: it lets the page draw under a phone's notch.
   Portals are always `noindex`.
+- **`pages`** (optional) — the `<head>` of sub-pages, keyed by their first path segment:
+  `{ "me": { "title": "My page", "private": true, "app": { "name": "My page", "shortName"?, "description"?,
+  "backgroundColor"?, "themeColor"? } } }` (at most 20). `title` replaces the portal's; `private` marks a personal
+  page — never indexed, never stored by a cache, and no `Referer` leaves it (a link or a map tile that needs one
+  opts in itself); `app` makes the sub-page installable to a phone's home screen (what an iPhone needs before it
+  delivers Web Push): the core serves its web app manifest at `/portal/<slug>/app.webmanifest?page=me`, scoped to
+  `/portal/<slug>/me`. Hex colours only; no `<` or `>` in a text.
+- **`serviceWorker`** (optional) — a plain `.js` file under `client/` (`"client/portal/sw.js"`), served as-is
+  (never compiled) at `/portal/<slug>/sw.js`, so a page of the portal can register it with the portal or one of its
+  sub-pages as its scope — e.g. to show notifications sent by Web Push. Sending them needs the `network` grant.
+- **`file`** (optional) — one of your PUBLIC GET routes (`"/public/file"`) that turns a short-lived ticket you mint
+  (`?d=`, 16–128 letters, digits, `-` or `_`) into `{ mime, filename, b64 }`. A plugin route answers JSON; the core
+  answers the bytes at `/portal/<slug>/file?d=<ticket>` with their real type — a PDF opens in a phone's viewer —
+  for `application/pdf`, `image/png` and `image/jpeg` only, `no-store`, `nosniff`. The ticket is the only
+  credential: make it random, short-lived and few-use.
+- The core's own paths under every portal — `/portal/<slug>/file`, `/sw.js` and `/app.webmanifest` — are never
+  your sub-pages (`file` is refused as a `pages` key).
 
 **What the page gets.** The bare portal layout — no theme header or footer, no admin shell — with
 `ModalProvider`, `I18nProvider` and `ToastProvider` mounted, so `useModal()`, `useI18n()` and `useToast()`
@@ -900,7 +939,12 @@ then renders your component — compiled in when the plugin was present at build
 (`frontend/scripts/generate-portal-plugin-registry.js`), otherwise loaded at runtime from
 `GET /api/v1/plugins/<slug>/bundle?type=portal` — and links `…/bundle/css?type=portal`. All three routes
 take the **portal** slug, never the folder or the admin-page slug. A static folder under
-`frontend/src/app/portal/` is a core route of its own and wins over a plugin portal of the same name.
+`frontend/src/app/portal/` is a core route of its own and wins over a plugin portal of the same name. The menu
+editor (`/admin/menus`, «System pages») offers every portal that is served (`GET /plugins/portals`).
+
+The conference-manager plugin's portal is the complete example: `/portal/conference` (the coordinators), its
+sub-pages `yo` (private, installable, with a service worker for its bus notices) and `badge`, and its badge PDFs
+through `file` — see `marketplace/plugins/conference-manager/manifest.json` and `client/portal/page.tsx`.
 
 ---
 
@@ -926,6 +970,8 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Core hooks that carry other parties' data need the matching grant — `comments:read` (`comments:pii` for commenter email/IP/agent), `posts:read`, `notifications:read`, `settings:read` — and arrive minimized (see §10.5); reserved core-namespace names are refused. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` and `dynamic_sidebar` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
 | `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `access: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. `req` carries `method`, `path`, `query`, `params`, `body`, plus `clientKey` (a stable HMAC of the caller's IP — rate-limit or dedup by caller without seeing the IP), `cookies` (the host's auth/session cookies always stripped), `headers` (only `x-portal-token` is forwarded) and, for a `multipart` route, `file` (`{ path, originalname, mimetype, size, filename }` of the saved upload, removed when the response finishes). With `auth`, `req.user` is `{ id, role, hasProfessionalMailbox, pluginCapabilities }`, plus `userEmail` and `userLogin` only when the plugin holds the **`users:read` grant** (they are personal data) — `pluginCapabilities` being the caller's capabilities in your own namespace (§12a); `null` for an anonymous request. `res` offers `status`, `set` (headers — `Set-Cookie`, CSP, HSTS, `Location`, `Content-Type`, `Refresh` and `Access-Control-*` are dropped by the host), `cookie` / `clearCookie` (renamed into your `wjp_<slug>_` namespace, path-confined to your routes, lifetime capped at 7 days, at most 20 per reply), `json`, `send`, `end`, and `sendPrivateMedia` (row above). |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
+| `wordjs.widgets.register(id, { name, description, fields, render })` | — | A sidebar widget; `render(settings)` may be async, capped at 2 s ([§10.2](#102-widgets-api)). |
+| `wordjs.graphql.extend({ typeDefs, fields })` | — (its routes need `express:register_route`) | Adds GraphQL types and `Query` fields, each resolved by one of your own GET routes called as the GraphQL caller ([graphql.md](graphql.md#extending-the-schema)). |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
 | `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant, shown to the administrator as **administrator-level**). Password-reset and verification email reaches your provider only if the administrator allows your plugin by name in Settings → Account email; by default the host sends it with its built-in SMTP transport. |
@@ -1343,7 +1389,7 @@ generators and the marketplace scripts). The manifest may be at most 64 KB.
 | :-- | :-- |
 | `frontend.adminPage` | `{ "entry", "slug" }` — the admin page at `/admin/plugin/<slug>` (§2 Step 3, §10.1). |
 | `frontend.hooks` | Path (a string) of the hooks file whose `register*` exports run on admin load (§2 Step 4). |
-| `frontend.portalPage` | `{ "entry", "slug", "title"?, "themeColor"?, "viewportFit"? }` — the public page at `/portal/<slug>` (§10.6). |
+| `frontend.portalPage` | `{ "entry", "slug", "title"?, "themeColor"?, "viewportFit"?, "pages"?, "serviceWorker"?, "file"? }` — the public page at `/portal/<slug>` and its sub-pages (§10.6). |
 | `frontend.versoComponents` | `{ "entry" }` — the Verso block file (§13); the deprecated `frontend.puckComponents` is still read. `null` or absent → the `client/verso/<Pascal>Verso.tsx` convention. |
 | `frontend.components` | Legacy *location* components, `[{ "name", "entry", "locations", "props" }]`; the development registry takes the first `entry`. |
 | `style`, `theme` | Admin-page styling, returned by `GET /api/v1/plugins/<slug>/admin-style` (§11a): `style` is a string, `theme` an object whose keys become `--plugin-<key>` variables. |

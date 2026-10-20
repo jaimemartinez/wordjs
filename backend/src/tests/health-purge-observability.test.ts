@@ -16,7 +16,7 @@
  * FIXTURE-VS-PRODUCER: nothing here pokes `purgeFailureState` or hand-builds a broken state. A real
  * TLS listener is started, the real `purgeFrontend()` entry point (the one the content hooks call) is
  * invoked, a real handshake really fails, and the failure is then read back through supertest over
- * the REAL routes tree. The cluster certificates are generated with node-forge exactly as the
+ * the REAL routes tree. The cluster certificates are generated with core/x509 exactly as the
  * installer does, and are INPUT to the module under test.
  *
  * MUTATION PROOF: delete the `purge` field from SystemHealth.getFullStatus and the second test fails;
@@ -45,7 +45,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const https = require('https');
-const forge = require('node-forge');
+const x509 = require('../core/x509');
 
 const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-health-purge-'));
 const ORIGINAL_CWD = process.cwd();
@@ -59,31 +59,30 @@ const jwt = require('jsonwebtoken');
 
 // --- Certificates, generated the way the installer does: a cluster CA plus leaves whose CN is the ROLE.
 function makeCA(cn: string) {
-    const keys = forge.pki.rsa.generateKeyPair(2048);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = '01';
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    const attrs = [{ name: 'commonName', value: cn }];
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs);
-    cert.setExtensions([{ name: 'basicConstraints', cA: true }]);
-    cert.sign(keys.privateKey, forge.md.sha256.create());
-    return { keys, cert, pem: forge.pki.certificateToPem(cert) };
+    const keys = x509.generateRsaKeyPair(2048);
+    const pem = x509.createCertificate({
+        subject: [['CN', cn]],
+        publicKey: keys.publicKey,
+        signingKey: keys.privateKey,
+        serialHex: '01',
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+        ca: true,
+    });
+    return { keys, pem };
 }
 
 function makeLeaf(ca: any, cn: string) {
-    const keys = forge.pki.rsa.generateKeyPair(2048);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = String(Date.now()) + Math.floor(Math.random() * 1000);
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    cert.setSubject([{ name: 'commonName', value: cn }]);
-    cert.setIssuer(ca.cert.subject.attributes);
-    cert.sign(ca.keys.privateKey, forge.md.sha256.create());
-    return { key: forge.pki.privateKeyToPem(keys.privateKey), cert: forge.pki.certificateToPem(cert) };
+    const keys = x509.generateRsaKeyPair(2048);
+    const cert = x509.createCertificate({
+        subject: [['CN', cn]],
+        issuerCertPem: ca.pem,
+        publicKey: keys.publicKey,
+        signingKey: ca.keys.privateKey,
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+    });
+    return { key: keys.privateKeyPem, cert };
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

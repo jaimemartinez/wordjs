@@ -3095,7 +3095,7 @@ async function offerPluginToSites(slug: string, tokens: unknown): Promise<string
     let manifest: any = null;
     try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* checked below */ }
     if (!manifest || !manifest.isolated) { const e: any = new Error(`Plugin ${slug} is not an isolated plugin`); e.code = 'plugin_not_isolated'; e.status = 400; throw e; }
-    const stored = require('./network').setPluginCeiling(slug, tokens);
+    const stored = await require('./network').setPluginCeiling(slug, tokens);
     if (!isBundledPlugin(plugin.path, manifest)) {
         try { await installPluginDependencies(slug, manifest, plugin.path); }
         catch (e: any) { log.warn(`[plugins] '${logSafe(slug)}' offered, but its dependencies could not be installed: ${logSafe(e && e.message)}`); }
@@ -3106,7 +3106,7 @@ async function offerPluginToSites(slug: string, tokens: unknown): Promise<string
 
 /** Network administrator: stop offering `slug` to the other sites (deactivates it there). */
 async function withdrawPluginFromSites(slug: string): Promise<{ withdrawn: boolean; deactivatedOn: number[] }> {
-    const withdrawn = require('./network').clearPluginCeiling(slug);
+    const withdrawn = await require('./network').clearPluginCeiling(slug);
     const deactivatedOn = await deactivatePluginOnSecondarySites(slug);
     return { withdrawn, deactivatedOn };
 }
@@ -3143,7 +3143,7 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
             // Mirror plugin-worker.js's tablePrefix normalization exactly.
             const prefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
             const rows = isPostgres
-                ? await dbAsync.all("SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public'")
+                ? await dbAsync.all("SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema()")
                 : isMySQL
                     ? await dbAsync.all("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()")
                     : await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table'");

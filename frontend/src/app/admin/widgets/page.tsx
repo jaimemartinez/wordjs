@@ -22,7 +22,7 @@ import {
     useSortable
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { widgetsApi, Widget, Sidebar } from "@/lib/api";
+import { widgetsApi, Widget, Sidebar, WidgetField } from "@/lib/api";
 import { widgetIdFromInstanceKey } from "@/lib/widgetInstanceKey";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader } from "@/components/ui";
@@ -57,15 +57,100 @@ function DraggableWidget({ widget }: { widget: Widget }) {
     );
 }
 
+/**
+ * The settings form of one widget instance, drawn from the fields the widget declares (backend
+ * core/widgets `fields`). Loads the stored settings when opened and saves them with
+ * PUT /widgets/:widgetId/instances/:instanceId, which keeps only those fields, coerced and bounded.
+ */
+function WidgetSettingsForm({ widgetId, instanceId, fields }: { widgetId: string; instanceId: string; fields: WidgetField[] | null | undefined }) {
+    const { t } = useI18n();
+    const [values, setValues] = useState<Record<string, unknown> | null>(null);
+    const [saving, setSaving] = useState(false);
+    const [status, setStatus] = useState<"" | "saved" | "error">("");
+
+    useEffect(() => {
+        let alive = true;
+        widgetsApi.getInstance(widgetId, instanceId)
+            .then((r) => { if (alive) setValues(r.settings || {}); })
+            .catch(() => { if (alive) { setValues({}); setStatus("error"); } });
+        return () => { alive = false; };
+    }, [widgetId, instanceId]);
+
+    if (!fields || fields.length === 0) {
+        return <p className="text-sm text-gray-500" data-widget-settings="none">{t('widgets.settings.none')}</p>;
+    }
+    if (values === null) return <p className="text-sm text-gray-500">{t('widgets.loading')}</p>;
+
+    const label = (f: WidgetField) => {
+        const key = `widgets.field.${f.name}`;
+        const translated = t(key);
+        return translated === key ? f.label : translated;
+    };
+    const set = (name: string, v: unknown) => { setStatus(""); setValues((prev) => ({ ...(prev || {}), [name]: v })); };
+    const save = async () => {
+        setSaving(true);
+        try {
+            const r = await widgetsApi.updateInstance(widgetId, instanceId, values);
+            setValues(r.settings || values);
+            setStatus("saved");
+        } catch {
+            setStatus("error");
+        } finally {
+            setSaving(false);
+        }
+    };
+    const inputClass = "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100";
+
+    return (
+        <form className="space-y-3" data-widget-settings={widgetId} onSubmit={(e) => { e.preventDefault(); void save(); }}>
+            {fields.map((f) => {
+                const id = `w-${instanceId}-${f.name}`;
+                const v = values[f.name] ?? f.default;
+                if (f.type === "checkbox") {
+                    return (
+                        <label key={f.name} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                            <input id={id} type="checkbox" checked={v === true} onChange={(e) => set(f.name, e.target.checked)} />
+                            {label(f)}
+                        </label>
+                    );
+                }
+                return (
+                    <div key={f.name}>
+                        <label htmlFor={id} className="block text-xs font-bold text-gray-600 mb-1">{label(f)}</label>
+                        {f.type === "textarea" || f.type === "html" ? (
+                            <textarea id={id} rows={f.type === "html" ? 6 : 4} className={`${inputClass} ${f.type === "html" ? "font-mono text-xs" : ""}`}
+                                value={v == null ? "" : String(v)} maxLength={f.max} onChange={(e) => set(f.name, e.target.value)} />
+                        ) : (
+                            <input id={id} type={f.type === "number" ? "number" : "text"} className={inputClass}
+                                value={v == null ? "" : String(v)} min={f.min} max={f.type === "number" ? f.max : undefined}
+                                maxLength={f.type === "text" ? f.max : undefined}
+                                onChange={(e) => set(f.name, f.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} />
+                        )}
+                    </div>
+                );
+            })}
+            <div className="flex items-center gap-3">
+                <button type="submit" disabled={saving} className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 disabled:opacity-50">
+                    {saving ? t('widgets.settings.saving') : t('widgets.settings.save')}
+                </button>
+                {status === "saved" && <span className="text-xs font-semibold text-emerald-700" role="status">{t('widgets.settings.saved')}</span>}
+                {status === "error" && <span className="text-xs font-semibold text-rose-700" role="alert">{t('widgets.settings.saveError')}</span>}
+            </div>
+        </form>
+    );
+}
+
 function SidebarItem({
     instanceKey,
     widgetId,
     sidebarId,
+    fields,
     onRemove
 }: {
     instanceKey: string,
     widgetId: string,
     sidebarId: string,
+    fields: WidgetField[] | null | undefined,
     onRemove: (id: string, key: string) => void
 }) {
     const { t } = useI18n();
@@ -80,7 +165,8 @@ function SidebarItem({
     };
 
     const [isExpanded, setIsExpanded] = useState(false);
-    const [settings, setSettings] = useState<any>({}); // Load settings here later
+    // "<widgetId>-<instanceId>" (lib/widgetInstanceKey resolved widgetId against the registered ids).
+    const instanceId = instanceKey.startsWith(`${widgetId}-`) ? instanceKey.slice(widgetId.length + 1) : instanceKey;
 
     // Parse widget name from ID for display (simplified)
     const displayId = widgetId.charAt(0).toUpperCase() + widgetId.slice(1);
@@ -118,18 +204,15 @@ function SidebarItem({
 
             {isExpanded && (
                 <div className="p-4">
-                    {/* Config form placeholder - to be implemented fully */}
-                    <p className="text-sm text-gray-500 mb-2">{t('widgets.detailedSettingsFor')} {widgetId}...</p>
-                    <div className="text-sm text-yellow-600 bg-yellow-50 p-2 rounded">
-                        {t('widgets.settingsComingSoon')}
-                    </div>
+                    <WidgetSettingsForm widgetId={widgetId} instanceId={instanceId} fields={fields} />
                 </div>
             )}
         </div>
     );
 }
 
-function SidebarContainer({ sidebar, widgetIds, onRemove }: { sidebar: Sidebar, widgetIds: string[], onRemove: (sid: string, key: string) => void }) {
+function SidebarContainer({ sidebar, widgets, onRemove }: { sidebar: Sidebar, widgets: Widget[], onRemove: (sid: string, key: string) => void }) {
+    const widgetIds = widgets.map((w) => w.id);
     const { t } = useI18n();
     const { setNodeRef } = useDroppable({
         id: sidebar.id,
@@ -163,6 +246,7 @@ function SidebarContainer({ sidebar, widgetIds, onRemove }: { sidebar: Sidebar, 
                                 instanceKey={key}
                                 widgetId={wId}
                                 sidebarId={sidebar.id}
+                                fields={widgets.find((w) => w.id === wId)?.fields}
                                 onRemove={onRemove}
                             />
                         );
@@ -320,7 +404,7 @@ export default function WidgetsPage() {
                             <SidebarContainer
                                 key={sidebar.id}
                                 sidebar={sidebar}
-                                widgetIds={widgets.map(w => w.id)}
+                                widgets={widgets}
                                 onRemove={(sid, key) => handleRemove(sid, key)}
                             />
                         ))}

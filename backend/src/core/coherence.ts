@@ -151,12 +151,17 @@ async function resyncPluginPolicy(slugs?: string[]): Promise<string[]> {
 let resyncInFlight: Promise<unknown> | null = null;
 function scheduledResync(): Promise<unknown> {
     if (resyncInFlight) return resyncInFlight;
-    resyncInFlight = Promise.resolve()
+    const resyncCurrentSite = () => Promise.resolve()
         .then(() => require('./plugins').reconcileDeactivatedPlugins())
         .catch((e: any) => log.warn({ err: e }, '[coherence] active-set re-sync failed'))
         .then(() => refreshPolicyAndReconcile())
         .then((started) => { for (const { done } of started) done.catch(respawnFailed); })
-        .catch((e: any) => log.warn({ err: e }, '[coherence] plugin policy re-sync failed'))
+        .catch((e: any) => log.warn({ err: e }, '[coherence] plugin policy re-sync failed'));
+    // Multisite: the same bound for every other site THIS node runs workers for (a site it never opened
+    // has none), each in its own context — a lost broadcast for a site of a multi-node network.
+    resyncInFlight = resyncCurrentSite()
+        .then(() => require('./network-sites').forEachOpenSecondarySite('policy re-sync', () => resyncCurrentSite()))
+        .catch((e: any) => log.warn({ err: e }, '[coherence] site policy re-sync failed'))
         .finally(() => { resyncInFlight = null; });
     return resyncInFlight;
 }

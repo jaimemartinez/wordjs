@@ -42,7 +42,7 @@ async function makeStaffRole(p: any, name = 'Recepción') {
 }
 
 test('manifest: requests roles:declare and declares one namespaced role whose only capability is the plugin\'s own', () => {
-    assert.strictEqual(manifest.version, '2.17.2');
+    assert.strictEqual(manifest.version, '2.30.0');
     const perms = (manifest.permissions || []).map((p: any) => `${p.scope}:${p.access}`);
     assert.ok(perms.includes('roles:declare'), `roles:declare must be requested: ${perms.join(', ')}`);
     assert.ok(Array.isArray(manifest.roles) && manifest.roles.length === 1, 'exactly one declared role');
