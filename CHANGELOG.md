@@ -891,6 +891,16 @@ the boot error links there too.
 
 ### Fixed
 
+- **Static front page: plugin `[tag]` embeds come from the plugins' manifests.** The front page kept its
+  own list (`[cards]` → card-gallery, `[vgallery]` → video-gallery). It now renders whatever tags the
+  active plugins declare in their manifest `shortcodes` and render with their own site component, with
+  attributes passed as props (`[vgallery id="…"]` — the form video-gallery's own handler emits — used to
+  stay as text). New public route `GET /api/v1/plugins/shortcodes`.
+- **photo-carousel 2.1.0: `[carousel]` works in sanitized post HTML.** Its output relied on a `<style>`
+  block the sanitizer always removed, plus an initialiser the core mounted on every post. It now renders
+  plain markup on the core's new, plugin-neutral `wjs-snap-strip` classes (a swipeable, scroll-snapping
+  row in `wordjs-ui.css`, no script), and the core no longer carries that initialiser. Autoplay and arrow
+  buttons remain on the Verso block.
 - **mail-server 3.1.1: an account sends as its mailbox address, never its personal email.** An account an
   administrator gave a mailbox while its account email was a personal address (or one whose email later
   moved off the mail domain) could still open the composer, and its mail went out with that personal

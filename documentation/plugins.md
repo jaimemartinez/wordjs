@@ -1429,6 +1429,7 @@ generators and the marketplace scripts). The manifest may be at most 64 KB.
 | `dependencies` | npm package → registry semver range, installed by the host on activation (§2). |
 | `bundled` | `true` = the plugin ships its own `node_modules/`; the host skips shared install/garbage-collection. |
 | `roles` | User roles the plugin declares (§12a); requires `roles:declare`. |
+| `shortcodes` | `[{ "tag": "…" }]` — the `[tag]` / `[tag key="value"]` embeds a static HTML front page renders with your site component (`frontend.components`), its attributes passed as props. Served to the front end by `GET /api/v1/plugins/shortcodes` for active plugins; a tag is an identifier and the first plugin (by slug) to declare it owns it. Server-side expansion is still your code's `wordjs.shortcodes.add`. |
 | `accountCapabilities` | Per-account capabilities an administrator grants on the user screen (§12b). |
 | `claimPorts` | Array of port numbers the plugin needs (`[25]` for a mail server). Only these ports are eligible for the admin's port-conflict screen (`/api/v1/plugins/:slug/port-conflicts`), and they are the ports `wordjs.smtp.listen` may ask the host for. |
 
@@ -1452,7 +1453,7 @@ generators and the marketplace scripts). The manifest may be at most 64 KB.
 | Key | Status |
 | :-- | :-- |
 | `adminMenu` | Read only by `build-marketplace.js`, for the catalog card's label and icon. The sidebar item comes from `wordjs.adminMenu.add` in your code. |
-| `api`, `shortcodes` | Not read. Routes and shortcodes exist only when your code registers them. |
+| `api` | Not read. Routes exist only when your code registers them. |
 | `backend.entry`, `main` | Not read. The backend entry is the first of `index.js`, `main.js`, `plugin.js` found in the plugin folder. |
 | `active` | Not read. Whether a plugin is active is the core's state, not the manifest's. |
 | `themeSurfaces` | Not read at runtime; a frontend CI test (`frontend/src/lib/__tests__/pluginSelectorContract.test.ts`) checks the declarations of the plugins committed to the repository. |

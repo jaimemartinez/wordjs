@@ -1322,6 +1322,58 @@ router.get('/registry', optionalAuth, asyncHandler(async (req: Request, res: Res
 }));
 
 /**
+ * The shortcode tags the ACTIVE plugins declare in their manifest (`shortcodes: [{ tag }]`) that a public
+ * page renders with the plugin's own site component (`frontend.components`), as [{ tag, plugin }]. The
+ * front end used to keep its own hardcoded tag → plugin list; it now asks, so the core names no plugin.
+ * Tags are identifiers (letters, digits, `_`, `-`); the first plugin (by slug) to declare a tag owns it.
+ */
+const SHORTCODE_TAG = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+async function declaredPluginShortcodes(): Promise<Array<{ tag: string; plugin: string }>> {
+    const plugins = (await getAllPlugins()).filter((p: any) => p.active).sort((a: any, b: any) => String(a.slug).localeCompare(String(b.slug)));
+    const owners = new Map<string, string>();
+    for (const p of plugins) {
+        let manifest: any;
+        try { manifest = JSON.parse(fs.readFileSync(path.join(p.path, 'manifest.json'), 'utf8')); } catch { continue; }
+        const components = manifest && manifest.frontend && manifest.frontend.components;
+        if (!Array.isArray(components) || components.length === 0) continue;   // nothing to render it with
+        const id = typeof manifest.id === 'string' && manifest.id ? manifest.id : p.slug;
+        for (const sc of Array.isArray(manifest.shortcodes) ? manifest.shortcodes : []) {
+            const tag = sc && typeof sc.tag === 'string' ? sc.tag.trim().toLowerCase() : '';
+            if (SHORTCODE_TAG.test(tag) && !owners.has(tag)) owners.set(tag, id);
+        }
+    }
+    return Array.from(owners, ([tag, plugin]) => ({ tag, plugin }));
+}
+
+/**
+ * @swagger
+ * /plugins/shortcodes:
+ *   get:
+ *     summary: Shortcode tags the active plugins render with their own site component
+ *     description: >-
+ *       Public. Each active plugin's manifest `shortcodes` whose plugin ships a site component
+ *       (`frontend.components`). A static HTML front page replaces `[tag]` with that component.
+ *     tags: [Plugins]
+ *     responses:
+ *       200:
+ *         description: The declared tags and their owning plugin.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   tag:
+ *                     type: string
+ *                   plugin:
+ *                     type: string
+ */
+router.get('/shortcodes', asyncHandler(async (_req: Request, res: Response) => {
+    res.json(await declaredPluginShortcodes());
+}));
+
+/**
  * @swagger
  * /plugins/active:
  *   get:
