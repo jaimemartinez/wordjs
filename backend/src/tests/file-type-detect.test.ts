@@ -3,8 +3,7 @@
  *
  * Pins three things: the bridge actually loads file-type and detects the signatures the upload
  * allowlist relies on; unknown content is reported as undefined (the callers fail closed on that);
- * and the installed file-type is a release fixed for GHSA-5v7r-6r5c-r473 (>= 21.3.1) on the 21.x line,
- * which is the last one that still supports Node 20.
+ * and the installed file-type is a release fixed for GHSA-5v7r-6r5c-r473 (>= 21.3.1).
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
@@ -46,11 +45,10 @@ describe('file-type-detect', () => {
         }
     });
 
-    it('the installed file-type is a fixed 21.x release', () => {
+    it('the installed file-type is a fixed release (>= 21.3.1)', () => {
         const pkgPath = path.join(path.dirname(require.resolve('file-type/core')), 'package.json');
         const { version } = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
         const [major, minor, patch] = version.split('.').map(Number);
-        assert.strictEqual(major, 21, `file-type ${version}: 22+ requires Node 22, the engines floor is 20.9`);
-        assert.ok(minor > 3 || (minor === 3 && patch >= 1), `file-type ${version} is affected by GHSA-5v7r-6r5c-r473`);
+        assert.ok(major > 21 || (major === 21 && (minor > 3 || (minor === 3 && patch >= 1))), `file-type ${version} is affected by GHSA-5v7r-6r5c-r473`);
     });
 });

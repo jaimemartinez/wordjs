@@ -380,6 +380,16 @@ describe('server protection', () => {
         assert.deepStrictEqual(spread, inline);
     });
 
+    test('fragment arguments (graphql 17 experimental syntax) are a syntax error, even if a caller asks for them', async () => {
+        // The fragment memo above is only sound while a fragment cannot vary with arguments.
+        const doc = 'query { post(id: 1) { ...A(n: 100) } } fragment A($n: Int) on ContentNode { author { name } }';
+        const r = await gqlRaw(null, doc);
+        assert.strictEqual(r.status, 400);
+        assert.match(JSON.stringify(r.body.errors), /Syntax Error/);
+        const { parseWithLimits } = require('../core/graphql');
+        assert.throws(() => parseWithLimits(doc, { experimentalFragmentArguments: true }), /Syntax Error/);
+    });
+
     test('a query whose cost exceeds the limit is refused (nested pages multiply)', async () => {
         const r = await gqlRaw(null, '{ posts(first: 100) { nodes { comments(first: 100) { nodes { id } } } } }');
         assert.strictEqual(r.status, 400);

@@ -15,7 +15,7 @@ single server. The other deploy modes are covered in [Tutorial 3](03-split-mode-
 
 ## 1. Install Node.js
 
-WordJS needs Node.js 20.9 or newer; Node.js 22 is what it is built and tested on. On Debian/Ubuntu the
+WordJS needs Node.js 22 or newer; Node.js 22 is what it is built and tested on. On Debian/Ubuntu the
 simplest source is NodeSource:
 
 ```bash

@@ -23,7 +23,7 @@ All public traffic should go through the **Gateway on 3000**; 4000 and 3001 stay
 
 ## 📦 Install
 
-- **Node:** v20.9 or higher (every workspace's `package.json` declares `engines.node >= 20.9.0`; CI runs on Node 22). `monolith.js` preflights the running version and exits with a clear message on anything older (Next 16 + native modules need Node 20 LTS or 22 LTS).
+- **Node:** v22 or higher (every workspace's `package.json` declares `engines.node >= 22.0.0`; CI runs on Node 22). `monolith.js` preflights the running version and exits with a clear message on anything older (Node 22 LTS or 24 LTS).
 
 Install every workspace's dependencies in one shot from the repo root:
 
@@ -280,7 +280,7 @@ Short pointers for the newer subsystems. Each has its own guide; the code paths 
 | **MCP server** (AI agents) | `backend/src/routes/mcp.ts`, `backend/src/core/mcp-server.ts`, `backend/src/core/agent-capabilities.ts` | Create a connection in **Admin → AI agents** (`/admin/agents`) to get a `wja_…` token, then point an MCP client at `POST /api/v1/mcp`. Tests: `src/tests/agents-mcp.test.ts` | [ai-agents.md](ai-agents.md) |
 | **AI provider** + editor suggestions | `backend/src/core/ai-provider.ts`, `backend/src/core/ai-suggest.ts`, `backend/src/routes/ai.ts` | Configure a provider in **Settings → AI** (`/admin/settings/ai`, i.e. `PUT /api/v1/ai/settings`), then use "Suggest with AI" in the editor (`POST /api/v1/ai/suggest`); plugins reach it through `wordjs.ai.complete(...)` with the `ai:use` grant. Tests: `src/tests/ai-provider.test.ts` | [ai-provider.md](ai-provider.md) |
 | **Webhooks** | `backend/src/models/Webhook.ts` (`WEBHOOK_EVENT_GROUPS`, 31 events), `backend/src/core/webhook-payloads.ts`, `backend/src/routes/webhooks.ts` | **Admin → Webhooks**, or `GET /api/v1/webhooks/events` for the catalogue; **Send test** (`POST /api/v1/webhooks/:id/ping`) delivers a `ping`. Tests: `src/tests/webhooks.test.ts`, `webhook-events.test.ts` | [webhooks.md](webhooks.md) |
-| **Multisite** | `backend/src/core/network.ts`, `network-sites.ts`, `site-context.ts`, `site-resolver.ts` | `npm run network -- enable --admin <login>` on a `sqlite-native` install, restart, then **Admin → Network**. Tests: `src/tests/multisite-isolation.test.ts`, `multisite-plugins.test.ts` | [multisite.md](multisite.md) |
+| **Multisite** | `backend/src/core/network.ts`, `network-sites.ts`, `site-context.ts`, `site-resolver.ts` | `npm run network -- enable --admin <login>` (any engine but `sqlite-legacy`), restart, then **Admin → Network**. Tests: `src/tests/multisite-isolation.test.ts`, `multisite-plugins.test.ts`, `multisite-engine-{sqlite,postgres,mysql}.test.ts` (Postgres/MySQL via `PGHOST`/`MYSQL_HOST`), `tests-integration/multinode-network.integration.ts` | [multisite.md](multisite.md) |
 | **Media offload** (S3 / CDN) | `backend/src/core/media-storage.ts`, `media-storage-migrate.ts`, `backend/src/routes/media-storage.ts` | Point `WORDJS_MEDIA_*` at a local MinIO bucket, then `npm run media -- test` and `npm run media -- offload` | [media-storage.md](media-storage.md) |
 
 ---

@@ -361,6 +361,7 @@ const pending = new Map();         // id -> {resolve,reject} for our calls to th
 const callbacks = new Map();       // cbId -> function (hook/filter callbacks living in this isolate)
 const routeHandlers = new Map();   // routeId -> route handler (req,res) living in this isolate
 const shortcodeHandlers = new Map(); // scId -> shortcode handler (attrs,content,tag)=>string living here
+const widgetRenderers = new Map(); // wId -> widget renderer (settings)=>string living here
 let mailProvider = null;           // the send(msg) function this isolate provides, if any
 const notifyTransports = new Map(); // transport name -> handler(notification) living here
 let smtpHandlers = null;           // { connect, mailFrom, rcptTo, data, close } for the host's inbound listener
@@ -527,6 +528,29 @@ const wordjs = {
             shortcodeHandlers.set(scId, handler);
             send({ kind: 'register-shortcode', tag, scId });
         }
+    },
+
+    // Register a sidebar widget: it appears in Appearance -> Widgets with the settings form `fields`
+    // declares (text, textarea, html, number, checkbox), and `render(settings)` runs HERE and returns its
+    // HTML when a sidebar is rendered (the public site sanitizes it, as it does a shortcode's).
+    widgets: {
+        register(id, def) {
+            const d = def || {};
+            if (typeof d.render !== 'function') throw new Error('wordjs.widgets.register(id, { render }) needs a render function');
+            const wId = `w:${id}:${++_id}`;
+            widgetRenderers.set(wId, d.render);
+            send({ kind: 'register-widget', id: String(id), wId, name: d.name, description: d.description, fields: d.fields });
+        }
+    },
+
+    // Extend the site's GraphQL schema DECLARATIVELY: SDL plus, for each new Query field, which of this
+    // plugin's own GET routes answers it ({ 'Query.books': { path: '/books', list: true } }). The host
+    // resolves the field by calling that route as the GraphQL caller; nothing runs here but the route.
+    graphql: {
+        extend(def) {
+            const d = def || {};
+            send({ kind: 'register-graphql', typeDefs: String(d.typeDefs || ''), fields: d.fields && typeof d.fields === 'object' ? d.fields : {} });
+        }
     }
 };
 
@@ -630,6 +654,15 @@ onMessage(async (msg) => {
             send({ kind: 'shortcode-reply', id: msg.id, ok: true, value: out == null ? '' : String(out) });
         } catch (e) {
             send({ kind: 'shortcode-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+        }
+    } else if (msg.kind === 'invoke-widget') {
+        // Host is rendering a sidebar that holds a widget whose renderer lives in this isolate.
+        const render = widgetRenderers.get(msg.wId);
+        try {
+            const out = render ? await render(msg.settings || {}) : '';
+            send({ kind: 'widget-reply', id: msg.id, ok: true, value: out == null ? '' : String(out) });
+        } catch (e) {
+            send({ kind: 'widget-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     } else if (msg.kind === 'invoke-mail') {
         // Host (on behalf of another plugin/core calling wordjs.mail) asks THIS provider to send.

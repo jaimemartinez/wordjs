@@ -31,7 +31,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const https = require('https');
-const forge = require('node-forge');
+const x509 = require('../core/x509');
 
 // A stub frontend that resolves as soon as it is purged.
 function stubFrontend() {
@@ -60,34 +60,33 @@ const listen = (server: any) => new Promise<number>((r) => server.listen(0, '127
 const close = (server: any) => new Promise<void>((r) => (server ? server.close(() => r()) : r()));
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-// --- Cluster certificates, generated the way the installer does (node-forge, cluster CA + service
+// --- Cluster certificates, generated the way the installer does (core/x509, cluster CA + service
 //     leaves whose CN is the ROLE). They are INPUT to the module under test, not a stand-in for it.
 function makeCA() {
-    const keys = forge.pki.rsa.generateKeyPair(2048);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = '01';
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    const attrs = [{ name: 'commonName', value: 'WordJS Cluster Root CA' }];
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs);
-    cert.setExtensions([{ name: 'basicConstraints', cA: true }]);
-    cert.sign(keys.privateKey, forge.md.sha256.create());
-    return { keys, cert, pem: forge.pki.certificateToPem(cert) };
+    const keys = x509.generateRsaKeyPair(2048);
+    const pem = x509.createCertificate({
+        subject: [['CN', 'WordJS Cluster Root CA']],
+        publicKey: keys.publicKey,
+        signingKey: keys.privateKey,
+        serialHex: '01',
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+        ca: true,
+    });
+    return { keys, pem };
 }
 
 function makeLeaf(ca: any, cn: string) {
-    const keys = forge.pki.rsa.generateKeyPair(2048);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = String(Date.now()) + Math.floor(Math.random() * 1000);
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    cert.setSubject([{ name: 'commonName', value: cn }]);
-    cert.setIssuer(ca.cert.subject.attributes);
-    cert.sign(ca.keys.privateKey, forge.md.sha256.create());
-    return { key: forge.pki.privateKeyToPem(keys.privateKey), cert: forge.pki.certificateToPem(cert) };
+    const keys = x509.generateRsaKeyPair(2048);
+    const cert = x509.createCertificate({
+        subject: [['CN', cn]],
+        issuerCertPem: ca.pem,
+        publicKey: keys.publicKey,
+        signingKey: ca.keys.privateKey,
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+    });
+    return { key: keys.privateKeyPem, cert };
 }
 
 describe('direct purge — monolith and single-host split reach the frontend as before', () => {

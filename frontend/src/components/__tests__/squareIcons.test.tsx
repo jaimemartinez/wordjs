@@ -134,14 +134,13 @@ function tsxIn(rel: string): string[] {
 }
 
 // The whole admin (every screen, its dialogs and the shell), the shared components it is built from, the
-// coordinators' portal and every conference-manager screen. Left out: the Verso editor's own UI
+// every conference-manager screen (its coordinators' portal included). Left out: the Verso editor's own UI
 // (components/verso) and the public site's chrome (components/chrome), which have their own design rules.
 const SWEPT = Array.from(new Set([
     ...tsxUnder("frontend/src/app/admin"),
     ...tsxIn("frontend/src/components"),
     ...tsxUnder("frontend/src/components/ui"),
     ...tsxUnder("frontend/src/components/editor"),
-    ...tsxUnder("frontend/src/app/portal/conference"),
     ...tsxUnder("marketplace/plugins/conference-manager/client"),
 ]));
 

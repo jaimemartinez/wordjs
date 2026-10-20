@@ -285,7 +285,11 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
             bootNote('🔐 Generated secure JWT secret for existing config.');
         }
 
-        if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
+        // A nested `db.password` the operator (or the installer) set is a real password: generating a flat
+        // one would shadow it (the flat key outranks the nested one below) and lock the site out of its
+        // own database at this very boot.
+        const nestedPassword = fileConfig.db && typeof fileConfig.db.password === 'string' && fileConfig.db.password !== '' && fileConfig.db.password !== 'password';
+        if ((!fileConfig.dbPassword || fileConfig.dbPassword === 'password') && !nestedPassword) {
             fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
             configChanged = true;
             bootNote('🔐 Generated secure Database password for existing config.');
@@ -426,7 +430,8 @@ const config: AppConfig = {
         port: fileConfig.dbPort || (fileConfig.db && fileConfig.db.port) || 5432,
         user: fileConfig.dbUser || (fileConfig.db && fileConfig.db.user) || 'postgres',
         password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
-        name: fileConfig.dbName || (fileConfig.db && fileConfig.db.name) || 'wordjs',
+        // `db.database` is what the install wizard wrote before it wrote `db.name`; both name the database.
+        name: fileConfig.dbName || (fileConfig.db && (fileConfig.db.name || fileConfig.db.database)) || 'wordjs',
         ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false,
         sslCa: fileConfig.dbSslCa || fileConfig.db?.sslCa || undefined,
         // Verified unless an operator opts out EXPLICITLY with `false` (flat or nested).

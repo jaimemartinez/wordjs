@@ -354,6 +354,19 @@ function openSiteEnvelope(raw: string): { siteId: number; msg: string } {
     return { siteId: Number(id), msg: raw.slice(end + SITE_MARK_END.length) };
 }
 
+/**
+ * Is site `siteId` (not site 1) live in this process: 'now' when its database is open, a promise while
+ * it is being prepared, 'skip' when this node never opened it. Required lazily: core/network-sites and
+ * config/database load this module.
+ */
+function siteRouting(siteId: number): 'now' | 'skip' | Promise<void> {
+    try {
+        const pending = require('./network-sites').whenPrepared(siteId);
+        if (require('../config/database').isSiteDatabaseOpen(siteId)) return 'now';
+        return pending || 'skip';
+    } catch { return 'skip'; }
+}
+
 /** Publish a message to a channel. Returns false if Redis isn't available (caller stays in-process). */
 async function publish(channel: string, payload: any): Promise<boolean> {
     if (deferUntilCommit(() => publish(channel, payload))) return true;
@@ -401,8 +414,15 @@ function subscribe(channel: string, handler: (message: string) => void): void {
             };
             // Multisite: a peer's message is handled as the site it was published for (site 1 when it
             // names none), so the handler's reads and invalidations land on that site's data.
-            if (siteContext.multisiteEnabled()) siteContext.runWithSite(siteId, run);
-            else run();
+            if (!siteContext.multisiteEnabled()) { run(); return; }
+            if (siteId === siteContext.PRIMARY_SITE_ID) { siteContext.runWithSite(siteId, run); return; }
+            // Another site: this node holds state for it only once it opened it (a request, a background
+            // pass). One it never opened has nothing here to invalidate, and its handlers would only fail
+            // on a closed database; one still opening gets the message once it is ready.
+            const routing = siteRouting(siteId);
+            if (routing === 'skip') return;
+            if (routing === 'now') { siteContext.runWithSite(siteId, run); return; }
+            routing.then(() => siteContext.runWithSite(siteId, run), () => { /* it failed to open: nothing to update */ });
         });
         subscriber.on('error', (e: any) => log.warn({ err: e }, '[Cache] Subscriber error'));
         // ioredis emits 'ready' at the top of its ready handler and writes the automatic re-SUBSCRIBE right

@@ -37,7 +37,7 @@ is mTLS.
 
 ## Prerequisites
 
-* Node.js ≥ 20.9 on every machine; `openssl` on the PATH of the machines that **join** (backend/frontend).
+* Node.js ≥ 22 on every machine; `openssl` on the PATH of the machines that **join** (backend/frontend).
 * Network reachability (open only to the app-tier subnet / VPN, **not** the public internet):
   * backend & frontend → gateway `:3100` (register) and `:3101` (enroll)
   * gateway → backend `:4000` and frontend `:3001` (proxy + health checks)
@@ -147,7 +147,7 @@ It is the same flow the npx commands automate.
 
 ```bash
 cd wordjs
-npm run install:gateway            # gateway deps (includes node-forge for the CA)
+npm run install:gateway            # gateway deps (the CA itself needs none: Node's crypto)
 node scripts/cluster.js init --host <gateway-ip>
 #   → mints the cluster CA + the gateway's own identity + public cert,
 #     writes gateway/gateway-config.json (routable internal bind, ports, shared secret),

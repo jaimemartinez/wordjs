@@ -357,9 +357,10 @@ Health probes (added for orchestration):
 
 ## Known limitations
 
-- **Multisite and multi-node do not combine yet.** A network of sites ([multisite.md](multisite.md))
-  needs the `sqlite-native` driver and one backend host (`npm run network -- enable` refuses any other
-  driver), while N backend replicas need Postgres or MySQL. Pick one of the two for a given install.
+- **A network of sites on several nodes** ([multisite.md](multisite.md#several-backend-nodes)) needs
+  Postgres or MySQL like any multi-node install: each node mirrors the network store (sites, addresses,
+  network administrators) and re-reads it on the `wordjs:network-changed` bus and every 15 s, so a node
+  that misses an announcement answers a new site, or stops answering a suspended one, at most 15 s later.
 - **Role and capability edits reach the other nodes over Redis.** The `wordjs:option-changed`
   pub/sub propagates role/capability edits live, and a same-node local-write epoch stops a stale
   background TTL refresh from clobbering a just-applied local edit. A node that misses a publish picks

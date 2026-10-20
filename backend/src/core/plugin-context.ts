@@ -6,6 +6,7 @@
 const { AsyncLocalStorage } = require('async_hooks');
 const fs = require('fs');
 const path = require('path');
+const { themeDeclaredPermissions } = require('./theme-declaration');
 const storage = new AsyncLocalStorage();
 
 // Internal cache for manifests to avoid repeated JS parsing
@@ -169,14 +170,14 @@ function getEffectivePlugin(): string | null {
 }
 
 /**
- * What a theme's functions.js DECLARES when the theme ships no manifest.json (read-only: writing settings
- * belongs to the admin panel, never to theme logic). Shared with core/theme-engine's static scan so there
- * is one copy. Every scope here must be one of core/plugins KNOWN_PERMISSIONS: this used to declare a
- * `content` scope that exists in no permission vocabulary and that nothing checks.
+ * What a theme's functions.js is taken to DECLARE when the theme declares nothing (no `permissions` in
+ * theme.json or a legacy manifest.json): read-only — writing settings belongs to the admin panel. Shared
+ * with core/theme-engine's static scan so there is one copy. Every scope here must be one of core/plugins
+ * KNOWN_PERMISSIONS: this used to declare a `content` scope that exists in no permission vocabulary.
  *
- * A declaration is only a request: hasPermission() also needs an administrator's grant, and grants are
- * keyed by plugin slug (plugin-permissions PLUGIN_SLUG), which a `theme:<slug>` principal never matches.
- * So a theme's functions.js holds no permission today, with or without this declaration.
+ * A declaration is only a request: hasPermission() also needs an administrator's grant
+ * (core/plugin-permissions '@themes'), and an administrator can grant a theme only what the theme itself
+ * declared (routes/themes.ts). So this default is never granted: a theme that declares nothing holds nothing.
  */
 const DEFAULT_THEME_PERMISSIONS: ReadonlyArray<Readonly<{ scope: string; access: string }>> = Object.freeze([
     Object.freeze({ scope: 'settings', access: 'read' }),
@@ -193,15 +194,17 @@ function hasPermission(scope: string, access = 'read') {
 
     let manifest = manifestCache.get(pluginSlug);
 
-    if (!manifest) {
-        let manifestPath;
+    if (!manifest && pluginSlug.startsWith('theme:')) {
+        // A theme declares in theme.json (or a legacy manifest.json): core/theme-declaration is the one reader.
+        // Read as the host: the theme's own fs gate (io-guard) must not decide whether its declaration is read.
+        const themeDir = path.join(THEMES_DIR, pluginSlug.slice('theme:'.length));
+        const declared = runAsHost(() => themeDeclaredPermissions(themeDir));
+        manifest = { permissions: declared || DEFAULT_THEME_PERMISSIONS.map((p) => ({ ...p })) };
+        manifestCache.set(pluginSlug, manifest);
+    }
 
-        if (pluginSlug.startsWith('theme:')) {
-            const realSlug = pluginSlug.replace('theme:', '');
-            manifestPath = path.join(THEMES_DIR, realSlug, 'manifest.json');
-        } else {
-            manifestPath = path.join(PLUGINS_DIR, pluginSlug, 'manifest.json');
-        }
+    if (!manifest) {
+        const manifestPath = path.join(PLUGINS_DIR, pluginSlug, 'manifest.json');
 
         if (fs.existsSync(manifestPath)) {
             try {
@@ -211,11 +214,6 @@ function hasPermission(scope: string, access = 'read') {
                 console.error(`[Security] Failed to parse manifest for ${pluginSlug}:`, e.message);
                 return false;
             }
-        } else if (pluginSlug.startsWith('theme:')) {
-            // Default theme declaration (see DEFAULT_THEME_PERMISSIONS above).
-            manifest = { permissions: DEFAULT_THEME_PERMISSIONS.map((p) => ({ ...p })) };
-            manifestCache.set(pluginSlug, manifest);
-            console.log(`[Security] No manifest for theme '${pluginSlug}', applying RESTRICTED default permissions (Read-Only).`);
         }
     }
 
@@ -245,13 +243,20 @@ function hasPermission(scope: string, access = 'read') {
     return granted;
 }
 
+/** Drop the cached declaration of `theme:<slug>` (its theme.json changed: update, re-activation). */
+function forgetThemeDeclaration(themeSlug: string) {
+    manifestCache.delete(`theme:${themeSlug}`);
+}
+
 /**
  * Strong enforcement helper: Throws error if permission is missing
  */
 function verifyPermission(scope: string, access = 'read') {
     if (!hasPermission(scope, access)) {
         const slug = getCurrentPlugin();
-        const error = `🛡️ Security Block: Plugin '${slug}' tried to access '${scope}' (${access}) without permission. Declare it in manifest.json first.`;
+        const error = String(slug || '').startsWith('theme:')
+            ? `🛡️ Security Block: Theme '${slug}' tried to access '${scope}' (${access}) without permission. Declare it in theme.json "permissions" and grant it in Appearance → Themes.`
+            : `🛡️ Security Block: Plugin '${slug}' tried to access '${scope}' (${access}) without permission. Declare it in manifest.json first.`;
         console.error(error);
         throw new Error(error);
     }
@@ -397,5 +402,6 @@ module.exports = {
     getEffectivePlugin,
     hasPermission,
     verifyPermission,
+    forgetThemeDeclaration,
     DEFAULT_THEME_PERMISSIONS
 };

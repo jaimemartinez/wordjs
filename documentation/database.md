@@ -253,7 +253,7 @@ curl -fsSL -o backend/certs/rds-global-bundle.pem https://truststore.pki.rds.ama
 
 > **Secrets:** on boot the config layer auto-generates and persists a secure `jwtSecret` and `dbPassword` if `wordjs-config.json` already exists and the value is **missing** or is the known-insecure literal (`wordjs-default-secret-change-me` / `password`). A `jwtSecret` that is not a string is also treated as missing. On a config that has **not been installed yet** (no `installedAt` or `dbDriver`), the boot also replaces a `jwtSecret` shorter than 64 characters or one of the placeholders printed in this repository, because the install wizard keeps the secret the backend booted with. The new value is written back into the file. An installed site's secret is never rotated: if it is one of the published placeholders, the backend **refuses to start** with an error telling you to set a real one (`openssl rand -hex 64`, the same value on every node), because anyone can sign an administrator session with it. Operators should still review these.
 
-> ⚠️ **`dbPassword` (flat) outranks `db.password` (nested), and the auto-generation only looks at the flat key.** The normalizer resolves the password as `dbPassword || db.password || 'password'` (`backend/src/config/app.ts`). So if you configure an external Postgres/MySQL password **only** in the nested form, boot sees no flat `dbPassword`, generates a random one, persists it — and that generated value then **shadows** your nested `db.password`, leaving the app unable to authenticate. When you set a real database password, set the flat **`dbPassword`** key (or set both to the same value). The same precedence applies to `dbHost`/`dbPort`/`dbUser`/`dbName`/`dbSsl` over their nested twins, but only the password is auto-generated.
+> ⚠️ **`dbPassword` (flat) outranks `db.password` (nested).** The normalizer resolves the password as `dbPassword || db.password || 'password'` (`backend/src/config/app.ts`). A flat `dbPassword` is generated at boot only when neither form names a real password, so a password set only in the nested form is kept. The install wizard writes both (and the database under `db.name`). An install made by an earlier wizard may carry a GENERATED flat `dbPassword` that shadows its nested one, and a `db.database` key instead of `db.name` (read as the name since this version): if such a site cannot reach its database after a restart, set the flat `dbPassword` to the real password. The same precedence applies to `dbHost`/`dbPort`/`dbUser`/`dbName`/`dbSsl` over their nested twins.
 
 ### 1.7 SQLite Drivers Use Different Files
 
@@ -532,10 +532,16 @@ Dialect differences are confined to a few spots:
 
 ## 5. Multisite Storage
 
-A [multisite](./multisite.md) network keeps every site's data apart by giving each site **its own database file**, plus one small database for the network itself ([design](./multisite-design.md)).
+A [multisite](./multisite.md) network keeps every site's data apart by giving each site **its own database** — a SQLite file, a Postgres schema or a MySQL database — plus a small store for the network itself ([design](./multisite-design.md)). Names come from `core/site-storage.ts`:
 
-*   **Driver requirement.** Multisite needs the `sqlite-native` driver: `npm run network -- enable` refuses any other, and `openSiteDatabase()` in `config/database.ts` throws before creating a file when the server runs a different driver. Postgres and MySQL site databases are not supported yet, so a network and all its sites live on one backend host.
-*   **The network store — `<data dir>/network.db`.** A separate SQLite file next to the main database (`config.multisite.networkDbPath` overrides it), written only by `core/network.ts` and never reachable through `dbAsync`, so no site's export, backup or wipe carries it. Its tables:
+    | Engine | Site N | Network store |
+    | :---- | :---- | :---- |
+    | `sqlite-native` | `<data dir>/sites/<N>/wordjs-native.db` | `<data dir>/network.db` (`config.multisite.networkDbPath` overrides it) |
+    | `postgres` | schema `wordjs_site_<N>` of the configured database | schema `wordjs_network` |
+    | `mysql` / `mariadb` | database `<db.name>_site_<N>` | database `<db.name>_network` |
+
+*   **Driver requirement.** `sqlite-native`, `postgres` or `mysql`/`mariadb` (`sqlite-legacy` is refused). `openSiteDatabase()` in `config/database.ts` creates the site's schema or database through the main connection (or uses one the operator created) and opens a small pool on it (`multisite.sitePoolMax`, default 4): Postgres connections start with `search_path` set to the site's schema, MySQL connections on the site's database. The driver's catalog queries read `current_schema()` / `DATABASE()`, never `public` or every schema.
+*   **The network store.** Written only by `core/network.ts` and never reachable through `dbAsync`, so no site's export, backup or wipe carries it. On Postgres and MySQL every node keeps an in-memory mirror of it, re-read after a change (the `wordjs:network-changed` bus) and every 15 s. Its tables:
 
     | Table | Holds |
     | :---- | :---- |
@@ -544,7 +550,10 @@ A [multisite](./multisite.md) network keeps every site's data apart by giving ea
     | `network_site_hosts` | Every address a site answers (`host` primary key → `site_id`, `kind`) |
     | `network_admins` | The main-site user ids listed as network administrators |
     | `network_plugin_ceilings` | Per plugin, the grant tokens any other site may grant it (no row = not offered) |
+    | `network_site_quotas` | Per site, its own media storage quota |
     | `network_audit_log` | Network-level actions: who, what, which site, when |
+    | `network_site_certs` | Per site address, its TLS certificate and key (served by SNI) |
+    | `network_acme_challenges` | HTTP-01 answers every node serves while an order is open |
 
 *   **Site 1** is the install that existed before multisite was enabled: its database stays at the configured `dbPath`, unchanged.
-*   **Every other site** owns one directory, `<data dir>/sites/<id>/`, holding its database (`wordjs-native.db`) and its public and private uploads. Each site database has the full core schema and runs the same migrations; models, migrations and plugin queries keep their literal table names and simply run against the current site's database. A site whose database is not open is an error, never a fall-through to site 1's.
+*   **Every other site** owns one directory, `<data dir>/sites/<id>/`, holding its public and private uploads, its backups and, on SQLite, its database (`wordjs-native.db`). Each site database has the full core schema and runs the same migrations; models, migrations and plugin queries keep their literal table names and simply run against the current site's database. A site whose database is not open is an error, never a fall-through to site 1's. A deleted site's schema / database / file is dropped (`dropSiteDatabase`), and its id is never reused.

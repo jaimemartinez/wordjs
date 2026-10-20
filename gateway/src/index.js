@@ -1,10 +1,10 @@
-// Preflight: the WordJS stack (Next 16 + native modules) needs Node >= 20.9. Fail with a clear
+// Preflight: the WordJS stack needs Node >= 22 (graphql 17 and the native modules declare it). Fail with a clear
 // message instead of the cryptic EBADENGINE/native-binding crash a newcomer would hit mid-boot.
 (() => {
-    const [maj, min] = process.versions.node.split('.').map(Number);
-    if (maj < 20 || (maj === 20 && min < 9)) {
-        console.error(`\n✖ WordJS requires Node.js >= 20.9 — you are running ${process.versions.node}.`);
-        console.error('  Install Node 20 LTS or 22 LTS (https://nodejs.org) and try again.\n');
+    const maj = Number(process.versions.node.split('.')[0]);
+    if (maj < 22) {
+        console.error(`\n✖ WordJS requires Node.js >= 22 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 22 LTS or 24 LTS (https://nodejs.org) and try again.\n');
         process.exit(1);
     }
 })();
@@ -42,6 +42,7 @@ const registration = require('./registration');
 // pins, and the policy the backend pushes (src/host-edge.js; the decision itself is src/host-policy.js,
 // byte-identical to the backend's).
 const hostEdge = require('./host-edge');
+const siteCerts = require('./site-certs');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
 // gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
@@ -235,8 +236,10 @@ function maybeStartAcmeHttpListener() {
                     res.writeHead(200, { 'Content-Type': 'text/plain' });
                     return res.end(fs.readFileSync(file));
                 }
-                res.writeHead(404, { 'Content-Type': 'text/plain' });
-                return res.end('Not found');
+                // Not on THIS disk: with several backend nodes (or a multisite network, whose answers are
+                // kept in the shared network store) the order may have been started elsewhere. Fall
+                // through to the HTTPS redirect below: the CA follows it (without checking the
+                // certificate, by design of HTTP-01) to the HTTPS edge, whose backends all answer it.
             }
             // Never a raw Host in the Location: an address the site answers, else the main address
             // (src/host-edge.js acmeRedirectLocation; the old `Host.split(':')[0]` echoed any name and
@@ -775,6 +778,26 @@ if (cluster.isPrimary) {
                     }
                 });
 
+                // Multisite: one certificate per site address, selected by SNI (src/site-certs.js). Stored
+                // owner-only next to the main certificate; the workers pick it up without a restart.
+                internalApp.post('/site-cert', requireIdentity(['backend']), (req, res) => {
+                    const { host, key, cert } = req.body || {};
+                    try {
+                        const stored = siteCerts.writeSiteCert(siteCerts.defaultSitesDir(), host, key, cert);
+                        if (stored === 'written') logger.info(`[Gateway] [Internal] Site certificate installed for ${String(siteCerts.cleanHost(host)).replace(/\n/g, '').replace(/\r/g, '')}.`);
+                        res.json({ success: true, stored });
+                    } catch (e) {
+                        res.status(400).json({ error: e.message });
+                    }
+                });
+                internalApp.post('/site-cert-remove', requireIdentity(['backend']), (req, res) => {
+                    const { host } = req.body || {};
+                    if (!siteCerts.cleanHost(host)) return res.status(400).json({ error: 'not a site address' });
+                    const removed = siteCerts.removeSiteCert(siteCerts.defaultSitesDir(), host);
+                    if (removed) logger.info(`[Gateway] [Internal] Site certificate removed for ${String(siteCerts.cleanHost(host)).replace(/\n/g, '').replace(/\r/g, '')}.`);
+                    res.json({ success: true, removed });
+                });
+
                 // New Config Update Endpoint
                 internalApp.post('/config-update', requireIdentity(['backend']), (req, res) => {
                     const { port, sslEnabled, siteUrl } = req.body || {};
@@ -1294,7 +1317,10 @@ if (cluster.isPrimary) {
             const https = require('https');
             const options = {
                 key: fs.readFileSync(path.resolve(__dirname, '../' + workerSslOptions.key)),
-                cert: fs.readFileSync(path.resolve(__dirname, '../' + workerSslOptions.cert))
+                cert: fs.readFileSync(path.resolve(__dirname, '../' + workerSslOptions.cert)),
+                // Multisite: a site's own certificate when the client names its address (src/site-certs.js);
+                // the certificate above for every other name, as before.
+                SNICallback: siteCerts.createSniSelector({ logger }).SNICallback,
             };
             server = https.createServer(options, app).listen(FINAL_PORT, () => {
                 logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTPS)`);

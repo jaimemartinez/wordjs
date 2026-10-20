@@ -29,6 +29,9 @@ That single command takes you from nothing to the browser install wizard:
    `wordjs-<tag>.zip.sha256` asset published with the release before extracting anything
    (see [Integrity](#integrity)).
 2. Extracts it into `my-site/` and installs the runtime dependencies (`npm run release:install`).
+   A failed install (typically a timed-out prebuilt `better-sqlite3` download on a server without a
+   compiler) is retried with backoff; if it keeps failing you get a plain explanation, and running
+   the same command again resumes the install.
 3. Generates a one-time install token and starts the server (`npm run start:mono`), printing a
    clickable URL:
 
@@ -42,7 +45,7 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 
 ## Requirements
 
-- Node.js **>= 20.9** (Node 20 or 22 LTS recommended) with npm on your PATH.
+- Node.js **>= 22** (Node 22 or 24 LTS recommended) with npm on your PATH.
 
 ## Options
 

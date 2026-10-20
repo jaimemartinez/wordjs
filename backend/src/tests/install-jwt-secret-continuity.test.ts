@@ -470,3 +470,41 @@ describe('the install keeps the ports the config already names', () => {
         assert.deepStrictEqual([cfg.port, cfg.frontendPort, cfg.gatewayPort], [4000, 3001, 3000]);
     });
 });
+
+describe('a Postgres / MySQL install reconnects to the database it was given, after every restart', () => {
+    // The wizard wrote the connection as `db: { database, password }`, and config/app.ts reads `db.name`
+    // and lets a flat `dbPassword` outrank `db.password` — generating one at the first boot of an installed
+    // config. So the install itself ran against the user's default database (Postgres: the one named
+    // like the user), and from the first restart on the site authenticated with a random password.
+    //
+    // MUTATION PROOF: drop `name: dbConn.database` from routes/setup.ts and the first case fails; drop the
+    // nested-password clause from config/app.ts's dbPassword generation (with `dbPassword` also dropped from
+    // the installer) and the restart case fails.
+    const CONN = { host: 'db.example.test', port: 5432, user: 'site_owner', password: 'Db-Secret-0f9e', database: 'site_db' };
+
+    it('the install connects to the named database with the given password', async () => {
+        freshMachine();
+        const first = await boot();
+        const { res } = await install({ dbDriver: 'postgres', db: CONN });
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.strictEqual(first.config.db.name, 'site_db', 'the live config the install connected with names the database');
+        assert.strictEqual(first.config.db.password, 'Db-Secret-0f9e');
+    });
+
+    it('every restart keeps that database and that password', async () => {
+        for (let restart = 0; restart < 2; restart++) {
+            const { config } = await boot();
+            assert.strictEqual(config.db.name, 'site_db', `restart ${restart + 1}: database`);
+            assert.strictEqual(config.db.password, 'Db-Secret-0f9e', `restart ${restart + 1}: password`);
+            assert.strictEqual(config.db.host, 'db.example.test');
+        }
+    });
+
+    it('a config that names its password only in the nested form is not given a generated one', async () => {
+        freshMachine();
+        realFs.writeFileSync(SANDBOX_CONFIG, JSON.stringify({ installedAt: '2026-01-01T00:00:00.000Z', dbDriver: 'mysql', jwtSecret: 'a'.repeat(128), db: { host: 'h', user: 'u', password: 'Nested-Only-77', name: 'shop' } }));
+        const { config } = await boot();
+        assert.strictEqual(config.db.password, 'Nested-Only-77');
+        assert.strictEqual(persisted().dbPassword, undefined, 'no flat password was generated over it');
+    });
+});

@@ -8,7 +8,8 @@ const router = express.Router();
 const {
     getWidgets, getSidebars, getSidebarWidgets,
     addWidgetToSidebar, removeWidgetFromSidebar,
-    setWidgetSettings, renderSidebar
+    setWidgetSettings, getWidgetSettings, renderSidebar,
+    getWidget, sanitizeWidgetSettings
 } = require('../core/widgets');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
@@ -37,7 +38,9 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
     res.json(widgets.map((w: any) => ({
         id: w.id,
         name: w.name,
-        description: w.description
+        description: w.description,
+        // The settings form of an instance (core/widgets WidgetField); null for a widget without one.
+        fields: w.fields,
     })));
 }));
 
@@ -127,8 +130,13 @@ router.post('/sidebars/:id', authenticate, isAdmin, asyncHandler(async (req: Req
     if (!widgetId) {
         return res.status(400).json({ error: 'Widget ID required' });
     }
+    const widget = getWidget(widgetId);
+    if (!widget) return res.status(404).json({ error: 'Unknown widget' });
+    // The same rule as editing an instance: only the widget's own fields, coerced and bounded.
+    const clean = sanitizeWidgetSettings(widget, settings);
+    if (!clean.ok) return res.status(400).json({ error: clean.error });
 
-    const instanceKey = await addWidgetToSidebar(req.params.id, widgetId, settings);
+    const instanceKey = await addWidgetToSidebar(req.params.id, widgetId, clean.settings);
     res.json({ success: true, instanceKey });
 }));
 
@@ -205,6 +213,27 @@ router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncH
 /**
  * @swagger
  * /widgets/{widgetId}/instances/{instanceId}:
+ *   get:
+ *     summary: Read a widget instance's settings
+ *     tags: [Widgets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: widgetId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: instanceId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The instance's settings ({ settings, fields })
+ *       404:
+ *         description: Unknown widget
  *   put:
  *     summary: Update widget instance settings
  *     tags: [Widgets]
@@ -233,10 +262,19 @@ router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncH
  *       200:
  *         description: Settings updated
  */
+router.get('/:widgetId/instances/:instanceId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const widget = getWidget(String(req.params.widgetId));
+    if (!widget) return res.status(404).json({ error: 'Unknown widget' });
+    res.json({ settings: await getWidgetSettings(widget.id, String(req.params.instanceId)), fields: widget.fields });
+}));
+
 router.put('/:widgetId/instances/:instanceId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const { settings } = req.body;
-    await setWidgetSettings(req.params.widgetId, req.params.instanceId, settings || {});
-    res.json({ success: true });
+    const widget = getWidget(String(req.params.widgetId));
+    if (!widget) return res.status(404).json({ error: 'Unknown widget' });
+    const clean = sanitizeWidgetSettings(widget, (req.body && req.body.settings) ?? {});
+    if (!clean.ok) return res.status(400).json({ error: clean.error });
+    await setWidgetSettings(widget.id, String(req.params.instanceId), clean.settings);
+    res.json({ success: true, settings: clean.settings });
 }));
 
 module.exports = router;

@@ -164,6 +164,13 @@ class PostgresDriver extends DatabaseDriverInterface {
             const num = (v: any, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
             const ssl = dbTlsOptions(dbConfig);
             if (ssl && !ssl.rejectUnauthorized) log.warn(DB_TLS_UNVERIFIED_WARNING);
+            // MULTISITE (documentation/multisite-design.md, "Postgres: a schema per site"): the pool of a
+            // site other than the main one, and the network store's, is pinned to its own schema with the
+            // `search_path` STARTUP PARAMETER, so every connection the pool ever opens resolves the core's
+            // unqualified table names (`posts`, `options`, a plugin's `wjp_<slug>_*`) in that schema and
+            // nowhere else. A startup parameter cannot be lost by a pooled connection the way a `SET` issued
+            // after checkout can. The main site's pool sets nothing: its schema stays the server default.
+            const schema = dbConfig.schema ? safeIdent(String(dbConfig.schema)) : null;
             this.pool = new Pool({
                 host: dbConfig.host,
                 port: dbConfig.port || 5432,
@@ -174,6 +181,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 // Force UTF-8 encoding to prevent errors on Windows servers with WIN1252 defaults
                 connectionString: undefined, // ensure pool uses individual params
                 client_encoding: 'UTF8',
+                ...(schema ? { options: `-c search_path=${schema}` } : {}),
                 // Pool sizing + resilience — safe defaults (override per-field via the db config block).
                 max: num(dbConfig.poolMax, 10) > 0 ? num(dbConfig.poolMax, 10) : 10,
                 idleTimeoutMillis: num(dbConfig.poolIdleMs, 30000),          // reclaim idle clients
@@ -191,7 +199,17 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await client.query('SELECT NOW()');
             client.release();
 
-            log.info({ serverTime: res.rows[0].now }, '✅ Postgres: Connected successfully');
+            if (schema) {
+                // The schema must already exist (created by config/database before the site's pool opens):
+                // Postgres silently ignores a search_path entry that names no schema, and every unqualified
+                // CREATE TABLE would then land in no schema at all and fail — or, with `public` appended by a
+                // server default, in the MAIN site's. Refuse the pool instead of guessing.
+                const cur = await this.pool.query('SELECT current_schema() AS s');
+                if (!cur.rows[0] || cur.rows[0].s !== schema) {
+                    throw new Error(`Postgres: the schema "${schema}" does not exist (or is not usable by this user).`);
+                }
+            }
+            log.info({ serverTime: res.rows[0].now, schema: schema || undefined }, '✅ Postgres: Connected successfully');
 
         } catch (err) {
             log.error({ err }, '❌ Postgres: Connection failed');
@@ -259,8 +277,10 @@ class PostgresDriver extends DatabaseDriverInterface {
 
     async run(sql: string, params: any[] = []) {
         try {
-            // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
-            let normalizedSql = this.normalizeSql(sql);
+            // Normalize SQL from SQLite style (?) to Postgres style ($1, $2). A SQLite-dialect CREATE TABLE
+            // sent through run() (a plugin's `db.run('CREATE TABLE …')`) is translated exactly as exec()
+            // translates it — the MySQL driver already did; here it failed on AUTOINCREMENT.
+            let normalizedSql = this.normalizeSql(translateSql(sql));
 
             // AUTO-INJECT 'RETURNING *' for INSERTs if missing so we can surface the generated id for
             // SQLite-style models. We keep RETURNING * (not RETURNING id) because not every table has
@@ -327,7 +347,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 return res.rows;
             },
             run: async (sql: string, params: any[] = []) => {
-                let normalizedSql = this.normalizeSql(sql);
+                let normalizedSql = this.normalizeSql(translateSql(sql));
                 // Mirror run(): auto-inject RETURNING * for INSERTs lacking it, so lastID works.
                 if (/^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
                     normalizedSql += ' RETURNING *';
@@ -387,8 +407,10 @@ class PostgresDriver extends DatabaseDriverInterface {
         const rLit = escapeLiteral(safeIdent(role));   // string literal form for the pg_roles lookup
         const r = escapeIdentifier(safeIdent(role));   // quoted-identifier form for CREATE ROLE / GRANT
         await this.pool.query(`DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = ${rLit}) THEN CREATE ROLE ${r} NOLOGIN NOINHERIT; END IF; END $do$;`);
-        // A fresh role can reach NOTHING until GRANTed; give it only schema USAGE (tables are granted per-prefix).
-        await this.pool.query(`GRANT USAGE ON SCHEMA public TO ${r}`);
+        // A fresh role can reach NOTHING until GRANTed; give it only USAGE on THIS pool's schema (tables are
+        // granted per-prefix). On a network each site's pool is pinned to the site's schema, and each site's
+        // worker of a plugin has its own role (`…__s<id>`), so a role never gets USAGE on another site's schema.
+        await this.pool.query(`GRANT USAGE ON SCHEMA ${escapeIdentifier(await this.currentSchema())} TO ${r}`);
         // The pool user must be a MEMBER of the role to `SET ROLE` to it (unless it's a superuser). Granting
         // membership is harmless — the role holds strictly FEWER privileges than the admin pool user.
         await this.pool.query(`GRANT ${r} TO CURRENT_USER`);
@@ -397,9 +419,9 @@ class PostgresDriver extends DatabaseDriverInterface {
     async grantPluginPrefix(role: string, prefix: string) {
         const r = escapeIdentifier(safeIdent(role));
         safeIdent(prefix); // a wjp_<slug>_ prefix is itself a valid identifier (trailing _ is fine) — validate it
-        const tbls = await this.pool.query(`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE $1`, [prefix + '%']);
+        const tbls = await this.pool.query(`SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE $1`, [prefix + '%']);
         for (const row of tbls.rows) { const tn = escapeIdentifier(safeIdent(row.tablename)); await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tn} TO ${r}`); }
-        const seqs = await this.pool.query(`SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public' AND sequence_name LIKE $1`, [prefix + '%']);
+        const seqs = await this.pool.query(`SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema=current_schema() AND sequence_name LIKE $1`, [prefix + '%']);
         for (const row of seqs.rows) { const sn = escapeIdentifier(safeIdent(row.sequence_name)); await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE ${sn} TO ${r}`); }
     }
     /** GRANT the role CRUD on ONE newly-created table (called right after createTable). */
@@ -414,10 +436,16 @@ class PostgresDriver extends DatabaseDriverInterface {
         await this.pool.query(`DROP ROLE IF EXISTS ${r}`);
     }
 
+    /** The schema this pool's unqualified names resolve in (`public` on the main site; a site's own schema). */
+    async currentSchema(): Promise<string> {
+        const res = await this.pool.query('SELECT current_schema() AS s');
+        return safeIdent(String(res.rows[0] && res.rows[0].s));
+    }
+
     async getTables() {
         try {
             const res = await this.pool.query(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()"
             );
             return res.rows.map((r: any) => r.table_name);
         } catch (err) {
@@ -429,7 +457,7 @@ class PostgresDriver extends DatabaseDriverInterface {
     async getTableSchema(tableName: string) {
         try {
             const res = await this.pool.query(
-                "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position",
+                "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
                 [tableName]
             );
 
@@ -489,6 +517,8 @@ class PostgresDriver extends DatabaseDriverInterface {
 }
 
 module.exports = new PostgresDriver();
+// The class, for config/database to open one pool per site schema (multisite).
+module.exports.PostgresDriver = PostgresDriver;
 // Exported for unit tests of the dialect translation.
 module.exports.translateSql = translateSql;
 module.exports.translateCreateTable = translateCreateTable;

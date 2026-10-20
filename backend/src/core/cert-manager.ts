@@ -1,9 +1,8 @@
-const acme = require('acme-client');
+// The RFC 8555 client (./acme-client). It bounds every outbound ACME HTTP attempt — directory, order,
+// finalize AND the http-01 local pre-verify fetch — at 10 s: unbounded, an unreachable port 80 left each
+// verify attempt hanging on the OS TCP timeout and the admin request froze for minutes.
+const acme = require('./acme-client');
 const log = require('./module-logger').moduleLogger('core/cert-manager');
-// Bound every outbound ACME HTTP attempt (directory/order/finalize AND the http-01 local pre-verify
-// fetch). Without this, an unreachable port 80 left each verify attempt hanging on the OS TCP
-// timeout and the admin request froze for minutes.
-acme.axios.defaults.timeout = 10000;
 const fs = require('fs');
 const path = require('path');
 const dns = require('dns').promises;
@@ -148,6 +147,26 @@ function gatewayError(status: number, text: string): Error {
 }
 
 /**
+ * The chain a CA returned, checked before a byte of it is written: it must parse as certificates, its
+ * leaf must belong to the private key WE generated for the CSR, and it must cover every name that was
+ * ordered. What is written is the chain as OpenSSL re-encodes it, not the raw download.
+ */
+function verifiedChain(keyPem: string | Buffer, chainPem: string | Buffer, names: string[]): string {
+    const crypto = require('crypto');
+    const blocks = String(chainPem).match(/-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+?-----END CERTIFICATE-----/g) || [];
+    if (blocks.length === 0) throw new Error('The certificate authority returned no certificate.');
+    const certs = blocks.map((b: string) => new crypto.X509Certificate(b));
+    if (!certs[0].checkPrivateKey(crypto.createPrivateKey(keyPem))) {
+        throw new Error('The certificate authority returned a certificate for a different key.');
+    }
+    for (const name of names) {
+        const probe = name.startsWith('*.') ? `wildcard-probe.${name.slice(2)}` : name;
+        if (!certs[0].checkHost(probe, { wildcards: true })) throw new Error(`The issued certificate does not cover ${name}.`);
+    }
+    return certs.map((c: any) => c.toString()).join('');
+}
+
+/**
  * The names ONE certificate order covers (multi-identifier ACME: the main address and its www/apex twin
  * can share one certificate). Each name must be storable as a certificate directory name — the same gate
  * the single-name flow always had, applied BEFORE any CA work — and the first one names the directory.
@@ -169,12 +188,19 @@ class CertManager {
     accountKeyPath: string;
     directoryUrl: any;
 
+    /**
+     * Where a two-step DNS-01 request waits between its steps. The ORDER, authorization and challenge
+     * URLs live here, on the server, and step 2 reads them from here; the copy the browser carries back
+     * is display data only. Otherwise the request body would choose which URLs this server POSTs to.
+     */
+    pendingDnsPath: string;
+
     constructor() {
         this.client = null;
+        this.pendingDnsPath = path.join(DATA_DIR, 'pending-dns-01.json');
         this.accountKeyPath = path.join(DATA_DIR, 'account.key');
         // Let's Encrypt URLs
         this.directoryUrl = acme.directory.letsencrypt.production;
-        // this.directoryUrl = acme.directory.letsencrypt.staging; // TODO: Configurable?
     }
 
     async initClient(email: string, useStaging = false, directoryUrlOverride: string | null = null) {
@@ -185,8 +211,15 @@ class CertManager {
         // to staging too. A restart then reset it back to production via the constructor. That is how a
         // two-step DNS-01 flow ended up starting at one CA and finishing at the other, where the
         // challenge URL does not exist — boulder answers "No such challenge".
-        this.directoryUrl = directoryUrlOverride
-            || (useStaging ? acme.directory.letsencrypt.staging : acme.directory.letsencrypt.production);
+        // The override is the directory a two-step DNS flow was minted at, round-tripped through the
+        // browser — request input. It can only name a CA this method itself would have chosen.
+        // What is assigned is always one of OUR constants, never the request's string.
+        const { production, staging } = acme.directory.letsencrypt;
+        if (directoryUrlOverride && directoryUrlOverride !== production && directoryUrlOverride !== staging) {
+            throw new Error('This challenge names a certificate authority this site does not use. Start the certificate request again.');
+        }
+        const wantStaging = directoryUrlOverride ? directoryUrlOverride === staging : useStaging;
+        this.directoryUrl = wantStaging ? staging : production;
 
         // 1. Load or Generate Account Key
         let accountKey;
@@ -194,7 +227,7 @@ class CertManager {
             accountKey = fs.readFileSync(this.accountKeyPath);
         } else {
             log.info('[CertManager] Generatng new Account Key...');
-            accountKey = await acme.forge.createPrivateKey(); // ECDSA by default in newer lib or RSA
+            accountKey = await acme.crypto.createPrivateKey(); // RSA 2048, PKCS#1 — the format existing account keys have
             writePrivateKey(this.accountKeyPath, accountKey);
         }
 
@@ -202,7 +235,8 @@ class CertManager {
         this.client = new acme.Client({
             directoryUrl: this.directoryUrl,
             accountKey: accountKey,
-            // acme-client's default backoff (10 attempts, 5s→30s) lets verifyChallenge /
+            timeout: 10000,
+            // The client's default backoff (10 attempts, 5s→30s) lets verifyChallenge /
             // waitForValidStatus spin ~4 minutes INSIDE an admin HTTP request — the UI just hangs on
             // "Processing...". 5 attempts at 3s→10s caps each phase under ~40s of backoff while still
             // riding out normal CA validation latency.
@@ -232,7 +266,7 @@ class CertManager {
     /**
      * Finalize an order we hold only the URL of, and return the finalized order.
      *
-     * WHY THIS EXISTS: acme-client's finalizeOrder(order, csr) requires `order.finalize` — the URL the
+     * WHY THIS EXISTS: the ACME client's finalizeOrder(order, csr) requires `order.finalize` — the URL the
      * CA hands back when the order is created. Both call sites used to pass a hand-made `{ url }` stub,
      * which has no `finalize`, so the library threw "Unable to finalize order, URL not found" and NO
      * certificate could ever be issued — by HTTP-01 or DNS-01. Re-READING the order from its URL is
@@ -303,6 +337,38 @@ class CertManager {
             const domains = certificateNames(domainOrDomains);
             const domain = domains[0];
             const domainDir = resolveCertDir(LIVE_DIR, domain) as string;
+            const { key, cert } = await this.obtainHttp01Certificate(domains, email, useStaging);
+
+            // 5. Save locally (backup/reference) — into the directory resolved and proved contained
+            // at the top of this method.
+            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
+
+            writePrivateKey(certFile(domainDir, 'privkey.pem'), key);
+            fs.writeFileSync(certFile(domainDir, 'fullchain.pem'), cert);
+
+            // 6. Push to Gateway
+            // Ensure key is string
+            await this.pushCertToGateway(key.toString(), cert.toString());
+            log.info('[CertManager] Certificate pushed to Gateway.');
+
+            return { success: true, message: 'Certificate provisioned and installed.', domains };
+
+        } catch (e) {
+            log.error({ err: e }, '[CertManager] Auto HTTP Provision Error');
+            throw new Error(`Provisioning failed: ${e.message}`, { cause: e });
+        }
+    }
+
+    /**
+     * Steps 1-4 of an HTTP-01 issuance — order, challenges, validation, finalization — and nothing else:
+     * the key and the certificate come back to the caller, which decides where they go (the main site's
+     * certificate above, or a site's own certificate in core/site-certs). Each challenge answer is written
+     * where every node can serve it (writeChallengeFile).
+     */
+    async obtainHttp01Certificate(domainOrDomains: string | string[], email: string, useStaging = false): Promise<{ key: string; cert: string; domains: string[] }> {
+        {
+            const domains = certificateNames(domainOrDomains);
+            const domain = domains[0];
             log.info(`[CertManager] Starting HTTP-01 provisioning for ${domains.join(', ')}...`);
             await this.initClient(email, useStaging);
 
@@ -340,34 +406,67 @@ class CertManager {
             }
 
             // 4. Finalize — every name in the CSR, or the CA refuses an order whose identifiers differ.
-            const [key, csr] = await acme.forge.createCsr({
+            const [key, csr] = await acme.crypto.createCsr({
                 commonName: domain,
                 ...(domains.length > 1 ? { altNames: domains } : {}),
             });
 
             const finalized = await this.finalizeOrderByUrl(orderData.orderUrl, csr);
 
-            const cert = await this.client.getCertificate(finalized);
+            const cert = verifiedChain(key, await this.client.getCertificate(finalized), domains);
             log.info('[CertManager] Certificate downloaded.');
-
-            // 5. Save locally (backup/reference) — into the directory resolved and proved contained
-            // at the top of this method.
-            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
-
-            writePrivateKey(certFile(domainDir, 'privkey.pem'), key);
-            fs.writeFileSync(certFile(domainDir, 'fullchain.pem'), cert);
-
-            // 6. Push to Gateway
-            // Ensure key is string
-            await this.pushCertToGateway(key.toString(), cert.toString());
-            log.info('[CertManager] Certificate pushed to Gateway.');
-
-            return { success: true, message: 'Certificate provisioned and installed.', domains };
-
-        } catch (e) {
-            log.error({ err: e }, '[CertManager] Auto HTTP Provision Error');
-            throw new Error(`Provisioning failed: ${e.message}`, { cause: e });
+            return { key: key.toString(), cert: cert.toString(), domains };
         }
+    }
+
+    /**
+     * Every pending two-step DNS-01 request: a LIST of records, each naming its domain, looked up by
+     * equality — the domain comes from a request body, so it is never used as a property name.
+     * Unreadable or absent → none.
+     */
+    readPendingDns(): any[] {
+        try {
+            const all = JSON.parse(fs.readFileSync(this.pendingDnsPath, 'utf8'));
+            return Array.isArray(all) ? all.filter((r: any) => r && typeof r.domain === 'string') : [];
+        } catch { return []; }
+    }
+
+    /** The pending request for `domain`, or undefined. */
+    pendingDnsFor(domain: string): any {
+        const d = String(domain).toLowerCase();
+        return this.readPendingDns().find((r: any) => r.domain === d);
+    }
+
+    private writePendingDns(all: any[]) {
+        writePrivateKey(this.pendingDnsPath, JSON.stringify(all, null, 2));
+    }
+
+    /**
+     * Remember what step 1 minted for `domain` (the CA's own URLs, the directory it was minted at).
+     * A newer request for the same domain replaces the older one; entries older than a CA order's
+     * lifetime (7 days at Let's Encrypt) are dropped.
+     */
+    rememberDnsChallenge(step1: any) {
+        const domain = String(step1.domain).toLowerCase();
+        const cutoff = Date.now() - 7 * 864e5;
+        const kept = this.readPendingDns().filter((r: any) => r.domain !== domain && r.createdAt > cutoff);
+        kept.push({
+            domain,
+            orderUrl: step1.orderUrl,
+            authzUrl: step1.authzUrl,
+            challenge: step1.challenge,
+            directoryUrl: step1.directoryUrl,
+            alreadyValid: !!step1.alreadyValid,
+            createdAt: Date.now(),
+        });
+        this.writePendingDns(kept);
+    }
+
+    private forgetDnsChallenge(domain: string) {
+        const d = String(domain).toLowerCase();
+        const all = this.readPendingDns();
+        const kept = all.filter((r: any) => r.domain !== d);
+        if (kept.length !== all.length) this.writePendingDns(kept);
     }
 
     async startDNSChallenge(domain: string, email: string, useStaging = false) {
@@ -387,7 +486,7 @@ class CertManager {
             // Nothing left to prove — the CA still holds a valid authorization for this domain. There
             // is no TXT record to publish; the caller can finish immediately.
             if (orderData.alreadyValid) {
-                return {
+                const result = {
                     domain,
                     alreadyValid: true,
                     txtRecord: `_acme-challenge.${domain}`,
@@ -398,16 +497,18 @@ class CertManager {
                     keyAuthorization: null,
                     directoryUrl: this.directoryUrl
                 };
+                this.rememberDnsChallenge(result);
+                return result;
             }
 
             // getChallengeKeyAuthorization() ALREADY returned the RFC 8555 §8.4 TXT value for dns-01
-            // (base64url(sha256(`token.thumbprint`))) — acme-client digests it internally. The old
+            // (base64url(sha256(`token.thumbprint`))) — the ACME client digests it internally. The old
             // getDNSDigest() hashed it a SECOND time, so the UI displayed a value no CA could ever
             // match and DNS-01 issuance was permanently broken.
             const txtValue = orderData.keyAuthorization;
 
-            // Return data for UI
-            return {
+            // Return data for UI (and remember it: step 2 acts on the server's copy, see pendingDnsPath)
+            const result = {
                 domain,
                 txtRecord: `_acme-challenge.${domain}`,
                 txtValue,
@@ -422,6 +523,8 @@ class CertManager {
                 // mutating the shared singleton, and not through a restart in the middle of the flow.
                 directoryUrl: this.directoryUrl
             };
+            this.rememberDnsChallenge(result);
+            return result;
         } catch (e) {
             log.error({ err: e }, '[CertManager] DNS Start Error');
             throw new Error(`DNS challenge start failed: ${e.message}`, { cause: e });
@@ -442,12 +545,18 @@ class CertManager {
             if (domainDir === null) {
                 throw new Error(`Invalid domain ${JSON.stringify(String(step1Data && step1Data.domain))} — expected a DNS name such as "example.com" or "*.example.com".`);
             }
-            // Re-init against THE CA THAT MINTED THIS CHALLENGE (step1Data.directoryUrl), not against
-            // the caller's `staging` flag. The order/authz/challenge URLs in step1Data exist at exactly
-            // one endpoint; talking to the other one gets "No such challenge" from boulder after the
-            // operator has already published the TXT record — the failure this pairing removes.
-            // `useStaging` remains the fallback for a step1Data minted before this field existed.
-            await this.initClient(email, useStaging, step1Data && step1Data.directoryUrl);
+            // The URLs to act on are the ones step 1 minted and this server stored — never the ones in
+            // the request body. Only the domain (validated above) comes from the browser.
+            const domain: string = String(step1Data.domain).toLowerCase();
+            const flow = this.pendingDnsFor(domain);
+            if (!flow) {
+                throw new Error('No certificate request is pending for this domain on this server. Start the certificate request again.');
+            }
+            // Re-init against THE CA THAT MINTED THIS CHALLENGE (flow.directoryUrl), not against the
+            // caller's `staging` flag. The order/authz/challenge URLs exist at exactly one endpoint;
+            // talking to the other one gets "No such challenge" from boulder after the operator has
+            // already published the TXT record — the failure this pairing removes.
+            await this.initClient(email, useStaging, flow.directoryUrl || null);
 
             // Best-effort LOCAL pre-flight only — the CA performs the authoritative validation from
             // the outside after completeChallenge. Failing hard here strands setups whose local
@@ -455,10 +564,10 @@ class CertManager {
             // lookups), so a pre-verify miss logs and continues instead of aborting the order.
             // Skipped entirely when the authorization is already valid — there is no challenge to check.
             try {
-                if (!step1Data.challenge) throw new Error('authorization already valid — nothing to pre-verify');
+                if (!flow.challenge) throw new Error('authorization already valid — nothing to pre-verify');
                 await this.client.verifyChallenge(
-                    { url: step1Data.authzUrl, identifier: { type: 'dns', value: step1Data.domain } },
-                    step1Data.challenge
+                    { url: flow.authzUrl, identifier: { type: 'dns', value: domain } },
+                    flow.challenge
                 );
             } catch (preErr: any) {
                 log.warn({ err: preErr }, '[CertManager] Local dns-01 pre-verify inconclusive (continuing — the CA decides)');
@@ -466,24 +575,24 @@ class CertManager {
 
             // Complete and wait — unless the CA already holds a valid authorization, in which case
             // there is no challenge object and nothing to complete; go straight to finalization.
-            if (step1Data.challenge) {
-                await this.client.completeChallenge(step1Data.challenge);
-                await this.client.waitForValidStatus(step1Data.challenge);
+            if (flow.challenge) {
+                await this.client.completeChallenge(flow.challenge);
+                await this.client.waitForValidStatus(flow.challenge);
             }
 
             // Create CSR and finalize
-            const [key, csr] = await acme.forge.createCsr({
-                commonName: step1Data.domain,
+            const [key, csr] = await acme.crypto.createCsr({
+                commonName: domain,
             });
 
             // Finalize the order
-            const finalized = await this.finalizeOrderByUrl(step1Data.orderUrl, csr);
+            const finalized = await this.finalizeOrderByUrl(flow.orderUrl, csr);
 
-            // Get certificate
-            const cert = await this.client.getCertificate(finalized);
+            // Get certificate — checked against our key and the domain before anything is written
+            const cert = verifiedChain(key, await this.client.getCertificate(finalized), [domain]);
 
             // Save to files — `domainDir` is the value resolved and proved contained at the top of
-            // this method, never a fresh join of step1Data.domain.
+            // this method, never a fresh join of domain.
             if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
 
             const keyPath = certFile(domainDir, 'privkey.pem');
@@ -494,6 +603,7 @@ class CertManager {
             // Update config to use new cert. AWAIT it: un-awaited, a failed gateway push still
             // reported success to the admin and the rejection went unhandled.
             await this.updateSSLConfig(keyPath, chainPath);
+            this.forgetDnsChallenge(domain);
 
             return {
                 success: true,
@@ -580,6 +690,34 @@ class CertManager {
             log.error({ err: e }, '[CertManager] Push Error');
             throw e;
         }
+    }
+
+    /**
+     * MULTISITE: give the edge the certificate of ONE site address (core/site-certs). The gateway keeps it
+     * under ssl/live/sites/<host>/ and its workers select it by SNI with no restart; the monolith reads the
+     * same directory (gateway/src/site-certs.js). The main site's certificate is untouched.
+     */
+    async pushSiteCertToEdge(host: string, keyContent: string, certContent: string) {
+        if (process.env.WORDJS_EMBEDDED === '1') {
+            const siteCerts = require('../../../gateway/src/site-certs.js');
+            siteCerts.writeSiteCert(siteCerts.defaultSitesDir(), host, keyContent, certContent);
+            return { success: true, embedded: true };
+        }
+        const { status, text } = await gatewayControlRequest('POST', '/site-cert', { host, key: keyContent, cert: certContent }, 15000);
+        if (status !== 200) throw gatewayError(status, text);
+        return JSON.parse(text);
+    }
+
+    /** MULTISITE: take a deleted site's certificate off the edge. */
+    async removeSiteCertFromEdge(host: string) {
+        if (process.env.WORDJS_EMBEDDED === '1') {
+            const siteCerts = require('../../../gateway/src/site-certs.js');
+            siteCerts.removeSiteCert(siteCerts.defaultSitesDir(), host);
+            return { success: true, embedded: true };
+        }
+        const { status, text } = await gatewayControlRequest('POST', '/site-cert-remove', { host }, 15000);
+        if (status !== 200) throw gatewayError(status, text);
+        return JSON.parse(text);
     }
 
     /**
@@ -683,6 +821,10 @@ class CertManager {
         }
         if (!fs.existsSync(challengeDir)) fs.mkdirSync(challengeDir, { recursive: true });
         fs.writeFileSync(target, keyAuthorization);
+        // Multisite: also where EVERY node can answer it (core/site-certs). Several backend nodes behind
+        // the edge each get a share of the CA's validation requests; the local file is on one of them.
+        try { await require('./site-certs').rememberChallenge(token, keyAuthorization); }
+        catch (e: any) { log.warn({ err: e }, '[CertManager] the challenge answer could not be shared with the other nodes'); }
         return true;
     }
 

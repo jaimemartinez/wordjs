@@ -13,7 +13,7 @@ before writing code.
 
 ## Getting the project running
 
-**Requirements:** Node **≥ 20.9**.
+**Requirements:** Node **≥ 22**.
 
 ```bash
 git clone https://github.com/jaimemartinez/wordjs.git

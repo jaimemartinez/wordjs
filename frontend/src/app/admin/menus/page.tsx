@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { menusApi, postsApi, Menu, MenuItem, Post } from "@/lib/api";
+import { menusApi, pluginsApi, postsApi, Menu, MenuItem, Post } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
 import ModernSelect from "@/components/ModernSelect";
@@ -26,9 +26,10 @@ export default function MenusPage() {
     const [deleteAction, setDeleteAction] = useState<(() => void) | null>(null);
     const [deleteMessage, setDeleteMessage] = useState("");
 
-    // System Pages
+    // System Pages: the plugin portals served right now (/portal/<slug>), then the login page.
+    const [portals, setPortals] = useState<{ slug: string; title?: string }[]>([]);
     const systemPages = [
-        { title: t('menus.systemPortalConference'), url: '/portal/conference' },
+        ...portals.map((p) => ({ title: p.title || `/portal/${p.slug}`, url: `/portal/${p.slug}` })),
         { title: t('menus.systemLoginAccess'), url: '/login' }
     ];
     const [selectedSystemUrl, setSelectedSystemUrl] = useState<string>("");
@@ -37,6 +38,7 @@ export default function MenusPage() {
         loadMenus();
         loadPages();
         loadLocations();
+        loadPortals();
     }, []);
 
     useEffect(() => {
@@ -53,6 +55,15 @@ export default function MenusPage() {
             setLocations(data || {});
         } catch (error) {
             console.error("Failed to load locations", error);
+        }
+    };
+
+    const loadPortals = async () => {
+        try {
+            const data = await pluginsApi.portals();
+            setPortals(Array.isArray(data) ? data : []);
+        } catch {
+            setPortals([]);
         }
     };
 

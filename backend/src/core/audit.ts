@@ -114,6 +114,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // An installed theme replaced from an uploaded zip (POST /themes/:slug/update).
     THEME_UPDATE: 'theme.update',
     THEME_MODS_IMPORT: 'theme.mods.import',
+    // An administrator granted or revoked a theme's functions.js permissions (activation dialog or
+    // PUT /themes/:slug/permissions): {granted} - the full grant list after the write.
+    THEME_PERMISSIONS: 'theme.permissions',
 
     // ── Configuration ───────────────────────────────────────────────────────────────────────────────
     SETTINGS_UPDATE: 'settings.update',

@@ -502,7 +502,7 @@ const MIGRATIONS: Migration[] = [
                 try {
                     if (ctx.isPostgres) {
                         const r = await ctx.get(
-                            `SELECT 1 AS ok FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1`,
+                            `SELECT 1 AS ok FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ? LIMIT 1`,
                             [table, column]
                         );
                         return !!r;
@@ -643,7 +643,7 @@ const MIGRATIONS: Migration[] = [
                 try {
                     if (ctx.isPostgres) {
                         return !!(await ctx.get(
-                            `SELECT 1 AS ok FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1`,
+                            `SELECT 1 AS ok FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ? LIMIT 1`,
                             [table, column]
                         ));
                     }

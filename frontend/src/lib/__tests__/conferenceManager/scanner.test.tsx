@@ -36,6 +36,8 @@ import {
 } from '../../../../../marketplace/plugins/conference-manager/client/admin/MealScanner';
 import { classifyRead, createReadRouter, createScanMeter, isRegCode, normalizeCode, scanLoopDelay } from '../../../../../marketplace/plugins/conference-manager/client/lib/meals';
 import { translations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
+import { encodeQr } from '../../../../../marketplace/plugins/conference-manager/client/lib/qr';
+import { BoardingScanner, boardingLines } from '../../../../../marketplace/plugins/conference-manager/client/admin/BoardingScanner';
 
 const es = makeTx((k: string) => translations.es[k] ?? k);
 const flat = (html: string) => html.replace(/<!-- -->/g, '');
@@ -144,11 +146,12 @@ describe('scanLoopDelay: the built-in reader leaves the main thread free at leas
 });
 
 describe('BarcodeDetector is asked for every format it supports', () => {
-    it('code_128 plus the rest (2.15.0 asked for code_128 only)', () => {
+    it('qr_code plus the rest (2.15.0 asked for code_128 only; the badges are QR since 2.22.0)', () => {
         expect(pickNativeFormats(['code_128', 'ean_13', 'upc_e', 'qr_code', 'unknown'])).toEqual(['code_128', 'ean_13', 'upc_e', 'qr_code']);
-        expect(pickNativeFormats(undefined)).toEqual(expect.arrayContaining(['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39']));
-        // Without Code 128 it cannot read the badges: the built-in reader is used instead.
-        expect(pickNativeFormats(['qr_code', 'ean_13'])).toBeNull();
+        expect(pickNativeFormats(undefined)).toEqual(expect.arrayContaining(['qr_code', 'code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39']));
+        expect(pickNativeFormats(['qr_code', 'ean_13'])).toEqual(['qr_code', 'ean_13']);
+        // Without QR it cannot read the badges: the built-in reader (QR + Code 128) is used instead.
+        expect(pickNativeFormats(['code_128', 'ean_13'])).toBeNull();
     });
 });
 
@@ -183,11 +186,44 @@ describe('the built-in path decodes the aiming band, nothing filtered', () => {
         const fw = 640 * 0.82, fh = fw / 2.6;
         const aim = { getBoundingClientRect: () => ({ left: (640 - fw) / 2, top: (720 - fh) / 2, width: fw, height: fh }) };
         expect(decodeCameraFrame(video, canvas, aim)).toEqual({ text: '96385074', format: 'ean_8' });
-        // Only the band under the frame was drawn, 1:1 (full resolution, nothing downscaled).
+        // First a QR was looked for (2.22.0) in a square around the frame, at most 720 px a side; then the band
+        // under the frame was drawn 1:1 (full resolution, nothing downscaled) for the barcode.
+        expect(draws).toHaveLength(2);
+        expect(draws[0][0]).toBe(draws[0][1]);
+        expect(Math.max(draws[0][2], draws[0][3])).toBeLessThanOrEqual(720);
         expect(canvas.width).toBeLessThan(W);
         expect(canvas.height).toBeLessThan(H);
-        expect(draws[0][0]).toBe(draws[0][2]);
-        expect(draws[0][1]).toBe(draws[0][3]);
+        expect(draws[1][0]).toBe(draws[1][2]);
+        expect(draws[1][1]).toBe(draws[1][3]);
+    });
+
+    it('a badge QR under the aiming frame is read first, as qr_code (2.22.0)', () => {
+        // The badge's QR (version 1-H, the registration code), 9 px per module, in the middle of the camera.
+        const qr = encodeQr('EUVWPL73N7', 'H');
+        const W = 1280, H = 720, px = 9;
+        const frame = new Uint8ClampedArray(W * H).fill(235);
+        const x0 = Math.round((W - qr.size * px) / 2), y0 = Math.round((H - qr.size * px) / 2);
+        for (let y = 0; y < qr.size; y++) for (let x = 0; x < qr.size; x++) if (qr.modules[y][x]) {
+            for (let dy = 0; dy < px; dy++) for (let dx = 0; dx < px; dx++) frame[(y0 + y * px + dy) * W + x0 + x * px + dx] = 20;
+        }
+        let target = new Uint8ClampedArray(0);
+        const canvas = {
+            width: 0, height: 0,
+            getContext: () => ({
+                drawImage: (_v: unknown, sx: number, sy: number, sw: number, sh: number, _dx: number, _dy: number, dw: number, dh: number) => {
+                    target = new Uint8ClampedArray(dw * dh * 4);
+                    for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) {
+                        const v = frame[Math.floor(sy + (y * sh) / dh) * W + Math.floor(sx + (x * sw) / dw)];
+                        target.set([v, v, v, 255], (y * dw + x) * 4);
+                    }
+                },
+                getImageData: () => ({ data: target }),
+            }),
+        };
+        const video = { videoWidth: W, videoHeight: H, getBoundingClientRect: () => ({ left: 0, top: 0, width: 640, height: 720 }) };
+        const fw = 640 * 0.82, fh = fw / 2.6;
+        const aim = { getBoundingClientRect: () => ({ left: (640 - fw) / 2, top: (720 - fh) / 2, width: fw, height: fh }) };
+        expect(decodeCameraFrame(video, canvas, aim)).toEqual({ text: 'EUVWPL73N7', format: 'qr_code' });
     });
 });
 
@@ -373,3 +409,32 @@ describe('MealScanner: the overlay is black, full screen and above the admin chr
         expect(html).toContain('@keyframes cm-scan-sweep');
     });
 });
+
+// ── «Verificar abordaje» (2.25.0) ────────────────────────────────────────────────────────────────────
+
+describe('boarding check: the verdict in words, and the screen', () => {
+    const person = { id: 1, name: 'Ana Pérez', location: 'Norte', reg_code: 'EUVWPL73N7' };
+    it('says plainly whether the person goes on this bus', () => {
+        expect(boardingLines(es, { result: 'ok', person, ticket: { balance: 0 } })).toEqual({ title: 'Sí va en este bus', lines: ['Ana Pérez', 'Norte'] });
+        expect(boardingLines(es, { result: 'ok', person, ticket: { balance: 50000 } }).lines[2]).toMatch(/^Pasaje con saldo pendiente: .*50\.000/);
+        expect(boardingLines(es, { result: 'other_bus', person, buses: [{ id: 2, name: 'Bus 2' }] })).toEqual({ title: 'Va en otro bus', lines: ['Ana Pérez', 'Su bus: Bus 2'] });
+        expect(boardingLines(es, { result: 'no_ticket', person }).title).toBe('No tiene pasaje');
+        expect(boardingLines(es, { result: 'cancelled', person }).title).toBe('Inscripción cancelada');
+        expect(boardingLines(es, { result: 'unknown' }).title).toBe('Código desconocido');
+        expect(boardingLines(es, { result: 'error', message: 'x' })).toEqual({ title: 'No se pudo comprobar', lines: ['x'] });
+    });
+    it('opens on the chosen bus, with the code box for a reader', () => {
+        const buses = [{ id: 1, name: 'Bus 1', origin: 'Barranquilla', destination: 'Santa Marta' }, { id: 2, name: 'Bus 2' }];
+        const html = renderToStaticMarkup(<I18nProvider><BoardingScanner buses={buses} busId={2} onClose={() => {}} /></I18nProvider>);
+        expect(html).toContain('data-boarding-scanner=""');
+        expect(html).toMatch(/<option value="2" selected="">Bus 2<\/option>/);
+        expect(html).toContain('Bus 1 · Barranquilla → Santa Marta');
+        expect(html).toContain('data-boarding-input=""');
+    });
+    it('every boarding text exists in es / en / pt', () => {
+        const keys = Object.keys(translations.es).filter((k) => k.startsWith('transport.board.'));
+        expect(keys.length).toBe(21);
+        for (const lang of ['en', 'pt'] as const) for (const k of keys) expect((translations as any)[lang][k], `${lang} ${k}`).toBeTruthy();
+    });
+});
+
