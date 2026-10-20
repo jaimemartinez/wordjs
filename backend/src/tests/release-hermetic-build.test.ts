@@ -200,10 +200,10 @@ describe('release hermetic-build guard — the clean case passes (control)', () 
 
     test('the default site name is the one the root layout falls back to', () => {
         // If layout.tsx changes its fallback, every clean release build would trip the title check.
-        const layout = fs.readFileSync(path.join(ROOT_DIR, 'frontend', 'src', 'app', 'layout.tsx'), 'utf8');
+        const layout = fs.readFileSync(path.join(ROOT_DIR, 'frontend', 'src', 'app', '_root', 'RootDocument.tsx'), 'utf8');
         assert.ok(
             layout.includes(`settings?.blogname || "${DEFAULT_SITE_NAME}"`),
-            `frontend/src/app/layout.tsx no longer falls back to "${DEFAULT_SITE_NAME}" — update DEFAULT_SITE_NAME`,
+            `frontend/src/app/_root/RootDocument.tsx no longer falls back to "${DEFAULT_SITE_NAME}" — update DEFAULT_SITE_NAME`,
         );
     });
 });

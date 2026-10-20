@@ -1,19 +1,18 @@
 /**
- * Multisite: the layout of every page of another site of the network. src/proxy.ts rewrites that
- * site's public requests to this tree (`/wjs-site/<host>/…`, never visible in the browser), and this
- * layout declares the site for everything it renders (lib/server-api setRequestSite) before handing over
- * to the (public) layout — the same chrome, the same theme, that site's settings and menus.
+ * Multisite: the ROOT LAYOUT of another site of the network. src/proxy.ts has next.config's rewrite send
+ * that site's public pages and sign-in screens to this tree (`/wjs-site/<host>/…`, never visible in the
+ * browser), and this layout declares the site (lib/server-api setRequestSite) from its route param before
+ * it reads anything — so the document itself is that site's: `<html lang dir>` from its locale options,
+ * the @font-face rules of its fonts, its name and title template, its icon and canonical base. There is
+ * no app/layout.tsx above it (see _root/RootDocument.tsx), so nothing of the main site's reaches it.
  *
- * The root layout above it (app/layout.tsx) is shared with the main site and takes no params, so the
- * head it builds is the main site's; the metadata here replaces every field of it that names a site (the
- * title, the description, the icon and the base canonical URLs resolve against). The document's lang /
- * dir are set on this tree's wrapper from this site's own settings.
+ * Below it, `(public)/layout.tsx` adds the public chrome; `login`, `register`, `reset-password` and
+ * `verify-email` are the site's sign-in screens (the main ones' pages, in this site's document).
  */
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import PublicLayout from "@/app/(public)/layout";
-import { getSettings, setRequestSite } from "@/lib/server-api";
-import { resolveDocumentLanguage } from "@/lib/documentLanguage";
+import RootDocument, { rootMetadata } from "@/app/_root/RootDocument";
+import { setRequestSite } from "@/lib/server-api";
 
 type Params = { params: Promise<{ siteHost: string }> };
 
@@ -25,27 +24,10 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
     if (!setRequestSite((await params).siteHost)) notFound();
-    const settings = await getSettings();
-    const title = settings?.blogname || "WordJS";
-    const meta: Metadata = {
-        title: { default: title, template: `%s | ${title}` },
-        description: settings?.blogdescription || "",
-        icons: { icon: settings?.site_icon || "/favicon.ico", apple: settings?.site_icon || "/favicon.ico" },
-    };
-    const configuredUrl = settings?.siteurl || settings?.home;
-    if (configuredUrl && /^https?:\/\//i.test(configuredUrl)) {
-        try { meta.metadataBase = new URL(configuredUrl); } catch { /* malformed: relative URLs stay relative */ }
-    }
-    return meta;
+    return rootMetadata();
 }
 
-export default async function SiteLayout({ children, params }: Params & { children: React.ReactNode }) {
+export default async function SiteRootLayout({ children, params }: Params & { children: React.ReactNode }) {
     if (!setRequestSite((await params).siteHost)) notFound();
-    const settings = await getSettings();
-    const { lang, dir } = resolveDocumentLanguage(settings);
-    return (
-        <div lang={lang} dir={dir} data-wjs-site="" className="contents">
-            <PublicLayout>{children}</PublicLayout>
-        </div>
-    );
+    return RootDocument({ children: <div data-wjs-site="" className="contents">{children}</div> });
 }

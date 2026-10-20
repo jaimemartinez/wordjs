@@ -48,8 +48,8 @@ describe("proxy: another site of the network", () => {
         expect(res.headers.get("x-middleware-rewrite")).toBeNull();
     });
 
-    it("leaves the admin, sign-in, API and asset paths alone", () => {
-        for (const p of ["/admin", "/admin/posts", "/login", "/api/v1/settings", "/uploads/2026/10/a.png", "/install", "/portal/x", "/logo.png", "/fonts/Inter.woff2"]) {
+    it("leaves the admin, API and asset paths alone (the sign-in screens: wjs-site/__tests__/siteRootLayout)", () => {
+        for (const p of ["/admin", "/admin/posts", "/api/v1/settings", "/uploads/2026/10/a.png", "/install", "/portal/x", "/logo.png", "/fonts/Inter.woff2"]) {
             expect(outcome(proxy(req(p, site))), p).toBe("next");
         }
     });
