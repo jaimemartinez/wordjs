@@ -572,6 +572,15 @@ export const checkSetupRequired = siteCache(async (): Promise<boolean> => {
 
 // Site settings change rarely and are read on EVERY page (title, theme, menus, SEO, chrome) — the single
 // hottest read. Cache 60s + tag so the ~N-per-render backend calls collapse to one until it changes.
+/**
+ * The shortcode tags the active plugins render with their own site component (GET /plugins/shortcodes):
+ * what a static HTML front page swaps for a PluginLoader. [] when unknown — the tags then stay text.
+ */
+export const getPluginShortcodes = siteCache(async (): Promise<Array<{ tag: string; plugin: string }>> => {
+    const list = await serverFetch<Array<{ tag: string; plugin: string }>>('/plugins/shortcodes', { revalidate: 60, tags: ['plugins'] });
+    return Array.isArray(list) ? list.filter((s) => s && typeof s.tag === 'string' && typeof s.plugin === 'string') : [];
+});
+
 export const getSettings = siteCache((): Promise<Record<string, string> | null> =>
     serverFetch<Record<string, string>>('/settings', { revalidate: 60, tags: ['settings'] }).then((settings) => {
         publishMediaCdnOrigin(settings);

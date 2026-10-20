@@ -109,11 +109,11 @@ gone **fails fast** ("… is not running") instead of waiting the timeout out. P
 global IPC message rates are token-bucket capped, with inbound/outbound payload caps.
 
 ## 1. Photo Carousel 📸
-**ID:** `photo-carousel` | **Version:** 2.0.1
+**ID:** `photo-carousel` | **Version:** 2.1.0
 
 Manages image carousels for Hero sections or content sliders.
 
-*   **Shortcode:** `[carousel id="123"]` (async — expanded via `doShortcodeAsync`)
+*   **Shortcode:** `[carousel id="123"]` (async — expanded via `doShortcodeAsync`). Since 2.1.0 it renders plain markup on the core's `wjs-snap-strip` classes (a swipeable, scroll-snapping row from `wordjs-ui.css`) so it survives the HTML sanitizer and needs no script; autoplay and arrow buttons are only on the Verso block.
 *   **Verso block:** `client/verso/PhotoCarouselVerso.tsx` (registry key `PhotoCarousel`; renders the `HeroCarousel` location component internally)
 *   **Permissions:** `settings` (read/write), `database` (write), `express` (register_route), `admin_menu` (register).
 *   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/photo-carousel/*`. Default-deny: an admin grants its declared capabilities in `/admin/plugins`.

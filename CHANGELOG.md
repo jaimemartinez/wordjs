@@ -839,6 +839,16 @@ the boot error links there too.
 
 ### Fixed
 
+- **Static front page: plugin `[tag]` embeds come from the plugins' manifests.** The front page kept its
+  own list (`[cards]` → card-gallery, `[vgallery]` → video-gallery). It now renders whatever tags the
+  active plugins declare in their manifest `shortcodes` and render with their own site component, with
+  attributes passed as props (`[vgallery id="…"]` — the form video-gallery's own handler emits — used to
+  stay as text). New public route `GET /api/v1/plugins/shortcodes`.
+- **photo-carousel 2.1.0: `[carousel]` works in sanitized post HTML.** Its output relied on a `<style>`
+  block the sanitizer always removed, plus an initialiser the core mounted on every post. It now renders
+  plain markup on the core's new, plugin-neutral `wjs-snap-strip` classes (a swipeable, scroll-snapping
+  row in `wordjs-ui.css`, no script), and the core no longer carries that initialiser. Autoplay and arrow
+  buttons remain on the Verso block.
 - **Multisite on Windows: a plugin's or a site's AppContainer profiles go with it.** Each (site, plugin)
   worker of a network runs under its own AppContainer profile. Deleting a plugin removed only the main
   site's; it now removes the profile (and the folder permissions given to it) of the plugin's worker on

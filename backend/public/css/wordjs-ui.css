@@ -3087,3 +3087,28 @@ html:has(#wjs-motion-pause:checked) { --wjs-ix-play: paused; }
   font-weight: 600;
 }
 .wjs-toc__title { color: var(--wjs-color-heading, var(--wjs-color-text-main, #1f2937)); }
+
+/* SNAP STRIP — a swipeable row of full-width items, for sanitized HTML (shortcode output, imported or
+   classic bodies) where neither a <style> block nor layout inline styles survive and no script runs.
+   Plugin-neutral: any content may use it. Scrolls natively (touch, trackpad, shift+wheel, keyboard once
+   focused); each item snaps into place. `--16x9` crops every item to that frame. */
+.wjs-snap-strip {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  overscroll-behavior-x: contain;
+  gap: 0;
+  width: 100%;
+  max-width: 900px;
+  margin: 2rem auto;
+  border-radius: 16px;
+  background: #1e293b;
+  scrollbar-width: thin;
+}
+.wjs-snap-strip:focus-visible { outline: 2px solid var(--wjs-color-primary, #2f6d86); outline-offset: 2px; }
+.wjs-snap-strip__item { flex: 0 0 100%; scroll-snap-align: start; margin: 0; }
+.wjs-snap-strip__item > img { display: block; width: 100%; height: auto; }
+.wjs-snap-strip--16x9 .wjs-snap-strip__item > img { aspect-ratio: 16 / 9; height: auto; object-fit: cover; }
+.wjs-snap-strip__caption { padding: 0.75rem 1rem; color: #f8fafc; font-size: 0.95rem; }
+@media (prefers-reduced-motion: reduce) { .wjs-snap-strip { scroll-behavior: auto; } }
