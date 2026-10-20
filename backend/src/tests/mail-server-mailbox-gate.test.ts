@@ -100,6 +100,8 @@ type Boot = {
     Email: any;
     smtp: any;
     menus: any[];
+    /** The send function the REAL plugin hands to wordjs.provideMail(). */
+    provided: { fn: any };
 };
 
 type BootOpts = {
@@ -127,6 +129,7 @@ async function boot({ options: extraOptions = {}, secrets = {}, users = DIRECTOR
     const routes = new Map<string, RouteHandler>();
     const registered: { method: string; sub: string; opts: any }[] = [];
     const menus: any[] = [];
+    const provided: { fn: any } = { fn: null };
     // 2525 keeps the plugin's real port-25 bindability probe (which uses `net`) from ever running.
     const options: Record<string, string> = { smtp_listen_port: '2525', ...extraOptions };
     const find = (pred: (u: any) => boolean) => users.find(pred) || null;
@@ -164,7 +167,7 @@ async function boot({ options: extraOptions = {}, secrets = {}, users = DIRECTOR
             }
         },
         adminMenu: { add(item: any) { menus.push(item); } },
-        provideMail() { /* host-wide mail provider registration */ },
+        provideMail(fn: any) { provided.fn = fn; },
         notify: Object.assign(async () => { /* db/sse notification */ }, { registerTransport() { } }),
         dns: {
             resolveMx: async () => { throw new Error('queryMx ENOTFOUND'); },
@@ -180,7 +183,7 @@ async function boot({ options: extraOptions = {}, secrets = {}, users = DIRECTOR
     await plugin.init(bridge);
 
     const createEmailStore = require(path.join(PLUGIN_DIR, 'lib/email-store.js'));
-    return { plugin, routes, registered, db, Email: createEmailStore(db), smtp: smtpInstances[0], menus };
+    return { plugin, routes, registered, db, Email: createEmailStore(db), smtp: smtpInstances[0], menus, provided };
 }
 
 // --- The route-handler calling convention of backend/src/core/plugin-worker.js -------------------
@@ -743,4 +746,47 @@ test('the grant is the DECLARED account capability, end to end: manifest, gate a
         assert.equal((await call(b, 'get /mailbox', legacyOnly)).body.hasMailbox, false);
         assert.equal((await call(b, 'get /mailbox', ALICE)).body.hasMailbox, true);
     } finally { b.plugin.deactivate(); }
+});
+
+test('another plugin sends through the REAL mail-server as the active provider (the generic mail seam)', async () => {
+    // The mail seam is generic and stays so: mail-server registers the site's sender through the real core
+    // bridge (wordjs.provideMail, email:provider), and ANY plugin holding email:admin sends with wordjs.mail()
+    // without knowing which provider is active (core/mail-provider.ts). The generic half — provider swap, no
+    // provider, grants — is pinned in plugin-mail-seam.test.ts; here the provider is the real plugin.
+    const perms = require('../core/plugin-permissions');
+    const { runWithContext } = require('../core/plugin-context');
+    const { createPluginApi } = require('../core/plugin-api');
+    const mailProvider = require('../core/mail-provider');
+    const PLUGINS = path.resolve(__dirname, '../../plugins');
+    const CONSUMER = `wjs-mailseam-gate-consumer-${process.pid}`;
+    const made: string[] = [];
+    const declare = (slug: string, manifest: any) => {
+        const dir = path.join(PLUGINS, slug);
+        if (fs.existsSync(path.join(dir, 'manifest.json'))) return;   // a real installed copy: use it as is
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+        made.push(dir);
+    };
+    declare('mail-server', JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'manifest.json'), 'utf8')));
+    declare(CONSUMER, { id: CONSUMER, name: CONSUMER, version: '1.0.0', isolated: true, permissions: [{ scope: 'email', access: 'admin', reason: 'test' }] });
+    perms._setGrantsInMemory('mail-server', ['email:provider']);
+    perms._setGrantsInMemory(CONSUMER, ['email:admin']);
+
+    const b = await boot();
+    try {
+        assert.equal(typeof b.provided.fn, 'function', 'the real plugin offers its sender');
+        runWithContext('mail-server', () => createPluginApi('mail-server').provideMail(b.provided.fn));
+        assert.equal(mailProvider.currentProviderSlug(), 'mail-server');
+
+        await runWithContext(CONSUMER, () => createPluginApi(CONSUMER).mail({
+            to: `alice@${SITE_DOMAIN}`, subject: 'Sent by another plugin', text: 'Through whatever provider is active.',
+        }));
+        const row: any = await b.db.get(`SELECT user_id FROM ${PREFIX}received_emails WHERE subject = ? AND is_sent = 0`, ['Sent by another plugin']);
+        assert.ok(row, 'the real mail-server delivered the consumer message');
+        assert.equal(row.user_id, ALICE.id, 'into the recipient mailbox it resolved');
+    } finally {
+        mailProvider.clearMailProvider();
+        b.plugin.deactivate();
+        for (const dir of made) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } }
+    }
 });
