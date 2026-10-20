@@ -185,8 +185,11 @@ export type MigrationOutcome =
  */
 async function migrateLegacyChrome(): Promise<{ footer: MigrationOutcome; header: MigrationOutcome }> {
     const header: MigrationOutcome = 'nothing-to-migrate';
-    const stored = await getOption('site_chrome_footer', '');
-    if (typeof stored === 'string' ? stored.trim() !== '' : stored != null && stored !== '') return { footer: 'site-composition', header };
+    // The option may come back as a string or as an already-parsed object; either non-empty form means
+    // the site has its own footer.
+    const stored: unknown = await getOption('site_chrome_footer', '');
+    const hasSiteFooter = typeof stored === 'string' ? stored.trim() !== '' : stored != null;
+    if (hasSiteFooter) return { footer: 'site-composition', header };
     const settings = await readLegacySettings();
     if (!text(settings.footer_text) && !text(settings.footer_copyright)) return { footer: 'nothing-to-migrate', header };
     if (await themeHasComposition('footer')) return { footer: 'theme-composition', header };
