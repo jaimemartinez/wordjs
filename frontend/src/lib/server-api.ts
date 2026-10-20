@@ -304,9 +304,10 @@ export function requestSiteHost(): string | null {
 
 /**
  * React `cache()` with the site in the key. Every request-memoized read of this module goes through it:
- * the root layout reads the settings BEFORE a site page has declared its site (it takes no params), and
- * with a site-blind key the site's layout would be handed that main-site result for the rest of the
- * request. The holder only ever moves from null to a host within a request, so a read keyed by the
+ * the layouts, pages and metadata functions of a request render concurrently and each declares its site
+ * itself, so a read made before a declaration (or by a component that never makes one) must not hand its
+ * result to one made after it — with a site-blind key, a main-site result would be served to the site's
+ * layout for the rest of the request. The holder only ever moves from null to a host within a request, so a read keyed by the
  * host is always that host's.
  */
 export function siteCache<F extends (...args: any[]) => any>(fn: F): F {
@@ -635,7 +636,7 @@ export const getPublicAssets = siteCache((): Promise<PublicAssets> =>
 
 /**
  * Installed fonts, fetched on the SERVER so their @font-face rules can be emitted into the initial
- * SSR <head> (see app/layout.tsx). Previously fonts were injected only client-side (SystemFontsLoader
+ * SSR <head> (see app/_root/RootDocument.tsx). Previously fonts were injected only client-side (SystemFontsLoader
  * useEffect), so a public page's first paint had the inline `font-family` but no matching face and fell
  * back to the theme font until hydration — a font changed in the editor appeared unreflected on public.
  */
