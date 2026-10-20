@@ -409,7 +409,7 @@ export function runMultisiteEngineSuite(engine: Engine): void {
             const made = await bearer('post', `${API}/backups`, TWO, tokens.two).send({});
             if (made.status !== 200) {
                 // The route answers a generic 500: say WHY, from the same call made directly as the site.
-                let why = '';
+                let why: string;
                 try { await siteContext.runWithSite(ids.two, () => require('../../core/backup').createBackup()); why = 'the direct call succeeded'; }
                 catch (e: any) { why = String((e && e.message) || e); }
                 assert.fail(`POST /backups on a ${engine} site answered ${made.status}: ${why}`);
@@ -424,7 +424,7 @@ export function runMultisiteEngineSuite(engine: Engine): void {
             const threeBefore = await bearer('get', `${API}/posts?status=draft`, THREE, tokens.three);
             const restored = await bearer('post', `${API}/backups/${file}/restore`, TWO, tokens.two).send({ currentPassword: PASSWORD });
             if (restored.status !== 200) {
-                let why = '';
+                let why: string;
                 try { await siteContext.runWithSite(ids.two, () => require('../../core/backup').restoreBackup(file)); why = 'the direct call succeeded'; }
                 catch (e: any) { why = String((e && e.message) || e); }
                 assert.fail(`restoring a ${engine} site's backup answered ${restored.status}: ${why}`);
