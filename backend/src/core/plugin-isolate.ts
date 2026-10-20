@@ -1785,7 +1785,7 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'fs.read', 'fs.write',
     'mail', 'notify',
     'adminMenu.add', 'cron.schedule',
-    'crypto.randomToken', 'crypto.randomInt', 'crypto.hmac', 'crypto.timingSafeEqual',
+    'crypto.randomToken', 'crypto.randomInt', 'crypto.hmac', 'crypto.hash', 'crypto.timingSafeEqual',
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',

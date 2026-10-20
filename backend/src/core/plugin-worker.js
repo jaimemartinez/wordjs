@@ -465,6 +465,7 @@ const wordjs = {
         randomInt: (min, max) => callHost('crypto.randomInt', [min, max]),
         // Keyed hashing for signed webhooks: hmac('sha256', secret, rawBody) → hex (or 'base64').
         hmac: (algorithm, key, data, encoding) => callHost('crypto.hmac', [algorithm, key, data, encoding]),
+        hash: (algorithm, data, encoding) => callHost('crypto.hash', [algorithm, data, encoding]),
         timingSafeEqual: (a, b) => callHost('crypto.timingSafeEqual', [a, b]),
     },
 

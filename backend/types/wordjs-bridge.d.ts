@@ -91,8 +91,8 @@ export interface WordJSRouteRequest {
     cookies: Record<string, string>;
     /**
      * Only selected non-sensitive headers are forwarded — `x-portal-token` on ordinary routes; on a
-     * `{ webhook: true }` route, the provider's signature headers (any header naming a signature,
-     * `webhook-id`, `webhook-timestamp`) and `content-type`, lower-cased.
+     * `{ webhook: true }` route, the provider's signature headers (any header naming a signature or a
+     * checksum, `webhook-id`, `webhook-timestamp`, `x-request-id`) and `content-type`, lower-cased.
      */
     headers: { 'x-portal-token'?: string; [name: string]: string | undefined };
     /** `{ webhook: true }` routes only: the body exactly as received (UTF-8) — what the sender signed. */
@@ -392,6 +392,8 @@ export interface WordJS {
         randomInt(min: number, max: number): Promise<number>;
         /** HMAC of `data` (UTF-8) under `key`: 'sha256' | 'sha1' | 'sha512', hex (default) or base64. Data ≤ 2 MB. */
         hmac(algorithm: 'sha256' | 'sha1' | 'sha512', key: string, data: string, encoding?: 'hex' | 'base64'): Promise<string>;
+        /** Plain digest of `data` (UTF-8): 'sha256' | 'sha1' | 'sha512', hex (default) or base64. Data ≤ 2 MB. */
+        hash(algorithm: 'sha256' | 'sha1' | 'sha512', data: string, encoding?: 'hex' | 'base64'): Promise<string>;
         /** Constant-time string comparison (e.g. a received signature against the computed one). */
         timingSafeEqual(a: string, b: string): Promise<boolean>;
     };
