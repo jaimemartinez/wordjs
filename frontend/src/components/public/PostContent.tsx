@@ -8,10 +8,12 @@
  * itself contains (each code-split per page). Before F3 this file was a client component that
  * imported <Render> + the ENTIRE editor config — ~378KB of hydrated JS on every public page.
  */
+import type React from "react";
 import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import { publicUiStrings } from "@/lib/public/uiStrings";
+import { publicUiStrings, membersGateStrings } from "@/lib/public/uiStrings";
+import MembersOnlyGate from "./MembersOnlyGate";
 import { siteDateLanguage } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
 import LegacyCarousels from "@/components/content/LegacyCarousels";
@@ -60,12 +62,42 @@ export default function PostContent({ post, settings, category, showComments }: 
         </div>
     );
 
-    const commentsAllowed =
+    const commentsOpen =
         !isLocked &&
-        showComments &&
+        !!showComments &&
         post.type === 'post' &&
         settings?.comments_enabled !== "0" &&
         post.commentStatus === 'open';
+
+    // MEMBERS-ONLY ENTRIES (backend core/content-access). This render is anonymous and cached, so a
+    // gated entry arrives as its TEASER (`access.granted === false`); MembersOnlyGate swaps in the full
+    // body in the browser of a member, and the comments with it — they are gated with the entry.
+    const access = post.access;
+    const membersLocked = !!(access && access.gated && !access.granted);
+    const teaserEmpty = membersLocked && !String(post.content || '').trim()
+        && !(Array.isArray((versoData as any)?.content) && (versoData as any).content.length > 0);
+    const commentsAllowed = commentsOpen && !membersLocked;
+    const ixPresets = settings?.wjs_ix_presets;
+    const motion = settings?.wjs_motion;
+    const gated = (mode: 'verso' | 'html', htmlClassName: string | undefined, body: React.ReactNode) => (
+        membersLocked ? (
+            <MembersOnlyGate
+                postId={post.id}
+                mode={mode}
+                htmlClassName={htmlClassName}
+                ixPresets={ixPresets}
+                motion={motion}
+                ui={publicUiStrings(settings)}
+                strings={membersGateStrings(settings)}
+                showNotice={teaserEmpty}
+                commentsWhenGranted={commentsOpen}
+            >
+                {body}
+            </MembersOnlyGate>
+        ) : body
+    );
+    const pageHtmlClass = "wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
+    const postHtmlClass = "wjs-post-body wjs-content prose prose-lg mx-auto p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
 
     return (
         <div className="w-full">
@@ -80,22 +112,24 @@ export default function PostContent({ post, settings, category, showComments }: 
                         <h1 className="text-4xl font-bold mt-8 mb-4 text-center">{post.title}</h1>
                         {protectedNotice}
                     </div>
-                ) : versoData ? (
+                ) : versoData ? gated('verso', undefined, (
                     <div className="wjs-post-body puck-content">
                         <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} ui={publicUiStrings(settings)} />
                     </div>
-                ) : (
+                )) : (
                     // Page fallback (no card). `wjs-post-body` rides here too: the FRAME is post-only,
                     // but the body hook must match wherever a body renders, or `singlePost.body` would
                     // stop applying depending on whether the content happens to be Puck data or HTML —
                     // a selector that matches sometimes is the defect this file exists to catch.
                     <div className="wjs-post-body w-full px-4 py-8">
                         <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
-                        <div
-                            className="wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
-                            suppressHydrationWarning
-                            dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
-                        />
+                        {gated('html', pageHtmlClass, (
+                            <div
+                                className={pageHtmlClass}
+                                suppressHydrationWarning
+                                dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
+                            />
+                        ))}
                         <LegacyCarousels postId={post.id} />
                     </div>
                 )
@@ -145,19 +179,21 @@ export default function PostContent({ post, settings, category, showComments }: 
                         framework-STYLED in ui.css (heading margins, image radii, table and field
                         rules), so putting it on Puck output would restyle every block. The Puck body
                         keeps `.puck-content`, which is what ui.css already treats as its twin. */}
-                    {isLocked ? protectedNotice : versoData ? (
+                    {isLocked ? protectedNotice : versoData ? gated('verso', undefined, (
                         <div className="wjs-post-body puck-content">
                             <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} ui={publicUiStrings(settings)} />
                         </div>
-                    ) : (
+                    )) : (
                         <>
                             {/* Card hooks use UNDECLARED contract tokens (card-*): ui.css :root pre-declares
                                 --wjs-radius-lg at 0.75rem, which would beat a 1rem parity fallback. */}
-                            <div
-                                className="wjs-post-body wjs-content prose prose-lg mx-auto p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
-                                suppressHydrationWarning
-                                dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
-                            />
+                            {gated('html', postHtmlClass, (
+                                <div
+                                    className={postHtmlClass}
+                                    suppressHydrationWarning
+                                    dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
+                                />
+                            ))}
                             {/* Classic-only: it initialises [photo-carousel] shortcodes inside the
                                 sanitized HTML body, which Puck content has no equivalent of. */}
                             <LegacyCarousels postId={post.id} />

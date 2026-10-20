@@ -117,6 +117,12 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'med',
         icon: 'fa-wand-magic-sparkles',
     },
+    'content_access:provider': {
+        label: 'Decide who reads members-only content',
+        description: 'Answer which access levels each account holds and which levels the post editor offers. What it answers opens members-only entries site-wide: grant it only to the memberships plugin you trust.',
+        risk: 'high',
+        icon: 'fa-id-card',
+    },
     'notifications:send': {
         label: 'Send notifications',
         description: 'Emit in-app notifications to admins.',

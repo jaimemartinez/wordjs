@@ -832,6 +832,7 @@ export const STYLE_SECURITY = deepFreeze({
     "plugin-admin-invoices",
     "plugin-admin-jobs",
     "plugin-admin-lightbox",
+    "plugin-admin-memberships",
     "plugin-admin-newsletter",
     "plugin-admin-polls",
     "plugin-admin-popups",

@@ -89,8 +89,14 @@ export interface WordJSRouteRequest {
     clientKey: string;
     /** Request cookies, with the host's auth/session cookies (e.g. `wordjs_token`) always stripped. */
     cookies: Record<string, string>;
-    /** Only selected non-sensitive headers are forwarded — today that is `x-portal-token` alone. */
-    headers: { 'x-portal-token'?: string };
+    /**
+     * Only selected non-sensitive headers are forwarded — `x-portal-token` on ordinary routes; on a
+     * `{ webhook: true }` route, the provider's signature headers (any header naming a signature,
+     * `webhook-id`, `webhook-timestamp`) and `content-type`, lower-cased.
+     */
+    headers: { 'x-portal-token'?: string; [name: string]: string | undefined };
+    /** `{ webhook: true }` routes only: the body exactly as received (UTF-8) — what the sender signed. */
+    rawBody?: string;
     /** The authenticated user for a `{ auth: true }` route; `null` when the request is anonymous. */
     user: WordJSRouteUser | null;
     /** Present when the route was registered with `{ multipart: '<field>' }` — saved file metadata. */
@@ -139,6 +145,13 @@ export interface WordJSRouteOptions {
     admin?: boolean;
     /** Accept a single multipart file upload; the value is the form field name. */
     multipart?: string;
+    /**
+     * A signed server-to-server webhook (POST only). The route is exempt from the CSRF gate and receives
+     * `req.rawBody`; in exchange it never sees an identity — `user` is null, no cookies are forwarded and
+     * it cannot be combined with `auth`/`admin`/`multipart`. Verify the sender's signature with
+     * `wordjs.crypto.hmac` + `wordjs.crypto.timingSafeEqual`, and reject anything that does not verify.
+     */
+    webhook?: boolean;
 }
 
 /** A sidebar entry for the admin panel (declarative — rendered by the admin frontend). */
@@ -377,6 +390,10 @@ export interface WordJS {
         randomToken(bytes?: number): Promise<string>;
         /** Uniform integer in `[min, max)`. Throws on a non-finite, empty or >1e9-wide range. */
         randomInt(min: number, max: number): Promise<number>;
+        /** HMAC of `data` (UTF-8) under `key`: 'sha256' | 'sha1' | 'sha512', hex (default) or base64. Data ≤ 2 MB. */
+        hmac(algorithm: 'sha256' | 'sha1' | 'sha512', key: string, data: string, encoding?: 'hex' | 'base64'): Promise<string>;
+        /** Constant-time string comparison (e.g. a received signature against the computed one). */
+        timingSafeEqual(a: string, b: string): Promise<boolean>;
     };
 
     /**

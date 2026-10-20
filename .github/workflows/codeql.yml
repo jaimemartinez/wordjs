@@ -1,13 +1,16 @@
 name: CodeQL
 
 # Static analysis (SAST) for JavaScript/TypeScript. Findings surface in the repo's Security tab and as
-# PR annotations. Runs on push/PR to main and weekly; the analysis job succeeds regardless of findings
+# PR annotations. Runs on push to main, on PRs to main or to a feature branch (stacked PRs) and weekly;
+# the analysis job succeeds regardless of findings
 # (code scanning reports them, it does not fail the build), so it never blocks a merge.
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Also a pull request stacked on a feature branch (feat/x on top of feat/y): its code is scanned
+    # before it is retargeted to main, not only after.
+    branches: [main, 'feat/**', 'fix/**']
   schedule:
     - cron: '27 3 * * 1'
 

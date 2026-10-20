@@ -608,7 +608,9 @@ const { csrfProtection } = require('./middleware/auth');
 app.use(config.api.prefix, csrfProtection);
 
 // Parse JSON bodies
-app.use(express.json({ limit: '10mb' }));
+// Plugin webhook routes (core/plugin-webhooks) also get the body EXACTLY as received, because their
+// sender signed those bytes; every other request keeps only the parsed value.
+app.use(express.json({ limit: '10mb', verify: require('./core/plugin-webhooks').captureWebhookRawBody }));
 
 // Parse URL-encoded bodies
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -1171,6 +1173,13 @@ app.use(config.api.prefix, (req: Request, res: Response, next: NextFunction) => 
                 && !res.getHeader('Cache-Control')
                 && res.statusCode >= 200 && res.statusCode < 300) {
                 res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+            } else if (credentialed && !res.getHeader('Cache-Control')) {
+                // The SAME URLs answer differently per reader (a members-only entry's full body, a draft the
+                // reader may edit): a credentialed answer is never for a shared cache, and a cache that keys
+                // on the URL alone must not hand it to the next anonymous visitor.
+                res.setHeader('Cache-Control', 'private, no-cache');
+                res.vary('Cookie');
+                res.vary('Authorization');
             }
             return origJson(data);
         };

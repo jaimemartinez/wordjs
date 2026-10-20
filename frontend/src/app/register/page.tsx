@@ -29,6 +29,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authApi, settingsApi } from "@/lib/api";
+import { currentReturnPath } from "@/lib/safeReturnPath";
 import {
     EMPTY_DRAFT,
     PASSWORD_MAX,
@@ -153,10 +154,11 @@ function RegisterForm() {
                 </p>
                 <button
                     type="button"
-                    onClick={() => router.push("/admin")}
+                    onClick={() => router.push(currentReturnPath() || "/admin")}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
                 >
-                    Ir al panel
+                    {/* Rendered only after a submit (client state), so reading the URL here cannot mismatch the server HTML. */}
+                    {currentReturnPath() ? "Continuar" : "Ir al panel"}
                 </button>
             </div>
         );
