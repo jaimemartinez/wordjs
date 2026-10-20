@@ -14,15 +14,22 @@
  *    /merchants/{public key}). Our renewal job (cron) then charges that source with a new transaction when
  *    the period is about to end; the result arrives as `transaction.updated`. A declined renewal marks the
  *    membership past due and is retried daily, three times at most, then the membership is canceled.
+ *    EACH CHARGE IS CLAIMED BEFORE IT IS MADE: its reference names the account, the period and the attempt
+ *    (unique in the checkouts table), so two runs — the timer and the admin's button, or two servers —
+ *    cannot both charge the same period. A charge whose result has not arrived is ASKED about
+ *    (GET /transactions/{id}, or by reference if its id was never stored), never charged again.
  *    Card payment sources are not offered in this version: tokenizing a card has to happen in the browser
  *    against Wompi's API, which the site's content security policy does not allow and which would put the
  *    site in PCI scope; cards still pay each period through Web Checkout.
  *  · Events — `signature.properties` (paths into `data`) are concatenated in order, then `timestamp`, then
  *    the EVENTS secret; SHA256 hex must equal `signature.checksum` (and `X-Event-Checksum` when sent),
- *    compared in constant time. `environment` must be `test`. An event older than WEBHOOK_TOLERANCE_S is
- *    refused (Wompi retries a failed delivery for up to 24 hours, with the original timestamp). Each
- *    (transaction id, status) is applied once, and only for a reference this plugin created, with the
- *    amount and currency it recorded.
+ *    compared in constant time. `environment` must be `test`. The signed properties must include the
+ *    transaction's id, status and amount (what Wompi signs), and the transaction applied is RE-READ from
+ *    the API by that id — never taken from the event body, whose other fields are not signed. An event
+ *    older than WEBHOOK_TOLERANCE_S is refused (Wompi retries a failed delivery for up to 24 hours, with
+ *    the original timestamp). Each (transaction id, status) is applied once, and only for a reference this
+ *    plugin created, with the amount and currency it recorded.
+ *  · A VOIDED transaction that had opened a period takes that period back.
  *  · Cancel / resume — stop or restart automatic renewal (access continues to the end of the paid period).
  *    Change tier — takes effect at the next period (renewal or payment).
  * Currency: COP only (Wompi's only currency). Amounts are integer cents (COP 20.000 = 2000000).
@@ -34,6 +41,10 @@ const WEBHOOK_TOLERANCE_S = 26 * 60 * 60;
 const RENEW_LEAD_MS = 24 * 60 * 60 * 1000;      // charge the source a day before the period ends
 const RENEW_RETRY_MS = 24 * 60 * 60 * 1000;     // retry a declined renewal daily
 const RENEW_MAX_ATTEMPTS = 3;
+const AUTO_RENEW_STATUS_TTL_MS = 30 * 1000;     // how long the account block's Nequi status answer is reused
+// What a transaction event must sign, at least (Wompi signs these for `transaction.updated`).
+const REQUIRED_TXN_PROPS = ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'];
+const REQUIRED_NEQUI_PROPS = ['nequi_token.id', 'nequi_token.status'];
 
 const keyKind = (k) => {
     const s = String(k || '');
@@ -45,9 +56,9 @@ const keyKind = (k) => {
 };
 
 /** Add one billing period (1 or 12 months) to `fromMs`, calendar-aware. */
-function addPeriod(fromMs, interval) {
+function addPeriod(fromMs, interval, sign = 1) {
     const d = new Date(fromMs);
-    d.setUTCMonth(d.getUTCMonth() + (interval === 'year' ? 12 : 1));
+    d.setUTCMonth(d.getUTCMonth() + sign * (interval === 'year' ? 12 : 1));
     return d.getTime();
 }
 
@@ -76,9 +87,12 @@ function createWompiProvider(ctx) {
         events: await getSetting('wompi_events_secret'),
         integrity: await getSetting('wompi_integrity_secret'),
     });
+    // The EVENTS secret is required too: without it no result of a charge could be verified, and the
+    // renewal job would have nothing but polling to learn that a period was paid.
     const ready = async () => {
         const k = await keys();
-        return keyKind(k.pub) === 'public' && keyKind(k.prv) === 'private' && keyKind(k.integrity) === 'integrity';
+        return keyKind(k.pub) === 'public' && keyKind(k.prv) === 'private' && keyKind(k.integrity) === 'integrity'
+            && keyKind(k.events) === 'events';
     };
 
     const request = async (method, path, body, auth = 'private') => {
@@ -138,6 +152,23 @@ function createWompiProvider(ctx) {
             return { ok: false, reason: 'amount or currency mismatch' };
         }
         if (txn.status === 'APPROVED') return activatePeriod(checkout, txn);
+        // A payment voided after it opened a period takes that period back (and access with it, when the
+        // period it leaves has already ended).
+        if (txn.status === 'VOIDED' && checkout.status === 'complete') {
+            const flipped = await db.run(`UPDATE ${T.checkouts} SET status = 'voided' WHERE id = ? AND status = 'complete'`, [checkout.id]);
+            if (!flipped || flipped.changes !== 1) return { ok: true, duplicate: true };
+            const m = await memberByUser(checkout.user_id);
+            const tier = await tierById(checkout.tier_id);
+            const end = m && m.source === 'wompi' && m.current_period_end ? Date.parse(m.current_period_end) : NaN;
+            if (Number.isFinite(end)) {
+                const back = addPeriod(end, tier ? tier.billing_interval : 'month', -1);
+                await upsertProviderMember(m.user_id, 'wompi', {
+                    current_period_end: new Date(back).toISOString(),
+                    ...(back <= Date.now() ? { status: 'expired' } : {}),
+                });
+            }
+            return { ok: true, voided: true };
+        }
         if (['DECLINED', 'ERROR', 'VOIDED'].includes(txn.status)) {
             await db.run(`UPDATE ${T.checkouts} SET status = ? WHERE id = ? AND status != 'complete'`, [String(txn.status).toLowerCase(), checkout.id]);
             if (checkout.kind === 'renewal') {
@@ -152,8 +183,8 @@ function createWompiProvider(ctx) {
         return { ok: true, status: txn.status };
     };
 
-    /** Wompi event checksum (constant-time), environment and age. */
-    const verifyEvent = async (event, headerChecksum, nowSec = Math.floor(Date.now() / 1000)) => {
+    /** Wompi event checksum (constant-time), environment and age; `required` properties must be signed. */
+    const verifyEvent = async (event, headerChecksum, required = [], nowSec = Math.floor(Date.now() / 1000)) => {
         const secret = (await keys()).events;
         if (keyKind(secret) !== 'events' || !event || typeof event !== 'object') return false;
         const sig = event.signature || {};
@@ -161,6 +192,7 @@ function createWompiProvider(ctx) {
         const checksum = String(sig.checksum || '').toLowerCase();
         const ts = Number(event.timestamp);
         if (!props || !props.length || props.length > 20 || !/^[0-9a-f]{64}$/.test(checksum) || !Number.isInteger(ts)) return false;
+        if (!required.every((p) => props.includes(p))) return false;
         if (Math.abs(nowSec - ts) > WEBHOOK_TOLERANCE_S) return false;
         let concat = '';
         for (const p of props) {
@@ -196,6 +228,22 @@ function createWompiProvider(ctx) {
         return source.id;
     };
 
+    /** A pending Nequi approval, asked at Wompi: approved → becomes the payment source; declined → dropped. */
+    const nequiStatusCache = new Map();
+    const nequiTokenStatus = async (member, src) => {
+        const tok = await request('GET', `/tokens/nequi/${encodeURIComponent(src.slice(6))}`, null, 'public').catch(() => null);
+        if (tok && tok.status === 'APPROVED') {
+            const user = await wordjs.users.findById(member.user_id).catch(() => null);
+            await attachNequiSource(member, tok.id, user && user.userEmail);
+            return { method: 'nequi', state: 'active' };
+        }
+        if (tok && tok.status === 'DECLINED') {
+            await upsertProviderMember(member.user_id, 'wompi', { payment_source: null });
+            return { method: 'nequi', state: 'declined' };
+        }
+        return { method: 'nequi', state: 'pending' };
+    };
+
     /** Charge every due payment source once (the renewal job). */
     const renewDue = async () => {
         if (!(await ready())) return { charged: 0 };
@@ -209,18 +257,44 @@ function createWompiProvider(ctx) {
         for (const m of rows) {
             const end = Date.parse(m.current_period_end);
             if (!Number.isFinite(end) || end - RENEW_LEAD_MS > now) continue;
-            // One renewal at a time: a charge still waiting for its event, or one declined less than a day
-            // ago, is not repeated. (An approved one moved current_period_end, so the check above skips it.)
             const last = await db.get(`SELECT * FROM ${T.checkouts} WHERE provider = 'wompi' AND user_id = ? AND kind = 'renewal' ORDER BY id DESC LIMIT 1`, [m.user_id]);
+            // A charge whose result has not arrived is ASKED about, never made again.
+            if (last && last.status === 'pending') {
+                let txn = null;
+                if (last.session_id) {
+                    txn = await request('GET', `/transactions/${encodeURIComponent(last.session_id)}`, null).catch(() => null);
+                } else {
+                    // Claimed, but the id was never stored (the run stopped mid-way): look it up by reference.
+                    const found = await request('GET', `/transactions?reference=${encodeURIComponent(last.reference)}`, null).catch(() => null);
+                    txn = Array.isArray(found) ? found[0] || null : null;
+                    if (txn && txn.id) await db.run(`UPDATE ${T.checkouts} SET session_id = ? WHERE id = ?`, [String(txn.id).slice(0, 200), last.id]);
+                    else if (!txn && now - dbTime(last.created_at) > RENEW_RETRY_MS) {
+                        // Nothing reached Wompi in a day: the claim is released and the next attempt may charge.
+                        await db.run(`UPDATE ${T.checkouts} SET status = 'error' WHERE id = ? AND status = 'pending'`, [last.id]);
+                        await upsertProviderMember(m.user_id, 'wompi', { renew_attempts: (m.renew_attempts || 0) + 1 });
+                    }
+                }
+                if (txn && txn.status && txn.status !== 'PENDING') await applyTransaction(txn, undefined);
+                continue;
+            }
+            // A declined charge is retried a day later. (An approved one moved current_period_end, so the
+            // due check above skips it.)
             if (last && last.status !== 'complete' && now - dbTime(last.created_at) < RENEW_RETRY_MS) continue;
             const tier = await tierById(m.pending_tier_id || m.tier_id);
             if (!tier) continue;
             const user = await wordjs.users.findById(m.user_id).catch(() => null);
             const email = user && user.userEmail;
             if (!email) continue;
-            const reference = await newReference('renewal', m.user_id, tier.id);
-            const r = await db.run(`INSERT INTO ${T.checkouts} (user_id, tier_id, provider, kind, reference, amount_cents, currency, status) VALUES (?, ?, 'wompi', 'renewal', ?, ?, 'cop', 'pending')`,
-                [m.user_id, tier.id, reference, tier.price_cents]);
+            // THE CLAIM: one reference per (account, period, attempt), unique in the table. Another run that
+            // got here first owns this charge.
+            const reference = `wjm_renewal_${m.user_id}_${Math.floor(end / 1000)}_${m.renew_attempts || 0}`;
+            let r;
+            try {
+                r = await db.run(`INSERT INTO ${T.checkouts} (user_id, tier_id, provider, kind, reference, amount_cents, currency, status) VALUES (?, ?, 'wompi', 'renewal', ?, ?, 'cop', 'pending')`,
+                    [m.user_id, tier.id, reference, tier.price_cents]);
+            } catch (e) {
+                continue; // claimed by another run
+            }
             try {
                 const txn = await request('POST', '/transactions', {
                     amount_in_cents: tier.price_cents,
@@ -231,6 +305,7 @@ function createWompiProvider(ctx) {
                     payment_source_id: Number(String(m.provider_payment_source).slice('source:'.length)),
                 });
                 charged++;
+                if (txn && txn.id) await db.run(`UPDATE ${T.checkouts} SET session_id = ? WHERE id = ?`, [String(txn.id).slice(0, 200), r.lastID]);
                 if (txn && txn.status && txn.status !== 'PENDING') await applyTransaction(txn, undefined);
             } catch (e) {
                 await db.run(`UPDATE ${T.checkouts} SET status = 'error' WHERE id = ?`, [r.lastID]);
@@ -310,17 +385,24 @@ function createWompiProvider(ctx) {
             }
             if (!event || typeof event !== 'object') return { status: 400, body: { error: 'invalid payload' } };
             const header = req.headers && req.headers['x-event-checksum'];
-            if (!(await verifyEvent(event, header))) return { status: 400, body: { error: 'invalid signature' } };
+            const required = event.event === 'transaction.updated' ? REQUIRED_TXN_PROPS : event.event === 'nequi_token.updated' ? REQUIRED_NEQUI_PROPS : [];
+            if (!(await verifyEvent(event, header, required))) return { status: 400, body: { error: 'invalid signature' } };
             if (event.environment !== 'test') return { status: 400, body: { error: 'only sandbox events are accepted by this version' } };
             const data = event.data || {};
             if (event.event === 'transaction.updated' && data.transaction) {
-                const txn = data.transaction;
-                const key = `wompi:${txn.id}:${txn.status}`;
+                const id = String(data.transaction.id || '');
+                if (!/^[0-9A-Za-z_-]{1,64}$/.test(id)) return { status: 400, body: { error: 'invalid transaction' } };
+                // The transaction as Wompi has it now — reference, amount, currency and status are not all
+                // signed in the event, so none of them is taken from it.
+                const txn = await request('GET', `/transactions/${encodeURIComponent(id)}`, null);
+                const key = `wompi:${txn && txn.id}:${txn && txn.status}`;
                 if (await seenEvent(key)) return { status: 200, body: { received: true, duplicate: true } };
                 await applyTransaction(txn, undefined);
                 await recordEvent(key, event.event);
             } else if (event.event === 'nequi_token.updated' && data.nequi_token) {
-                const tok = data.nequi_token;
+                const tokId = String(data.nequi_token.id || '');
+                if (!/^[0-9A-Za-z_-]{1,100}$/.test(tokId)) return { status: 400, body: { error: 'invalid token' } };
+                const tok = (await request('GET', `/tokens/nequi/${encodeURIComponent(tokId)}`, null, 'public')) || {};
                 const key = `wompi:nequi:${tok.id}:${tok.status}`;
                 if (await seenEvent(key)) return { status: 200, body: { received: true, duplicate: true } };
                 const m = await db.get(`SELECT * FROM ${T.members} WHERE source = 'wompi' AND provider_payment_source = ?`, [`nequi:${tok.id}`]);
@@ -341,18 +423,14 @@ function createWompiProvider(ctx) {
         async autoRenewStatus(member) {
             const src = member && member.provider_payment_source ? String(member.provider_payment_source) : '';
             if (src.startsWith('nequi:')) {
-                // Still waiting for the member to approve in the Nequi app: ask Wompi.
-                const tok = await request('GET', `/tokens/nequi/${encodeURIComponent(src.slice(6))}`, null, 'public').catch(() => null);
-                if (tok && tok.status === 'APPROVED') {
-                    const user = await wordjs.users.findById(member.user_id).catch(() => null);
-                    await attachNequiSource(member, tok.id, user && user.userEmail);
-                    return { method: 'nequi', state: 'active' };
-                }
-                if (tok && tok.status === 'DECLINED') {
-                    await upsertProviderMember(member.user_id, 'wompi', { payment_source: null });
-                    return { method: 'nequi', state: 'declined' };
-                }
-                return { method: 'nequi', state: 'pending' };
+                // Asked on every account-block load while the member has not approved yet: the answer is
+                // reused for a few seconds instead of calling Wompi on each one.
+                const cached = nequiStatusCache.get(src);
+                if (cached && Date.now() - cached.at < AUTO_RENEW_STATUS_TTL_MS) return cached.value;
+                if (nequiStatusCache.size > 1000) nequiStatusCache.clear();
+                const value = await nequiTokenStatus(member, src);
+                nequiStatusCache.set(src, { at: Date.now(), value });
+                return value;
             }
             if (src.startsWith('source:')) return { method: 'nequi', state: member.cancel_at_period_end ? 'paused' : 'active' };
             return { method: null, state: 'off' };

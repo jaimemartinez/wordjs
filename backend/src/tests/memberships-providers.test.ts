@@ -46,6 +46,10 @@ let plugin: BootedPlugin;
 let filters: Map<string, (...a: any[]) => any>;
 let calls: Call[];
 let replies: Array<(call: Call) => any>;
+// What Wompi holds right now: the webhook RE-READS the transaction / Nequi token an event names, so a
+// delivered event's object, and every transaction the plugin creates, is what the next GET of that id
+// answers.
+let wompiState: Map<string, any>;
 let tiers: Record<string, any> = {};
 const realFetch = global.fetch;
 
@@ -59,14 +63,24 @@ beforeEach(async () => {
     filters = new Map();
     calls = [];
     replies = [];
+    wompiState = new Map();
     (global as any).fetch = async (url: string, init: any) => {
         const u = new URL(url);
         assert.ok(['api.mercadopago.com', 'sandbox.wompi.co'].includes(u.host), `unexpected host ${u.host} — only the sandbox APIs`);
         const call: Call = { method: init.method, host: u.host, path: u.pathname + u.search, body: init.body ? JSON.parse(init.body) : null, auth: init.headers.Authorization };
         calls.push(call);
+        const known = /^\/v1\/(transactions|tokens\/nequi)\/([^/?]+)$/.exec(u.pathname);
+        if (u.host === 'sandbox.wompi.co' && init.method === 'GET' && known && wompiState.has(decodeURIComponent(known[2]))) {
+            const data = JSON.parse(JSON.stringify(wompiState.get(decodeURIComponent(known[2]))));
+            return { ok: true, status: 200, json: async () => ({ data }) };
+        }
         const reply = replies.shift();
         if (!reply) throw new Error(`unexpected call ${call.method} ${u.host}${call.path}`);
         const body = reply(call);
+        // A transaction the plugin creates is then what Wompi answers for its id.
+        if (u.host === 'sandbox.wompi.co' && init.method === 'POST' && u.pathname === '/v1/transactions' && body && body.data && body.data.id) {
+            wompiState.set(String(body.data.id), { ...call.body, ...body.data });
+        }
         const failed = body && (body.error || body.status === 400) && !body.id && !body.data;
         return { ok: !failed, status: failed ? 400 : 200, json: async () => body };
     };
@@ -137,7 +151,7 @@ async function mpConfigure() {
 /** Checkout + return leg: MEMBER on Basic, authorized. */
 async function mpSubscribe() {
     apiWill(() => ({ id: 'pre_1', status: 'pending', init_point: 'https://www.mercadopago.com.co/subscriptions/checkout?preapproval_id=pre_1' }));
-    const c = await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: tiers.basic.id, page_url: 'https://evil.test/post?x=1' } });
+    const c = await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: tiers.basic.id, page_url: 'http://site.test/post?x=1' } });
     assert.strictEqual(c.status, 200, JSON.stringify(c.body));
     apiWill(() => preapproval('authorized'));
     const ok = await plugin.call('get', '/me/confirm', { user: MEMBER, query: { provider: 'mercadopago', preapproval_id: 'pre_1' } });
@@ -175,7 +189,7 @@ describe('Mercado Pago: credentials and checkout', () => {
         assert.deepStrictEqual(create.body.auto_recurring, { frequency: 1, frequency_type: 'months', transaction_amount: 20000, currency_id: 'COP' });
         assert.strictEqual(create.body.payer_email, MEMBER.userEmail);
         assert.strictEqual(create.body.status, 'pending');
-        assert.strictEqual(create.body.back_url, 'http://site.test/post?x=1&ms_provider=mercadopago', 'only the path survives; the host is this site');
+        assert.strictEqual(create.body.back_url, 'http://site.test/post?x=1&ms_provider=mercadopago', 'back to the page of this site the member was on');
         assert.ok((await grantsOf(MEMBER.id)).includes('tier:basic'));
         const row = memberRow();
         assert.deepStrictEqual([row.source, row.status, row.provider_subscription_id, row.provider_customer_id], ['mercadopago', 'active', 'pre_1', '555']);
@@ -254,31 +268,40 @@ describe('Mercado Pago: x-signature', () => {
 });
 
 describe('Mercado Pago: lifecycle', () => {
-    test('authorized → tier change (next charge) → paused at period end keeps access → resumed → cancelled ends access', async () => {
+    test('authorized → tier change (granted with the next approved charge) → paused at period end keeps access → resumed → cancelled ends access', async () => {
         await mpConfigure();
         await mpSubscribe();
+        const plusPre = (status: string) => preapproval(status, { auto_recurring: { transaction_amount: 50000, currency_id: 'COP' } });
         apiWill((call) => {
             assert.deepStrictEqual([call.method, call.path], ['PUT', '/preapproval/pre_1']);
             assert.deepStrictEqual(call.body.auto_recurring, { transaction_amount: 50000, currency_id: 'COP' });
-            return preapproval('authorized', { auto_recurring: { transaction_amount: 50000, currency_id: 'COP' } });
+            return plusPre('authorized');
         });
         const change = await plugin.call('post', '/me/change-tier', { user: MEMBER, body: { tier_id: tiers.plus.id } });
         assert.deepStrictEqual([change.status, change.body.effective], [200, 'next-charge']);
-        assert.ok((await grantsOf(MEMBER.id)).includes('tier:plus'));
+        assert.ok(!(await grantsOf(MEMBER.id)).includes('tier:plus'), 'not before the new amount is charged');
+        assert.ok((await grantsOf(MEMBER.id)).includes('tier:basic'), 'the paid tier stays');
+        assert.strictEqual((await plugin.call('get', '/me', { user: MEMBER })).body.member.pendingTier.slug, 'plus');
+        apiWill(
+            () => ({ id: 7100, preapproval_id: 'pre_1', status: 'processed', payment: { status: 'approved' } }),
+            () => plusPre('authorized'),
+        );
+        await mpNotify('subscription_authorized_payment', '7100');
+        assert.ok((await grantsOf(MEMBER.id)).includes('tier:plus'), 'granted with the first charge at its price');
 
-        apiWill((call) => { assert.deepStrictEqual(call.body, { status: 'paused' }); return preapproval('paused'); });
+        apiWill((call) => { assert.deepStrictEqual(call.body, { status: 'paused' }); return plusPre('paused'); });
         const cancel = await plugin.call('post', '/me/cancel', { user: MEMBER });
         assert.strictEqual(cancel.status, 200);
         let me = await plugin.call('get', '/me', { user: MEMBER });
         assert.deepStrictEqual([me.body.member.active, me.body.member.cancelAtPeriodEnd, me.body.member.provider], [true, true, 'mercadopago']);
         assert.ok((await grantsOf(MEMBER.id)).includes('tier:plus'), 'access continues until the period ends');
 
-        apiWill((call) => { assert.deepStrictEqual(call.body, { status: 'authorized' }); return preapproval('authorized'); });
+        apiWill((call) => { assert.deepStrictEqual(call.body, { status: 'authorized' }); return plusPre('authorized'); });
         await plugin.call('post', '/me/resume', { user: MEMBER });
         me = await plugin.call('get', '/me', { user: MEMBER });
         assert.strictEqual(me.body.member.cancelAtPeriodEnd, false);
 
-        apiWill(() => preapproval('cancelled'));
+        apiWill(() => plusPre('cancelled'));
         await mpNotify('subscription_preapproval', 'pre_1');
         assert.deepStrictEqual(await grantsOf(MEMBER.id), ['members']);
         assert.strictEqual(memberRow().status, 'canceled');
@@ -347,6 +370,9 @@ function wompiEvent(event: string, data: any, opts: { secret?: string; timestamp
     return { event, data, environment: opts.environment || 'test', signature: { properties: props, checksum }, timestamp, sent_at: new Date().toISOString() };
 }
 const wompiDeliver = (ev: any, opts: { header?: string | null; mutate?: (e: any) => void } = {}) => {
+    // Wompi holds the event's object as it was signed (a tampered copy in transit changes nothing there).
+    const obj = ev.data && (ev.data.transaction || ev.data.nequi_token);
+    if (obj && obj.id) wompiState.set(String(obj.id), JSON.parse(JSON.stringify(obj)));
     const e = JSON.parse(JSON.stringify(ev));
     if (opts.mutate) opts.mutate(e);
     const header = opts.header === null ? undefined : (opts.header || ev.signature.checksum);
@@ -355,7 +381,7 @@ const wompiDeliver = (ev: any, opts: { header?: string | null; mutate?: (e: any)
 
 /** Start a Web Checkout for `tier` and return its reference (from the URL the member is sent to). */
 async function wompiCheckout(tier: any, user = MEMBER) {
-    const c = await plugin.call('post', '/checkout', { user, body: { tier_id: tier.id, page_url: 'https://evil.test/club?a=1' } });
+    const c = await plugin.call('post', '/checkout', { user, body: { tier_id: tier.id, page_url: 'http://site.test/club?a=1' } });
     assert.strictEqual(c.status, 200, JSON.stringify(c.body));
     const url = new URL(c.body.checkoutUrl);
     return { url, reference: url.searchParams.get('reference')! };
@@ -634,5 +660,140 @@ describe('switching providers', () => {
         // The Wompi period still runs; MP would double-charge.
         const r = await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: tiers.plus.id } });
         assert.strictEqual(r.status, 409);
+    });
+});
+
+describe('Mercado Pago: amounts and duplicates (second audit)', () => {
+    beforeEach(mpConfigure);
+
+    test('a preapproval that charges another amount or currency than the one created opens nothing', async () => {
+        apiWill(() => ({ id: 'pre_1', status: 'pending', init_point: 'https://mp.test/x' }));
+        await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: tiers.plus.id } });
+        apiWill(() => preapproval('authorized', { auto_recurring: { transaction_amount: BASIC_CENTS / 100, currency_id: 'COP' } }));
+        const cheap = await plugin.call('get', '/me/confirm', { user: MEMBER, query: { provider: 'mercadopago', preapproval_id: 'pre_1' } });
+        assert.deepStrictEqual(cheap.body, { active: false }, 'Plus checkout, Basic amount');
+        assert.ok(!(await grantsOf(MEMBER.id)).includes('paid'));
+        apiWill(() => preapproval('authorized', { auto_recurring: { transaction_amount: PLUS_CENTS / 100, currency_id: 'USD' } }));
+        const usd = await plugin.call('get', '/me/confirm', { user: MEMBER, query: { provider: 'mercadopago', preapproval_id: 'pre_1' } });
+        assert.deepStrictEqual(usd.body, { active: false }, 'another currency');
+        apiWill(() => preapproval('authorized', { auto_recurring: { transaction_amount: PLUS_CENTS / 100, currency_id: 'COP' } }));
+        const ok = await plugin.call('get', '/me/confirm', { user: MEMBER, query: { provider: 'mercadopago', preapproval_id: 'pre_1' } });
+        assert.deepStrictEqual(ok.body, { active: true }, 'positive control');
+    });
+
+    test('currencies without cents are charged in whole units', async () => {
+        await plugin.call('post', '/config', { user: ADMIN, body: { currencyCode: 'clp' } });
+        const t = await plugin.call('post', '/tiers', { user: ADMIN, body: { name: 'Chile', price_cents: 990050 } });
+        apiWill(() => ({ id: 'pre_cl', status: 'pending', init_point: 'https://mp.test/x' }));
+        await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: t.body.tier.id } });
+        assert.deepStrictEqual(calls[0].body.auto_recurring.transaction_amount, 9901);
+        assert.strictEqual(calls[0].body.auto_recurring.currency_id, 'CLP');
+    });
+
+    test('a new checkout cancels the account\'s earlier preapproval that was never authorised', async () => {
+        apiWill(() => ({ id: 'pre_old', status: 'pending', init_point: 'https://mp.test/1' }));
+        await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: tiers.basic.id } });
+        calls = [];
+        apiWill(
+            (call) => { assert.deepStrictEqual([call.method, call.path, call.body], ['PUT', '/preapproval/pre_old', { status: 'cancelled' }]); return preapproval('cancelled', { id: 'pre_old' }); },
+            () => ({ id: 'pre_new', status: 'pending', init_point: 'https://mp.test/2' }),
+        );
+        const r = await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: tiers.plus.id } });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+        assert.deepStrictEqual(calls.map((c) => `${c.method} ${c.path}`), ['PUT /preapproval/pre_old', 'POST /preapproval']);
+    });
+
+    test('a declined first charge does not give a free month: past due opens 3 days at most', async () => {
+        await mpSubscribe();
+        apiWill(
+            () => ({ id: 7200, preapproval_id: 'pre_1', status: 'recycling', payment: { status: 'rejected' } }),
+            () => preapproval('authorized'),
+        );
+        await mpNotify('subscription_authorized_payment', '7200');
+        assert.ok((await grantsOf(MEMBER.id)).includes('paid'), 'within 3 days');
+        setRow('past_due_since = ?', new Date(Date.now() - 4 * DAY).toISOString());
+        assert.deepStrictEqual(await grantsOf(MEMBER.id), ['members']);
+    });
+});
+
+describe('Wompi: charges, events and periods (second audit)', () => {
+    beforeEach(wompiConfigure);
+
+    test('without the events secret Wompi is not offered (no result of a charge could be verified)', async () => {
+        await plugin.call('post', '/config', { user: ADMIN, body: { credentials: { wompi: { eventsSecret: '' } } } });
+        const pub = await plugin.call('get', '/public/tiers', {});
+        assert.strictEqual(pub.body.paymentsEnabled, false);
+        const r = await plugin.call('post', '/checkout', { user: MEMBER, body: { tier_id: tiers.basic.id } });
+        assert.strictEqual(r.status, 400);
+    });
+
+    test('the transaction applied is re-read from Wompi, and the event must sign its id, status and amount', async () => {
+        const { reference } = await wompiCheckout(tiers.basic);
+        // Signed, but only over the id: the rest of the body is anyone's to write.
+        const weak = wompiEvent('transaction.updated', { transaction: txn('txn_w', reference, 'APPROVED') }, { props: ['transaction.id'] });
+        assert.strictEqual((await wompiDeliver(weak)).status, 400);
+        // Properly signed APPROVED, while Wompi itself says DECLINED: Wompi wins.
+        const ev = wompiEvent('transaction.updated', { transaction: txn('txn_v', reference, 'APPROVED') });
+        wompiState.set('txn_v', txn('txn_v', reference, 'DECLINED'));
+        const r = await plugin.call('post', '/wompi/webhook', { body: ev, rawBody: JSON.stringify(ev), headers: {} });
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(memberRow(), undefined, 'nothing opened');
+        assert.ok(calls.some((c) => c.method === 'GET' && c.path === '/v1/transactions/txn_v'));
+    });
+
+    test('a voided payment takes its period back', async () => {
+        const reference = await wompiPayPeriod(tiers.basic, 'txn_void');
+        assert.ok((await grantsOf(MEMBER.id)).includes('tier:basic'));
+        await wompiDeliver(wompiEvent('transaction.updated', { transaction: txn('txn_void', reference, 'VOIDED') }));
+        assert.strictEqual(memberRow().status, 'expired');
+        assert.deepStrictEqual(await grantsOf(MEMBER.id), ['members']);
+    });
+
+    test('a period paid without automatic renewal ends at its end (no grace: nothing is being collected)', async () => {
+        await wompiPayPeriod();
+        setRow('current_period_end = ?', new Date(Date.now() - 60 * 60 * 1000).toISOString());
+        assert.deepStrictEqual(await grantsOf(MEMBER.id), ['members']);
+        setRow("current_period_end = ?, provider_payment_source = 'source:1'", new Date(Date.now() - 60 * 60 * 1000).toISOString());
+        assert.ok((await grantsOf(MEMBER.id)).includes('paid'), 'with automatic renewal the charge may still be on its way');
+    });
+
+    test('renewals: two runs at once charge once; a charge in flight is asked about, never made again', async () => {
+        await wompiPayPeriod();
+        setRow("provider_payment_source = 'source:3891', current_period_end = ?", new Date(Date.now() + 60 * 60 * 1000).toISOString());
+        let charges = 0;
+        apiWill((call) => { charges++; return { data: { id: 'txn_once', status: 'PENDING', reference: call.body.reference, amount_in_cents: call.body.amount_in_cents, currency: 'COP' } }; });
+        const both = await Promise.all([1, 2].map(() => plugin.call('post', '/payments/process', { user: ADMIN })));
+        assert.strictEqual(charges, 1, 'one charge for two simultaneous runs');
+        assert.deepStrictEqual(both.map((r) => r.body.renewed), [1, 1], 'the second run shares the first');
+        // A day later its result has still not arrived: the job ASKS (GET), it does not charge again.
+        plugin.sdb.prepare(`UPDATE ${plugin.prefix}checkouts SET created_at = datetime('now', '-2 days') WHERE kind = 'renewal'`).run();
+        calls = [];
+        const later = await plugin.call('post', '/payments/process', { user: ADMIN });
+        assert.strictEqual(later.body.renewed, 0);
+        assert.deepStrictEqual(calls.map((c) => `${c.method} ${c.path}`), ['GET /v1/transactions/txn_once']);
+        // Another server already claimed this period's charge (its row exists): this one does not charge.
+        wompiState.set('txn_once', { ...wompiState.get('txn_once'), status: 'DECLINED' });
+        await plugin.call('post', '/payments/process', { user: ADMIN });
+        const m = memberRow();
+        plugin.sdb.prepare(`UPDATE ${plugin.prefix}checkouts SET created_at = datetime('now', '-2 days') WHERE kind = 'renewal'`).run();
+        const end = Math.floor(Date.parse(m.current_period_end) / 1000);
+        plugin.sdb.prepare(`INSERT INTO ${plugin.prefix}checkouts (user_id, tier_id, provider, kind, reference, amount_cents, currency, status) VALUES (?, ?, 'wompi', 'renewal', ?, ?, 'cop', 'complete')`)
+            .run(MEMBER.id, tiers.basic.id, `wjm_renewal_${MEMBER.id}_${end}_${m.renew_attempts}`, BASIC_CENTS);
+        plugin.sdb.prepare(`UPDATE ${plugin.prefix}checkouts SET created_at = datetime('now', '-2 days') WHERE kind = 'renewal'`).run();
+        calls = [];
+        const claimed = await plugin.call('post', '/payments/process', { user: ADMIN });
+        assert.strictEqual(claimed.body.renewed, 0);
+        assert.ok(!calls.some((c) => c.method === 'POST' && c.path === '/v1/transactions'), 'no second charge for a claimed period');
+    });
+
+    test('Nequi approval requests: a few per account per hour', async () => {
+        await wompiPayPeriod();
+        for (let i = 0; i < 3; i++) {
+            apiWill(() => ({ data: { id: `nequi_tok_r${i}`, status: 'PENDING' } }));
+            const r = await plugin.call('post', '/me/auto-renew/nequi', { user: MEMBER, body: { phone: '3001234567' } });
+            assert.strictEqual(r.status, 200, `request ${i + 1}`);
+        }
+        const fourth = await plugin.call('post', '/me/auto-renew/nequi', { user: MEMBER, body: { phone: '3001234567' } });
+        assert.strictEqual(fourth.status, 429);
     });
 });

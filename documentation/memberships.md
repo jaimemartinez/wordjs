@@ -103,11 +103,14 @@ reader comes back to the post.
 | --- | --- |
 | `members` | Every signed-in account (free sign-up on), or any live membership. |
 | `paid` | Any live paid or complimentary membership on a paid tier. |
-| `tier:<slug>` | That tier **or a dearer one** (`Gold` opens content for `Silver`). Tier slugs are immutable for that reason. |
+| `tier:<slug>` | That tier **or a dearer one** (`Gold` opens content for `Silver`), ranked by price **per month** (a yearly price counts as twelve months: a 50/year plan is below a 20/month one). Tier slugs are immutable. |
 
-A paid membership grants access while it is `active` or `past_due` (the renewal is still being
-retried); a membership whose paid period ended more than 3 days ago without a renewal stops granting even
-if a webhook was missed. A complimentary membership grants until its optional end date.
+A paid membership grants access while it is `active`, and while it is `past_due` (the provider is still
+collecting a failed payment) for **3 days from the moment it became past due** — not for the new period
+the provider has already opened. A membership whose paid period ended more than 3 days ago without a
+renewal stops granting even if a webhook was missed; a Wompi period paid without automatic renewal has no
+such grace (there is nothing left to collect). A complimentary membership grants until its optional end
+date.
 
 ### 2.3 Blocks
 
@@ -133,6 +136,10 @@ format, and for Mercado Pago by asking the API, see below) and live events. Cred
 plugin's own settings table, write-only: the admin shows whether each one is set, never its value. The
 Ajustes tab shows each provider's webhook URL.
 
+The plugin needs the `network` grant to reach the provider. Narrow it with the plugin's **egress host
+allowlist** (`POST /api/v1/plugins/memberships/egress-hosts`, see plugins.md) to the provider you use:
+`api.stripe.com`, `api.mercadopago.com` or `sandbox.wompi.co`.
+
 Money is integer minor units throughout (COP 20.000 is `2000000`); the price always comes from the tier
 row, never from the client. The site currency (Ajustes) is what the provider charges in.
 
@@ -144,11 +151,16 @@ row, never from the client. The site currency (Ajustes) is what the provider cha
 | Webhook | `/api/v1/plugin/memberships/stripe/webhook` | `/api/v1/plugin/memberships/mercadopago/webhook` | `/api/v1/plugin/memberships/wompi/webhook` |
 | Verification | `Stripe-Signature` (HMAC-SHA256, 5 min) | `x-signature` (HMAC-SHA256, 1 h) | `signature.checksum` (SHA-256 with the events secret, 26 h) + `X-Event-Checksum` |
 | Idempotency key | event id | `x-request-id` | transaction id + status |
-| Change tier | Now, prorated | From the next charge (new amount) | From the next paid period |
+| Change tier | Once the prorated difference is paid (invoiced at once) | From the next approved charge (new amount) | From the next paid period |
+| Refund / void | A full refund or a dispute ends the membership at once | Re-read from the API (a cancelled preapproval ends it) | A voided payment takes its period back |
 | Cancel | At period end (`cancel_at_period_end`) | Preapproval `paused` (no more charges); access to the period end | No renewal; access to the period end |
 
 A member with a live paid membership cannot start a second one (with the same or another provider);
-only Wompi takes another payment while a period runs — it prepays the next period. A paid membership whose
+only Wompi takes another payment while a period runs — it prepays the next period. Starting a checkout
+retires the account's earlier unpaid ones at the provider (Stripe sessions are expired, Mercado Pago
+preapprovals that were never authorised are cancelled), and a second request from the same account while
+one is being prepared is refused, so a double click or two tabs cannot leave two subscriptions billing.
+The return URL is always a page of this site (a `//host` path is collapsed). A paid membership whose
 period (plus 3 days of grace) is over and that nothing renewed is marked `expired` by the plugin's payments
 job (every 10 minutes, or `POST /payments/process` as an admin).
 
@@ -167,9 +179,26 @@ Settings: the secret key — **test keys only** (`sk_test_…`/`rk_test_…`) �
 - **Webhook**: the `Stripe-Signature` header is verified with HMAC-SHA256 over the raw body within a
   5-minute tolerance; any of several `v1` signatures may match (secret rotation); each event id is applied
   once; live-mode events are refused. Handled events: `checkout.session.completed`,
-  `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`.
-- **Change tier**: the subscription's item moves to the new tier's price with prorations. **Cancel** sets
-  `cancel_at_period_end` (access continues to the end of the period); **resume** clears it.
+  `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`,
+  `charge.refunded`, `charge.dispute.created`. The event only says WHAT changed: the session or
+  subscription it names is **re-read from the API** and that state is applied, so a late, retried or
+  out-of-order event can only apply the current state. On top of that, an event older than the newest one
+  applied to the membership changes nothing, a canceled subscription never becomes active again, and an
+  event about a subscription the account no longer pays with never touches the one it pays with now. The
+  tier is the one whose Stripe product the subscription bills.
+- **Refunds and disputes**: a **full** refund (`charge.refunded` with `refunded: true`) or a dispute ends
+  the membership of that customer at once — its subscription is deleted at Stripe so it is not charged
+  again. A partial refund changes nothing.
+- **Amounts**: tiers store integer cents (units × 100); Stripe takes each currency's own minor unit, so a
+  zero-decimal currency (JPY, CLP, KRW…) is sent divided by 100 and a three-decimal one (KWD, BHD…)
+  multiplied by 10 — ¥500 is charged as ¥500.
+- **Change tier**: the subscription's item moves to the new tier's price and the prorated difference is
+  **invoiced at once**; the item moves only when that invoice is paid (`payment_behavior:
+  pending_if_incomplete`), so an upgrade is never read before it is paid for — the account box shows the
+  new plan as pending until then. A downgrade leaves a credit for the next invoice. **Cancel** sets
+  `cancel_at_period_end` (access continues to the end of the period); **resume** clears it. If the account
+  manages to pay a second subscription anyway, the older one is deleted with proration (its unused part
+  becomes a credit the new one uses).
 
 Sandbox keys: Stripe Dashboard → *Developers* → *API keys*, with **Test mode** on. Webhook: *Developers* →
 *Webhooks* → *Add endpoint* with the URL above and the five events; its *Signing secret* is the `whsec_…`.
@@ -186,7 +215,8 @@ Pay with Stripe's published test cards (`4242 4242 4242 4242`, any future date, 
 Settings: the **access token** and the **webhook secret key**.
 
 - **Checkout**: creates a preapproval (*subscription without an associated plan*, `POST /preapproval`)
-  with `status: pending`, the tier's amount (`transaction_amount` = price / 100), the site currency
+  with `status: pending`, the tier's amount (`transaction_amount` = price / 100, a whole number for
+  currencies without cents such as COP and CLP), the site currency
   (`currency_id`, e.g. `COP`), every 1 month (or 12 for a yearly tier), the member's e-mail as
   `payer_email`, and a `back_url` on this site; the member authorizes it on Mercado Pago's page
   (`init_point`).
@@ -199,8 +229,10 @@ Settings: the **access token** and the **webhook secret key**.
   `subscription_preapproval`) or the recurring charge (`subscription_authorized_payment`, then its
   preapproval). Status mapping: `authorized` → active; `paused` → active until the period end, not
   renewing; `pending` → incomplete; `cancelled` → canceled. A rejected or retried charge makes the
-  membership `past_due` (access kept while Mercado Pago retries); an approved one makes it active again.
-- **Change tier**: the preapproval's amount is updated; Mercado Pago charges it from the next charge.
+  membership `past_due` (access kept for 3 days while Mercado Pago retries); an approved one makes it
+  active again. A preapproval whose amount or currency is not the one this plugin set opens nothing.
+- **Change tier**: the preapproval's amount is updated; Mercado Pago charges it from the next charge, and
+  the new tier is granted when that charge is approved (the account box shows it as pending until then).
   **Cancel** pauses the preapproval, **resume** authorizes it again, an admin **revoke** cancels it.
 - One-off payments (Checkout Pro) are not used: every tier is recurring.
 
@@ -234,8 +266,13 @@ Wompi has no subscriptions, so the recurring model is stated here plainly:
 - **Automatic renewal is opt-in, with Nequi.** In the account block the member enters their Nequi number
   and approves the request in the Nequi app; the plugin turns the approved token into a Wompi **payment
   source** and its payments job charges it (`POST /transactions` with `payment_source_id`, signed) a day
-  before the period ends. A declined renewal makes the membership `past_due` (access kept) and is retried
-  daily; after 3 declines the membership is canceled. Card payment sources are not offered: tokenizing a
+  before the period ends. Each renewal is **claimed** before it is charged — its reference names the
+  account, the period and the attempt, and is unique — so the timer, the admin's *process now* and a second
+  server cannot charge the same period twice; a charge whose result has not arrived is asked about
+  (`GET /transactions/{id}`, or by reference), never made again. A declined renewal makes the membership
+  `past_due` (access kept for 3 days) and is retried daily; after 3 declines the membership is canceled.
+  Wompi is only offered once all four credentials, the events secret included, are set. Card payment
+  sources are not offered: tokenizing a
   card would put card numbers through this site's pages (PCI scope); a member paying by card pays each
   period, like PSE.
 - **Return leg**: Web Checkout returns to the page with `?id=<transaction>`; `/me/confirm` re-reads the
@@ -244,8 +281,11 @@ Wompi has no subscriptions, so the recurring model is stated here plainly:
 - **Events**: `transaction.updated` and `nequi_token.updated`. The checksum is SHA-256 of the values of
   `signature.properties` (read from `data`), then `timestamp`, then the events secret; it must match
   `signature.checksum` and the `X-Event-Checksum` header when present, the event must be at most 26 hours
-  old (Wompi retries for 24) and `environment` must be `test`. Each transaction id + status is applied
-  once, and the return leg and the event for the same payment extend the period once.
+  old (Wompi retries for 24) and `environment` must be `test`. The signed properties must include the
+  transaction's id, status and amount; the transaction is then **re-read from the API** by its id and that
+  is what is applied (the event's other fields are not signed). Each transaction id + status is applied
+  once, and the return leg and the event for the same payment extend the period once. A **voided**
+  transaction that had opened a period takes that period back.
 - **Change tier**: from the next paid period (the next renewal or payment charges the new tier).
   **Cancel**: no automatic renewal; access to the end of the period. An admin **revoke** drops the
   payment source and ends access.

@@ -115,7 +115,9 @@ function tiersFor(level, tiers) {
     if (!Array.isArray(tiers)) return [];
     if (typeof level === "string" && level.startsWith("tier:")) {
         const wanted = tiers.find((t) => t.slug === level.slice(5));
-        return wanted ? tiers.filter((t) => t.price_cents >= wanted.price_cents) : tiers;
+        // The plugin ranks tiers by their price PER MONTH (a yearly price covers twelve months).
+        const monthly = (t) => (Number(t.price_cents) || 0) / (t.interval === "year" ? 12 : 1);
+        return wanted ? tiers.filter((t) => monthly(t) >= monthly(wanted)) : tiers;
     }
     return tiers;
 }
@@ -443,7 +445,8 @@ function AccountVerso({ title, isEditing, puck }) {
         if (!r.ok) { setError((r.body && r.body.error) || "No se pudo completar la operación."); return; }
         const effective = r.body && r.body.effective;
         m.setBanner(label === "cancel" ? "Tu suscripción terminará al final del periodo pagado." : label === "resume" ? "Tu suscripción seguirá renovándose."
-            : effective === "next-period" ? "El nuevo plan empieza con el próximo periodo." : effective === "next-charge" ? "Plan cambiado — el nuevo precio se cobra desde el próximo cobro." : "Plan cambiado.");
+            : effective === "next-period" ? "El nuevo plan empieza con el próximo periodo." : effective === "next-charge" ? "El nuevo plan empieza con tu próximo cobro (al nuevo precio)."
+            : effective === "pending-payment" ? "Cobramos la diferencia: el nuevo plan se activa en cuanto se confirme el pago." : "Plan cambiado.");
         await m.reload();
     };
 
@@ -471,7 +474,7 @@ function AccountVerso({ title, isEditing, puck }) {
                             <div className="wjms-row"><span>{member.cancelAtPeriodEnd ? "Termina el" : member.autoRenew && member.autoRenew.state !== "active" ? "Pagado hasta" : "Se renueva el"}</span><span>{fmtDay(member.currentPeriodEnd)}</span></div>
                         )}
                         {member.pendingTier ? (
-                            <div className="wjms-row"><span>Desde el próximo periodo</span><span>{member.pendingTier.name}</span></div>
+                            <div className="wjms-row"><span>{member.source === "stripe" ? "Cuando se pague la diferencia" : "Desde el próximo periodo"}</span><span>{member.pendingTier.name}</span></div>
                         ) : null}
                         {member.autoRenew ? <AutoRenew member={member} onChange={m.reload} /> : null}
                         {member.canRenewNow && member.tier ? (

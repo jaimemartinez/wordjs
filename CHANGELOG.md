@@ -46,6 +46,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   applies each event once and accepts sandbox / test credentials only. Paid memberships whose period ran
   out without a renewal are marked expired. Plugins get **`wordjs.crypto.hash()`** (an unkeyed SHA
   digest), and webhook routes also receive `*checksum*` headers and `x-request-id`.
+  Every webhook re-reads the object it names from the provider's API and applies that, so late, replayed
+  or out-of-order events only ever apply the current state. A tier upgrade is granted once it is paid
+  (Stripe invoices the difference at once; Mercado Pago and Wompi from the next charge). A full refund or a
+  dispute (Stripe) and a voided payment (Wompi) take access back. A membership whose renewal failed keeps
+  access for 3 days from that moment. Tiers rank by their price per month. Amounts in zero-decimal
+  currencies are sent in whole units. Starting a checkout retires the account's earlier unpaid ones, and
+  each Wompi renewal is claimed before it is charged, so no period is charged twice.
 - **Plugin fields in the post editor.** Through the new `post_editor_fields` filter a plugin declares a
   field (select, radio or text, validated by core) that the editor shows in the entry's settings and saves
   as unprefixed post meta (`GET /api/v1/editor/fields`).

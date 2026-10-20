@@ -78,6 +78,8 @@ const RENEW_TICK_MS = 10 * 60 * 1000;
 // Member states. `active`/`past_due` grant access (the provider is still retrying a failed renewal), the
 // rest (incomplete, canceled, expired) do not.
 const ACCESS_STATUSES = ['active', 'past_due'];
+/** What a tier costs per month (a yearly price covers twelve): the order `tier:<slug>` levels rank in. */
+const monthlyRank = (t) => (Number(t && t.price_cents) || 0) / (t && t.billing_interval === 'year' ? 12 : 1);
 const PAID_SOURCES = ['stripe', 'mercadopago', 'wompi'];
 
 exports.init = async function (wordjs) {
@@ -119,11 +121,14 @@ exports.init = async function (wordjs) {
         current_period_end TEXT,
         cancel_at_period_end INTEGER DEFAULT 0,
         renew_attempts INTEGER DEFAULT 0,
+        provider_event_at INTEGER DEFAULT 0,
+        past_due_since TEXT,
         comped_until TEXT,
         note TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+    // `reference` is UNIQUE: a merchant-initiated charge is CLAIMED by inserting its reference first (Wompi renewals).
     await db.run(`CREATE TABLE IF NOT EXISTS ${T.checkouts} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -131,7 +136,7 @@ exports.init = async function (wordjs) {
         provider TEXT NOT NULL DEFAULT 'stripe',
         kind TEXT NOT NULL DEFAULT 'subscription',
         session_id TEXT,
-        reference TEXT,
+        reference TEXT UNIQUE,
         amount_cents INTEGER,
         currency TEXT,
         status TEXT DEFAULT 'open',
@@ -147,7 +152,6 @@ exports.init = async function (wordjs) {
     try {
         await db.run(`CREATE INDEX IF NOT EXISTS ${P}idx_members_sub ON ${T.members} (provider_subscription_id)`);
         await db.run(`CREATE INDEX IF NOT EXISTS ${P}idx_checkouts_session ON ${T.checkouts} (session_id)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS ${P}idx_checkouts_reference ON ${T.checkouts} (reference)`);
     } catch (e) { /* index exists / unsupported — non-fatal */ }
 
     // ---- plugin-private settings (provider credentials) -------------------------------------------------
@@ -220,15 +224,31 @@ exports.init = async function (wordjs) {
     const memberBySubscription = (provider, subId) =>
         db.get(`SELECT * FROM ${T.members} WHERE source = ? AND provider_subscription_id = ?`, [provider, String(subId)]);
 
-    /** Does this membership row grant access right now? */
+    /**
+     * Does this membership row grant access right now?
+     *  · past due (the provider is collecting a failed payment): for the grace window from the moment it
+     *    became past due, not for the whole new period the provider already opened;
+     *  · the paid period plus the grace window — the grace covers a renewal the provider is still
+     *    collecting, so a prepaid Wompi period without automatic renewal (nothing to collect) has none.
+     */
     const memberHasAccess = (m, now = Date.now()) => {
         if (!m || !ACCESS_STATUSES.includes(m.status)) return false;
         if (m.source === 'comped') return !m.comped_until || Date.parse(m.comped_until) > now;
+        if (m.status === 'past_due' && m.past_due_since) {
+            const since = Date.parse(m.past_due_since);
+            if (Number.isFinite(since) && since + PERIOD_GRACE_MS < now) return false;
+        }
         if (m.current_period_end) {
             const end = Date.parse(m.current_period_end);
-            if (Number.isFinite(end) && end + PERIOD_GRACE_MS < now) return false;
+            const renews = !(m.source === 'wompi' && !String(m.provider_payment_source || '').startsWith('source:'));
+            if (Number.isFinite(end) && end + (renews ? PERIOD_GRACE_MS : 0) < now) return false;
         }
         return true;
+    };
+    /** When a status change starts (or ends) a past-due spell: the value for `past_due_since`. */
+    const pastDueSince = (previous, status) => {
+        if (status !== 'past_due') return null;
+        return previous && previous.status === 'past_due' && previous.past_due_since ? previous.past_due_since : nowIso();
     };
 
     // ---- the ONE writer of paid memberships (every provider uses it) ------------------------------------
@@ -236,10 +256,16 @@ exports.init = async function (wordjs) {
         tier_id: 'tier_id', pending_tier_id: 'pending_tier_id', status: 'status',
         customer_id: 'provider_customer_id', subscription_id: 'provider_subscription_id', payment_source: 'provider_payment_source',
         current_period_end: 'current_period_end', cancel_at_period_end: 'cancel_at_period_end', renew_attempts: 'renew_attempts',
+        // The provider's own timestamp (unix seconds) of the newest event applied, so an older event that
+        // arrives late (providers do not deliver in order) never overwrites a newer state.
+        event_at: 'provider_event_at',
+        past_due_since: 'past_due_since',
     };
     /** Create or update the paid membership of `userId` from `provider` (undefined fields keep their value). */
-    const upsertProviderMember = async (userId, provider, fields) => {
+    const upsertProviderMember = async (userId, provider, input) => {
         const existing = await memberByUser(userId);
+        const fields = { ...input };
+        if (fields.status !== undefined) fields.past_due_since = pastDueSince(existing, fields.status);
         const sets = [];
         const vals = [];
         for (const [field, column] of Object.entries(FIELD_COLUMNS)) {
@@ -253,7 +279,7 @@ exports.init = async function (wordjs) {
             // Switching a membership to a provider clears what belonged to another one.
             const switching = existing.source !== provider;
             const extra = switching
-                ? `, comped_until = NULL${fields.customer_id === undefined ? ', provider_customer_id = NULL' : ''}${fields.subscription_id === undefined ? ', provider_subscription_id = NULL' : ''}${fields.payment_source === undefined ? ', provider_payment_source = NULL' : ''}`
+                ? `, comped_until = NULL${fields.customer_id === undefined ? ', provider_customer_id = NULL' : ''}${fields.subscription_id === undefined ? ', provider_subscription_id = NULL' : ''}${fields.payment_source === undefined ? ', provider_payment_source = NULL' : ''}${fields.event_at === undefined ? ', provider_event_at = 0' : ''}`
                 : '';
             await db.run(`UPDATE ${T.members} SET source = ?${sets.length ? ', ' + sets.join(', ') : ''}${extra}, updated_at = ? WHERE id = ?`,
                 [provider, ...vals, nowIso(), existing.id]);
@@ -266,8 +292,11 @@ exports.init = async function (wordjs) {
         return memberByUser(userId);
     };
     /** A provider-reported state change, never reviving a canceled membership. */
-    const setMemberStatus = (member, status) =>
-        db.run(`UPDATE ${T.members} SET status = ?, updated_at = ? WHERE id = ? AND status != 'canceled'`, [status, nowIso(), member.id]);
+    const setMemberStatus = async (member, status) => {
+        const current = (await db.get(`SELECT * FROM ${T.members} WHERE id = ?`, [member.id])) || member;
+        return db.run(`UPDATE ${T.members} SET status = ?, past_due_since = ?, updated_at = ? WHERE id = ? AND status != 'canceled'`,
+            [status, pastDueSince(current, status), nowIso(), member.id]);
+    };
 
     // Each provider event once (Stripe event id, Mercado Pago request id, Wompi transaction + status).
     const seenEvent = async (key) => !!(await db.get(`SELECT id FROM ${T.events} WHERE event_key = ?`, [String(key).slice(0, 250)]));
@@ -291,8 +320,11 @@ exports.init = async function (wordjs) {
             const tier = m.tier_id ? await tierById(m.tier_id) : null;
             if (tier && tier.price_cents > 0) {
                 levels.add(LEVEL_PAID);
-                const tiers = await db.all(`SELECT slug FROM ${T.tiers} WHERE price_cents <= ?`, [tier.price_cents]);
-                for (const t of tiers) levels.add(TIER_LEVEL_PREFIX + t.slug);
+                // Ranked by what the tier costs PER MONTH: a yearly plan's price covers twelve months, so a
+                // cheap yearly plan is not "above" a dearer monthly one just because its number is bigger.
+                const rank = monthlyRank(tier);
+                const tiers = await db.all(`SELECT slug, price_cents, billing_interval FROM ${T.tiers}`);
+                for (const t of tiers) if (monthlyRank(t) <= rank) levels.add(TIER_LEVEL_PREFIX + t.slug);
             }
         }
         return Array.from(levels);
@@ -336,16 +368,26 @@ exports.init = async function (wordjs) {
         return p;
     };
 
-    /** The page to return to, on THIS site: only the path and query of `pageUrl` are kept. */
+    /**
+     * The page to return to, on THIS site: the path and query of `pageUrl` when it is a page of this site,
+     * else the home page. A path that starts with `//` or `/\` is a network-path reference — resolved
+     * against the site it would name ANOTHER host — so leading slashes are collapsed, and the result must
+     * still be on the site's origin.
+     */
     const returnUrl = async (pageUrl) => {
         const site = new URL(await wordjs.site.url());
         let path = '/';
+        let search = '';
         try {
-            const u = new URL(String(pageUrl || ''), site);
-            for (const k of ['ms_session', 'ms_cancel', 'ms_provider', 'preapproval_id', 'id', 'env']) u.searchParams.delete(k);
-            path = u.pathname + (u.search || '');
+            const u = new URL(String(pageUrl || '').slice(0, 2000), site);
+            if (u.origin === site.origin) {
+                for (const k of ['ms_session', 'ms_cancel', 'ms_provider', 'preapproval_id', 'id', 'env']) u.searchParams.delete(k);
+                path = u.pathname;
+                search = u.search || '';
+            }
         } catch (e) { /* keep '/' */ }
-        return new URL(path, site.origin);
+        const out = new URL('/' + path.replace(/^[\/\\]+/, '') + search, site.origin);
+        return out.origin === site.origin ? out : new URL('/', site.origin);
     };
 
     // ================================================================================================
@@ -399,8 +441,19 @@ exports.init = async function (wordjs) {
     }));
 
     // Start paying for a tier with the active provider. The price is the tier row's; the client names a tier.
+    // One checkout at a time per account in this worker: a double click must not start two payments.
+    const checkoutsInFlight = new Set();
     http.route('post', '/checkout', { auth: true }, quietly('checkout', async (req, res) => {
         const userId = Number(req.user && req.user.id);
+        if (checkoutsInFlight.has(userId)) return res.status(409).json({ error: 'Ya estamos preparando tu pago — espera un momento.' });
+        checkoutsInFlight.add(userId);
+        try {
+            await startCheckoutFor(req, res, userId);
+        } finally {
+            checkoutsInFlight.delete(userId);
+        }
+    }));
+    const startCheckoutFor = async (req, res, userId) => {
         if (!providerCallAllowed('u' + userId)) return res.status(429).json({ error: 'Demasiados intentos — espera un minuto.' });
         const tierId = toInt(req.body && req.body.tier_id);
         const tier = Number.isInteger(tierId) ? await tierById(tierId) : null;
@@ -426,7 +479,7 @@ exports.init = async function (wordjs) {
             return res.status(502).json({ error: 'No se pudo iniciar el pago — inténtalo de nuevo.' });
         }
         res.json({ checkoutUrl: out.url, provider: provider.id });
-    }));
+    };
 
     // The return leg: the provider re-reads the payment server-side; it must be this account's (idempotent).
     http.route('get', '/me/confirm', { auth: true }, quietly('checkout confirmation', async (req, res) => {
@@ -497,9 +550,12 @@ exports.init = async function (wordjs) {
     http.route('post', '/me/resume', { auth: true }, setCancelAtPeriodEnd(false));
 
     // Wompi automatic renewal with Nequi (the member approves in the Nequi app).
+    // Each request makes Wompi push an approval prompt to a phone: a few per account per hour.
+    const nequiRequestAllowed = makeLimiter(3, 60 * 60 * 1000);
     http.route('post', '/me/auto-renew/nequi', { auth: true }, quietly('nequi auto-renew', async (req, res) => {
         const b = await billingMember(req, res);
         if (!b) return;
+        if (!nequiRequestAllowed('n' + b.m.user_id)) return res.status(429).json({ error: 'Ya pediste varias aprobaciones de Nequi — espera una hora.' });
         if (!b.provider.startNequi) return res.status(400).json({ error: 'La renovación automática con Nequi es de Wompi.' });
         res.json(await b.provider.startNequi(b.m, String((req.body && req.body.phone) || '').replace(/\D/g, '')));
     }));
@@ -526,7 +582,15 @@ exports.init = async function (wordjs) {
     }
 
     // ---- merchant-scheduled renewals (Wompi) and expiry ------------------------------------------------
-    const processPayments = async () => {
+    // One run at a time in this worker (the timer and the admin's «process now» share it): a renewal must
+    // never be charged twice because two runs looked at the same due membership. Across workers, the
+    // providers claim each charge in the database first (Wompi: a unique reference per period).
+    let paymentsRun = null;
+    const processPayments = () => {
+        if (!paymentsRun) paymentsRun = runPayments().finally(() => { paymentsRun = null; });
+        return paymentsRun;
+    };
+    const runPayments = async () => {
         const out = { renewed: 0, expired: 0 };
         for (const p of providers.list) {
             if (p.renewDue) {

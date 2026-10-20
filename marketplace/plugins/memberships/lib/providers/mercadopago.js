@@ -20,7 +20,13 @@
  *  · cancel / resume — PUT status `paused` / `authorized` (a `cancelled` preapproval cannot be resumed, so
  *    the member's own cancel pauses it); admin revoke — PUT `cancelled`.
  *  · change tier — PUT the new `transaction_amount` (Mercado Pago does not prorate: the new amount is
- *    charged from the next payment) and the tier is granted at once.
+ *    charged from the next payment); the new tier is granted when that payment is approved, not before
+ *    (an upgrade is never read before it is paid for).
+ *  · amounts — the preapproval must carry the amount and currency this plugin created (or last set) it
+ *    with, or it opens nothing. Tiers store integer cents (units × 100); currencies Mercado Pago takes as
+ *    whole units (CLP, COP, PYG, …) are sent as integers.
+ *  · one subscription being paid at a time — starting a checkout cancels the account's earlier
+ *    preapprovals that were never authorised, so two of them cannot both start charging.
  * Credentials: an access token (`TEST-…` sandbox credentials, or `APP_USR-…` of a Mercado Pago TEST USER —
  * the way Mercado Pago recommends testing subscriptions) and the webhook secret. Live-mode notifications
  * (`live_mode: true`) are refused by this version.
@@ -30,6 +36,9 @@ const API = 'https://api.mercadopago.com';
 // Mercado Pago retries a notification every 15 minutes; a captured notification older than this is
 // refused. Replays inside the window are harmless: the state is always re-read from the API.
 const WEBHOOK_TOLERANCE_MS = 60 * 60 * 1000;
+
+// Currencies charged in whole units (no cents) — Mercado Pago refuses decimals for them.
+const WHOLE_UNIT_CURRENCIES = new Set(['clp', 'cop', 'pyg', 'jpy', 'krw', 'vnd', 'xaf', 'xof']);
 
 const tokenMode = (t) => {
     const s = String(t || '');
@@ -70,13 +79,26 @@ function createMercadoPagoProvider(ctx) {
         return json;
     };
 
-    const amountOf = (tier) => Math.round(tier.price_cents) / 100;
+    /** Integer cents → the amount Mercado Pago charges in `currency` (whole units where it has no cents). */
+    const amountFromCents = (cents, currency) => (WHOLE_UNIT_CURRENCIES.has(String(currency || '').toLowerCase())
+        ? Math.round((Number(cents) || 0) / 100)
+        : Math.round(Number(cents) || 0) / 100);
+    const amountOf = (tier, cfg) => amountFromCents(tier.price_cents, (cfg && cfg.currencyCode) || 'cop');
     const autoRecurring = (tier, cfg) => ({
         frequency: tier.billing_interval === 'year' ? 12 : 1,
         frequency_type: 'months',
-        transaction_amount: amountOf(tier),
+        transaction_amount: amountOf(tier, cfg),
         currency_id: String(cfg.currencyCode || 'cop').toUpperCase(),
     });
+    /** Does the preapproval charge what we created (or last set) it to charge, in that currency? */
+    const chargesWhatWeSet = (pre, checkout) => {
+        if (!checkout) return true;
+        const ar = pre && pre.auto_recurring;
+        if (!ar) return false;
+        const currency = String(checkout.currency || '').toLowerCase();
+        return Number(ar.transaction_amount) === amountFromCents(checkout.amount_cents, currency)
+            && String(ar.currency_id || '').toLowerCase() === currency;
+    };
 
     /** Apply a preapproval read from the API. Only one we created (a checkout row) is ever applied. */
     const applyPreapproval = async (pre, expectedUserId) => {
@@ -86,11 +108,14 @@ function createMercadoPagoProvider(ctx) {
         if (!checkout && !member) return { ok: false, reason: 'not one of ours' };
         const userId = member ? member.user_id : checkout.user_id;
         if (expectedUserId !== undefined && userId !== expectedUserId) return { ok: false, reason: 'belongs to another account' };
-        // The tier: the member's current one (a tier change updates it locally), else the checkout's.
+        // The tier: the member's current one, else the checkout's (a tier change waits in pending_tier_id
+        // for its first approved charge).
         const tierId = member && member.tier_id ? member.tier_id : (checkout ? checkout.tier_id : null);
+        // A preapproval that does not charge what this plugin set opens nothing.
+        const status = chargesWhatWeSet(pre, checkout) ? statusFromMp(pre.status) : 'incomplete';
         await upsertProviderMember(userId, 'mercadopago', {
             tier_id: tierId && (await tierById(tierId)) ? tierId : undefined,
-            status: statusFromMp(pre.status),
+            status,
             customer_id: pre.payer_id ? String(pre.payer_id) : undefined,
             subscription_id: String(pre.id),
             current_period_end: pre.next_payment_date ? new Date(pre.next_payment_date).toISOString() : undefined,
@@ -164,6 +189,12 @@ function createMercadoPagoProvider(ctx) {
             if (!email) throw providerError(400, 'Tu cuenta necesita un correo para pagar con Mercado Pago.');
             const back = new URL(backUrl.toString());
             back.searchParams.set('ms_provider', 'mercadopago');
+            // Earlier preapprovals of this account that were never authorised are cancelled first.
+            const stale = await db.all(`SELECT id, session_id FROM ${T.checkouts} WHERE user_id = ? AND provider = 'mercadopago' AND status IN ('open', 'pending') AND session_id IS NOT NULL`, [userId]);
+            for (const row of stale) {
+                try { await request('PUT', `/preapproval/${encodeURIComponent(row.session_id)}`, { status: 'cancelled' }); } catch (e) { /* already authorised or gone: the webhook applies it */ }
+                await db.run(`UPDATE ${T.checkouts} SET status = 'cancelled' WHERE id = ? AND status IN ('open', 'pending')`, [row.id]);
+            }
             const nonce = await wordjs.crypto.randomToken(6);
             const reference = `wjm:${userId}:${tier.id}:${nonce}`;
             const pre = await request('POST', '/preapproval', {
@@ -192,11 +223,15 @@ function createMercadoPagoProvider(ctx) {
         },
 
         async changeTier(member, tier, cfg) {
+            const currency = String(cfg.currencyCode || 'cop').toLowerCase();
             const pre = await request('PUT', `/preapproval/${encodeURIComponent(member.provider_subscription_id)}`, {
                 reason: String(tier.name).slice(0, 120),
-                auto_recurring: { transaction_amount: amountOf(tier), currency_id: String(cfg.currencyCode || 'cop').toUpperCase() },
+                auto_recurring: { transaction_amount: amountOf(tier, cfg), currency_id: currency.toUpperCase() },
             });
-            await upsertProviderMember(member.user_id, 'mercadopago', { tier_id: tier.id });
+            // What the preapproval charges now, for chargesWhatWeSet; the tier itself waits for that charge.
+            await db.run(`UPDATE ${T.checkouts} SET amount_cents = ?, currency = ? WHERE provider = 'mercadopago' AND session_id = ?`,
+                [tier.price_cents, currency, String(member.provider_subscription_id)]);
+            await upsertProviderMember(member.user_id, 'mercadopago', { pending_tier_id: tier.id });
             await applyPreapproval(pre, member.user_id);
             return { effective: 'next-charge' };
         },
@@ -237,7 +272,13 @@ function createMercadoPagoProvider(ctx) {
                     const paymentStatus = charge.payment && charge.payment.status;
                     const m = await memberBySubscription('mercadopago', preId);
                     if (m && (paymentStatus === 'rejected' || charge.status === 'recycling')) await ctx.setMemberStatus(m, 'past_due');
-                    else if (m && paymentStatus === 'approved') await ctx.setMemberStatus(m, 'active');
+                    else if (m && paymentStatus === 'approved') {
+                        await ctx.setMemberStatus(m, 'active');
+                        // A tier change takes effect with the first charge approved at its price.
+                        if (m.pending_tier_id && (await tierById(m.pending_tier_id))) {
+                            await upsertProviderMember(m.user_id, 'mercadopago', { tier_id: m.pending_tier_id, pending_tier_id: null });
+                        }
+                    }
                 }
             }
             await recordEvent(key, type || 'unknown');
