@@ -538,6 +538,16 @@ const wordjs = {
             widgetRenderers.set(wId, d.render);
             send({ kind: 'register-widget', id: String(id), wId, name: d.name, description: d.description, fields: d.fields });
         }
+    },
+
+    // Extend the site's GraphQL schema DECLARATIVELY: SDL plus, for each new Query field, which of this
+    // plugin's own GET routes answers it ({ 'Query.books': { path: '/books', list: true } }). The host
+    // resolves the field by calling that route as the GraphQL caller; nothing runs here but the route.
+    graphql: {
+        extend(def) {
+            const d = def || {};
+            send({ kind: 'register-graphql', typeDefs: String(d.typeDefs || ''), fields: d.fields && typeof d.fields === 'object' ? d.fields : {} });
+        }
     }
 };
 

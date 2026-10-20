@@ -35,8 +35,10 @@
  *
  * SANDBOXED PLUGINS. The action hook is host-only (core/hook-access classifies it `denied`): its argument
  * is a function and its product is executable resolvers, neither of which can cross the isolate boundary.
- * Host modules and in-process code use it today; sandboxed plugins get a declarative, route-backed bridge
- * in a later phase (see documentation/graphql.md).
+ * A sandboxed plugin extends the schema DECLARATIVELY instead (wordjs.graphql.extend, built by
+ * core/graphql/plugin-bridge): SDL plus, for each new Query field, which of the plugin's own GET routes
+ * answers it — so the route's own authorization applies. Those extensions belong to the site whose worker
+ * registered them (`site`), like the plugin's routes.
  */
 
 import { extendSchema, parse, GraphQLSchema, isObjectType, isInterfaceType } from 'graphql';
@@ -54,6 +56,8 @@ export interface GraphQLExtension {
     owner: string;
     typeDefs: string;
     resolvers?: Record<string, Record<string, GraphQLResolverSpec | GraphQLFieldResolver<any, any, any>>>;
+    /** Multisite: the site this extension belongs to (a plugin worker's). Absent: every site (host code). */
+    site?: number;
 }
 
 export const REGISTER_HOOK = 'wordjs_graphql_register_types';
@@ -69,10 +73,10 @@ export function registerGraphQLExtension(ext: GraphQLExtension): void {
     version++;
 }
 
-export function unregisterGraphQLExtensions(owner: string): void {
+export function unregisterGraphQLExtensions(owner: string, site?: number): void {
     let removed = false;
     for (let i = registry.length - 1; i >= 0; i--) {
-        if (registry[i].owner === owner) { registry.splice(i, 1); removed = true; }
+        if (registry[i].owner === owner && (site === undefined || registry[i].site === site)) { registry.splice(i, 1); removed = true; }
     }
     if (removed) version++;
 }
@@ -138,10 +142,14 @@ function applyOne(schema: GraphQLSchema, ext: GraphQLExtension): GraphQLSchema {
     return next;
 }
 
-/** The core schema with every valid extension applied (static registry first, then the hook's). */
-export function applyExtensions(core: GraphQLSchema): GraphQLSchema {
+/**
+ * The core schema with every valid extension applied (static registry first, then the hook's). With a
+ * `site`, a site-bound extension (a plugin worker's) applies only to its own site.
+ */
+export function applyExtensions(core: GraphQLSchema, site?: number): GraphQLSchema {
     let schema = core;
-    for (const ext of [...registry, ...collectHookExtensions()]) {
+    const own = registry.filter((ext) => ext.site === undefined || ext.site === site);
+    for (const ext of [...own, ...collectHookExtensions()]) {
         try {
             schema = applyOne(schema, ext);
         } catch (err: any) {

@@ -41,6 +41,17 @@ const siteContext = require('./site-context');
 function isolateKey(slug: string, siteId: number = siteContext.currentSiteId()): string {
     return siteContext.siteKeyPrefix(siteId) + slug;
 }
+/**
+ * isolate key -> an express Router holding that worker's GET routes (the same middleware and handler the
+ * app mounts). The GraphQL plugin bridge (core/graphql/plugin-bridge) dispatches a plugin's declared field
+ * through it, as the GraphQL caller, so the route's own auth decides — never a second copy of the rules.
+ */
+const pluginGraphRouters = new Map<string, any>();
+/** The current site's GET routes of `slug` for the GraphQL bridge, or null while it is not running. */
+function getPluginGraphRouter(slug: string): any {
+    return pluginGraphRouters.get(isolateKey(slug)) || null;
+}
+
 /** The site and plugin slug of an isolate key (the inverse of isolateKey). */
 function splitIsolateKey(key: string): { siteId: number; slug: string } {
     const m = /^s([1-9][0-9]{0,8}):(.+)$/.exec(String(key));
@@ -2804,6 +2815,11 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         const pendingWidget = new Map<number, any>();
         const registeredWidgetIds: string[] = [];
         const invokeWidget = (wId: string, settings: any) => rpcSend(pendingWidget, { kind: 'invoke-widget', wId, settings });
+        // GraphQL (wordjs.graphql.extend): the plugin's GET routes, also reachable by the GraphQL bridge.
+        const graphRouter = require('express').Router();
+        let graphqlRegistrations = 0;
+        const MAX_GRAPHQL_EXTENSIONS = 5;
+        pluginGraphRouters.set(isolateKey(slug, siteId), graphRouter);
 
         const pendingMail = new Map<number, any>();
         const invokeMail = (mailMsg: any) => rpcSend(pendingMail, { kind: 'invoke-mail', msg: mailMsg });
@@ -3194,6 +3210,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // Keep the HANDLER, not just the verb: teardown matches on handler identity because
                 // the verb is not reliably recoverable from the layer (see the teardown comment).
                 registeredRoutes.push({ m, full, handler: finalHandler });
+                // A read route is also what the GraphQL bridge may resolve a declared field through: the
+                // same middleware (site gate, auth, admin) and handler, on the plugin's own router.
+                if ((m === 'get' || m === 'all') && !(msg.opts && msg.opts.multipart)) graphRouter.get(routePath, ...mw, finalHandler);
             } else if (msg.kind === 'route-reply') {
                 rpcSettle(pendingRoute, msg, msg.response);
             } else if (msg.kind === 'register-shortcode') {
@@ -3247,6 +3266,20 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 if (registered) registeredWidgetIds.push(id);
             } else if (msg.kind === 'widget-reply') {
                 rpcSettle(pendingWidget, msg, msg.value);
+            } else if (msg.kind === 'register-graphql') {
+                if (++graphqlRegistrations > MAX_GRAPHQL_EXTENSIONS) {
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] graphql.extend refused: at most ${MAX_GRAPHQL_EXTENSIONS} extensions per plugin.`);
+                    return;
+                }
+                // Declarative only: the resolvers are built HERE from data (core/graphql/plugin-bridge) and
+                // resolve through this worker's own GET routes — no function crosses the boundary.
+                const ext = require('./graphql/plugin-bridge').buildPluginExtension(slug, siteId, { typeDefs: msg.typeDefs, fields: msg.fields },
+                    () => pluginGraphRouters.get(isolateKey(slug, siteId)) || null);
+                if (typeof ext === 'string') {
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] graphql.extend refused: ${logSafe(ext)}`);
+                    return;
+                }
+                require('./graphql').registerGraphQLExtension(ext);
             } else if (msg.kind === 'register-mail-provider') {
                 // Becoming the host-wide mail sender is host-level hijack potential, so it requires an
                 // explicit admin grant of the email:provider capability (Android-style, default-deny).
@@ -3343,6 +3376,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             for (const tag of registeredShortcodes) { try { runWithContext(slug, () => removeShortcode(tag)); } catch { /* */ } }
             // Same owner guard for widgets: only this plugin's own registrations on this site are removed.
             for (const id of registeredWidgetIds) { try { runWithContext(slug, () => require('./widgets').unregisterWidget(id)); } catch { /* */ } }
+            // GraphQL: this site's extensions of this plugin, and the router its fields resolved through.
+            if (graphqlRegistrations) { try { require('./graphql').unregisterGraphQLExtensions(slug, siteId); } catch { /* */ } }
+            if (pluginGraphRouters.get(isolateKey(slug, siteId)) === graphRouter) pluginGraphRouters.delete(isolateKey(slug, siteId));
             if (providedMail) { try { require('./mail-provider').clearMailProvider(mailProviderFn || undefined); } catch { /* */ } }
             try { require('./notifications').unregisterPluginTransports(slug); } catch { /* */ }
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
@@ -3590,7 +3626,7 @@ module.exports = {
     isIsolated: (slug: string) => isolates.has(isolateKey(slug)),
     // The policy fingerprint the RUNNING child of `slug` was spawned with (undefined when none is running).
     spawnPolicyFingerprint: (slug: string) => { const key = isolateKey(slug); return isolates.has(key) ? spawnPolicies.get(key) : undefined; },
-    listIsolates, listIsolateKeys, isolateKey, splitIsolateKey,
+    listIsolates, listIsolateKeys, isolateKey, splitIsolateKey, getPluginGraphRouter,
     // Network-wide: stop one isolate by key (core/plugins, when a plugin leaves the network or a site).
     unloadIsolateKey: unloadKey,
     // What a plugin route handler receives as req.user (incl. its own pluginCapabilities).
