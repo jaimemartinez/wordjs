@@ -150,7 +150,7 @@ export const REVIEWED_VAR_DECLARATIONS: ReadonlySet<string> = new Set(STYLE_SECU
  * A CLASS NAME IS ALSO A WAY TO WRITE A DECLARATION, and it reaches the same element.
  *
  * Everything above bounds the `style` attribute. It says nothing about `class`, and the two are the
- * same sink: `frontend/src/app/globals.css` (imported by app/layout.tsx, i.e. EVERY public route)
+ * same sink: `frontend/src/app/globals.css` (imported by app/_root/RootDocument.tsx, i.e. EVERY route)
  * compiles a Tailwind utility bundle that contains `.fixed{position:fixed}`, `.inset-0`, `.z-50`,
  * `.w-full`, `.h-full`, `.bg-white`. So a block that writes
  *

@@ -1,7 +1,26 @@
+/**
+ * THE DOCUMENT every page is rendered into: `<html lang dir>`, the server-rendered @font-face rules, the
+ * self-hosted icon font and the providers every tree shares — and the metadata that names the site.
+ *
+ * WHY IT IS NOT app/layout.tsx. A root layout takes no params, so one shared root layout could only ever
+ * describe the MAIN site: another site of a multisite network (rewritten by src/proxy.ts to the internal
+ * `wjs-site/[siteHost]` tree) got the main site's `lang`, its fonts and its name in the sign-in pages'
+ * titles. So there is no app/layout.tsx any more: every top-level tree's own layout is a root layout
+ * (Next allows several — any layout without one above it is a root layout) and renders this document.
+ * `wjs-site/[siteHost]/layout.tsx` is that site's root layout: it declares the site from its route param
+ * (setRequestSite) BEFORE calling this, so every read below is that site's, cached under its own tags.
+ * The main site's trees declare nothing and read exactly what the single root layout read before: the
+ * same request-deduped, ISR-cached getSettings/getFonts, no request header, no extra rewrite.
+ *
+ * Called as a function (`return RootDocument({ children })`), not mounted as <RootDocument>: the layouts
+ * await it so the document is ready markup, and the render tests can render it without an async-aware
+ * renderer. Navigating between two root layouts is a full page load (Next's rule), which is what moving
+ * between the public site, the admin and the sign-in screens costs now; within a tree nothing changed.
+ */
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { inter } from "./fonts";
-import "./globals.css";
+import { inter } from "@/app/fonts";
+import "@/app/globals.css";
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
 import HostNotAllowedNotice from "@/components/HostNotAllowedNotice";
 import { ModalProvider } from "@/contexts/ModalContext";
@@ -11,7 +30,8 @@ import { buildFontFaceCss } from "@/lib/fontFaceCss";
 import { resolveDocumentLanguage } from "@/lib/documentLanguage";
 import { ASSET_VERSION } from "@/lib/assetVersion";
 
-export async function generateMetadata(): Promise<Metadata> {
+/** The document's metadata: the site's name (and the title template every page's title goes through), its description, icon and canonical base. */
+export async function rootMetadata(): Promise<Metadata> {
     // Use the shared server data layer (mono/split-aware base URL + request-deduped) instead of a
     // hand-rolled fetch — the old hardcoded http://localhost:3000 hit the HTTPS gateway and silently
     // fell back to the "WordJS" default.
@@ -47,7 +67,7 @@ export async function generateMetadata(): Promise<Metadata> {
     return meta;
 }
 
-export default async function RootLayout({
+export default async function RootDocument({
     children,
 }: {
     children: React.ReactNode;
@@ -64,13 +84,13 @@ export default async function RootLayout({
     // English and laid out left-to-right whatever it published, and no theme could fix it (a theme
     // gets one stylesheet and no head input; `direction: rtl` in CSS does not change what the
     // browser's bidi/hyphenation/quote behaviour thinks the document is). getSettings() is the same
-    // request-deduped + ISR-cached read generateMetadata above already performs, so this adds no
+    // request-deduped + ISR-cached read rootMetadata above already performs, so this adds no
     // fetch. resolveDocumentLanguage is fail-closed: an unparseable locale or an out-of-enum
     // direction yields en/ltr rather than reaching the attribute.
     const settings = await getSettings();
     const { lang, dir } = resolveDocumentLanguage(settings);
     // The configured main address, for the refused-address notice's one link. The same chain
-    // generateMetadata uses for metadataBase: never the request host, which is the thing in question.
+    // rootMetadata uses for metadataBase: never the request host, which is the thing in question.
     const canonical = settings?.siteurl || settings?.home || null;
 
     return (

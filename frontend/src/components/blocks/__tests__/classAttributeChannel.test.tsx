@@ -7,7 +7,7 @@
  *
  *     <div class="fixed inset-0 z-50 w-full h-full bg-white"><a href="https://evil/login">…</a></div>
  *
- * Every one of those six utilities ships in the Tailwind bundle that `app/layout.tsx` imports on EVERY
+ * Every one of those six utilities ships in the Tailwind bundle that `app/_root/RootDocument.tsx` imports on EVERY
  * route (and the admin loads it too), so that markup is a viewport-covering, opaque, attacker-linked
  * overlay served from the victim's own origin. Two writers reached it and both were live:
  *
