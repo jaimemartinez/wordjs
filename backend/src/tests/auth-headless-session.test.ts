@@ -297,7 +297,7 @@ test('PUT /users/me will not change the RECOVERY address on an ambient cookie al
 
 test('an UNCHANGED resend of the same addresses is not a change and needs no password', async () => {
     // Every profile form re-sends the whole object on every save. A presence check here would 403 "rename
-    // me" — the no-op-resend trap professionalMailbox, `role` and the mail-domain rule each had to learn
+    // me" — the no-op-resend trap accountCapabilities, `role` and the mail-domain rule each had to learn
     // separately. Different case, same value: still not a change.
     const save = await request(app).put(`${B}/users/me`).set('Authorization', asUser('recovery'))
         .send({ personalEmail: 'ME@Personal.test', email: 'recovery@example.com', displayName: 'Rec' });

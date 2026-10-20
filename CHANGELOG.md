@@ -8,6 +8,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Plugins can declare per-account capabilities.** A manifest's new `accountCapabilities` block names
+  capabilities in the plugin's own namespace that an administrator grants per account on the user screen
+  (one toggle each, rendered from the declaration, for `edit_users` holders only — `GET
+  /api/v1/users/account-capabilities`). Only `edit_users` can change a grant, it is never self-assignable
+  and never derived from the email address, no role implies it, and only the declaring plugin is told
+  (`req.user.accountCapabilities` and `accountCapabilities` on `wordjs.users.*`). A declaration may ask for
+  two generic effects: `locksEmail` (the account cannot move its own address while it holds the grant) and,
+  on a menu item, `requiresAccountCapability` (hidden from non-administrators without it). See
+  [plugins.md §12b](documentation/plugins.md#12b-declaring-per-account-capabilities-accountcapabilities-).
 - **Multisite: a network administrator can open any other site's admin as administrator.** Admin → Network →
   *Open as administrator* re-checks the password and sends the browser to the site's own address with a
   one-time link (signed with that site's key, bound to its address, valid once and for one minute). It starts a
@@ -542,6 +551,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   holds are removed; its id is never reused. See the upgrade notes in
   [multisite.md](documentation/multisite.md#upgrading-from-27).
 
+### ⚠️ Upgrade note — mail-server 3.1.0 with this release
+
+The "Professional mail account" grant is no longer a core concept: mail-server **3.1.0** declares it as its
+account capability `mail_server_mailbox`, and schema migration `0019` moves every existing
+`professional_mailbox` value to it unchanged at boot. Update the plugin together with the core. A 3.0.x copy
+still installed keeps working (its mailboxes, menu and address lock are bridged onto the migrated grant),
+but the toggle on the user screen comes from 3.1.0's declaration, so granting or revoking a mailbox needs
+the update.
+
 ### ⚠️ Upgrade note — Node.js 22 or newer is required
 
 WordJS now requires **Node.js 22 or newer** (Node 22 LTS or 24 LTS recommended). Node 20 reached end of
@@ -571,6 +589,17 @@ the boot error links there too.
 
 ### Changed
 
+- **The core no longer knows about mailboxes.** `user_meta.professional_mailbox`, `User.hasProfessionalMailbox`,
+  the `professionalMailbox` field of `POST /users` / `PUT /users/:id`, the `hasProfessionalMailbox`
+  projection and the `requiresProfessionalMailbox` menu flag are replaced by the generic account
+  capabilities above; the user API now takes and returns `accountCapabilities`. `core/mailbox.ts` became
+  `core/email-address.ts` (the address-shape rule and the self-service email-write rule — reserved site
+  email domain, `locksEmail`); the error codes are unchanged. The deprecated fields are still served to a
+  mail-server older than 3.1.0 (`core/legacy-account-flags.ts`) and will be removed in the next major.
+- **mail-server 3.1.0: the mailbox grant is a declared account capability.** The plugin declares
+  `mail_server_mailbox` (`locksEmail`, on by default for new accounts), gates its routes, delivery and menu
+  on `accountCapabilities`, and its user-form extension now only keeps a mailbox holder's address on
+  `<username>@<mail domain>` — the toggle itself is rendered by the core.
 - **conference-manager 2.30.0: the conference portal is the plugin's own page.** The coordinators' portal
   (`/portal/conference`), «Mi inscripción» (`/portal/conference/yo`) and the badge links
   (`/portal/conference/badge`) were pages of the core (`frontend/src/app/portal/conference`); they are now the
@@ -836,6 +865,12 @@ the boot error links there too.
   wizard and **Admin → Database migration** offer both settings when *Use SSL* is ticked (the opt-out with
   a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
   `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
+
+### Removed
+
+- **`backend/src/models/Email.ts`** — an unused copy of the mail plugin's store (the plugin has its own in
+  `lib/email-store.js`), together with the `uploads/mail-attachments` directory it created at load and the
+  `backend/cli/debug-inbox.js` script that used it.
 
 ### Fixed
 

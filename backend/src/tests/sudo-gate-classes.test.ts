@@ -1004,8 +1004,8 @@ test('CLASS 3 — an administrator API token cannot drive ANY account-security w
             },
         },
         {
-            name: 'PUT /users/:id {professionalMailbox} (the admin-owned grant)',
-            run: () => request(app).put(`${B}/users/${victim}`).set('Authorization', bearer).send({ professionalMailbox: true }),
+            name: 'PUT /users/:id {accountCapabilities} (the admin-owned grants)',
+            run: () => request(app).put(`${B}/users/${victim}`).set('Authorization', bearer).send({ accountCapabilities: { test_plugin_cap: true } }),
         },
         {
             name: 'PUT /users/me {password} (the token owner re-credentialing themselves)',
@@ -1068,7 +1068,7 @@ test('CLASS 3 — the blank/null axis, over the PRODUCT of the module\'s field t
     const victim = U.blankVictim;
     const REAL: Record<string, any> = {
         password: 'TokenOwned-9!', currentPassword: PASSWORD, email: 'attacker@evil.test',
-        personalEmail: 'attacker@evil.test', role: 'administrator', professionalMailbox: true,
+        personalEmail: 'attacker@evil.test', role: 'administrator', accountCapabilities: { test_plugin_cap: true },
     };
     const BLANKS: Array<[string, any]> = [['empty string', ''], ['whitespace', '   '], ['null', null]];
 

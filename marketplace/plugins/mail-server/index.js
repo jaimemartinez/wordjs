@@ -63,7 +63,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.0.4',
+    version: '3.1.0',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -122,10 +122,11 @@ let _lastSpamPurge = 0;    // last 30-day spam-retention sweep (runs at most eve
 
 // === User lookups via the SAFE host bridge (grant: users:read) ===
 // wordjs.users.* returns a PROJECTION
-// {id,userLogin,username,userEmail,displayName,role,hasProfessionalMailbox} — never user_pass. The
+// {id,userLogin,username,userEmail,displayName,role,pluginCapabilities,accountCapabilities} — never
+// user_pass. The
 // field names already match what the rest of this file expects (mapUser-compatible), so no
 // normalization is needed here. The host writes the underlying query (core User model).
-// `hasProfessionalMailbox` is the ADMIN-OWNED corporate-mailbox grant — see hasCorporateMailbox below;
+// `accountCapabilities` carries the ADMIN-OWNED corporate-mailbox grant — see hasCorporateMailbox below;
 // it is the host's fact, not something this plugin may derive.
 const User = {
     findByEmail: (email) => wordjs.users.findByEmail(email),
@@ -175,7 +176,7 @@ let lastMirroredMailDomain = null;
  * PUBLISH the resolved domain to the host as the plain `mail_domain` option.
  *
  * The host has to know this domain too — it reserves those local parts so an unprivileged account cannot
- * claim <someone>@<mailDomain> (core/mailbox.ts). It CANNOT read our source of truth: the host tried
+ * claim <someone>@<mailDomain> (core/email-address.ts). It CANNOT read our source of truth: the host tried
  * `getOption('mail_security_dkim_domain')` against the core options table, where that key never appears in
  * production. `mail_security_dkim_domain` matches this plugin's SECRET_OPTION_RE and the host's
  * PROTECTED_OPTION_RE (both on /dkim/), so every writer routes it into wjp_mail_server_secrets instead —
@@ -212,35 +213,40 @@ async function getMailDomain() {
  * === ACTIVE CORPORATE MAILBOX — THE ONE DEFINITION (SSOT) ======================================
  *
  * A user has an ACTIVE CORPORATE (professional) MAILBOX when an ADMINISTRATOR HAS ENABLED ONE for
- * them — the "Professional Mail Account" toggle on the user form, stored by the host in
- * `user_meta.professional_mailbox` and handed to this plugin as the projected boolean
- * `user.hasProfessionalMailbox` (backend/src/core/mailbox.ts is the host-side definition).
+ * them — the "Professional mail account" toggle on the user form. This plugin DECLARES that toggle as
+ * the account capability `mail_server_mailbox` (manifest.json `accountCapabilities`); the host renders
+ * it, lets only an `edit_users` administrator change it, stores it, and hands it to this plugin in
+ * `user.accountCapabilities` (backend/src/core/account-capabilities.ts). The host knows nothing about
+ * what it means — this plugin is the only place that does.
  *
  * IT IS NOT DERIVED FROM THE ACCOUNT'S EMAIL ADDRESS ANY MORE, and that is the whole point. The old
  * rule — "their own account email is on the site domain" — read a field the account itself writes:
  * PUT /users/me is guarded by `authenticate` alone, so any subscriber could set their address to
  * me@<mailDomain> and self-issue the entire mail surface (sending DKIM-signed mail as the site), and
  * with `users_can_register` on, POST /auth/register let an ANONYMOUS attacker do the same. The host
- * now also refuses those two writes (core/mailbox.refuseSelfServiceEmailChange), so the address can no
- * longer be claimed either — but the GATE deliberately no longer depends on it at all.
+ * now also refuses those two writes (core/email-address refuseSelfServiceEmailChange: the published
+ * `mail_domain` is reserved, and the declaration's `locksEmail` stops a mailbox holder moving the
+ * address), so the address can no longer be claimed either — but the GATE does not depend on it at all.
  *
  * Reading the FLAG (not the address) is also what makes the gate immune to a mail-domain change: an
  * operator setting `mail_security_dkim_domain` cannot 403 every non-admin out of the whole webmail.
  *
  * The HOST reads the SAME fact for admin-menu visibility (backend/src/routes/plugins.ts, via the
- * generic `requiresProfessionalMailbox` flag, admins always kept), so a menu entry can never appear
+ * generic `requiresAccountCapability` item field, admins always kept), so a menu entry can never appear
  * for a user whose page only 403s.
  *
  * NOT cached, deliberately: `user` is the host's per-request projection, rebuilt from the DB by
  * middleware/auth.ts on EVERY request, so an admin flipping the mailbox toggle off denies the very
  * next request instead of a stale grant living on in this process.
  */
+const MAILBOX_CAPABILITY = 'mail_server_mailbox';
 function hasCorporateMailbox(user) {
-    return !!(user && user.hasProfessionalMailbox === true); // fail closed on a missing/older projection
+    // Fail closed on a missing/older projection.
+    return !!(user && Array.isArray(user.accountCapabilities) && user.accountCapabilities.includes(MAILBOX_CAPABILITY));
 }
 
 /**
- * The domain part of an address, by the SAME rule the host applies (backend/src/core/mailbox.ts:
+ * The domain part of an address, by the SAME rule the host applies (backend/src/core/email-address.ts:
  * `domainOfAddress`): an address is exactly one '@' with a non-empty local part and a dotted domain,
  * and anything else has NO domain. `a@gmail.com@acme.example` is therefore not an address at all —
  * previously this file took the text after the LAST '@' and the host took the text after the FIRST, so
@@ -3214,7 +3220,7 @@ exports.init = async function (bridge) {
         // IRREVERSIBLY (once a row is no longer user_id = 0 the exact-filtered path cannot find it).
         //
         // Identity is safe to trust here: the host refuses self-service assignment of an address on the
-        // mail domain (core/mailbox.refuseSelfServiceEmailChange, enforced on PUT /users/me,
+        // mail domain (core/email-address refuseSelfServiceEmailChange, enforced on PUT /users/me,
         // PUT /users/:id and POST /auth/register), so nobody can claim an unused corporate address and
         // inherit its history — which is the hijack the delivery predicate was reached for.
         //
@@ -3480,7 +3486,7 @@ exports.init = async function (bridge) {
     //     override, same reason: req.user here is the users:read projection and carries no capability
     //     map). Denying them the surface would contradict that;
     //   - the host makes the same call for menu visibility — backend/src/routes/plugins.ts keeps
-    //     `requiresProfessionalMailbox` items visible to administrators — so a stricter rule here
+    //     `requiresAccountCapability` items visible to administrators — so a stricter rule here
     //     would show an admin a menu entry whose page only 403s.
     // If a capability bridge ever lands, replace BOTH role checks (here and canAccessEmail) with an
     // explicit capability at the same time.
@@ -4782,7 +4788,7 @@ exports.init = async function (bridge) {
             const list = [];
             for (const u of byId.values()) {
                 const use = usage[u.id] || { messages: 0, unread: 0, sent: 0, spam: 0, bytes: 0, lastActivity: null };
-                const hasMailbox = !!u.hasProfessionalMailbox;
+                const hasMailbox = hasCorporateMailbox(u);
                 if (!hasMailbox && use.messages === 0) continue;
                 const override = overrides[u.id] !== undefined ? overrides[u.id] : -1;
                 const quotaMb = override >= 0 ? override : policy.defaultQuotaMb;
@@ -4908,9 +4914,9 @@ exports.init = async function (bridge) {
         order: 90,
         cap: 'access_admin_panel',
         // Only a user for whom an ADMINISTRATOR enabled a professional mailbox has an inbox here; core
-        // hides this per-user webmail from everyone else via the generic requiresProfessionalMailbox
-        // flag, reading the same grant this plugin's route gate reads.
-        requiresProfessionalMailbox: true
+        // hides this per-user webmail from every other non-administrator via the generic
+        // requiresAccountCapability field, reading the same grant this plugin's route gate reads.
+        requiresAccountCapability: MAILBOX_CAPABILITY
     });
 
     // Expose sendMail utility for other plugins (host installs a shim for wordjs.mail / global.wordjs_send_mail).

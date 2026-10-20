@@ -8,8 +8,9 @@
  *
  * The first fix gated the surface on "the account's own email is on the site domain". That predicate
  * was SELF-GRANTABLE (PUT /users/me and POST /auth/register both write that field), so the gate now
- * reads the ADMIN-OWNED grant the host projects as `user.hasProfessionalMailbox`
- * (backend/src/core/mailbox.ts; the host half is pinned by mailbox-grant.test.ts). This suite pins the
+ * reads the ADMIN-OWNED grant the host projects in `user.accountCapabilities` (the plugin's declared
+ * `mail_server_mailbox`; backend/src/core/account-capabilities.ts, the host half pinned by
+ * account-capabilities.test.ts). This suite pins the
  * plugin half: the gate reads the GRANT and never the address, delivery needs BOTH, the mail domain
  * has one definition, and no route can reach the bridge unclassified.
  *
@@ -31,7 +32,7 @@
  *
  * `res` mirrors the shim the isolate worker gives a plugin route handler
  * (backend/src/core/plugin-worker.js), and `req.user` mirrors the projection the host forwards
- * ({ id, role, userEmail, userLogin, hasProfessionalMailbox } — no capability map, which is why the
+ * ({ id, role, userEmail, userLogin, accountCapabilities } — no core capability map, which is why the
  * admin allowance below keys off `role`, exactly like the plugin's existing canAccessEmail override).
  */
 import { test } from 'node:test';
@@ -79,14 +80,14 @@ function loadPluginModule(): any {
 }
 
 // --- Users, in the exact projection shape the host forwards to an isolated plugin route ----------
-// `hasProfessionalMailbox` IS the grant (user_meta.professional_mailbox, writable only by an
-// `edit_users` caller — see backend/src/core/mailbox.ts). Note MALLORY: an on-domain address WITHOUT
+// `accountCapabilities: ['mail_server_mailbox']` IS the grant (writable only by an `edit_users` caller —
+// see backend/src/core/account-capabilities.ts). Note MALLORY: an on-domain address WITHOUT
 // the grant, i.e. exactly what a subscriber could give themselves through PUT /users/me before the
 // host closed that door. She must be refused everywhere.
-const ALICE = { id: 2, role: 'editor', userEmail: `alice@${SITE_DOMAIN}`, userLogin: 'alice', hasProfessionalMailbox: true };
-const PABLO = { id: 3, role: 'subscriber', userEmail: 'pablo@gmail.com', userLogin: 'pablo', hasProfessionalMailbox: false };
-const MALLORY = { id: 4, role: 'subscriber', userEmail: `ceo@${SITE_DOMAIN}`, userLogin: 'mallory', hasProfessionalMailbox: false };
-const BOSS = { id: 1, role: 'administrator', userEmail: 'boss@gmail.com', userLogin: 'boss', hasProfessionalMailbox: false };
+const ALICE = { id: 2, role: 'editor', userEmail: `alice@${SITE_DOMAIN}`, userLogin: 'alice', accountCapabilities: ['mail_server_mailbox'] };
+const PABLO = { id: 3, role: 'subscriber', userEmail: 'pablo@gmail.com', userLogin: 'pablo', accountCapabilities: [] };
+const MALLORY = { id: 4, role: 'subscriber', userEmail: `ceo@${SITE_DOMAIN}`, userLogin: 'mallory', accountCapabilities: [] };
+const BOSS = { id: 1, role: 'administrator', userEmail: 'boss@gmail.com', userLogin: 'boss', accountCapabilities: [] };
 const DIRECTORY = [BOSS, ALICE, PABLO, MALLORY];
 
 type RouteHandler = (req: any, res: any) => any;
@@ -98,6 +99,7 @@ type Boot = {
     db: any;
     Email: any;
     smtp: any;
+    menus: any[];
 };
 
 type BootOpts = {
@@ -124,6 +126,7 @@ async function boot({ options: extraOptions = {}, secrets = {}, users = DIRECTOR
     }
     const routes = new Map<string, RouteHandler>();
     const registered: { method: string; sub: string; opts: any }[] = [];
+    const menus: any[] = [];
     // 2525 keeps the plugin's real port-25 bindability probe (which uses `net`) from ever running.
     const options: Record<string, string> = { smtp_listen_port: '2525', ...extraOptions };
     const find = (pred: (u: any) => boolean) => users.find(pred) || null;
@@ -160,7 +163,7 @@ async function boot({ options: extraOptions = {}, secrets = {}, users = DIRECTOR
                 routes.set(`${method} ${sub}`, handler);
             }
         },
-        adminMenu: { add() { /* captured elsewhere */ } },
+        adminMenu: { add(item: any) { menus.push(item); } },
         provideMail() { /* host-wide mail provider registration */ },
         notify: Object.assign(async () => { /* db/sse notification */ }, { registerTransport() { } }),
         dns: {
@@ -177,7 +180,7 @@ async function boot({ options: extraOptions = {}, secrets = {}, users = DIRECTOR
     await plugin.init(bridge);
 
     const createEmailStore = require(path.join(PLUGIN_DIR, 'lib/email-store.js'));
-    return { plugin, routes, registered, db, Email: createEmailStore(db), smtp: smtpInstances[0] };
+    return { plugin, routes, registered, db, Email: createEmailStore(db), smtp: smtpInstances[0], menus };
 }
 
 // --- The route-handler calling convention of backend/src/core/plugin-worker.js -------------------
@@ -373,7 +376,7 @@ test('an ADMINISTRATOR without a mailbox of their own keeps the surface (they ow
     // Decision for the catch-all edge case: inbound mail with no matching mailbox is stored OWNED BY
     // THE SITE ADMIN, and the admin's own address may well be personal — a naive gate would lock them
     // out of mail they own. Administrators therefore pass, exactly like the host's admin-menu filter
-    // (backend/src/routes/plugins.ts keeps requiresProfessionalMailbox items visible to admins) and
+    // (backend/src/routes/plugins.ts keeps requiresAccountCapability items visible to admins) and
     // exactly like the plugin's existing canAccessEmail role override.
     const b = await boot();
     try {
@@ -442,7 +445,7 @@ test('losing the corporate mailbox denies the very NEXT request (no cached acces
 
         // The admin flips the toggle off. The ADDRESS is untouched — only the grant is revoked, which is
         // exactly what the toggle now does, and the gate must follow the grant.
-        const demoted = { ...ALICE, hasProfessionalMailbox: false };
+        const demoted = { ...ALICE, accountCapabilities: [] };
         const after = await call(b, 'get /stats', demoted);
         assert.equal(after.status, 403, 'access must end with the grant, on the next request');
         assert.equal(after.body.code, 'mail_no_corporate_mailbox');
@@ -451,7 +454,7 @@ test('losing the corporate mailbox denies the very NEXT request (no cached acces
 
 test('the plugin and the HOST agree, address for address, on what a mail domain is', async () => {
     // The plugin runs in a sandboxed child process and cannot require host modules, so the address rule
-    // necessarily exists twice (marketplace/…/index.js `mailboxDomainOf` and backend/src/core/mailbox.ts
+    // necessarily exists twice (marketplace/…/index.js `mailboxDomainOf` and backend/src/core/email-address.ts
     // `domainOfAddress`). They previously DISAGREED — the plugin took the text after the LAST '@' and
     // the host after the FIRST — which is a real split-identity bug: 'a@gmail.com@acme.example' passed
     // the plugin's mailbox test while the host filtered the same user out of the menu.
@@ -459,7 +462,7 @@ test('the plugin and the HOST agree, address for address, on what a mail domain 
     // Driven through the REAL /mailbox route, whose `address` is non-null exactly when the plugin's rule
     // says the account's address is on the mail domain, and compared against the host helper's answer
     // for the same string.
-    const { domainOfAddress } = require('../core/mailbox');
+    const { domainOfAddress } = require('../core/email-address');
     const ADVERSARIAL = [
         `alice@${SITE_DOMAIN}`,
         `ALICE@${SITE_DOMAIN.toUpperCase()}`,
@@ -476,7 +479,7 @@ test('the plugin and the HOST agree, address for address, on what a mail domain 
     try {
         for (const userEmail of ADVERSARIAL) {
             const probe = await call(b, 'get /mailbox',
-                { id: 9, role: 'subscriber', userLogin: 'x', userEmail, hasProfessionalMailbox: true });
+                { id: 9, role: 'subscriber', userLogin: 'x', userEmail, accountCapabilities: ['mail_server_mailbox'] });
             const pluginSaysOnDomain = probe.body.address !== null;
             const hostSaysOnDomain = domainOfAddress(userEmail) === SITE_DOMAIN;
             assert.equal(
@@ -502,7 +505,7 @@ test('the mailbox PROBE reports the grant, not the address', async () => {
         );
         // Grant but an off-domain address: they may use the surface, but they receive nowhere, and the
         // probe must not invent an address for them.
-        const odd = { ...PABLO, hasProfessionalMailbox: true };
+        const odd = { ...PABLO, accountCapabilities: ['mail_server_mailbox'] };
         assert.deepEqual(
             (({ hasMailbox, canUseMail, address }) => ({ hasMailbox, canUseMail, address }))(await probe(odd)),
             { hasMailbox: true, canUseMail: true, address: null }
@@ -716,4 +719,28 @@ test('the corporate-mailbox rule has exactly ONE definition in the plugin', () =
         SOURCE.match(/dkimDomain \|\| siteDomain/g) || [], [],
         'the "dkim domain else site domain" expression must not be re-inlined — call resolveMailDomain()/getMailDomain()'
     );
+});
+
+test('the grant is the DECLARED account capability, end to end: manifest, gate and menu agree', async () => {
+    // The host knows nothing about mailboxes any more (backend/src/core/account-capabilities.ts): this plugin
+    // declares `mail_server_mailbox`, the host renders, stores and projects it. Pin all three plugin-side
+    // halves against the REAL files, so renaming one of them cannot leave the other two pointing nowhere.
+    const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'manifest.json'), 'utf8'));
+    const { validateManifestAccountCapabilities } = require('../core/account-capabilities');
+    assert.deepEqual(validateManifestAccountCapabilities('mail-server', manifest), []);
+    const decl = manifest.accountCapabilities.find((d: any) => d.slug === 'mail_server_mailbox');
+    assert.ok(decl && decl.locksEmail === true, 'the mailbox is declared, and binds the account address');
+
+    const b = await boot();
+    try {
+        const item = b.menus.find((m: any) => m.href === '/admin/plugin/emails');
+        assert.ok(item, 'the webmail menu item is registered');
+        assert.equal(item.requiresAccountCapability, 'mail_server_mailbox', 'the menu is gated on the same declared grant');
+        assert.equal('requiresProfessionalMailbox' in item, false, 'and no longer on the core-owned legacy flag');
+
+        // The gate reads the declared grant, and ONLY it: the legacy boolean alone opens nothing.
+        const legacyOnly = { ...PABLO, accountCapabilities: [], hasProfessionalMailbox: true };
+        assert.equal((await call(b, 'get /mailbox', legacyOnly)).body.hasMailbox, false);
+        assert.equal((await call(b, 'get /mailbox', ALICE)).body.hasMailbox, true);
+    } finally { b.plugin.deactivate(); }
 });

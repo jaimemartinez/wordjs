@@ -760,6 +760,9 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             // the door, before an administrator is ever asked to grant `roles:declare`.
             const roleProblems = validateManifestRoles(pluginSlug, manifest);
             if (roleProblems.length) throw new Error(`Invalid roles:\n- ${roleProblems.join('\n- ')}`);
+            // Declared per-account capabilities, the same namespace rule (core/account-capabilities.ts).
+            const accountCapProblems = require('../core/account-capabilities').validateManifestAccountCapabilities(pluginSlug, manifest);
+            if (accountCapProblems.length) throw new Error(`Invalid accountCapabilities:\n- ${accountCapProblems.join('\n- ')}`);
             // Two installed plugins never answer to the same /admin/plugin/<slug> (core/adminMenu.ts
             // adminPageConflict): the admin layout opens a plugin page through the menu items pointing there.
             const pageConflict = require('../core/adminMenu').adminPageConflict(pluginSlug, manifest);
@@ -3189,24 +3192,19 @@ router.get('/menus', authenticate, asyncHandler(async (req: Request, res: Respon
         return typeof req.user.can === 'function' && req.user.can(requiredCap);
     });
 
-    // 4. Some plugin menu items are only meaningful to a user who owns a PROFESSIONAL mailbox on the
-    //    site's mail domain — e.g. a per-user webmail inbox; a user without one has no inbox, so the
-    //    page would be an empty shell. A plugin marks those items with `requiresProfessionalMailbox:
-    //    true` when it registers them (adminMenu.add), and core hides them from everyone without a
-    //    professional mailbox. Administrators ALWAYS keep them. This is slug/href-agnostic, so ANY mail
-    //    (or other) plugin gets the behaviour — not just mail-server.
-    //
-    //    THE FACT IS ADMIN-OWNED, NOT DERIVED. This used to compare the user's own email domain to the
-    //    site hostname — a field the user writes themselves via PUT /users/me, so menu visibility (and,
-    //    through the identical rule in the mail plugin, the whole mail surface) was self-grantable. It
-    //    now reads the SAME `user_meta.professional_mailbox` grant the mail plugin's route gate reads,
-    //    via the one helper in core/mailbox.ts: menu visibility and route access cannot disagree, and a
-    //    menu entry can no longer appear for a user whose page will only 403.
+    // 4. Some plugin menu items are only meaningful to an account an administrator granted one of the
+    //    plugin's account capabilities (core/account-capabilities.ts) — e.g. a per-account screen that is
+    //    an empty shell for anyone else. A plugin marks those items with `requiresAccountCapability:
+    //    '<its capability>'` when it registers them (adminMenu.add, which keeps only the plugin's own
+    //    namespace), and core hides them from every other non-administrator. Administrators ALWAYS keep
+    //    them. The grant read is the SAME one the plugin's route gate reads (req.user.accountCapabilities),
+    //    so menu visibility and route access cannot disagree — and it is admin-owned, never derived from
+    //    anything the account writes (its email domain used to be read here, which made it self-grantable).
     const isAdmin = typeof req.user.getRole === 'function' && req.user.getRole() === 'administrator';
-    const { hasProfessionalMailbox } = require('../core/mailbox');
-    const finalMenus = (isAdmin || hasProfessionalMailbox(req.user))
+    const { hasAccountCapability } = require('../core/account-capabilities');
+    const finalMenus = isAdmin
         ? visibleMenus
-        : visibleMenus.filter((m: any) => !m.requiresProfessionalMailbox);
+        : visibleMenus.filter((m: any) => !m.requiresAccountCapability || hasAccountCapability(req.user, m.requiresAccountCapability));
 
     res.json(finalMenus);
 }));
