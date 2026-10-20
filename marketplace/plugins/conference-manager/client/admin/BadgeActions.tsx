@@ -100,7 +100,7 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
                     )}
                     {badge ? (
                         <div className={`mx-auto ${badge.layout === 'vertical' ? 'max-w-[220px]' : 'max-w-[400px]'} rounded-2xl overflow-hidden shadow-lg ring-1 ring-black/5`}>
-                            <BadgeSvg badge={badge} plate={badge && badge.version === 2 ? null : plate} images={images} title={name} />
+                            <BadgeSvg badge={badge} plate={badge.version === 2 ? null : plate} images={images} title={name} />
                         </div>
                     ) : !error && <div className="h-40 rounded-2xl bg-gray-100 animate-pulse" />}
                     {link && (

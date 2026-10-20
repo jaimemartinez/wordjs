@@ -23,7 +23,7 @@ export function parseGeo(text: unknown): GeoResult {
     if (!s) return { ok: false, code: 'empty' };
     if (s.length > 2000) return { ok: false, code: 'no_coords' };
     if (SHORT_LINK.test(s)) return { ok: false, code: 'short_link' };
-    let decoded = s;
+    let decoded: string;
     try { decoded = decodeURIComponent(s); } catch { decoded = s; }
     for (const re of PATTERNS) {
         const m = decoded.match(re);
