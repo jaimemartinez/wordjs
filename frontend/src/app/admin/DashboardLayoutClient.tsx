@@ -53,7 +53,7 @@ export function SiteAddressBannerList({ banners, host, isAdmin, onDismissLinkBas
             {banners.map((banner) => (
                 <div
                     key={banner.kind}
-                    className={`border-b px-4 py-2.5 flex items-center justify-center gap-3 text-sm ${banner.kind === "link-base" ? "bg-sky-50 border-sky-200 text-sky-900" : "bg-amber-50 border-amber-200 text-amber-900"}`}
+                    className={`border-b px-4 py-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm text-center ${banner.kind === "link-base" ? "bg-sky-50 border-sky-200 text-sky-900" : "bg-amber-50 border-amber-200 text-amber-900"}`}
                 >
                     <i className={`fa-solid ${banner.kind === "link-base" ? "fa-link text-sky-500" : "fa-triangle-exclamation text-amber-500"}`} aria-hidden="true"></i>
                     <span className="font-medium">{text(banner)}</span>
@@ -63,7 +63,7 @@ export function SiteAddressBannerList({ banners, host, isAdmin, onDismissLinkBas
                         </Link>
                     )}
                     {banner.kind === "link-base" && (
-                        <button type="button" onClick={onDismissLinkBase} className="ml-1 text-sky-700 hover:text-sky-950" aria-label={t("siteBanner.dismiss")} title={t("siteBanner.dismiss")}>
+                        <button type="button" onClick={onDismissLinkBase} className="ml-1 w-11 h-11 shrink-0 -my-2 inline-flex items-center justify-center text-sky-700 hover:text-sky-950" aria-label={t("siteBanner.dismiss")} title={t("siteBanner.dismiss")}>
                             <i className="fa-solid fa-xmark" aria-hidden="true"></i>
                         </button>
                     )}
@@ -293,10 +293,11 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                 data-wjs-host-ui=""
                 onClick={() => setIsCollapsed(!isCollapsed)}
                 className={`
-                    hidden md:flex absolute top-10 z-[5003] w-8 h-8 bg-white border border-gray-200 rounded-full items-center justify-center text-gray-500 hover:text-blue-500 hover:border-blue-200 shadow-lg transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]
+                    hidden lg:flex absolute top-10 z-[5003] w-8 h-8 bg-white border border-gray-200 rounded-full items-center justify-center text-gray-500 hover:text-blue-500 hover:border-blue-200 shadow-lg transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]
                     ${isCollapsed ? 'left-[calc(96px+env(safe-area-inset-left))]' : 'left-[calc(304px+env(safe-area-inset-left))]'}
                 `}
-                title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+                title={isCollapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
+                aria-label={isCollapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
             >
                 <i className={`fa-solid fa-chevron-${isCollapsed ? 'right' : 'left'} text-xs`}></i>
             </button>
@@ -308,15 +309,19 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                     clears the status bar when the admin runs full-screen (viewport-fit=cover). */}
                 {/* border-gray-100: a bare `border-b` is currentColor in Tailwind v4 — a black rule under the bar that
                     also showed, sharp, through the edge of every dialog's blurred backdrop. */}
-                <header className="md:hidden bg-white border-b border-gray-100 p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between relative z-[5000] flex-shrink-0" data-wjs-host-ui="">
-                    <div className="flex items-center gap-3">
+                <header className="lg:hidden bg-white border-b border-gray-100 px-2 sm:px-4 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] flex items-center justify-between gap-2 relative z-[5000] flex-shrink-0" data-wjs-host-ui="">
+                    <div className="flex items-center gap-1 sm:gap-2 min-w-0">
                         <button
+                            type="button"
                             onClick={() => setSidebarOpen(true)}
-                            className="text-gray-600 hover:text-gray-900 focus:outline-none"
+                            aria-label={t("nav.openMenu")}
+                            aria-expanded={sidebarOpen}
+                            aria-controls="wjs-admin-sidebar"
+                            className="w-11 h-11 shrink-0 flex items-center justify-center rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100"
                         >
-                            <i className="fa-solid fa-bars text-xl"></i>
+                            <i className="fa-solid fa-bars text-xl" aria-hidden="true"></i>
                         </button>
-                        <span className="font-bold text-gray-800 flex items-center gap-2">
+                        <span className="font-bold text-gray-800 flex items-center gap-2 min-w-0 truncate">
                             {logoUrl ? (
                                 <img src={logoUrl} alt={siteTitle} className="h-8 w-8 object-contain" />
                             ) : (
@@ -331,7 +336,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                 {user.handoff && (
                     // Multisite: a network administrator's handoff session (backend core/network-handoff) —
                     // who is in, from which site, and until when, on every screen for as long as it lasts.
-                    <div data-wjs-host-ui="" data-wjs-handoff-banner="" role="status" className="flex-shrink-0 bg-violet-50 border-b border-violet-200 px-4 py-2.5 flex items-center justify-center gap-3 text-sm">
+                    <div data-wjs-host-ui="" data-wjs-handoff-banner="" role="status" className="flex-shrink-0 bg-violet-50 border-b border-violet-200 px-4 py-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm text-center">
                         <i className="fa-solid fa-sitemap text-violet-500" aria-hidden="true"></i>
                         <span className="text-violet-900 font-medium">
                             {fillTemplate(t("handoff.banner"), {
@@ -347,7 +352,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                 )}
 
                 {graceDaysLeft !== null && (
-                    <div data-wjs-host-ui="" className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center justify-center gap-3 text-sm">
+                    <div data-wjs-host-ui="" className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm text-center">
                         <i className="fa-solid fa-shield-halved text-amber-500"></i>
                         <span className="text-amber-800 font-medium">
                             Two-factor authentication is required for your role
@@ -366,7 +371,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                     onDismissLinkBase={dismissLinkBase}
                 />
 
-                <main className="flex-1 relative bg-white flex flex-col h-full overflow-hidden">
+                <main {...(/^\/admin\/plugin\//.test(pathname ?? "") ? {} : { "data-wjs-core-screen": "" })} className="flex-1 relative bg-white flex flex-col h-full overflow-hidden">
                     {children}
                 </main>
 

@@ -30,7 +30,7 @@
  *   pantalla es una comodidad, no una autoridad.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader, Card, Button, EmptyState } from "@/components/ui";
+import { PageHeader, Card, Button, EmptyState, DataTable } from "@/components/ui";
 import { postsApi, settingsApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
@@ -363,7 +363,7 @@ export default function InteractionPresetsPage() {
     const full = Object.keys(catalog).length >= IX_MAX_SITE_PRESETS;
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
             <div className="max-w-4xl mx-auto">
                 <PageHeader
                     title="Interacciones"
@@ -450,59 +450,47 @@ export default function InteractionPresetsPage() {
                                 {inventory.totals.entrances} entradas clásicas ·{" "}
                                 {(inventory.totals.cssBytes / 1024).toFixed(1)} KB de CSS
                             </p>
-                            <div className="mt-3 overflow-x-auto">
-                                <table className="w-full text-left text-xs">
-                                    <thead className="text-gray-500">
-                                        <tr>
-                                            <th scope="col" className="py-1 pr-3 font-semibold">Página</th>
-                                            <th scope="col" className="py-1 pr-3 font-semibold">Bloques</th>
-                                            <th scope="col" className="py-1 pr-3 font-semibold">En bucle</th>
-                                            <th scope="col" className="py-1 pr-3 font-semibold">Con motor</th>
-                                            <th scope="col" className="py-1 pr-3 font-semibold">Entradas</th>
-                                            <th scope="col" className="py-1 pr-3 font-semibold">Preajustes</th>
-                                            <th scope="col" className="py-1 font-semibold">CSS</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="text-gray-700">
-                                        {inventory.rows.map((row) => (
-                                            <tr key={`${row.type}-${row.id}`} className="border-t border-gray-100">
-                                                <td className="py-1.5 pr-3">
-                                                    <a
-                                                        href={`/admin/editor/${row.id}`}
-                                                        className="font-medium text-gray-900 hover:underline"
-                                                    >
-                                                        {row.title}
-                                                    </a>
-                                                    <span className="ml-1 text-gray-400">/{row.slug}</span>
-                                                </td>
-                                                <td className="py-1.5 pr-3">
-                                                    {row.blocks}
-                                                    {row.units !== row.blocks && (
-                                                        <span className="text-gray-400"> ({row.units} distintas)</span>
-                                                    )}
-                                                </td>
-                                                <td className={`py-1.5 pr-3 ${row.infinite > 0 ? "font-semibold text-gray-900" : "text-gray-400"}`}>
-                                                    {row.infinite || "—"}
-                                                </td>
-                                                <td className={`py-1.5 pr-3 ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>
-                                                    {row.runtime || "—"}
-                                                </td>
-                                                {/* La entrada CLÁSICA (`anim`) es lo que llevan casi todas las páginas
-                                                    ya publicadas: sin esta columna el inventario diría que están quietas. */}
-                                                <td className={`py-1.5 pr-3 ${row.entrances > 0 ? "text-gray-900" : "text-gray-400"}`}>
-                                                    {row.entrances || "—"}
-                                                </td>
-                                                <td className="py-1.5 pr-3 text-gray-500">
-                                                    {row.presets.length > 0 ? row.presets.join(", ") : "—"}
-                                                </td>
-                                                <td className="py-1.5 text-gray-500">
-                                                    {(row.cssBytes / 1024).toFixed(1)} KB
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
+                            <DataTable
+                                className="mt-3 -mx-1"
+                                rows={inventory.rows}
+                                rowKey={(row) => `${row.type}-${row.id}`}
+                                caption="Inventario de movimiento"
+                                rowLabel={(row) => row.title}
+                                density="compact"
+                                stackBelow="lg"
+                                columns={[
+                                    {
+                                        key: "page",
+                                        header: "Página",
+                                        primary: true,
+                                        cell: (row) => (
+                                            <span className="text-sm">
+                                                <a href={`/admin/${row.type === "page" ? "pages" : "posts"}/${row.id}`} className="inline-flex items-center pointer-coarse:min-h-11 font-medium text-gray-900 hover:underline break-words">
+                                                    {row.title}
+                                                </a>
+                                                <span className="ml-1 text-gray-500 break-all">/{row.slug}</span>
+                                            </span>
+                                        ),
+                                    },
+                                    {
+                                        key: "blocks",
+                                        header: "Bloques",
+                                        cell: (row) => (
+                                            <span className="text-xs text-gray-700">
+                                                {row.blocks}
+                                                {row.units !== row.blocks && <span className="text-gray-500"> ({row.units} distintas)</span>}
+                                            </span>
+                                        ),
+                                    },
+                                    { key: "infinite", header: "En bucle", cell: (row) => <span className={`text-xs ${row.infinite > 0 ? "font-semibold text-gray-900" : "text-gray-400"}`}>{row.infinite || "—"}</span> },
+                                    { key: "runtime", header: "Con motor", cell: (row) => <span className={`text-xs ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.runtime || "—"}</span> },
+                                    // La entrada CLÁSICA (`anim`) es lo que llevan casi todas las páginas
+                                    // ya publicadas: sin esta columna el inventario diría que están quietas.
+                                    { key: "entrances", header: "Entradas", cell: (row) => <span className={`text-xs ${row.entrances > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.entrances || "—"}</span> },
+                                    { key: "presets", header: "Preajustes", cell: (row) => <span className="text-xs text-gray-500 break-words">{row.presets.length > 0 ? row.presets.join(", ") : "—"}</span> },
+                                    { key: "css", header: "CSS", cell: (row) => <span className="text-xs text-gray-500 whitespace-nowrap">{(row.cssBytes / 1024).toFixed(1)} KB</span> },
+                                ]}
+                            />
                         </>
                     )}
                 </Card>

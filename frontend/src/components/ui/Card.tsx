@@ -31,11 +31,12 @@ const accentColorClasses: Record<AccentColor, string> = {
     indigo: "bg-indigo-50/50 border border-indigo-100",
 };
 
+// Padding steps down on a phone, where every 16px of gutter is 4% of the screen.
 const paddingClasses = {
     none: "",
     sm: "p-4",
-    md: "p-6",
-    lg: "p-8",
+    md: "p-4 sm:p-6",
+    lg: "p-5 sm:p-8",
 };
 
 /**
@@ -51,7 +52,7 @@ export function Card({
     padding = "lg",
     overflow = "hidden",
 }: CardProps) {
-    const baseClasses = `rounded-[40px] relative ${overflow === "hidden" ? "overflow-hidden" : "overflow-visible"}`;
+    const baseClasses = `rounded-3xl md:rounded-[40px] relative min-w-0 ${overflow === "hidden" ? "overflow-hidden" : "overflow-visible"}`;
     const variantClass = variant === "accent" ? accentColorClasses[color] : variantClasses[variant];
     const hoverClasses = hoverable
         ? "hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 cursor-pointer"

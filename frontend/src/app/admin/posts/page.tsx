@@ -9,7 +9,7 @@ export default function PostsPage() {
     const { t } = useI18n();
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t('posts.title')}
                 subtitle={t('posts.subtitle')}

@@ -100,7 +100,7 @@ export default function AiSuggestion({
             {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
             {suggestion !== null && (
                 <div className={BOX[tone]} role="status" aria-live="polite">
-                    <p className="text-[10px] font-bold uppercase tracking-wider opacity-60 mb-1">{t("ai.suggestionLabel")}</p>
+                    <p className="text-[11px] font-bold uppercase tracking-wider opacity-60 mb-1">{t("ai.suggestionLabel")}</p>
                     <p className="whitespace-pre-wrap break-words">{suggestion}</p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                         <button type="button" className={BTN[tone]} onClick={() => { onAccept(suggestion); setSuggestion(null); }}>
