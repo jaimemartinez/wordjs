@@ -17,8 +17,8 @@
  * content-outbox event. Activity that does not need a worker by itself keeps an awake site awake (touch):
  * a bus message for the site. A request in flight keeps its site awake however long it lasts.
  *
- * The reaper stops the workers of a site idle for `multisite.workerIdleMinutes` (wordjs-config.json,
- * default 15; 0 turns reaping off). The main site and single-site installs are never touched: their
+ * The reaper (started at boot) stops the workers of a site idle for `multisite.workerIdleMinutes`
+ * (wordjs-config.json, default 15; 0 turns reaping off). The main site and single-site installs are never touched: their
  * workers start with the process and stay up, as they always did. Each node reaps its own workers.
  */
 const config = require('../config/app');
@@ -94,7 +94,6 @@ function wake(siteId: number): Promise<void> {
     if (!managed(siteId)) return RESOLVED;
     const s = stateOf(siteId);
     s.lastActive = Date.now();
-    ensureReaper();
     if (s.phase === 'awake') return RESOLVED;
     if (s.phase === 'waking') return s.pending || RESOLVED;
     // Asleep, or stopping: a stop in progress finishes first, so no two workers of one key overlap.
@@ -187,9 +186,13 @@ async function reapIdleSites(now: number = Date.now()): Promise<number[]> {
     return stopped;
 }
 
-/** Start the periodic reaper (once, lazily, only when reaping is on). */
-function ensureReaper(): void {
-    if (reaper) return;
+/**
+ * Start the periodic reaper (once; only on a network with reaping on). Called at boot (index.ts), as the
+ * main site: a timer keeps the async context it was created in, so one started from inside a request would
+ * run every pass as that request (its site, its request id in the log).
+ */
+function startReaper(): void {
+    if (reaper || !siteContext.multisiteEnabled()) return;
     const limit = idleMs();
     if (!Number.isFinite(limit)) return;
     const every = Math.max(1000, Math.min(60000, Math.floor(limit / 4)));
@@ -229,6 +232,7 @@ module.exports = {
     touch,
     enterRequest,
     reapIdleSites,
+    startReaper,
     stopReaper,
     forget,
     phaseOf,
