@@ -38,7 +38,7 @@ vi.mock("@/app/fonts", () => ({ inter: { variable: "font-inter-var" } }));
 // error would propagate. Nothing about this component touches <html>.
 vi.mock("@/components/AnalyticsTracker", () => ({ AnalyticsTracker: () => null }));
 
-const { default: RootLayout } = await import("@/app/layout");
+const { default: RootLayout } = await import("@/app/_root/RootDocument");
 
 /** Render the real (async) root layout and return the shipped HTML. */
 async function render(settings: Record<string, unknown> | null): Promise<string> {
