@@ -89,14 +89,16 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
     // Mount-gated so the server and the first client render agree.
     useEffect(() => setMounted(true), []);
 
-    // Close on resize to desktop, like Header.tsx (the desktop nav takes over at md).
+    // Close on resize to desktop, like Header.tsx (the desktop nav takes over at md — at lg on a touch
+    // screen when the menu has submenus, see ChromeNav).
     useEffect(() => {
         const handleResize = () => {
-            if (window.innerWidth >= 768) setOpen(false);
+            const coarseSubmenus = hasSubmenus && window.matchMedia("(pointer: coarse)").matches;
+            if (window.innerWidth >= (coarseSubmenus ? 1024 : 768)) setOpen(false);
         };
         window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
-    }, []);
+    }, [hasSubmenus]);
 
     // Drawer semantics: Escape dismisses it and the page behind stays put (as in Header.tsx), plus the
     // two halves of a modal focus contract — while it is open Tab CYCLES inside the panel (it covers the
@@ -144,7 +146,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
         // .wjs-header-actions: the hook Header.tsx puts on the <div> holding this same hamburger, which
         // themes target as `.wjs-header-actions button`. Same classes as that div so the theme's flex
         // tweaks (order / margin-left:auto) land identically.
-        <div className="wjs-chrome-nav-mobile wjs-header-actions flex items-center gap-4 md:hidden">
+        <div className={`wjs-chrome-nav-mobile wjs-header-actions flex items-center gap-4 md:hidden${hasSubmenus ? " pointer-coarse:max-lg:flex" : ""}`}>
             <button
                 ref={triggerRef}
                 className="w-11 h-11 rounded-full bg-[var(--wjs-color-primary,#2F6D86)] text-[var(--wjs-color-on-primary,#ffffff)] flex items-center justify-center shadow-lg hover:bg-[var(--wjs-color-primary-dark,#266073)] transition-colors"
@@ -167,7 +169,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
             {mounted && createPortal(<>
             {/* Overlay */}
             <div
-                className={`wjs-header-mobile-overlay fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300 md:hidden ${open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+                className={`wjs-header-mobile-overlay fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300 md:hidden${hasSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
                 onClick={() => setOpen(false)}
             />
 
@@ -177,11 +179,11 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                 id={panelId}
                 inert={!open}
                 aria-hidden={!open}
-                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden ${open ? "translate-x-0" : "translate-x-full rtl:-translate-x-full"}`}
+                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden${hasSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "translate-x-0" : "translate-x-full rtl:-translate-x-full"}`}
             >
                 <div className="p-6">
                     <button
-                        className="absolute top-4 end-4 w-10 h-10 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
+                        className="absolute top-4 end-4 w-11 h-11 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
                         onClick={() => setOpen(false)}
                         aria-label="Close menu"
                     >

@@ -847,6 +847,10 @@ the boot error links there too.
 
 ### Fixed
 
+- **Public header and footer on a touch screen.** Menu links, the site title and the logo are at least 44 px
+  tall where the pointer is a finger (a mouse keeps the theme's own line height), the drawer's close button is
+  44 px, and a header menu with submenus uses the drawer up to 1024 px on a touch screen: its dropdowns open on
+  hover or focus, and a tap on the parent link navigated away before either could happen.
 - **Multisite on Windows: a plugin's or a site's AppContainer profiles go with it.** Each (site, plugin)
   worker of a network runs under its own AppContainer profile. Deleting a plugin removed only the main
   site's; it now removes the profile (and the folder permissions given to it) of the plugin's worker on

@@ -158,7 +158,7 @@ export default function Header({ disableSticky = false, variant = "classic", sti
     const topBg = transparent ? "bg-transparent py-6" : (disableSticky || !sticky ? scrolledBg : "bg-transparent py-6");
 
     const logo = (
-        <Link href="/" className="wjs-header-logo flex items-center gap-2">
+        <Link href="/" className="wjs-header-logo flex items-center gap-2 pointer-coarse:min-h-11">
             {logoUrl ? (
                 <img src={logoUrl} alt={siteTitle} width={160} height={40} className="h-10 w-auto object-contain" />
             ) : siteTitle ? (
@@ -178,7 +178,7 @@ export default function Header({ disableSticky = false, variant = "classic", sti
                         key={item.id}
                         href={item.url}
                         onClick={(e) => handleNavClick(e, item.url)}
-                        className="text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors"
+                        className="text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors pointer-coarse:inline-flex pointer-coarse:items-center pointer-coarse:min-h-11"
                         aria-current={menuAriaCurrent(item.url, pathname)}
                     >
                         {item.title}
@@ -259,7 +259,7 @@ export default function Header({ disableSticky = false, variant = "classic", sti
                 <div className="p-6">
                     {/* Close Button */}
                     <button
-                        className="absolute top-4 end-4 w-10 h-10 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
+                        className="absolute top-4 end-4 w-11 h-11 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
                         onClick={() => setMobileMenuOpen(false)}
                         aria-label="Close menu"
                     >
