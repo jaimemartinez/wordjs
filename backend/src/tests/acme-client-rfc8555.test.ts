@@ -388,16 +388,14 @@ describe('core/acme-client against a strict RFC 8555 CA, through cert-manager', 
             const done = await certManager.finishDNSChallenge(forged, 'ops@example.test', false);
             assert.strictEqual(done.success, true);
             assert.deepStrictEqual(seen, [], 'the server requested a URL taken from the request body');
-            assert.strictEqual(certManager.readPendingDns()['dns-e2e.example.test'], undefined, 'a finished request is forgotten');
+            assert.strictEqual(certManager.pendingDnsFor('dns-e2e.example.test'), undefined, 'a finished request is forgotten');
         } finally {
             await new Promise<void>((r) => elsewhere.close(() => r()));
         }
     });
 
     it('step 2 without a request this server started is refused before any CA work', async () => {
-        const all = certManager.readPendingDns();
-        delete all['dns-e2e.example.test'];
-        fs.writeFileSync(certManager.pendingDnsPath, JSON.stringify(all));
+        fs.writeFileSync(certManager.pendingDnsPath, JSON.stringify(certManager.readPendingDns().filter((r: any) => r.domain !== 'dns-e2e.example.test')));
         const requestsBefore = ca.state.requests.length;
         await assert.rejects(certManager.finishDNSChallenge({ domain: 'dns-e2e.example.test', challenge: { url: 'x' } }, 'ops@example.test', false),
             /No certificate request is pending for this domain/);

@@ -405,15 +405,25 @@ class CertManager {
         }
     }
 
-    /** Every pending two-step DNS-01 request, by domain. Unreadable or absent → none. */
-    readPendingDns(): Record<string, any> {
+    /**
+     * Every pending two-step DNS-01 request: a LIST of records, each naming its domain, looked up by
+     * equality — the domain comes from a request body, so it is never used as a property name.
+     * Unreadable or absent → none.
+     */
+    readPendingDns(): any[] {
         try {
             const all = JSON.parse(fs.readFileSync(this.pendingDnsPath, 'utf8'));
-            return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
-        } catch { return {}; }
+            return Array.isArray(all) ? all.filter((r: any) => r && typeof r.domain === 'string') : [];
+        } catch { return []; }
     }
 
-    private writePendingDns(all: Record<string, any>) {
+    /** The pending request for `domain`, or undefined. */
+    pendingDnsFor(domain: string): any {
+        const d = String(domain).toLowerCase();
+        return this.readPendingDns().find((r: any) => r.domain === d);
+    }
+
+    private writePendingDns(all: any[]) {
         writePrivateKey(this.pendingDnsPath, JSON.stringify(all, null, 2));
     }
 
@@ -423,25 +433,26 @@ class CertManager {
      * lifetime (7 days at Let's Encrypt) are dropped.
      */
     rememberDnsChallenge(step1: any) {
-        const all = this.readPendingDns();
+        const domain = String(step1.domain).toLowerCase();
         const cutoff = Date.now() - 7 * 864e5;
-        for (const k of Object.keys(all)) if (!(all[k] && all[k].createdAt > cutoff)) delete all[k];
-        all[String(step1.domain).toLowerCase()] = {
+        const kept = this.readPendingDns().filter((r: any) => r.domain !== domain && r.createdAt > cutoff);
+        kept.push({
+            domain,
             orderUrl: step1.orderUrl,
             authzUrl: step1.authzUrl,
             challenge: step1.challenge,
             directoryUrl: step1.directoryUrl,
             alreadyValid: !!step1.alreadyValid,
             createdAt: Date.now(),
-        };
-        this.writePendingDns(all);
+        });
+        this.writePendingDns(kept);
     }
 
     private forgetDnsChallenge(domain: string) {
+        const d = String(domain).toLowerCase();
         const all = this.readPendingDns();
-        if (!(domain.toLowerCase() in all)) return;
-        delete all[domain.toLowerCase()];
-        this.writePendingDns(all);
+        const kept = all.filter((r: any) => r.domain !== d);
+        if (kept.length !== all.length) this.writePendingDns(kept);
     }
 
     async startDNSChallenge(domain: string, email: string, useStaging = false) {
@@ -523,7 +534,7 @@ class CertManager {
             // The URLs to act on are the ones step 1 minted and this server stored — never the ones in
             // the request body. Only the domain (validated above) comes from the browser.
             const domain: string = String(step1Data.domain).toLowerCase();
-            const flow = this.readPendingDns()[domain];
+            const flow = this.pendingDnsFor(domain);
             if (!flow) {
                 throw new Error('No certificate request is pending for this domain on this server. Start the certificate request again.');
             }
