@@ -25,7 +25,8 @@
 
 import type React from "react";
 import type { ChromePart } from "@/lib/api";
-import { ALIGN_CLASS, GAP_CLASS } from "@/components/chrome/ChromeRow";
+import { chromeColumnsClass } from "@/components/chrome/ChromeColumns";
+import { chromeRowClass } from "@/components/chrome/ChromeRow";
 import {
     createBlockRegistry,
     makeSlotResolver,
@@ -36,23 +37,39 @@ import {
 import type { SlotResolver } from "@/lib/verso/types";
 import type { VersoComponentMap } from "@/components/verso/render/context";
 import { buildChromeEditorConfig } from "./chromeEditorConfig";
+import { useHiddenOnDevice } from "./chromeEditorDevice";
 
 type SlotFn = (className?: string) => React.ReactNode;
 
 /** En Verso el slot llega como función; si el nodo aún no tiene el slot, un slot vacío. */
 const asSlot = (v: unknown): SlotFn => (typeof v === "function" ? (v as SlotFn) : () => null);
 
+/** A container hidden on the previewed device stays in the canvas, dimmed (see DeviceVisibility). */
+const HIDDEN_HERE = " opacity-35 outline outline-1 outline-dashed outline-gray-400";
+
 /**
- * ChromeRow en Verso: el ZONE div del slot ES el contenedor flex (mismas clases literales que el
- * render legacy de chromeEditorConfig y que el ChromeRow público) y los bloques dropeados quedan
- * como hijos flex directos — paridad C11 del oráculo.
+ * ChromeRow en Verso: el ZONE div del slot ES el contenedor flex (mismas clases que el ChromeRow
+ * público, vía chromeRowClass, + la altura mínima del lienzo) y los bloques dropeados quedan como
+ * hijos flex directos — paridad C11 del oráculo.
  */
 function ChromeRowVersoRender(props: Record<string, unknown>) {
-    const { items, align, gap, wrap } = props;
-    return asSlot(items)(
-        `wjs-chrome-row flex items-center w-full min-h-12 ${ALIGN_CLASS[align as keyof typeof ALIGN_CLASS] ?? ALIGN_CLASS.start} ${GAP_CLASS[gap as keyof typeof GAP_CLASS] ?? GAP_CLASS.md}${wrap ? " flex-wrap" : ""}`,
-    );
+    const { items, ...rest } = props;
+    const hidden = useHiddenOnDevice(props);
+    return asSlot(items)(`${chromeRowClass(rest as Parameters<typeof chromeRowClass>[0])} min-h-12${hidden ? HIDDEN_HERE : ""}`);
 }
+
+/** ChromeColumns en Verso: el ZONE div es la rejilla (mismas clases que el ChromeColumns público). */
+function ChromeColumnsVersoRender(props: Record<string, unknown>) {
+    const { items, ...rest } = props;
+    const hidden = useHiddenOnDevice(props);
+    return asSlot(items)(`${chromeColumnsClass(rest as Parameters<typeof chromeColumnsClass>[0])} min-h-24${hidden ? HIDDEN_HERE : ""}`);
+}
+
+/** The containers whose slot arrives as a FUNCTION in Verso — their render is adapted, not reused. */
+const SLOT_RENDERS: Record<string, (props: Record<string, unknown>) => React.ReactNode> = {
+    ChromeRow: ChromeRowVersoRender,
+    ChromeColumns: ChromeColumnsVersoRender,
+};
 
 /** Forma mínima que este adaptador lee de una entrada de `config.components` de Puck. */
 interface LegacyChromeComponentDef {
@@ -82,7 +99,7 @@ export function adaptChromeComponents(config: LegacyChromeConfigShape): BlockDef
         // (subconjunto exacto de VersoField) — el test anti-drift los compara literal.
         fields: (def.fields ?? {}) as Record<string, VersoField>,
         defaultProps: { ...(def.defaultProps ?? {}) },
-        render: type === "ChromeRow" ? ChromeRowVersoRender : def.render,
+        render: SLOT_RENDERS[type] ?? def.render,
     }));
 }
 

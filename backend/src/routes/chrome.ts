@@ -19,6 +19,7 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { validateChromeData } = require('../core/chrome-validate');
 const { purgeFrontend } = require('../core/frontend-purge');
+const { legacyChromeComposition, migrateLegacyChrome } = require('../core/chrome-legacy');
 
 /**
  * @swagger
@@ -122,6 +123,54 @@ router.delete('/:part', authenticate, isAdmin, asyncHandler(async (req: Request,
     if (deleted) purgeFrontend(['settings'], ['/']);
 
     res.json({ part, deleted: !!deleted });
+}));
+
+/**
+ * @swagger
+ * /chrome/{part}/legacy:
+ *   get:
+ *     summary: The built-in (pre-composition) chrome for a part, converted to a composition (Admin)
+ *     description: Read-only. What the editor opens when neither the site nor the theme has a composition.
+ *     tags: [Chrome]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: part
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [header, footer]
+ *     responses:
+ *       200:
+ *         description: "{ part, data } — data is a valid composition"
+ *       400:
+ *         description: Invalid part (the announcement bar has no built-in form)
+ */
+router.get('/:part/legacy', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const { part } = req.params as { part: string };
+    if (part !== 'header' && part !== 'footer') return invalidPart(res);
+    res.json({ part, data: await legacyChromeComposition(part) });
+}));
+
+/**
+ * @swagger
+ * /chrome/migrate-legacy:
+ *   post:
+ *     summary: Convert the legacy footer settings into the site footer composition (Admin)
+ *     description: >
+ *       Lossless (the legacy options are kept) and idempotent (writes only when the site has no footer
+ *       composition yet). Skips a site whose active theme ships its own chrome/footer.json — that file,
+ *       not the legacy footer, is what renders there.
+ *     tags: [Chrome]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ footer, header } — each one of migrated | site-composition | theme-composition | nothing-to-migrate"
+ */
+router.post('/migrate-legacy', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
+    res.json(await migrateLegacyChrome());
 }));
 
 module.exports = router;

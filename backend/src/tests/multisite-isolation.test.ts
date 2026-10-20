@@ -272,6 +272,30 @@ describe('content with the same ids (I1)', () => {
         assert.notStrictEqual(three.body.blogdescription, 'only on two');
         assert.notStrictEqual(main.body.blogdescription, 'only on two');
     });
+
+    test('the header & footer are per site: a composition and a legacy migration stay on their own site (I1)', async () => {
+        const footer = { root: { props: { width: 'full' } }, content: [{ type: 'ChromeCopyright', props: { text: '© {year} Two only' } }] };
+        const save = await bearer('put', `${API}/chrome/footer`, TWO, tokens.two).send({ data: footer });
+        assert.strictEqual(save.status, 200, JSON.stringify(save.body));
+        // Another site's administrator cannot write it, even with the right shape.
+        assert.strictEqual((await bearer('put', `${API}/chrome/footer`, TWO, tokens.three).send({ data: footer })).status, 401);
+        const read = async (host: string) => (await direct('get', `${API}/settings`, host)).body.site_chrome_footer;
+        assert.deepStrictEqual(await read(TWO), footer);
+        assert.strictEqual(await read(THREE), null);
+        assert.strictEqual(await read('main.example.com'), null);
+
+        // The legacy footer migration reads and writes ONE site's options.
+        const legacy = await bearer('put', `${API}/settings`, THREE, tokens.three).send({ footer_copyright: 'Three legacy &copy;' });
+        assert.strictEqual(legacy.status, 200, JSON.stringify(legacy.body));
+        const migrated = await bearer('post', `${API}/chrome/migrate-legacy`, THREE, tokens.three);
+        assert.strictEqual(migrated.status, 200, JSON.stringify(migrated.body));
+        assert.strictEqual(migrated.body.footer, 'migrated');
+        assert.match(JSON.stringify(await read(THREE)), /Three legacy &copy;/);
+        assert.deepStrictEqual(await read(TWO), footer, "site two's own composition is untouched");
+        assert.strictEqual(await read('main.example.com'), null, 'the main site gained nothing');
+        // On two the same call is a no-op: it already has its own footer.
+        assert.strictEqual((await bearer('post', `${API}/chrome/migrate-legacy`, TWO, tokens.two)).body.footer, 'site-composition');
+    });
 });
 
 describe('uploads (I3)', () => {
