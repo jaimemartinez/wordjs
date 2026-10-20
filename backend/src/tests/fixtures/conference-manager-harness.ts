@@ -202,7 +202,7 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
             return { status: who ? 403 : 401, body: { code: who ? 'rest_forbidden' : 'rest_not_logged_in' }, route: m.route.path, host: true };
         }
         // The projection plugin-isolate.ts forwards (rebuilt per request).
-        const fwdUser = who ? { id: who.id, role: who.role, userEmail: who.userEmail, userLogin: who.userLogin, hasProfessionalMailbox: false, ...(who as any).extra } : null;
+        const fwdUser = who ? { id: who.id, role: who.role, userEmail: who.userEmail, userLogin: who.userLogin, accountCapabilities: [], ...(who as any).extra } : null;
         const req = {
             params: m.params, query: Object.fromEntries(new URLSearchParams(qs || '')),
             body: body === undefined ? {} : JSON.parse(JSON.stringify(body)),

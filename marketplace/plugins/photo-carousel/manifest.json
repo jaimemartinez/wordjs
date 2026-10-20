@@ -1,7 +1,7 @@
 {
     "id": "photo-carousel",
     "name": "Photo Carousel",
-    "version": "2.0.1",
+    "version": "2.1.0",
     "description": "Create and manage image carousels with admin UI",
     "author": "WordJS",
     "isolated": true,

@@ -776,7 +776,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
          * leaves OFF for every non-administrator — so a permission-shaped resolver answers 0 for all of
          * them on exactly the upgrade this backfill is for. Identity is safe to trust because the host
          * refuses self-service assignment of an address on the mail domain
-         * (core/mailbox.refuseSelfServiceEmailChange, enforced on PUT /users/me, PUT /users/:id and
+         * (core/email-address refuseSelfServiceEmailChange, enforced on PUT /users/me, PUT /users/:id and
          * POST /auth/register), so an account cannot be holding a corporate address it was not given.
          *
          * @returns {{userId: number, reason: 'sender'|'recipient'|'shared'|'unclaimed'}}

@@ -503,15 +503,14 @@ const KNOWN_INSTALL_VALIDATOR_REJECTIONS: Record<string, { dangerousCalls: strin
     // gate that guards installing it, so it should be rare and short-lived.
 };
 
-/** The tags the public home page will expand, read out of the frontend rather than restated. */
-function frontendShortcodeTags(): Set<string> {
-    if (!fs.existsSync(HOME_CONTENT_SRC)) return new Set();
-    const src = fs.readFileSync(HOME_CONTENT_SRC, 'utf8');
-    const tags = new Set<string>();
-    for (const m of src.matchAll(/\{\s*tag:\s*'\[([A-Za-z0-9_-]+)\]'/g)) tags.add(m[1]);
-    return tags;
-}
-const FRONTEND_TAGS = frontendShortcodeTags();
+/**
+ * The public home page keeps no tag list of its own: it renders every tag an ACTIVE plugin declares in
+ * `manifest.shortcodes` with that plugin's site component (backend GET /plugins/shortcodes →
+ * HomeContent's splitShortcodes). So the front page honours a declared tag exactly when the plugin ships
+ * one (`frontend.components`) — the SAME rule as routes/plugins.ts declaredPluginShortcodes.
+ */
+const frontendRenders = (manifest: any): boolean =>
+    !!(manifest && manifest.frontend && Array.isArray(manifest.frontend.components) && manifest.frontend.components.length > 0);
 
 // ── The population ──────────────────────────────────────────────────────────────────────────────────
 
@@ -531,13 +530,12 @@ test('the marketplace plugin population is non-empty and readable', () => {
         assert.ok(fs.existsSync(path.join(PLUGINS_ROOT, slug, 'manifest.json')),
             `marketplace/plugins/${slug} has no manifest.json — it can neither be packaged nor installed`);
     }
-    // Same guard one level down: the shortcode check below compares a manifest's declared tags against
-    // the frontend's map. If that file moved, the map reads EMPTY and the comparison would blame the
-    // plugins for a path change. Fail here instead, where the message names the real cause.
-    assert.ok(fs.existsSync(HOME_CONTENT_SRC), `${HOME_CONTENT_SRC} is missing — the frontend shortcode map cannot be read`);
-    assert.ok(FRONTEND_TAGS.size > 0,
-        `no '[tag]' entries could be parsed out of ${HOME_CONTENT_SRC}; its SHORTCODES table changed shape, so the `
-        + 'declared-shortcode check below has silently stopped checking');
+    // Same guard one level down: the shortcode check below relies on the home page rendering DECLARED
+    // tags (frontendRenders). If that file moved or stopped consuming the declarations, the check would
+    // vouch for a path that no longer exists. Fail here instead, where the message names the real cause.
+    assert.ok(fs.existsSync(HOME_CONTENT_SRC), `${HOME_CONTENT_SRC} is missing — the frontend shortcode renderer cannot be read`);
+    assert.match(fs.readFileSync(HOME_CONTENT_SRC, 'utf8'), /export function splitShortcodes\(/,
+        `${HOME_CONTENT_SRC} no longer renders the declared shortcodes (splitShortcodes), so the check below has silently stopped checking`);
 });
 
 for (const slug of SLUGS) {
@@ -785,13 +783,13 @@ for (const slug of SLUGS) {
         }
 
         // A shortcode tag is honoured by the backend expander (registered at init) or by the public home
-        // page's own map — a manifest that advertises one honoured by neither is a documented feature that
-        // does nothing when a user types it.
+        // page, which renders a declared tag with the plugin's site component — a manifest that advertises
+        // one honoured by neither is a documented feature that does nothing when a user types it.
         for (const declaredTag of (manifest.shortcodes || [])) {
             const tag = String(declaredTag && declaredTag.tag);
-            assert.ok(rec.shortcodes.includes(tag) || FRONTEND_TAGS.has(tag),
+            assert.ok(rec.shortcodes.includes(tag) || frontendRenders(manifest),
                 `manifest advertises the shortcode [${tag}], but init() registers ${JSON.stringify(rec.shortcodes)} and the `
-                + `public home page expands ${JSON.stringify([...FRONTEND_TAGS])} — nothing anywhere honours [${tag}]`);
+                + `plugin ships no site component (frontend.components) for the home page to render it with — nothing anywhere honours [${tag}]`);
         }
 
         // Disclosure-only capabilities: nothing denies these at runtime today (see the header), but the

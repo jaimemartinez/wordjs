@@ -1,5 +1,7 @@
 /**
- * WordJS - GraphQL schema, phase 1 (read-only).
+ * WordJS - GraphQL schema: the Query root and its object types. Mutations live in core/graphql/mutations,
+ * the reads of users/revisions/administrative resources in core/graphql/resources and the Subscription
+ * root in core/graphql/subscriptions; buildCoreSchema assembles all four.
  *
  * EVERY RESOLVER THAT TOUCHES DATA IS A REST READ (core/graphql/dispatch). A field never loads a model
  * itself: `posts` is `GET /posts`, `post(id:)` is `GET /posts/:id`, `Comment` lists are `GET /comments`,
@@ -263,8 +265,8 @@ export const TermRefType = new GraphQLObjectType({
 });
 
 // Thunks: ContentNode ↔ Comment ↔ Term reference each other.
-let ContentNodeType: GraphQLObjectType;
-let MediaItemType: GraphQLObjectType;
+export let ContentNodeType: GraphQLObjectType;
+export let MediaItemType: GraphQLObjectType;
 
 export const FeaturedMediaType: GraphQLObjectType = new GraphQLObjectType({
     name: 'FeaturedMedia',
@@ -291,6 +293,7 @@ export const CommentType: GraphQLObjectType = new GraphQLObjectType({
         authorName: { type: GraphQLString, resolve: (c) => c.author },
         authorUrl: { type: GraphQLString },
         authorAvatarUrl: { type: GraphQLString },
+        authorEmail: { type: GraphQLString, description: 'Only for a moderator, as on REST (null otherwise).' },
         userId: { type: GraphQLInt },
         date: { type: GraphQLString },
         dateGmt: { type: GraphQLString },
@@ -366,6 +369,13 @@ ContentNodeType = new GraphQLObjectType({
         featuredMedia: { type: FeaturedMediaType },
         categories: { type: new GraphQLList(new GraphQLNonNull(TermRefType)) },
         tags: { type: new GraphQLList(new GraphQLNonNull(TermRefType)) },
+        revisions: {
+            type: new GraphQLNonNull(connectionOf('Revision', require('./resources').RevisionType)),
+            description: 'Saved revisions (GET /revisions/post/:id) — an error for a caller who may not edit the entry, as on REST.',
+            args: { ...pageArgs },
+            extensions: REST_LIST(),
+            resolve: (p, args, ctx: GraphQLContext) => require('./resources').revisionPage(ctx, p.id, args),
+        },
         comments: {
             type: new GraphQLNonNull(connectionOf('Comment', CommentType)),
             description: 'Approved comments on this entry (GET /comments?post=).',
@@ -662,18 +672,19 @@ export function buildQueryFields(): Record<string, GraphQLFieldConfig<any, Graph
 
         comments: {
             type: new GraphQLNonNull(connectionOf('Comment', CommentType)),
-            description: 'Approved comments (GET /comments).',
+            description: 'Comments (GET /comments): the approved ones, or another status for a moderator.',
             args: {
                 ...pageArgs,
                 postId: { type: GraphQLInt },
                 parentId: { type: GraphQLInt },
                 search: { type: GraphQLString },
+                status: { type: GraphQLString, description: 'hold, approved (default), spam or trash — honoured for a moderator only, as on REST.' },
                 orderBy: { type: CommentOrderByType },
                 order: { type: OrderType },
             },
             extensions: REST_LIST(),
             resolve: (_r, args, ctx) => fetchPage(ctx, '/comments', {
-                post: args.postId, parent: args.parentId, search: args.search, orderby: args.orderBy, order: args.order,
+                post: args.postId, parent: args.parentId, search: args.search, status: args.status, orderby: args.orderBy, order: args.order,
             }, args),
         },
         comment: {
@@ -700,9 +711,15 @@ export function buildQueryFields(): Record<string, GraphQLFieldConfig<any, Graph
     };
 }
 
-/** The core (phase 1) schema, before any extension is applied. */
+/** The core schema (queries, mutations, subscriptions), before any extension is applied. */
 export function buildCoreSchema(): GraphQLSchema {
+    // Required here, not at load: both modules import this one's types.
+    const { buildMutationFields } = require('./mutations');
+    const { buildResourceQueryFields } = require('./resources');
+    const { buildSubscriptionFields } = require('./subscriptions');
     return new GraphQLSchema({
-        query: new GraphQLObjectType({ name: 'Query', fields: buildQueryFields }),
+        query: new GraphQLObjectType({ name: 'Query', fields: () => ({ ...buildQueryFields(), ...buildResourceQueryFields() }) }),
+        mutation: new GraphQLObjectType({ name: 'Mutation', fields: buildMutationFields }),
+        subscription: new GraphQLObjectType({ name: 'Subscription', fields: buildSubscriptionFields }),
     });
 }
