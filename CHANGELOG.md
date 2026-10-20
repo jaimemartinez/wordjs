@@ -458,6 +458,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   [graphql.md](documentation/graphql.md#extending-the-schema).
 - **`npm run media` takes `--site <id>` and `--all-sites`** on a network of sites, and **Settings → Media
   storage** lists each site's library state.
+- **Multisite on Postgres and MySQL, and on several nodes.** A network of sites now runs on the `postgres`
+  driver (each site is a schema of the database, `wordjs_site_<id>`) and on `mysql`/`mariadb` (each site is
+  a database, `<db.name>_site_<id>`), with the network store on the same server, so a network runs on
+  several backend nodes over shared Postgres/MySQL and Redis: the registry, per-site cache invalidation,
+  cron leases and plugin workers follow every node. Settings → Database migration moves a whole network
+  (every site and the network store) to another engine.
+- **A TLS certificate per site (SNI).** Admin → Network gets a certificate for each site's address from
+  Let's Encrypt (HTTP-01, automatic with ACME on) or installs one you bring; the gateway and the monolith
+  select it by SNI. HTTP-01 answers are shared by every backend node.
+- **Per-site backups and co-editing.** Every site of a network has its own Settings → Backups (its
+  database, uploads and private files) and real-time collaboration in its editor.
+- **Deleting a site** (`DELETE /network/sites/:id`, Admin → Network): a suspended site and everything it
+  holds are removed; its id is never reused. See the upgrade notes in
+  [multisite.md](documentation/multisite.md#upgrading-from-27).
 
 ### ⚠️ Upgrade note — Node.js 22 or newer is required
 
@@ -756,6 +770,14 @@ the boot error links there too.
 
 ### Fixed
 
+- **A Postgres or MySQL site installed with the wizard reaches its database after a restart.** The wizard
+  wrote the database as `db.database`, which the configuration never read (the install itself ran against
+  the user's default database), and wrote the password only in the nested `db.password`, which a flat
+  `dbPassword` generated at the next boot then shadowed. It now writes `db.name` and the flat `dbPassword`,
+  `db.database` is read as the name, and no flat password is generated over a real nested one.
+- **A plugin's `db.run('CREATE TABLE …')` works on Postgres.** The SQLite dialect was translated only in
+  `exec()`, so a plugin creating its table through `run()` (the FAQ plugin does) failed to activate with
+  "syntax error at or near AUTOINCREMENT"; MySQL already translated it.
 - **conference-manager 2.18.0: a hotel holds each room number once.** Creating a range of rooms sent one
   request per room with no sign of progress, and each extra tap started the whole batch again — the test
   hotel ended with every room seven times. The server now refuses a number the hotel already has (trimmed,

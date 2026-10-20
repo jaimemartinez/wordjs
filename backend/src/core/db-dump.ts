@@ -25,6 +25,11 @@ export type DbDumpConfig = {
     user?: string;
     password?: string;
     name?: string;
+    // Postgres: dump / restore ONE schema of the database (a site of a network, core/site-storage) instead
+    // of the whole database, which on a network holds every site's schema and the network store.
+    schema?: string;
+    // Restore into a schema / database that was just dropped: no --clean (there is nothing to drop).
+    fresh?: boolean;
 };
 
 // External tool a driver needs to CAPTURE a dump, and to RESTORE one.
@@ -91,10 +96,17 @@ function runTool(spawnFn: any, tool: string, args: string[], opts: any = {}): Pr
 }
 
 // ── argv builders (pure, unit-tested) ────────────────────────────────────────────────────────────────
+/** A schema name as pg_dump/pg_restore take it (-n is a pattern: only a plain identifier is passed). */
+function pgSchemaArgs(cfg: DbDumpConfig): string[] {
+    if (!cfg.schema) return [];
+    if (!/^[a-z_][a-z0-9_]{0,62}$/.test(String(cfg.schema))) throw new Error(`unsafe schema name: ${JSON.stringify(cfg.schema)}`);
+    return ['-n', String(cfg.schema)];
+}
 function buildPgDumpArgs(cfg: DbDumpConfig, destPath: string): string[] {
     return [
         '-Fc',                       // custom (compressed, pg_restore-able) format
         '--no-owner', '--no-privileges',
+        ...pgSchemaArgs(cfg),
         '-h', String(cfg.host || 'localhost'),
         '-p', String(cfg.port || 5432),
         '-U', String(cfg.user || 'postgres'),
@@ -104,8 +116,12 @@ function buildPgDumpArgs(cfg: DbDumpConfig, destPath: string): string[] {
 }
 function buildPgRestoreArgs(cfg: DbDumpConfig, srcPath: string): string[] {
     return [
-        '--clean', '--if-exists',    // drop each object before recreating ⇒ authoritative overwrite
+        // drop each object before recreating ⇒ authoritative overwrite; not needed into a fresh schema
+        ...(cfg.fresh ? [] : ['--clean', '--if-exists']),
         '--no-owner', '--no-privileges',
+        // No -n here, ever: a dump taken with -n already holds that schema alone, and pg_restore -n leaves
+        // out the CREATE SCHEMA entry itself — into a site schema that was just dropped, every table then
+        // fails with "schema does not exist".
         '-h', String(cfg.host || 'localhost'),
         '-p', String(cfg.port || 5432),
         '-U', String(cfg.user || 'postgres'),

@@ -109,8 +109,14 @@ type LockHandle = { held: boolean; release: () => Promise<void> };
  * The failure timestamp throttles the retry: if the DDL itself cannot run (no CREATE grant), retrying
  * it on every acquire would add a failed statement to every cron tick.
  */
-let lockTableMode: LockMode | null = null;
-let lockTableFailedAt = 0;
+// MULTISITE: the table lives in each site's database (every query here goes through the site-routed
+// dbAsync), so what was created, and when it last failed, is remembered PER SITE: a network on Postgres
+// or MySQL has a wordjs_locks table in every site's schema / database, created on that site's first lock.
+const lockTableModes = new Map<number, LockMode>();
+const lockTableFailures = new Map<number, number>();
+function lockSiteKey(): number {
+    try { return require('./site-context').currentSiteIdOrNull() ?? 1; } catch { return 1; }
+}
 const LOCK_TABLE_RETRY_MS = 30_000;
 
 /**
@@ -130,19 +136,20 @@ async function ensureLockTable(): Promise<void> {
             'CREATE TABLE IF NOT EXISTS wordjs_locks (' +
             'lock_name TEXT PRIMARY KEY, holder TEXT, locked_until BIGINT NOT NULL DEFAULT 0)'
         );
-        lockTableMode = mode;
-        lockTableFailedAt = 0;
+        lockTableModes.set(lockSiteKey(), mode);
+        lockTableFailures.delete(lockSiteKey());
     } catch (e: any) {
         // Concurrent CREATE TABLE IF NOT EXISTS can rarely race — harmless to ignore.
-        lockTableFailedAt = Date.now();
+        lockTableFailures.set(lockSiteKey(), Date.now());
         log.warn({ err: e }, '[dist-lock] ensureLockTable');
     }
 }
 
 /** The DDL, run at most once per engine (and at most once per `LOCK_TABLE_RETRY_MS` while failing). */
 async function ensureLockTableFor(mode: 'postgres' | 'mysql'): Promise<void> {
-    if (lockTableMode === mode) return;
-    if (lockTableFailedAt && Date.now() - lockTableFailedAt < LOCK_TABLE_RETRY_MS) return;
+    if (lockTableModes.get(lockSiteKey()) === mode) return;
+    const failedAt = lockTableFailures.get(lockSiteKey()) || 0;
+    if (failedAt && Date.now() - failedAt < LOCK_TABLE_RETRY_MS) return;
     await ensureLockTable();
 }
 
@@ -228,7 +235,7 @@ async function attemptAcquire(name: string, ttlMs: number): Promise<AcquireOutco
         // The table can also disappear AFTER we recorded it (a restore, a migration, a driver switch
         // back and forth): forget the record so the next attempt re-creates it instead of failing
         // for the rest of the process's life.
-        if (looksLikeMissingTable(e)) lockTableMode = null;
+        if (looksLikeMissingTable(e)) lockTableModes.delete(lockSiteKey());
         return { granted: false, failure: e, structural: looksStructural(e) };
     }
 }

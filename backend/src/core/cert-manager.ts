@@ -337,6 +337,38 @@ class CertManager {
             const domains = certificateNames(domainOrDomains);
             const domain = domains[0];
             const domainDir = resolveCertDir(LIVE_DIR, domain) as string;
+            const { key, cert } = await this.obtainHttp01Certificate(domains, email, useStaging);
+
+            // 5. Save locally (backup/reference) — into the directory resolved and proved contained
+            // at the top of this method.
+            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
+
+            writePrivateKey(certFile(domainDir, 'privkey.pem'), key);
+            fs.writeFileSync(certFile(domainDir, 'fullchain.pem'), cert);
+
+            // 6. Push to Gateway
+            // Ensure key is string
+            await this.pushCertToGateway(key.toString(), cert.toString());
+            log.info('[CertManager] Certificate pushed to Gateway.');
+
+            return { success: true, message: 'Certificate provisioned and installed.', domains };
+
+        } catch (e) {
+            log.error({ err: e }, '[CertManager] Auto HTTP Provision Error');
+            throw new Error(`Provisioning failed: ${e.message}`, { cause: e });
+        }
+    }
+
+    /**
+     * Steps 1-4 of an HTTP-01 issuance — order, challenges, validation, finalization — and nothing else:
+     * the key and the certificate come back to the caller, which decides where they go (the main site's
+     * certificate above, or a site's own certificate in core/site-certs). Each challenge answer is written
+     * where every node can serve it (writeChallengeFile).
+     */
+    async obtainHttp01Certificate(domainOrDomains: string | string[], email: string, useStaging = false): Promise<{ key: string; cert: string; domains: string[] }> {
+        {
+            const domains = certificateNames(domainOrDomains);
+            const domain = domains[0];
             log.info(`[CertManager] Starting HTTP-01 provisioning for ${domains.join(', ')}...`);
             await this.initClient(email, useStaging);
 
@@ -383,24 +415,7 @@ class CertManager {
 
             const cert = verifiedChain(key, await this.client.getCertificate(finalized), domains);
             log.info('[CertManager] Certificate downloaded.');
-
-            // 5. Save locally (backup/reference) — into the directory resolved and proved contained
-            // at the top of this method.
-            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
-
-            writePrivateKey(certFile(domainDir, 'privkey.pem'), key);
-            fs.writeFileSync(certFile(domainDir, 'fullchain.pem'), cert);
-
-            // 6. Push to Gateway
-            // Ensure key is string
-            await this.pushCertToGateway(key.toString(), cert.toString());
-            log.info('[CertManager] Certificate pushed to Gateway.');
-
-            return { success: true, message: 'Certificate provisioned and installed.', domains };
-
-        } catch (e) {
-            log.error({ err: e }, '[CertManager] Auto HTTP Provision Error');
-            throw new Error(`Provisioning failed: ${e.message}`, { cause: e });
+            return { key: key.toString(), cert: cert.toString(), domains };
         }
     }
 
@@ -678,6 +693,34 @@ class CertManager {
     }
 
     /**
+     * MULTISITE: give the edge the certificate of ONE site address (core/site-certs). The gateway keeps it
+     * under ssl/live/sites/<host>/ and its workers select it by SNI with no restart; the monolith reads the
+     * same directory (gateway/src/site-certs.js). The main site's certificate is untouched.
+     */
+    async pushSiteCertToEdge(host: string, keyContent: string, certContent: string) {
+        if (process.env.WORDJS_EMBEDDED === '1') {
+            const siteCerts = require('../../../gateway/src/site-certs.js');
+            siteCerts.writeSiteCert(siteCerts.defaultSitesDir(), host, keyContent, certContent);
+            return { success: true, embedded: true };
+        }
+        const { status, text } = await gatewayControlRequest('POST', '/site-cert', { host, key: keyContent, cert: certContent }, 15000);
+        if (status !== 200) throw gatewayError(status, text);
+        return JSON.parse(text);
+    }
+
+    /** MULTISITE: take a deleted site's certificate off the edge. */
+    async removeSiteCertFromEdge(host: string) {
+        if (process.env.WORDJS_EMBEDDED === '1') {
+            const siteCerts = require('../../../gateway/src/site-certs.js');
+            siteCerts.removeSiteCert(siteCerts.defaultSitesDir(), host);
+            return { success: true, embedded: true };
+        }
+        const { status, text } = await gatewayControlRequest('POST', '/site-cert-remove', { host }, 15000);
+        if (status !== 200) throw gatewayError(status, text);
+        return JSON.parse(text);
+    }
+
+    /**
      * Tell the gateway the site's main address (core/site-address commit): it rebuilds its own links and
      * pages from it. Same control plane, same identity and verification as the certificate push.
      */
@@ -778,6 +821,10 @@ class CertManager {
         }
         if (!fs.existsSync(challengeDir)) fs.mkdirSync(challengeDir, { recursive: true });
         fs.writeFileSync(target, keyAuthorization);
+        // Multisite: also where EVERY node can answer it (core/site-certs). Several backend nodes behind
+        // the edge each get a share of the CA's validation requests; the local file is on one of them.
+        try { await require('./site-certs').rememberChallenge(token, keyAuthorization); }
+        catch (e: any) { log.warn({ err: e }, '[CertManager] the challenge answer could not be shared with the other nodes'); }
         return true;
     }
 

@@ -219,8 +219,11 @@ async function runCron() {
     // (full backup, ACME renewal) is never preempted and can't double-run on another node.
     await distLock.runAsLeader('wordjs:cron', { ttlMs: 90000, renewMs: 30000 }, () => runCronInner());
     // Multisite: every other active site's own events, each in its own context (one at a time). A no-op
-    // on a single site. Multisite runs on one SQLite host in this phase, so no lease is needed.
-    await require('./network-sites').forEachSecondarySite('cron', () => runCronInner());
+    // on a single site. Each site has its own leader lease, kept in that site's database (dist-lock goes
+    // through the site-routed dbAsync): on a multi-node network over Postgres or MySQL one node runs a
+    // given site's due events, and a slow site never holds back another site's leader.
+    await require('./network-sites').forEachSecondarySite('cron', () =>
+        distLock.runAsLeader('wordjs:cron', { ttlMs: 90000, renewMs: 30000 }, () => runCronInner()));
 }
 
 /**
@@ -230,7 +233,26 @@ async function runCron() {
  * certificates, maintenance) act on the main site's database and files — an event naming one of them on
  * another site is dropped, not run.
  */
-const SECONDARY_SITE_CRON_HOOKS = new Set(['publish_future_post', 'wordjs_analytics_prune']);
+const SECONDARY_SITE_CRON_HOOKS = new Set(['publish_future_post', 'wordjs_analytics_prune', 'wordjs_collab_sweep', 'wordjs_scheduled_backup']);
+
+/**
+ * The recurring core events of a site other than the main one, scheduled when the site is prepared
+ * (core/network-sites): its collaboration rooms' sweep, its analytics retention and its own backups (per
+ * its own Settings → Backups schedule). Idempotent, like initDefaultCronEvents.
+ */
+async function initSiteCronEvents(): Promise<void> {
+    try {
+        if (!(await nextScheduled('wordjs_collab_sweep'))) await scheduleEvent(Date.now(), 'hourly', 'wordjs_collab_sweep');
+        const { HOOK: ANALYTICS_PRUNE_HOOK } = require('./analytics-retention');
+        if (!(await nextScheduled(ANALYTICS_PRUNE_HOOK))) await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
+        const backupFreq = await getOption('backup_schedule', 'off');
+        if (backupFreq !== 'off' && !(await nextScheduled('wordjs_scheduled_backup'))) {
+            await scheduleEvent(Date.now(), backupFreq, 'wordjs_scheduled_backup');
+        }
+    } catch (e) {
+        log.error({ err: e }, 'Failed to init the site cron events');
+    }
+}
 function cronHookAllowedHere(event: any): boolean {
     if (!require('./multisite-guards').onSecondarySite()) return true;
     if (event.pluginSlug) return true;
@@ -521,6 +543,14 @@ async function initDefaultCronEvents() {
         } catch (e) {
             log.error({ err: e }, 'ACME auto-renewal error');
         }
+        // Multisite: every other site's own certificate (core/site-certs), from this one leader.
+        try {
+            const sites = await require('./site-certs').renewSiteCertificatesIfDue();
+            if (sites.issued.length) log.info(`⏰ ACME: site certificates issued for ${sites.issued.join(', ')}`);
+            if (sites.failed.length) log.warn(`⏰ ACME: site certificates not issued for ${sites.failed.join(', ')}`);
+        } catch (e) {
+            log.error({ err: e }, 'ACME site certificates renewal error');
+        }
     });
 
     // 2c. Salas colaborativas huérfanas: se retira SOLO estado de sesión (`collab_docs`/`collab_ops`),
@@ -565,5 +595,6 @@ module.exports = {
     isCronRunning,
     registerCronJob,
     initDefaultCronEvents,
+    initSiteCronEvents,
     computeNextBackupRun, // pure; exported for the reschedule regression test
 };

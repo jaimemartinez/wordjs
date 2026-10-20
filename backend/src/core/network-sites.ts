@@ -7,6 +7,7 @@
  *   createSite(...)    provision a new site: registry record, data directory, database, default
  *                      options, first administrator — all or nothing
  *   setSiteStatus(...) suspend / resume
+ *   deleteSite(...)    remove a suspended site and everything it holds, on every node
  *   forEachSite(fn)    run background work (cron, outbox) once per active site, each in its own context
  *
  * Site 1 is always prepared by the normal boot (index.ts); nothing here changes it.
@@ -27,6 +28,8 @@ async function initSiteRuntime(): Promise<void> {
     await postTypes.initTaxonomies();
     await require('./roles').loadRoles();
     require('./adminMenu').initCoreMenus();
+    // Its own recurring core events (collaboration sweep, analytics retention, its backups).
+    await require('./cron').initSiteCronEvents();
     // Phase 2: the site's own plugin workers and theme worker (core/plugins, core/theme-engine). Neither
     // throws: a site whose plugins or theme code fail to start still serves its content.
     await require('./plugins').loadSitePlugins();
@@ -48,7 +51,7 @@ function prepareSite(id: number): Promise<void> {
         p = (async () => {
             const site = network.getSite(id);
             if (!site) throw new Error(`No such site: ${id}`);
-            await require('../config/database').openSiteDatabase(id, site.dbPath || network.siteDbPath(id));
+            await require('../config/database').openSiteDatabase(id, network.isSqlStore() ? null : (site.dbPath || network.siteDbPath(id)));
             await initSiteRuntime();
         })();
         prepared.set(id, p);
@@ -106,9 +109,8 @@ type CreateSiteInput = {
 async function createSite(input: CreateSiteInput) {
     if (!siteContext.multisiteEnabled()) throw codedError('network_disabled', 'Multisite is not enabled on this install.', 409);
     const database = require('../config/database');
-    if (database.getDbType().driver !== 'sqlite-native') {
-        throw codedError('network_driver_unsupported', 'Multisite needs the sqlite-native database driver in this version.', 409);
-    }
+    const storageProblem = require('./site-storage').storageProblem(database.getDbType().driver);
+    if (storageProblem) throw codedError('network_driver_unsupported', storageProblem, 409);
     const slug = String(input.slug || '').trim().toLowerCase();
     const title = String(input.title || '').trim();
     const adminUsername = String(input.adminUsername || '').trim();
@@ -120,7 +122,7 @@ async function createSite(input: CreateSiteInput) {
     if (adminPassword.length < 8) throw codedError('network_weak_password', 'The administrator password must be at least 8 characters.');
     const address = assertHostAvailable(input.url);
 
-    const record = network.insertSite({ slug, url: address.url, hostname: address.hostname });
+    const record = await network.insertSite({ slug, url: address.url, hostname: address.hostname });
     const dir = network.siteDataDir(record.id);
     try {
         fs.mkdirSync(path.join(dir, 'uploads'), { recursive: true });
@@ -140,40 +142,138 @@ async function createSite(input: CreateSiteInput) {
         });
     } catch (e: any) {
         prepared.delete(record.id);
-        try { await database.closeSiteDatabase(record.id); } catch { /* best-effort */ }
-        network.deleteSiteRecord(record.id);
+        // Nothing of the half-made site stays: its database or schema, its files, its record.
+        try { await database.dropSiteDatabase(record.id); } catch { /* best-effort */ }
+        await network.deleteSiteRecord(record.id);
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
         if (e && typeof e.message === 'string' && /already exists/i.test(e.message)) {
             throw codedError('network_invalid_admin', e.message);
         }
         throw e;
     }
-    network.audit('site.created', { actor: input.actorUserId ?? null, siteId: record.id, detail: { slug, url: address.url } });
+    await network.audit('site.created', { actor: input.actorUserId ?? null, siteId: record.id, detail: { slug, url: address.url } });
     afterRegistryChange();
+    // Its own certificate, when the install issues them (ACME http-01): in the background — the address
+    // may not point here yet, in which case the renewal pass tries again later.
+    try {
+        const siteCerts = require('./site-certs');
+        if (siteCerts.autoIssueEnabled()) {
+            siteCerts.issueSiteCertificate(record.id).catch((e: any) => log.warn(`[multisite] site ${record.id}: certificate not issued yet (${e && e.message})`));
+        }
+    } catch { /* certificates are optional */ }
     return network.getSite(record.id);
 }
 
-function setSiteStatus(id: number, status: 'active' | 'suspended', actorUserId: number | null = null) {
-    const site = network.setSiteStatus(id, status);
-    if (status === 'suspended') {
-        // A suspended site answers nothing, so its plugin and theme workers have nothing to do: stop them.
-        try {
-            const iso = require('./plugin-isolate');
-            for (const key of iso.listIsolateKeys()) {
-                if (iso.splitIsolateKey(key).siteId === id) { try { iso.unloadIsolateKey(key); } catch { /* already gone */ } }
-            }
-        } catch { /* isolate layer unavailable */ }
-    } else if (prepared.has(id)) {
-        // Resumed after this process had prepared it: start its workers again (a site prepared later starts
-        // them in initSiteRuntime). In the background — the resume itself must not wait for the spawns.
-        siteContext.runWithSite(id, async () => {
-            await require('./plugins').loadSitePlugins();
-            try { await require('./theme-engine').init(); } catch { /* logged by the engine */ }
-        }).catch(() => { /* loadSitePlugins never throws */ });
-    }
-    network.audit(status === 'suspended' ? 'site.suspended' : 'site.resumed', { actor: actorUserId, siteId: id });
+/** Stop every plugin and theme worker THIS process runs for site `id`. */
+function stopSiteWorkers(id: number): void {
+    try {
+        const iso = require('./plugin-isolate');
+        for (const key of iso.listIsolateKeys()) {
+            if (iso.splitIsolateKey(key).siteId === id) { try { iso.unloadIsolateKey(key); } catch { /* already gone */ } }
+        }
+    } catch { /* isolate layer unavailable */ }
+}
+
+/** Start the workers of a site this process had prepared, after a resume (in the background). */
+function restartSiteWorkers(id: number): void {
+    if (!prepared.has(id)) return;
+    siteContext.runWithSite(id, async () => {
+        await require('./plugins').loadSitePlugins();
+        try { await require('./theme-engine').init(); } catch { /* logged by the engine */ }
+    }).catch(() => { /* loadSitePlugins never throws */ });
+}
+
+/**
+ * Forget a site this process had prepared (it was deleted, here or on another node): its workers stop,
+ * its database connection closes, and its in-memory runtime is dropped with the preparation.
+ */
+async function forgetSite(id: number): Promise<void> {
+    stopSiteWorkers(id);
+    prepared.delete(id);
+    try { await require('../config/database').closeSiteDatabase(id); } catch { /* already closed */ }
+}
+
+async function setSiteStatus(id: number, status: 'active' | 'suspended', actorUserId: number | null = null) {
+    const site = await network.setSiteStatus(id, status);
+    // A suspended site answers nothing, so its plugin and theme workers have nothing to do: stop them.
+    // Resumed after this process had prepared it: start them again (a site prepared later starts them in
+    // initSiteRuntime). The other nodes do the same when the registry change reaches them.
+    if (status === 'suspended') stopSiteWorkers(id);
+    else restartSiteWorkers(id);
+    await network.audit(status === 'suspended' ? 'site.suspended' : 'site.resumed', { actor: actorUserId, siteId: id });
     afterRegistryChange();
     return site;
+}
+
+/**
+ * Delete site `id` and everything it holds: its media objects in the bucket, its database (file,
+ * Postgres schema or MySQL database), its directory of uploads and private files, the database principals
+ * of its plugins, its cached entries, its certificates and its record and addresses. The site must be
+ * suspended first (nothing is serving it while it goes) and `confirmSlug` must repeat its slug. The
+ * main site is never deleted. Its id is never reused (core/network keeps a high-water mark), so nothing
+ * a failed step leaves behind can ever surface in a later site.
+ */
+async function deleteSite(id: number, opts: { confirmSlug?: unknown; actorUserId?: number | null } = {}): Promise<void> {
+    if (id === siteContext.PRIMARY_SITE_ID) throw codedError('network_primary_site', 'The main site cannot be deleted.');
+    const site = network.getSite(id);
+    if (!site) throw codedError('network_site_not_found', 'No such site.', 404);
+    if (site.status !== 'suspended') throw codedError('network_site_active', 'Suspend the site before deleting it.', 409);
+    if (opts.confirmSlug !== site.slug) throw codedError('network_confirm_mismatch', 'Type the slug of the site to confirm its deletion.');
+    const database = require('../config/database');
+    stopSiteWorkers(id);
+    const warnings: string[] = [];
+    await siteContext.runWithSite(id, async () => {
+        // Its database only: preparing the whole site would start the workers it is losing.
+        try { await database.openSiteDatabase(id, network.isSqlStore() ? null : (site.dbPath || network.siteDbPath(id))); }
+        catch (e: any) { warnings.push(`open: ${e && e.message}`); }
+        // The site's objects in the media bucket: listed from its own database, so before it goes.
+        try {
+            const storage = require('./media-storage');
+            const store = storage.resolveMediaStorage();
+            if (store.driver === 's3' && database.isSiteDatabaseOpen(id)) {
+                const items = await require('./media-storage-migrate').offloadedItems();
+                const rels = ([] as string[]).concat(...items.map((i: any) => i.rels));
+                if (rels.length) await storage.removeFiles(storage.getMediaStorage(store), rels);
+            }
+        } catch (e: any) { warnings.push(`media bucket: ${e && e.message}`); }
+        // Its plugins' database principals (Postgres roles / MySQL users named for this site).
+        try {
+            const slugs = require('./plugins').scanPlugins().map((p: any) => p.slug);
+            await require('./plugin-db-isolation').dropSitePrincipals(slugs);
+        } catch (e: any) { warnings.push(`plugin principals: ${e && e.message}`); }
+        // Its entries in the shared cache (core/cache namespaces them s<id>:).
+        try { await require('./cache').flush(); } catch (e: any) { warnings.push(`cache: ${e && e.message}`); }
+    });
+    prepared.delete(id);
+    try { await database.dropSiteDatabase(id); } catch (e: any) { warnings.push(`database: ${e && e.message}`); }
+    try { fs.rmSync(network.siteDataDir(id), { recursive: true, force: true }); } catch (e: any) { warnings.push(`files: ${e && e.message}`); }
+    try { await require('./site-certs').forgetSiteCertificates(id, site.mainHost); } catch (e: any) { warnings.push(`certificates: ${e && e.message}`); }
+    await network.deleteSiteRecord(id);
+    await network.audit('site.deleted', { actor: opts.actorUserId ?? null, siteId: id, detail: { slug: site.slug, url: site.mainUrl, warnings } });
+    if (warnings.length) log.warn(`[multisite] site ${id} deleted with leftovers to check: ${warnings.join('; ')}`);
+    afterRegistryChange();
+}
+
+/**
+ * Another node changed the registry (core/network reloads its mirror from the shared store): make THIS
+ * node match it. A site suspended there stops its workers here; one resumed starts them again here if
+ * this node had prepared it; one deleted is forgotten. New sites need nothing: they are prepared on their
+ * first request. The gateway is told the new addresses as after a local change.
+ */
+function followRegistryChanges(): void {
+    network.onRegistryChange(({ before, after }: { before: any[]; after: any[] }) => {
+        const now = new Map(after.map((s: any) => [s.id, s]));
+        for (const old of before) {
+            if (old.id === siteContext.PRIMARY_SITE_ID) continue;
+            const cur = now.get(old.id);
+            if (!cur) { forgetSite(old.id).catch(() => { /* best-effort */ }); continue; }
+            if (cur.status !== old.status) {
+                if (cur.status === 'suspended') stopSiteWorkers(old.id);
+                else restartSiteWorkers(old.id);
+            }
+        }
+        afterRegistryChange();
+    });
 }
 
 /** The addresses answered changed: tell the gateway now instead of at its next periodic push. */
@@ -208,11 +308,35 @@ async function forEachSecondarySite(label: string, fn: (siteId: number) => Promi
     }
 }
 
+/**
+ * Run `fn` once per site other than site 1 that THIS process has prepared (and that is active), each in
+ * its own context, without preparing any other: periodic upkeep of what a node already runs.
+ */
+async function forEachOpenSecondarySite(label: string, fn: (siteId: number) => Promise<void> | void): Promise<void> {
+    if (!siteContext.multisiteEnabled()) return;
+    for (const [id, p] of Array.from(prepared.entries())) {
+        const site = (() => { try { return network.getSite(id); } catch { return null; } })();
+        if (!site || site.status !== 'active') continue;
+        try {
+            await p;
+            await siteContext.runWithSite(id, async () => { await fn(id); });
+        } catch (e: any) {
+            log.warn(`[multisite] ${label} failed for site ${id}: ${e && e.message}`);
+        }
+    }
+}
+
 module.exports = {
+    forEachOpenSecondarySite,
     prepareSite,
     resetPreparedSites,
     createSite,
     setSiteStatus,
+    deleteSite,
+    forgetSite,
+    followRegistryChanges,
+    isPrepared: (id: number) => prepared.has(id),
+    whenPrepared: (id: number) => prepared.get(id) || null,
     forEachSecondarySite,
     assertHostAvailable,
 };
