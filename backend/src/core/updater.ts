@@ -144,7 +144,13 @@ function toRelease(r: any): Release | null {
 
 async function releases(opts: { force?: boolean } = {}): Promise<Release[]> {
     if (!opts.force && cache && Date.now() - cache.at < CACHE_MS) return cache.releases;
-    const raw = await fetchJson(RELEASES_URL);
+    // One deadline for the whole request: a host that never answers the TCP handshake (offline, a
+    // firewall dropping packets) would otherwise hold the screen for the operating system's own timeout.
+    let timer: any;
+    const raw = await Promise.race([
+        fetchJson(RELEASES_URL),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('GitHub did not answer within 10 seconds')), 10000); }),
+    ]).finally(() => clearTimeout(timer));
     const list = (Array.isArray(raw) ? raw : []).map(toRelease).filter(Boolean) as Release[];
     list.sort((a, b) => compareVersions(b.version, a.version));
     cache = { at: Date.now(), releases: list };

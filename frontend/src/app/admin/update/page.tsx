@@ -38,6 +38,7 @@ export default function UpdatePage() {
     const [code, setCode] = useState("");
     const [busy, setBusy] = useState(false);
     const [following, setFollowing] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const alive = useRef(true);
     useEffect(() => () => { alive.current = false; }, []);
 
@@ -46,7 +47,10 @@ export default function UpdatePage() {
             const d = check ? await apiPost<Overview>("/system/update/check", {}) : await apiGet<Overview>("/system/update");
             if (alive.current) setData(d);
             return d;
-        } catch { return null; }
+        } catch (e: any) {
+            if (alive.current && !following) setLoadError(e?.message || t("update.loadFailed"));
+            return null;
+        }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => { load(); }, []);
@@ -85,7 +89,7 @@ export default function UpdatePage() {
             <div className="max-w-4xl space-y-6">{children}</div>
         </div>
     );
-    if (!data) return shell(<Card variant="default" padding="lg"><p className="text-sm text-gray-500">{t("loading")}</p></Card>);
+    if (!data) return shell(<Card variant="default" padding="lg"><p role={loadError ? "alert" : undefined} className={`text-sm ${loadError ? "text-red-600" : "text-gray-500"}`}>{loadError || t("loading")}</p></Card>);
 
     const s = data.state;
     const progress = (data.running || following || s.state === "running" || s.state === "applied") && (
@@ -117,7 +121,7 @@ export default function UpdatePage() {
                     <p className="text-sm text-gray-500">{t("update.current")}</p>
                     <p className="text-2xl font-black text-gray-900">WordJS {data.current}</p>
                 </div>
-                <p className={`text-sm font-bold ${data.latest ? "text-blue-700" : "text-emerald-700"}`}>
+                <p className={`text-sm font-bold ${data.latest ? "text-blue-700" : data.error ? "text-amber-700" : "text-emerald-700"}`}>
                     {data.latest ? t("update.available").replace("{version}", data.latest.version) : data.error ? data.error : t("update.upToDate")}
                 </p>
             </div>
