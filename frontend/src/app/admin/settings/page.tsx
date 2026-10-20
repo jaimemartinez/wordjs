@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { SITE_ADDRESS_SETTINGS_PATH } from "@/lib/siteAddress";
 import { MEDIA_STORAGE_SETTINGS_PATH } from "@/lib/mediaStorage";
+
+/** Settings → Network: turning the network of sites on and off (multisite). */
+const NETWORK_SETTINGS_PATH = "/admin/settings/network";
 import { settingsApi, accountMailApi, AccountMailStatus, MediaItem, postsApi, Post, rolesApi, Role } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import MediaPickerModal from "@/components/MediaPickerModal";
@@ -58,6 +61,7 @@ export default function SettingsPage() {
     // site (no `network` on the user) is unchanged.
     const viewerNetwork = useOptionalAuth()?.user?.network;
     const networkToolsOffered = !viewerNetwork || (viewerNetwork.mainSite && viewerNetwork.networkAdmin);
+    const isAdministrator = useOptionalAuth()?.user?.role === 'administrator';
     const { t } = useI18n();
     const [settings, setSettings] = useState({
         blogname: "",
@@ -287,6 +291,27 @@ export default function SettingsPage() {
                         {t('settings.mediaStorage.open')} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
                     </Link>
                 </div>
+
+                {/* The network of sites (multisite) is turned on and off from its own screen: the switch asks
+                    for the password and a two-factor code and restarts the backend by itself
+                    (backend routes/network.ts /setup, /enable, /disable). Administrators only. */}
+                {isAdministrator && (
+                <div className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-3xl border-2 border-gray-50 bg-white px-6 py-5 shadow-xl shadow-gray-100/50">
+                    <div className="flex min-w-0 flex-1 items-start gap-4">
+                        <i className="fa-solid fa-sitemap text-blue-500 text-xl mt-0.5" aria-hidden="true"></i>
+                        <div>
+                            <h2 className="text-sm font-bold text-gray-900">{t('settings.network.title')}</h2>
+                            <p className="text-sm text-gray-500 mt-1 leading-relaxed">{t('settings.network.help')}</p>
+                        </div>
+                    </div>
+                    <Link
+                        href={NETWORK_SETTINGS_PATH}
+                        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-bold text-white hover:bg-gray-800 whitespace-nowrap"
+                    >
+                        {t('settings.network.open')} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                    </Link>
+                </div>
+                )}
                 </>)}
 
                 <form onSubmit={handleSubmit} className="space-y-8">
