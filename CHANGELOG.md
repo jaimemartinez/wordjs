@@ -8,6 +8,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **GraphQL is complete: mutations, uploads, the admin reads and subscriptions.** Every mutation is the REST
+  write it names, dispatched in process as the same caller (content of any type — create, update, publish,
+  schedule, unpublish, trash, restore, delete, meta; revisions; categories and tags; media upload, update and
+  delete; comments and moderation; menus and their items; settings; the caller's own profile), with typed
+  payloads and the REST error `code`/`status` in `extensions`. Mutations are `POST` only (a `GET` mutation is
+  `405`), cost 20 more than the same read and are capped at 10 per document (`WORDJS_GRAPHQL_MAX_MUTATIONS`).
+  Uploads use the GraphQL multipart request spec and are re-streamed to `POST /media` behind the upload rate
+  limiter. New reads with REST parity: `users`, `user`, `revisions`, `revision`, `ContentNode.revisions`,
+  `contentAccessLevels`, `webhooks`, `webhook`, `webhookEvents`, `plugins`, `networkSites`, and
+  `comments(status:)` for moderators. Subscriptions (`contentChanged`, `commentAdded`) are served as GraphQL
+  over Server-Sent Events at `/api/v1/graphql/stream`, fed by the content outbox and the comments table and
+  re-authorized per event as the subscriber, with `Last-Event-ID` resume. See
+  [graphql.md](documentation/graphql.md).
 - **Plugins can declare per-account capabilities.** A manifest's new `accountCapabilities` block names
   capabilities in the plugin's own namespace that an administrator grants per account on the user screen
   (one toggle each, rendered from the declaration, for `edit_users` holders only — `GET

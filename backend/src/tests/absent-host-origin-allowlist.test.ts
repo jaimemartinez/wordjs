@@ -419,10 +419,16 @@ describe('RATCHET — the inventory of origin-from-Host constructions', () => {
         const collab = read('routes/collab.ts');
         assert.ok(!ORIGIN_TEMPLATE.test(collab),
             'routes/collab.ts must not build origins from a host itself — it must consume the single allow-list builder');
-        assert.match(collab, /sameOriginAllowList/,
-            'routes/collab.ts#sameOrigin must consume middleware/auth.ts#sameOriginAllowList');
-
+        // collab.ts consumes it through middleware/auth.ts#sameOriginRequest, the one same-origin predicate it
+        // shares with the GraphQL subscription stream — which itself must consume the one allow-list builder.
+        assert.match(collab, /sameOriginRequest/,
+            'routes/collab.ts#sameOrigin must consume middleware/auth.ts#sameOriginRequest');
         const auth = read('middleware/auth.ts');
+        const predicate = auth.slice(auth.indexOf('function sameOriginRequest('), auth.indexOf('module.exports = {'));
+        assert.match(predicate, /sameOriginAllowList\(host, scheme\)/,
+            'middleware/auth.ts#sameOriginRequest must consume sameOriginAllowList');
+        assert.ok(!ORIGIN_TEMPLATE.test(read('routes/graphql.ts')), 'routes/graphql.ts must not build origins itself');
+
         const guarded = (auth.match(/\.\.\.\(host \? \[`http:\/\/\$\{host\}`, `https:\/\/\$\{host\}`\] : \[\]\)/g) || []).length;
         const built = (auth.match(/`https?:\/\/\$\{host\}`/g) || []).length;
         assert.strictEqual(guarded, 1, 'the allow-list must be built in exactly one place, behind the truthiness guard');

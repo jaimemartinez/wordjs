@@ -76,8 +76,8 @@ export interface AppConfig {
         prefix: string;
         /** Global per-IP budget for /api/v1/*. Operator-tunable; consumed by apiLimiter in index.ts. */
         rateLimit: { max: number; windowMs: number };
-        /** Limits of the read-only GraphQL endpoint (core/graphql). Operator-tunable, clamped. */
-        graphql: { maxDepth: number; maxCost: number; maxTokens: number };
+        /** Limits of the GraphQL endpoint (core/graphql). Operator-tunable, clamped. */
+        graphql: { maxDepth: number; maxCost: number; maxTokens: number; maxMutations: number; maxStreams: number; maxStreamsPerClient: number };
     };
 
     // Site
@@ -475,6 +475,11 @@ const config: AppConfig = {
             maxDepth: envInt('WORDJS_GRAPHQL_MAX_DEPTH', 10, 2, 50),
             maxCost: envInt('WORDJS_GRAPHQL_MAX_COST', 1000, 50, 100_000),
             maxTokens: envInt('WORDJS_GRAPHQL_MAX_TOKENS', 5000, 100, 100_000),
+            // Mutation fields per document: the API limiter counts a GraphQL request once.
+            maxMutations: envInt('WORDJS_GRAPHQL_MAX_MUTATIONS', 10, 1, 100),
+            // Open subscription streams (GraphQL over SSE): per process, and per caller (user, else address).
+            maxStreams: envInt('WORDJS_GRAPHQL_MAX_STREAMS', 500, 1, 100_000),
+            maxStreamsPerClient: envInt('WORDJS_GRAPHQL_MAX_STREAMS_PER_CLIENT', 5, 1, 1000),
         },
     },
 

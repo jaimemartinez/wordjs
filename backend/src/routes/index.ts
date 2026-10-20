@@ -208,8 +208,9 @@ router.use('/presence', require('./presence'));
 // que es un aviso de "alguien más tiene esto abierto"; esta es la edición simultánea real.
 router.use('/collab', require('./collab'));
 router.use('/import', require('./import'));
-// Read-only GraphQL (phase 1). Every field resolves through the REST reads above for the same caller
-// (core/graphql/dispatch), so it adds a query language, not a second authorization model.
+// GraphQL: queries, mutations and (at /graphql/stream) SSE subscriptions. Every field resolves through the
+// REST routes above for the same caller (core/graphql/dispatch) — reads, writes and per-event re-reads — so
+// it adds a query language, not a second authorization model.
 router.use('/graphql', require('./graphql'));
 router.use('/', exportRoutes);
 

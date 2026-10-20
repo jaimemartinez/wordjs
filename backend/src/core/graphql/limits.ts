@@ -15,6 +15,12 @@
  *    validation cannot see variable values, so it assumes the worst). Aliases are separate fields and
  *    are counted separately, so `a: posts … b: posts …` cannot multiply work for free.
  *
+ *  · MUTATIONS — every field of the Mutation root (and any field marked `extensions.cost.mutation`) is a
+ *    REST write: it costs MUTATION_COST on top
+ *    (so writes are never free next to reads), and an operation may hold at most `maxMutations` of them,
+ *    aliases and fragment spreads counted one by one. The API rate limiter counts the GraphQL request
+ *    once; without the cap one document could carry an unbounded batch of writes past it.
+ *
  * Plugin fields (core/graphql/extensions) may declare the same `extensions.cost`; without it they cost
  * what any other field costs (1 for an object, 0 for a scalar).
  */
@@ -38,6 +44,8 @@ import type {
 } from 'graphql';
 
 export const REST_COST = 5;
+/** Extra cost of a REST write (a mutation field), on top of REST_COST. */
+export const MUTATION_COST = 20;
 
 export interface FieldCost {
     /** The field is resolved with a REST sub-request. */
@@ -46,12 +54,16 @@ export interface FieldCost {
     list?: boolean;
     /** Page size assumed when `first` is not given. */
     defaultFirst?: number;
+    /** The field is a REST write (a mutation): costs MUTATION_COST more and counts against maxMutations. */
+    mutation?: boolean;
 }
 
 export interface LimitOptions {
     maxDepth: number;
     maxCost: number;
     maxPageSize: number;
+    /** Most mutation fields one operation may hold (default 10). */
+    maxMutations?: number;
 }
 
 function fieldCostOf(def: GraphQLField<any, any> | undefined): FieldCost {
@@ -73,7 +85,7 @@ function fieldsOf(type: GraphQLNamedType | null | undefined): Record<string, Gra
     return null;
 }
 
-type Measure = { depth: number; cost: number };
+type Measure = { depth: number; cost: number; mutations: number };
 
 /** Per-operation walk state: fragment cycle guard and the memo of already-measured fragments. */
 interface WalkState {
@@ -83,7 +95,11 @@ interface WalkState {
 
 /** A partial result already over a limit: the caller needs no exact figure to refuse the operation. */
 function overLimit(m: Measure, opts: LimitOptions): boolean {
-    return m.cost > opts.maxCost || m.depth > opts.maxDepth;
+    return m.cost > opts.maxCost || m.depth > opts.maxDepth || m.mutations > maxMutationsOf(opts);
+}
+
+function maxMutationsOf(opts: LimitOptions): number {
+    return opts.maxMutations && opts.maxMutations > 0 ? opts.maxMutations : 10;
 }
 
 /**
@@ -105,6 +121,7 @@ function measure(
 ): Measure {
     let depth = 0;
     let cost = 0;
+    let mutations = 0;
     for (const sel of selectionSet.selections) {
         if (sel.kind === Kind.FIELD) {
             const name = sel.name.value;
@@ -115,7 +132,9 @@ function measure(
             if (!def && name === '__schema') childType = context.getSchema().getType('__Schema') || null;
             if (!def && name === '__type') childType = context.getSchema().getType('__Type') || null;
             const spec = fieldCostOf(def);
-            let child = { depth: 0, cost: 0 };
+            // Every field of the Mutation root is a write, declared or not (an extension's included).
+            const isWrite = !!spec.mutation || (!!parentType && parentType === context.getSchema().getMutationType());
+            let child: Measure = { depth: 0, cost: 0, mutations: 0 };
             if (sel.selectionSet) child = measure(context, sel.selectionSet, childType, opts, state);
             let multiplier = 1;
             if (spec.list) {
@@ -124,13 +143,15 @@ function measure(
                     ? (spec.defaultFirst || 10)
                     : (first.value === null ? opts.maxPageSize : Math.max(0, Math.min(first.value, opts.maxPageSize)));
             }
-            cost += (sel.selectionSet ? 1 : 0) + (spec.rest ? REST_COST : 0) + multiplier * child.cost;
+            cost += (sel.selectionSet ? 1 : 0) + (spec.rest ? REST_COST : 0) + (isWrite ? MUTATION_COST : 0) + multiplier * child.cost;
             depth = Math.max(depth, 1 + child.depth);
+            mutations += (isWrite ? 1 : 0) + child.mutations;
         } else if (sel.kind === Kind.INLINE_FRAGMENT) {
             const cond = sel.typeCondition ? context.getSchema().getType(sel.typeCondition.name.value) : parentType;
             const r = measure(context, sel.selectionSet, cond || parentType, opts, state);
             depth = Math.max(depth, r.depth);
             cost += r.cost;
+            mutations += r.mutations;
         } else if (sel.kind === Kind.FRAGMENT_SPREAD) {
             const name = sel.name.value;
             if (state.visiting.has(name)) continue;
@@ -147,10 +168,11 @@ function measure(
             }
             depth = Math.max(depth, r.depth);
             cost += r.cost;
+            mutations += r.mutations;
         }
-        if (overLimit({ depth, cost }, opts)) break;
+        if (overLimit({ depth, cost, mutations }, opts)) break;
     }
-    return { depth, cost };
+    return { depth, cost, mutations };
 }
 
 /** Measure one operation; exported for tests and for the X-GraphQL-Cost diagnostics. */
@@ -167,11 +189,17 @@ export function createLimitRule(opts: LimitOptions) {
                 const root = node.operation === 'query' ? schema.getQueryType()
                     : node.operation === 'mutation' ? schema.getMutationType()
                         : schema.getSubscriptionType();
-                const { depth, cost } = measureOperation(context, node.selectionSet, root || null, opts);
+                const { depth, cost, mutations } = measureOperation(context, node.selectionSet, root || null, opts);
                 if (depth > opts.maxDepth) {
                     context.reportError(new GraphQLError(
                         `Query depth ${depth} exceeds the maximum allowed depth of ${opts.maxDepth}.`,
                         { nodes: [node], extensions: { code: 'GRAPHQL_DEPTH_LIMIT', depth, maxDepth: opts.maxDepth } },
+                    ));
+                }
+                if (mutations > maxMutationsOf(opts)) {
+                    context.reportError(new GraphQLError(
+                        `Operation holds ${mutations} mutations; at most ${maxMutationsOf(opts)} are allowed per document.`,
+                        { nodes: [node], extensions: { code: 'GRAPHQL_MUTATION_LIMIT', mutations, maxMutations: maxMutationsOf(opts) } },
                     ));
                 }
                 if (cost > opts.maxCost) {
