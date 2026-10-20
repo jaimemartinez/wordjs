@@ -1281,10 +1281,22 @@ export const menusApi = {
     deleteItem: (itemId: number) => apiDelete(`/menus/items/${itemId}`),
 };
 
+/** One setting of a widget instance (backend core/widgets WidgetField). */
+export interface WidgetField {
+    name: string;
+    label: string;
+    type: "text" | "textarea" | "html" | "number" | "checkbox";
+    min?: number;
+    max?: number;
+    default?: string | number | boolean;
+}
+
 export interface Widget {
     id: string;
     name: string;
     description: string;
+    /** The instance settings form; null for a widget that declares none. */
+    fields?: WidgetField[] | null;
 }
 
 export interface Sidebar {
@@ -1298,7 +1310,10 @@ export const widgetsApi = {
     listWidgets: () => apiGet<Widget[]>("/widgets"),
     listSidebars: () => apiGet<Sidebar[]>("/widgets/sidebars"),
     addToSidebar: (sidebarId: string, widgetId: string, settings: any = {}) => apiPost<{ success: boolean; instanceKey: string }>(`/widgets/sidebars/${sidebarId}`, { widgetId, settings }),
-    updateInstance: (widgetId: string, instanceId: string, settings: any) => apiPut<{ success: boolean }>(`/widgets/${widgetId}/instances/${instanceId}`, { settings }),
+    getInstance: (widgetId: string, instanceId: string) =>
+        apiGet<{ settings: Record<string, unknown>; fields: WidgetField[] | null }>(`/widgets/${encodeURIComponent(widgetId)}/instances/${encodeURIComponent(instanceId)}`),
+    updateInstance: (widgetId: string, instanceId: string, settings: any) =>
+        apiPut<{ success: boolean; settings: Record<string, unknown> }>(`/widgets/${encodeURIComponent(widgetId)}/instances/${encodeURIComponent(instanceId)}`, { settings }),
     removeFromSidebar: (sidebarId: string, instanceKey: string) => apiDelete<{ success: boolean }>(`/widgets/sidebars/${sidebarId}/${instanceKey}`),
     reorderSidebar: (sidebarId: string, widgets: string[]) => apiPost<{ success: boolean }>(`/widgets/sidebars/${sidebarId}/reorder`, { widgets }),
     renderSidebar: (sidebarId: string) => api<string>(`/widgets/sidebars/${sidebarId}/render`, { headers: { Accept: "text/html" }, responseType: "text" }),

@@ -25,6 +25,7 @@ class Widget {
     render: any;
     form: any;
     update: any;
+    fields: WidgetField[] | null;
 
     constructor(id: string, name: string, options: Record<string, any> = {}) {
         this.id = id;
@@ -34,7 +35,83 @@ class Widget {
         this.render = options.render || (() => '');
         this.form = options.form || (() => '');
         this.update = options.update || ((instance: any) => instance);
+        this.fields = Array.isArray(options.fields) ? normalizeFields(options.fields) : null;
     }
+}
+
+// ── WIDGET SETTINGS: a declarative form ──────────────────────────────────────────────────────────────
+//
+// A widget declares the settings an instance has as `fields` (registerWidget(id, name, { fields })). The
+// admin's Widgets screen draws the form from them, and PUT /widgets/:widgetId/instances/:instanceId stores
+// only those fields, coerced to their type and bounded — the stored value is what the renderer reads, so it
+// must never be whatever the request carried. A widget registered without `fields` (older plugin widgets)
+// keeps storing a plain JSON object, bounded in size, as before.
+
+export type WidgetFieldType = 'text' | 'textarea' | 'html' | 'number' | 'checkbox';
+export interface WidgetField {
+    name: string;
+    label: string;
+    type: WidgetFieldType;
+    /** number: the allowed range; text/textarea/html: the maximum length. */
+    min?: number;
+    max?: number;
+    default?: string | number | boolean;
+}
+
+const FIELD_TYPES: ReadonlySet<string> = new Set(['text', 'textarea', 'html', 'number', 'checkbox']);
+const FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
+const FORBIDDEN_FIELD_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+const DEFAULT_MAX_LENGTH: Record<string, number> = { text: 500, textarea: 20000, html: 100000 };
+/** A settings object a widget without `fields` may store (its JSON). */
+const MAX_FREEFORM_SETTINGS_BYTES = 100 * 1024;
+
+function normalizeFields(fields: any[]): WidgetField[] {
+    const out: WidgetField[] = [];
+    const seen = new Set<string>();
+    for (const f of fields) {
+        if (!f || typeof f !== 'object' || typeof f.name !== 'string' || !FIELD_NAME.test(f.name) || FORBIDDEN_FIELD_NAMES.has(f.name)) continue;
+        if (seen.has(f.name) || !FIELD_TYPES.has(f.type)) continue;
+        seen.add(f.name);
+        const field: WidgetField = { name: f.name, label: typeof f.label === 'string' && f.label ? f.label : f.name, type: f.type };
+        if (Number.isFinite(f.min)) field.min = Number(f.min);
+        if (Number.isFinite(f.max)) field.max = Number(f.max);
+        if (['string', 'number', 'boolean'].includes(typeof f.default)) field.default = f.default;
+        out.push(field);
+    }
+    return out;
+}
+
+/**
+ * The settings a widget instance may store, from what a request sent: `{ ok: true, settings }`, or
+ * `{ ok: false, error }` for a value that is not a settings object.
+ */
+function sanitizeWidgetSettings(widget: any, input: unknown): { ok: true; settings: Record<string, any> } | { ok: false; error: string } {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, error: '`settings` must be an object.' };
+    const src = input as Record<string, unknown>;
+    if (!widget || !Array.isArray(widget.fields)) {
+        let json = '';
+        try { json = JSON.stringify(src); } catch { return { ok: false, error: '`settings` must be plain JSON.' }; }
+        if (Buffer.byteLength(json) > MAX_FREEFORM_SETTINGS_BYTES) return { ok: false, error: '`settings` is too large.' };
+        return { ok: true, settings: JSON.parse(json) };
+    }
+    const settings: Record<string, any> = {};
+    for (const f of widget.fields as WidgetField[]) {
+        const has = Object.prototype.hasOwnProperty.call(src, f.name);
+        const v = has ? src[f.name] : f.default;
+        if (v === undefined || v === null) continue;
+        if (f.type === 'number') {
+            let n = Math.trunc(Number(v));
+            if (!Number.isFinite(n)) continue;
+            if (f.min !== undefined) n = Math.max(f.min, n);
+            if (f.max !== undefined) n = Math.min(f.max, n);
+            settings[f.name] = n;
+        } else if (f.type === 'checkbox') {
+            settings[f.name] = v === true || v === 'true' || v === 1 || v === '1' || v === 'on';
+        } else {
+            settings[f.name] = String(v).slice(0, f.max ?? DEFAULT_MAX_LENGTH[f.type]);
+        }
+    }
+    return { ok: true, settings };
 }
 
 /**
@@ -45,6 +122,11 @@ function registerWidget(id: string, name: string, options: Record<string, any> =
     const widget = new Widget(id, name, options);
     registeredWidgets.set(id, widget);
     return widget;
+}
+
+/** A registered widget by id (own entries only). */
+function getWidget(id: string) {
+    return registeredWidgets.get(String(id)) || null;
 }
 
 /**
@@ -250,14 +332,18 @@ async function removeWidgetFromSidebar(sidebarId: string, instanceKey: any) {
 
 // Register default widgets
 
+const TITLE_FIELD = { name: 'title', label: 'Title', type: 'text', max: 200 };
+
 registerWidget('text', 'Text', {
     description: 'Arbitrary text or HTML',
+    fields: [TITLE_FIELD, { name: 'content', label: 'Content', type: 'textarea' }],
     render: async (settings: any) => `<div class="textwidget">${settings.content || ''}</div>`,
     form: (settings: any) => `<textarea name="content">${escHtml(settings.content || '')}</textarea>`
 });
 
 registerWidget('recent_posts', 'Recent Posts', {
     description: 'Your most recent posts',
+    fields: [TITLE_FIELD, { name: 'number', label: 'Number of posts', type: 'number', min: 1, max: 20, default: 5 }],
     render: async (settings: any) => {
         const Post = require('../models/Post');
         const limit = parseInt(settings.number) || 5;
@@ -275,6 +361,7 @@ registerWidget('recent_posts', 'Recent Posts', {
 
 registerWidget('categories', 'Categories', {
     description: 'A list of categories',
+    fields: [TITLE_FIELD, { name: 'hideEmpty', label: 'Hide empty categories', type: 'checkbox', default: false }],
     render: async (settings: any) => {
         const Term = require('../models/Term');
         const categories = await Term.getCategories({ hideEmpty: settings.hideEmpty });
@@ -291,6 +378,7 @@ registerWidget('categories', 'Categories', {
 
 registerWidget('search', 'Search', {
     description: 'A search form',
+    fields: [TITLE_FIELD],
     render: async () => `
     <form class="search-form" action="/search" method="get">
       <input type="text" name="q" placeholder="Search...">
@@ -301,6 +389,7 @@ registerWidget('search', 'Search', {
 
 registerWidget('custom_html', 'Custom HTML', {
     description: 'Add custom HTML code',
+    fields: [TITLE_FIELD, { name: 'html', label: 'HTML', type: 'html' }],
     render: async (settings: any) => settings.html || ''
 });
 
@@ -317,6 +406,8 @@ registerSidebar('footer-1', {
 
 module.exports = {
     Widget,
+    getWidget,
+    sanitizeWidgetSettings,
     registerWidget,
     unregisterWidget,
     getWidgets,
