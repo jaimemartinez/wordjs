@@ -1655,6 +1655,13 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         return next();
     }
 
+    // A plugin WEBHOOK route (core/plugin-webhooks): a signed server-to-server POST that sends no Origin
+    // or Referer. The exemption grants nothing — the host resolves no user and forwards no cookie to
+    // such a route; the plugin authenticates the sender by the body's signature.
+    if (require('../core/plugin-webhooks').isWebhookRequest(req)) {
+        return next();
+    }
+
     const origin = req.get('Origin');
     const referer = req.get('Referer');
     const host = trustedHost(req);
