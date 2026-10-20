@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "snapshot": {
     "restSource": {
-      "routeFiles": 47,
-      "endpointDeclarations": 299,
-      "mountDeclarations": 113,
-      "semanticSha256": "c7dcfa58666e27386eae29ef58f6498504d17951e84170c11a5a4e94458244c2"
+      "routeFiles": 48,
+      "endpointDeclarations": 300,
+      "mountDeclarations": 114,
+      "semanticSha256": "476ea502ea31fcaf0b660dee3d553922da05ae3fe1c07f61b80d8599fe8a4c5d"
     },
     "openapi": {
-      "paths": 234,
-      "operations": 296,
+      "paths": 235,
+      "operations": 297,
       "coverage": 0.99,
-      "semanticSha256": "bc6645156743a6708bb729bdace0d40e60eaf6025647be93d9eb35ea4a39a66a"
+      "semanticSha256": "5cd11fbc0dac063fdc3b4c2e5197f5c4e3f4c57003cc51e28101a4c80a432862"
     },
     "typingDebt": {
       "requestAny": {
@@ -48,10 +48,10 @@
         "WordJSSmtpVerdict",
         "WordJSUploadedFile"
       ],
-      "semanticSha256": "578d8cd838fdec4f29b31729a5fadfd86ccf2839a9f2beaa6101a38b9e4eee95"
+      "semanticSha256": "a0849efd7c8486f697f17d5c07bf81eae59706e95cda5fab5e4085ba78998b52"
     },
     "verificationSurface": {
-      "backendTestFiles": 380,
+      "backendTestFiles": 381,
       "frontendTestFiles": 294,
       "sandboxWorkflowSemanticSha256": "6589c490e047c52e4330eed83db22c91501686ccf6f30ba7ce030938c995a913",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"

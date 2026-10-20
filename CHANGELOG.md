@@ -44,6 +44,22 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `wordjs.crypto.hmac()` and `wordjs.crypto.timingSafeEqual()` let a sandboxed plugin verify the signature.
 - The sign-in and sign-up pages honour `?redirect=<same-origin path>`, so a reader returns to the post
   they were reading.
+- **Newsletters to members (`memberships` 1.1.0).** Publishing a post can email it to all, free or paid
+  members (chosen in the editor), Ghost-style. Sends are queued and rate-limited by the plugin's worker,
+  never inline in the publish request, and go out through the site's mail provider; failures retry with
+  backoff and the admin sees a send log with delivered / failed counts, approves sends requested by
+  authors, retries failures and sends tests. A post that requires an access level goes out in full only to
+  members who hold it — everyone else gets the teaser and a link. Every mail has a one-click unsubscribe
+  link (an HMAC token per account) plus RFC 8058 `List-Unsubscribe` / `List-Unsubscribe-Post` headers, and
+  members manage newsletters from their account block. Newsletters go only to addresses the member has
+  confirmed (a fixed-text confirmation mail, at most once every 30 days); what each member receives is
+  decided when their mail is sent, and every step is claimed in the database, so several workers never
+  send the same mail twice.
+- **Plugin fields in the post editor.** Through the new `post_editor_fields` filter a plugin declares a
+  field (select, radio or text, validated by core) that the editor shows in the entry's settings and saves
+  as unprefixed post meta (`GET /api/v1/editor/fields`).
+- **`wordjs.posts.get(id)`** (grant `posts:read`) reads a published, public entry with its access level;
+  **`wordjs.users.search()`** takes an `offset` to page through every account.
 - **conference-manager 2.30.0: everything since 2.17.2, in one release.** Versions 2.18.0 to 2.29.0 were built
   and tried on a test site but never released; they ship together now, and the entries below keep the version
   each change was made in: «Pagos de cuotas», split fee payments in the admin and the portal (2.18.0); rooms
