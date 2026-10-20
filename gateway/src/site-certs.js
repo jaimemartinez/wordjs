@@ -44,7 +44,22 @@ function validatePair(host, key, cert) {
     tls.createSecureContext({ key, cert }); // what the listener will build: it must accept it
 }
 
-const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
+const PEM_BEGIN = '-----BEGIN CERTIFICATE-----';
+const PEM_END = '-----END CERTIFICATE-----';
+/** The certificate blocks of a PEM bundle, in order: one linear pass with indexOf (no regular expression). */
+function pemCertificateBlocks(text) {
+    const blocks = [];
+    let at = 0;
+    for (;;) {
+        const begin = text.indexOf(PEM_BEGIN, at);
+        if (begin < 0) break;
+        const end = text.indexOf(PEM_END, begin + PEM_BEGIN.length);
+        if (end < 0) break;
+        blocks.push(text.slice(begin, end + PEM_END.length));
+        at = end + PEM_END.length;
+    }
+    return blocks;
+}
 
 /**
  * What is written is never the request's text: the key re-exported from the parsed key object (PKCS#8),
@@ -53,7 +68,7 @@ const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE----
  */
 function canonicalPair(key, cert) {
     const keyPem = crypto.createPrivateKey(key).export({ type: 'pkcs8', format: 'pem' }).toString();
-    const blocks = String(cert).match(PEM_CERT_RE) || [];
+    const blocks = pemCertificateBlocks(String(cert));
     if (!blocks.length) throw new Error('no certificate in the PEM');
     const chainPem = blocks.map((b) => new crypto.X509Certificate(b).toString().trim()).join('\n') + '\n';
     return { keyPem, chainPem };
