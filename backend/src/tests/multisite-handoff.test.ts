@@ -102,7 +102,7 @@ async function issue(siteId: number, as = tokens.net, currentPassword = PASSWORD
 const redeem = (host: string, token: unknown) => direct('post', `${API}/auth/handoff`, host).send({ token });
 
 /** Run `fn` with the clock moved `ms` ahead (jsonwebtoken and the handoff read Date.now). */
-async function later<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+async function later(ms: number, fn: () => any): Promise<any> {
     const realNow = Date.now;
     Date.now = () => realNow() + ms;
     try { return await fn(); } finally { Date.now = realNow; }
