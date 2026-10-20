@@ -259,6 +259,20 @@ function cronHookAllowedHere(event: any): boolean {
     return SECONDARY_SITE_CRON_HOOKS.has(String(event.hook));
 }
 
+/**
+ * The core events of a site other than the main one that never reach plugin or theme code (no hook a
+ * plugin can listen to fires during them), so they run without starting the site's workers.
+ */
+const WORKERLESS_CRON_HOOKS = new Set(['wordjs_analytics_prune', 'wordjs_collab_sweep', 'wordjs_scheduled_backup']);
+
+/** Start the current site's workers if a due event of this pass may need them (no-op on the main site). */
+async function wakeForDueEvents(events: any, timestamps: string[], now: number): Promise<void> {
+    if (!require('./multisite-guards').onSecondarySite()) return;
+    const needs = timestamps.some((timestamp) => parseInt(timestamp) <= now && Object.values(events[timestamp] || {}).some((event: any) =>
+        event && cronHookAllowedHere(event) && (event.pluginSlug || !WORKERLESS_CRON_HOOKS.has(String(event.hook)))));
+    if (needs) await require('./site-workers').wake(require('./site-context').currentSiteId());
+}
+
 async function runCronInner() {
     const now = Date.now();
     const events = await getOption('cron', {});
@@ -278,6 +292,10 @@ async function runCronInner() {
     // lost. Instead we re-read fresh at the end and apply only our own deltas.
     const executed: Array<{ timestamp: string; key: string }> = [];
     const reschedules: any[] = [];
+
+    // Multisite: a site whose workers stopped while it was idle starts them before a due event that may
+    // reach plugin or theme code runs (core/site-workers), so the event is not lost on them.
+    await wakeForDueEvents(events, timestamps, now);
 
     for (const timestamp of timestamps) {
         if (parseInt(timestamp) > now) continue;
