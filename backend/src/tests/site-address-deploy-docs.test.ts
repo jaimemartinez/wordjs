@@ -231,7 +231,7 @@ describe('deployment notes the redesign needs', () => {
                 return routes.slice(start, next === -1 ? undefined : next).includes('refuseRetiringSignIn(req, res)');
             })
             .map((m: RegExpMatchArray) => m[1]);
-        assert.deepStrictEqual(asking.sort(), ['/login', '/mfa', '/register'], `positive control: parsed ${asking}`);
+        assert.deepStrictEqual(asking.sort(), ['/handoff', '/login', '/mfa', '/register'], `positive control: parsed ${asking}`);
         const table = read('documentation/api.md').split('\n');
         for (const route of [...asking, '/refresh']) {
             const row = table.find((l: string) => new RegExp(`^\\| \`POST\` \\| \`${route}\` +\\|`).test(l));
