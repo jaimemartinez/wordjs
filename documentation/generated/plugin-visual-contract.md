@@ -28,15 +28,21 @@ Límites: 65536 bytes, 100 bloques y profundidad 3.
 
 | Bloque | Propiedades |
 | --- | --- |
-| `ChromeLogo` | size: enum |
+| `ChromeLogo` | size: enum<br>showTitle: boolean |
 | `ChromeSiteTitle` | showTagline: boolean |
-| `ChromeNav` | location: enum (required)<br>orientation: enum (required) |
+| `ChromeNav` | location: enum (required)<br>orientation: enum (required)<br>collapse: enum<br>title: string |
 | `ChromeSearch` | placeholder: string |
-| `ChromeSocials` | source: enum (required) |
+| `ChromeSocials` | source: enum (required)<br>title: string |
 | `ChromeText` | text: string (required) |
 | `ChromeButton` | label: string (required)<br>href: href (required)<br>variant: enum (required) |
 | `ChromeSpacer` | size: enum (required) |
-| `ChromeRow` | items: slot (required)<br>align: enum (required)<br>gap: enum (required)<br>wrap: boolean |
+| `ChromeRow` | items: slot (required)<br>align: enum (required)<br>gap: enum (required)<br>wrap: boolean<br>direction: enum<br>stack: enum<br>tone: enum |
+| `ChromeColumns` | items: slot (required)<br>columns: enum (required)<br>gap: enum (required) |
+| `ChromeHeading` | text: string (required)<br>level: enum |
+| `ChromeRichText` | html: string (required) |
+| `ChromeCopyright` | text: string |
+| `ChromeLanguageSwitcher` | style: enum<br>labels: enum |
+| `ChromeWidgets` | area: slug (required) |
 
 ## Registro core de Verso
 

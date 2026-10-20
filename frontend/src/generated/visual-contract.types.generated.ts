@@ -5,7 +5,7 @@
 
 export type VisualContractVersion = 1;
 export type TemplateBlockType = "PageContent" | "Section" | "Grid" | "FlexRow" | "Columns" | "Spacer" | "Divider" | "PostsGrid" | "CategoryPosts" | "SearchBar" | "TemplatePart";
-export type ChromeBlockType = "ChromeLogo" | "ChromeSiteTitle" | "ChromeNav" | "ChromeSearch" | "ChromeSocials" | "ChromeText" | "ChromeButton" | "ChromeSpacer" | "ChromeRow";
+export type ChromeBlockType = "ChromeLogo" | "ChromeSiteTitle" | "ChromeNav" | "ChromeSearch" | "ChromeSocials" | "ChromeText" | "ChromeButton" | "ChromeSpacer" | "ChromeRow" | "ChromeColumns" | "ChromeHeading" | "ChromeRichText" | "ChromeCopyright" | "ChromeLanguageSwitcher" | "ChromeWidgets";
 export type CoreBlockType = "Heading" | "Text" | "Image" | "Divider" | "Button" | "Spacer" | "Section" | "Grid" | "FlexRow" | "Columns" | "Card" | "Quote" | "Table" | "IconList" | "SocialLinks" | "Stats" | "HTMLEmbed" | "PricingTable" | "Testimonial" | "CTABanner" | "VideoEmbed" | "Hero" | "PostsGrid" | "CategoryPosts" | "AudioPlayer" | "Accordion" | "Tabs" | "SearchBar" | "Form" | "Symbol" | "ParticleField" | "NavMenu" | "SiteLogo" | "BackToTop" | "OffCanvas" | "Breadcrumbs" | "LangSwitcher" | "TableOfContents" | "MegaMenu";
 export type CoreBlockCategory = "content" | "layout";
 export type TemplatePartArea = "header" | "footer" | "sidebar" | "general";
@@ -36,15 +36,21 @@ export interface GeneratedTemplateTree {
 }
 
 export interface GeneratedChromePropsByType {
-  readonly "ChromeLogo": { readonly id?: string; readonly "size"?: "sm" | "md" | "lg"; };
-  readonly "ChromeSiteTitle": { readonly id?: string; readonly "showTagline"?: boolean; };
-  readonly "ChromeNav": { readonly id?: string; readonly "location": "header" | "footer"; readonly "orientation": "horizontal" | "vertical"; };
-  readonly "ChromeSearch": { readonly id?: string; readonly "placeholder"?: string; };
-  readonly "ChromeSocials": { readonly id?: string; readonly "source": "settings"; };
-  readonly "ChromeText": { readonly id?: string; readonly "text": string; };
-  readonly "ChromeButton": { readonly id?: string; readonly "label": string; readonly "href": string; readonly "variant": "primary" | "ghost"; };
-  readonly "ChromeSpacer": { readonly id?: string; readonly "size": "sm" | "md" | "lg"; };
-  readonly "ChromeRow": { readonly id?: string; readonly "items": GeneratedChromeBlock[]; readonly "align": "start" | "center" | "end" | "between"; readonly "gap": "sm" | "md" | "lg"; readonly "wrap"?: boolean; };
+  readonly "ChromeLogo": { readonly id?: string; readonly "size"?: "sm" | "md" | "lg"; readonly "showTitle"?: boolean; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeSiteTitle": { readonly id?: string; readonly "showTagline"?: boolean; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeNav": { readonly id?: string; readonly "location": "header" | "footer"; readonly "orientation": "horizontal" | "vertical"; readonly "collapse"?: "mobile" | "tablet" | "always" | "never"; readonly "title"?: string; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeSearch": { readonly id?: string; readonly "placeholder"?: string; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeSocials": { readonly id?: string; readonly "source": "settings"; readonly "title"?: string; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeText": { readonly id?: string; readonly "text": string; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeButton": { readonly id?: string; readonly "label": string; readonly "href": string; readonly "variant": "primary" | "ghost"; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeSpacer": { readonly id?: string; readonly "size": "sm" | "md" | "lg"; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeRow": { readonly id?: string; readonly "items": GeneratedChromeBlock[]; readonly "align": "start" | "center" | "end" | "between"; readonly "gap": "sm" | "md" | "lg"; readonly "wrap"?: boolean; readonly "direction"?: "row" | "column"; readonly "stack"?: "never" | "mobile" | "tablet"; readonly "tone"?: "none" | "muted" | "primary" | "inverse"; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeColumns": { readonly id?: string; readonly "items": GeneratedChromeBlock[]; readonly "columns": "2" | "3" | "4" | "5"; readonly "gap": "sm" | "md" | "lg"; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeHeading": { readonly id?: string; readonly "text": string; readonly "level"?: "h2" | "h3" | "h4"; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeRichText": { readonly id?: string; readonly "html": string; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeCopyright": { readonly id?: string; readonly "text"?: string; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeLanguageSwitcher": { readonly id?: string; readonly "style"?: "inline" | "dropdown"; readonly "labels"?: "native" | "code"; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
+  readonly "ChromeWidgets": { readonly id?: string; readonly "area": string; readonly "hideMobile"?: boolean; readonly "hideTablet"?: boolean; readonly "hideDesktop"?: boolean; };
 }
 
 export type GeneratedChromeBlock = {

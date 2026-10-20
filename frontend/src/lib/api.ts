@@ -1156,7 +1156,12 @@ export type ChromePart = "header" | "footer" | "announcement";
 export const chromeApi = {
     save: (part: ChromePart, data: unknown) => apiPut<{ part: string; saved: boolean }>(`/chrome/${part}`, { data }),
     reset: (part: ChromePart) => apiDelete<{ part: string; deleted: boolean }>(`/chrome/${part}`),
+    // The built-in (pre-composition) header/footer of this site, converted to a composition — read only.
+    legacy: (part: "header" | "footer") => apiGet<{ part: string; data: unknown }>(`/chrome/${part}/legacy`),
+    // One-shot, idempotent conversion of the legacy footer settings into the site footer composition.
+    migrateLegacy: () => apiPost<{ footer: ChromeMigrationOutcome; header: ChromeMigrationOutcome }>("/chrome/migrate-legacy", {}),
 };
+export type ChromeMigrationOutcome = "migrated" | "site-composition" | "theme-composition" | "nothing-to-migrate";
 
 export const rolesApi = {
     list: () => apiGet<Record<string, Role>>("/roles"),

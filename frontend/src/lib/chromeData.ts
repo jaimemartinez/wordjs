@@ -3,7 +3,7 @@
 // in the client editor and under vitest alike.
 //
 // FORMAT: Puck Data JSON { root: { props: {} }, content: [{ type, props }] }. Nesting ONLY through
-// ChromeRow's "items" slot, total depth ≤ 3. Validation is FAIL-CLOSED: any violation (type outside
+// the container blocks' "items" slot (ChromeRow, ChromeColumns), total depth ≤ 3. Validation is FAIL-CLOSED: any violation (type outside
 // the allowlist, bad prop, unsafe href, budget/depth overflow) invalidates the WHOLE composition —
 // the caller falls to the next precedence level, never a silent partial render.
 
@@ -247,17 +247,61 @@ function generatedPropCheck(spec: { kind: string; required?: boolean; values?: r
             break;
         case "href": ok = isSafeChromeHref; expected = "a relative '/…' path or an http(s):// URL"; break;
         case "slot": ok = Array.isArray; expected = "an array of blocks"; break;
+        case "slug": ok = (v) => typeof v === "string" && CHROME_SLUG_PATTERN.test(v); expected = "a slug (lowercase letters, digits, '-' or '_')"; break;
         default: ok = () => false; expected = `unsupported generated kind ${spec.kind}`;
     }
     return { required: spec.required === true, ok, expected };
 }
 
+// ChromeWidgets.area becomes part of a request path — a plain slug only. Mirrors chrome-validate.
+const CHROME_SLUG_PATTERN = new RegExp(CHROME_CONTRACT.slugPattern);
+
+// Every block also accepts the contract's commonProps (per-breakpoint visibility), merged here once —
+// the backend validator merges the same set, so the two can never disagree about which keys exist.
 const BLOCK_SPECS = Object.fromEntries(
     Object.entries(CHROME_CONTRACT.blocks).map(([type, block]) => [
         type,
-        Object.fromEntries(Object.entries(block.props).map(([prop, spec]) => [prop, generatedPropCheck(spec)])),
+        Object.fromEntries(
+            Object.entries({ ...block.props, ...CHROME_CONTRACT.commonProps }).map(([prop, spec]) => [prop, generatedPropCheck(spec as { kind: string; required?: boolean; values?: readonly string[] })]),
+        ),
     ]),
 ) as Record<ChromeBlockType, Record<string, PropCheck>>;
+
+// Known root props are type-checked; unknown root keys are ignored (an older editor's root may carry
+// anything — failing closed on it would silently drop a stored composition after an upgrade).
+const ROOT_SPECS = Object.fromEntries(
+    Object.entries(CHROME_CONTRACT.rootProps).map(([prop, spec]) => [prop, generatedPropCheck(spec as { kind: string; values?: readonly string[] })]),
+) as Record<string, PropCheck>;
+
+// The slot props of each container block (ChromeRow.items, ChromeColumns.items) — the only nesting.
+const SLOT_PROPS = Object.fromEntries(
+    Object.entries(CHROME_CONTRACT.blocks).map(([type, block]) => [
+        type,
+        Object.entries(block.props).filter(([, spec]) => (spec as { kind: string }).kind === "slot").map(([prop]) => prop),
+    ]),
+) as Record<ChromeBlockType, string[]>;
+
+/** The header/footer wrapper behaviour a composition asks for (root.props), normalized. */
+export interface ChromeRootOptions {
+    sticky?: boolean;
+    transparent: boolean;
+    // Text colour while a transparent header sits over the hero: "light" over a dark image, "dark"
+    // over a pale one. Unset = the theme's own colours (or its --wjs-header-overlay-text).
+    overlayText?: "light" | "dark";
+    width: "container" | "full";
+}
+
+export function chromeRootOptions(data: ChromeData | null | undefined): ChromeRootOptions {
+    const props = (data?.root?.props || {}) as Record<string, unknown>;
+    return {
+        // undefined = "not stated by the composition" — the layout then keeps the theme's layout v2
+        // `header.sticky`, exactly as before root props existed.
+        sticky: typeof props.sticky === "boolean" ? props.sticky : undefined,
+        transparent: props.transparent === true,
+        overlayText: props.overlayText === "light" || props.overlayText === "dark" ? props.overlayText : undefined,
+        width: props.width === "full" ? "full" : "container",
+    };
+}
 
 export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): ChromeParseResult {
     const where = ctx.source ? `${ctx.source}: ` : "";
@@ -300,6 +344,11 @@ export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): Chr
     const root = value.root;
     if (!isPlainObject(root) || (root.props !== undefined && !isPlainObject(root.props))) {
         errors.push(`${where}root must be an object with optional props object`);
+    } else if (isPlainObject(root.props)) {
+        for (const [key, check] of Object.entries(ROOT_SPECS)) {
+            const v = root.props[key];
+            if (v !== undefined && !check.ok(v)) errors.push(`${where}root.${key} must be ${check.expected}`);
+        }
     }
     const content = value.content;
     if (!Array.isArray(content)) {
@@ -364,8 +413,9 @@ export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): Chr
             }
             if (!Object.prototype.hasOwnProperty.call(spec, key)) errors.push(`${where}${path}: ${type} has unknown prop "${key}"`);
         }
-        if (type === "ChromeRow" && Array.isArray(props.items)) {
-            props.items.forEach((child, i) => visit(child, depth + 1, `${path}.items[${i}]`));
+        for (const slot of SLOT_PROPS[type as ChromeBlockType] || []) {
+            const children = props[slot];
+            if (Array.isArray(children)) children.forEach((child, i) => visit(child, depth + 1, `${path}.${slot}[${i}]`));
         }
     };
     (content as unknown[]).forEach((block, i) => visit(block, 1, `content[${i}]`));
