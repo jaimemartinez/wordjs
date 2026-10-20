@@ -445,3 +445,14 @@ describe('decided when each mail is sent; claimed so it is sent once (second aud
         }
     });
 });
+
+describe('the plain-text part', () => {
+    const { textOf } = require('../../../marketplace/plugins/memberships/lib/newsletter.js');
+
+    test('tags nested to survive one pass are gone, and entities are decoded once', () => {
+        assert.strictEqual(textOf('<p>a<<b>script>alert(1)<</b>/script>b</p>'), 'aalert(1)b', 'the tag a first pass reassembles is stripped too');
+        assert.ok(!/<|>/.test(textOf('<<script>script>x<</script>/script><img src=x onerror=1>')), 'no tag survives');
+        assert.strictEqual(textOf('&amp;lt;b&amp;gt; &amp;amp; &lt;i&gt;'), '&lt;b&gt; &amp; <i>', 'one decoding pass, not two');
+        assert.strictEqual(textOf('<p>One</p><p>Two&nbsp;&quot;3&quot; &#39;4&#39;</p>'), 'One\nTwo "3" \'4\'');
+    });
+});
