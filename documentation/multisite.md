@@ -169,7 +169,8 @@ site sees the same installed plugins. What each site does with them is its own:
 Lowering a ceiling takes effect at once on every site (a permission outside it stops counting even
 though the site's stored grant still names it, and running workers are restarted). *Stop offering*
 deactivates the plugin on every other site; their grants are kept for a later offer. Deleting a plugin
-on the main site removes it from the whole network.
+on the main site removes it from the whole network (on Windows, with the AppContainer profile of its
+worker on every site).
 
 A plugin that provides email does so per site: a site sends mail only through a mail plugin active and
 granted `email:provider` **on that site**. Account email (password-reset and verification links) is per
@@ -221,7 +222,8 @@ and an address under the reserved `.invalid` domain, and it cannot be used any o
 Suspend the site first, then Admin → Network → Delete: type the site's slug to confirm (your password
 confirms it too). Everything the site holds is removed for good: its database (its SQLite file, its
 Postgres schema or its MySQL database), its uploads and private files (on disk and in the media bucket),
-its backups, its plugin and theme workers, the database principals of its plugins, its cached entries,
+its backups, its plugin and theme workers with their private storage (and, on Windows, each worker's
+AppContainer profile), the database principals of its plugins, its cached entries,
 its certificate and its addresses. Every node of the network forgets it within seconds. The main site
 cannot be deleted, and the id of a deleted site is never given to a new one.
 
