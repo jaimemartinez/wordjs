@@ -25,7 +25,6 @@ import {
 } from "../lib/badges";
 import { usePerms, ReadOnlyNotice } from "./perms";
 import { useTx } from "./MealScanner";
-import { BadgeSvg } from "./BadgeSvg";
 import { BadgeActions, phoneOfRow } from "./BadgeActions";
 import { BadgeEditor } from "./BadgeEditor";
 import { TEMPLATES, fromLegacy, sampleData } from "../lib/badgeEditor";
@@ -279,14 +278,6 @@ function Toggle({ on, onChange, title, hint, disabled }: any) {
     );
 }
 
-function IconBtn({ icon, label: aria, onClick, disabled }: any) {
-    return (
-        <button type="button" onClick={onClick} disabled={disabled} aria-label={aria} title={aria}
-            className="w-9 h-9 shrink-0 rounded-xl border-2 border-gray-100 text-gray-500 hover:border-blue-300 disabled:opacity-30 flex items-center justify-center">
-            <i className={`fa-solid ${icon} text-[11px]`}></i>
-        </button>
-    );
-}
 
 
 /** People shown at first and per «Mostrar más»: a long list stays quick on a phone. */

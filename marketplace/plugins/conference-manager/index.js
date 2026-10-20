@@ -3844,34 +3844,6 @@ exports.init = async function (wordjs) {
         if (!await allow(req, res, 'transport', 'manage')) return;
         // 2.26.0: only packages are sold (a one-bus trip is a one-bus package).
         return res.status(410).json({ error: 'Ahora se venden paquetes de buses: vende el paquete en «Paquetes».', code: 'packages' });
-        // eslint-disable-next-line no-unreachable
-        try {
-            const id = positiveInt(req.params.id);
-            const raw = req.body && req.body.inscription_ids;
-            if (!Array.isArray(raw) || !raw.length) return res.status(400).json({ error: 'Selecciona al menos un participante.' });
-            if (raw.length > BUS_MAX_PASSENGERS_PER_CALL) return res.status(400).json({ error: `Máximo ${BUS_MAX_PASSENGERS_PER_CALL} participantes por operación.` });
-            const ids = [...new Set(raw.map(positiveInt))];
-            if (ids.some(n => !n)) return res.status(400).json({ error: 'Identificadores de inscripción inválidos.' });
-            const result = await withAssignmentLock(async () => {
-                const bus = id ? await db.get(`${busSelect} WHERE b.id = ?`, [id]) : null;
-                if (!bus) throw httpError(404, 'Bus no encontrado.');
-                const rows = await db.all(
-                    `SELECT i.id, i.status, (SELECT COUNT(*) FROM ${T.tickets} t WHERE t.bus_id = ? AND t.inscription_id = i.id) AS on_bus`
-                    + ` FROM ${T.inscriptions} i WHERE i.conference_id = ? AND i.id IN (${ids.map(() => '?').join(', ')})`,
-                    [id, bus.conference_id, ...ids]);
-                if (rows.length !== ids.length) throw httpError(400, 'Alguno de los participantes no pertenece a esta conferencia.');
-                if (rows.some(r => r.status === 'cancelled')) throw httpError(400, 'Un participante cancelado no puede recibir pasaje.');
-                const fresh = rows.filter(r => !Number(r.on_bus)).map(r => r.id);
-                const free = Number(bus.capacity) - (Number(bus.sold) || 0);
-                if (fresh.length > free) throw httpError(409, `Solo quedan ${Math.max(0, free)} puestos en este bus.`);
-                const price = roundMoney(Number(bus.price) || 0);
-                if (fresh.length) {
-                    await runBatched(fresh.map(iid => [`INSERT INTO ${T.tickets} (bus_id, inscription_id, price, amount_paid, payment_status) VALUES (?, ?, ?, 0, ?)`, [id, iid, price, price <= 0 ? 'paid' : 'unpaid']]));
-                }
-                return { added: fresh.length, skipped: ids.length - fresh.length };
-            });
-            res.json({ success: true, ...result });
-        } catch (e) { sendError(res, e); }
     });
 
     http.route('delete', '/buses/:id/passengers/:inscriptionId', { auth: true }, async (req, res) => {
@@ -3944,28 +3916,6 @@ exports.init = async function (wordjs) {
         if (!await allow(req, res, 'transport', 'manage')) return;
         // 2.26.0: payments belong to the package sale (POST /transport/package-sales/:id/payments).
         return res.status(410).json({ error: 'Los pagos ahora se registran al paquete.', code: 'packages' });
-        // eslint-disable-next-line no-unreachable
-        try {
-            const id = positiveInt(req.params.id);
-            const { amount, method, reference, date } = req.body || {};
-            if (!Number.isFinite(Number(amount)) || Number(amount) > MAX_MONEY) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
-            const amt = roundMoney(amount);
-            if (amt <= 0) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
-            const m = assertPaymentMethod(method);
-            const when = date === undefined || date === null || date === '' ? null : normDate(date, 'fecha del pago');
-            const result = await withAssignmentLock(async () => {
-                const ticket = id ? await db.get(`SELECT * FROM ${T.tickets} WHERE id = ?`, [id]) : null;
-                if (!ticket) throw httpError(404, 'Pasaje no encontrado.');
-                const owed = toCents(ticket.price) - toCents(ticket.amount_paid);
-                if (toCents(amt) > owed) throw httpError(400, `El pago supera el saldo del pasaje (${fromCents(Math.max(0, owed)).toFixed(2)}).`);
-                const cols = ['ticket_id', 'amount', 'method', 'reference', 'recorded_by'], vals = [ticket.id, amt, m, shortText(reference, 100), reviewerOf(req)];
-                if (when) { cols.push('date'); vals.push(when); }
-                const r = await db.run(`INSERT INTO ${T.transportPayments} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, vals);
-                await recomputeTickets('id = ?', [ticket.id]);
-                return { id: r.lastID };
-            });
-            res.json({ success: true, ...result });
-        } catch (e) { sendError(res, e); }
     });
     http.route('delete', '/transport-payments/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'transport', 'manage')) return;
@@ -6201,7 +6151,6 @@ exports.init = async function (wordjs) {
         for (const p of participants) if (!claimed.has(p.id)) units.push({ people: [p], group: null });
 
         const hardSeparate = separateRules.filter(r => r.hard);
-        const softSeparate = separateRules.filter(r => !r.hard);
         const parts = [];
         units.sort((a, b) => b.people.length - a.people.length);
         for (const unit of units) {
@@ -6268,7 +6217,7 @@ exports.init = async function (wordjs) {
         const ruleRows = await io.rules(ruleLocation);
         const rules = rankRules(ruleRows.map(parseRuleRow).filter(ruleOnFormFields(await io.fieldNames())));
         const ctx = scopeRuleContext(rules, { isPool, locationId });
-        const { keepRules, separateRules, splitRules, companionRules, viewFor, mergedSeparateOk, companionUnmet, partitionBy, dividingRules } = ctx;
+        const { keepRules, separateRules, splitRules, companionRules, viewFor, mergedSeparateOk, companionUnmet, partitionBy } = ctx;
 
         // The set of delegated locations decides who belongs to the pool scope; a FROZEN location's
         // attendees are out of every scope but their own. That is a decision about BULK operations, not a
