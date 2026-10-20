@@ -91,8 +91,8 @@ export interface WordJSRouteRequest {
     cookies: Record<string, string>;
     /**
      * Only selected non-sensitive headers are forwarded — `x-portal-token` on ordinary routes; on a
-     * `{ webhook: true }` route, the provider's signature headers (any header naming a signature,
-     * `webhook-id`, `webhook-timestamp`) and `content-type`, lower-cased.
+     * `{ webhook: true }` route, the provider's signature headers (any header naming a signature or a
+     * checksum, `webhook-id`, `webhook-timestamp`, `x-request-id`) and `content-type`, lower-cased.
      */
     headers: { 'x-portal-token'?: string; [name: string]: string | undefined };
     /** `{ webhook: true }` routes only: the body exactly as received (UTF-8) — what the sender signed. */
@@ -392,6 +392,8 @@ export interface WordJS {
         randomInt(min: number, max: number): Promise<number>;
         /** HMAC of `data` (UTF-8) under `key`: 'sha256' | 'sha1' | 'sha512', hex (default) or base64. Data ≤ 2 MB. */
         hmac(algorithm: 'sha256' | 'sha1' | 'sha512', key: string, data: string, encoding?: 'hex' | 'base64'): Promise<string>;
+        /** Plain digest of `data` (UTF-8): 'sha256' | 'sha1' | 'sha512', hex (default) or base64. Data ≤ 2 MB. */
+        hash(algorithm: 'sha256' | 'sha1' | 'sha512', data: string, encoding?: 'hex' | 'base64'): Promise<string>;
         /** Constant-time string comparison (e.g. a received signature against the computed one). */
         timingSafeEqual(a: string, b: string): Promise<boolean>;
     };
@@ -477,7 +479,29 @@ export interface WordJS {
         findByEmail(email: string): Promise<WordJSSafeUser | null>;
         findByLogin(login: string): Promise<WordJSSafeUser | null>;
         findById(id: number | string): Promise<WordJSSafeUser | null>;
-        search(term: string, limit?: number): Promise<WordJSSafeUser[]>;
+        /** Up to `limit` (≤ 200) accounts matching `term`, ordered by id; `offset` pages through all of them. */
+        search(term: string, limit?: number, offset?: number): Promise<WordJSSafeUser[]>;
+    };
+
+    /**
+     * PUBLISHED entries only. Permission: `posts:read`. `null` for anything unpublished, private,
+     * password protected or of a non-public type. `content` is the full body and `accessLevel` the level
+     * the entry requires (`''` = public): a plugin that sends or syndicates it must itself withhold the
+     * gated part from recipients who do not hold the level.
+     */
+    posts: {
+        get(id: number): Promise<{
+            id: number; type: string; status: string; title: string; slug: string;
+            /** Site-relative public path (`/<slug>`) and its absolute URL on the site's main address. */
+            path: string; url: string;
+            date: string; authorId: number;
+            /** The author's own excerpt ('' when none) — never derived from the body. */
+            excerpt: string;
+            content: string;
+            accessLevel: string;
+            /** Public (unprefixed) meta keys only. */
+            meta: Record<string, unknown>;
+        } | null>;
     };
 
     /**

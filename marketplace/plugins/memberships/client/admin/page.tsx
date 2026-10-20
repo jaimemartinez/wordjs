@@ -4,7 +4,7 @@
 /**
  * Admin page for the Memberships plugin (/admin/plugin/memberships).
  * Tabs: Planes (paid tiers: CRUD), Miembros (paid and complimentary memberships, grant / revoke),
- * Ajustes (currency, free sign-up policy, write-only Stripe test key and webhook signing secret).
+ * Ajustes (currency, free sign-up policy, the payment provider and its write-only sandbox credentials).
  *
  * Styles: the plugin's own client/admin/admin.css, scoped to .plugin-admin-memberships (cf-* identity
  * shared with the other bundled plugins).
@@ -13,9 +13,17 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
+import NewsletterTab from "./NewsletterTab";
 
-const STATUS_LABELS = { active: "Activa", past_due: "Pago pendiente", canceled: "Cancelada", incomplete: "Incompleta" };
-const SOURCE_LABELS = { stripe: "Stripe", comped: "Cortesía" };
+const STATUS_LABELS = { active: "Activa", past_due: "Pago pendiente", canceled: "Cancelada", incomplete: "Incompleta", expired: "Vencida" };
+const SOURCE_LABELS = { stripe: "Stripe", mercadopago: "Mercado Pago", wompi: "Wompi", comped: "Cortesía" };
+
+/** Where each provider's webhook is set up, and which events it must send. */
+const PROVIDER_HELP = {
+    stripe: <>En Stripe → Desarrolladores → Webhooks, añade este endpoint con los eventos <code>checkout.session.completed</code>, <code>customer.subscription.updated</code>, <code>customer.subscription.deleted</code>, <code>invoice.paid</code> e <code>invoice.payment_failed</code>:</>,
+    mercadopago: <>En Mercado Pago → Tus integraciones → tu aplicación → Webhooks (modo de prueba), pega esta URL y marca los eventos <strong>Planes y suscripciones</strong> (<code>subscription_preapproval</code> y <code>subscription_authorized_payment</code>). Allí mismo está la clave secreta:</>,
+    wompi: <>En el panel de Wompi (sandbox) → Desarrolladores → URL de eventos, pega esta URL. Wompi no tiene suscripciones: cada pago abre un periodo, y la renovación automática es con Nequi (la cobra este sitio). Solo cobra en COP:</>,
+};
 
 const fmtMoney = (cents, symbol) =>
     `${symbol || "$"}${(Math.round(cents || 0) / 100).toLocaleString("es", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
@@ -131,8 +139,9 @@ export default function MembershipsAdminPage() {
     const [modal, setModal] = useState(null);
     const [busy, setBusy] = useState(false);
     const [comp, setComp] = useState({ user: "", tier_id: "", until: "", note: "" });
-    const [stripeKey, setStripeKey] = useState("");
-    const [webhookSecret, setWebhookSecret] = useState("");
+    // Typed credential values, { provider: { key: value } }; `clear` marks the ones to remove.
+    const [creds, setCreds] = useState({});
+    const [clear, setClear] = useState({});
 
     const symbol = cfg ? cfg.currencySymbol : "$";
 
@@ -170,7 +179,7 @@ export default function MembershipsAdminPage() {
 
     const revoke = async (m) => {
         const who = (m.user && (m.user.email || m.user.login)) || `#${m.user_id}`;
-        const what = m.source === "stripe" ? "Se cancelará su suscripción en Stripe inmediatamente." : "Perderá el acceso ahora.";
+        const what = m.source !== "comped" ? `Se cancelará su suscripción en ${SOURCE_LABELS[m.source] || m.source} inmediatamente.` : "Perderá el acceso ahora.";
         if (!window.confirm(`¿Revocar la membresía de ${who}? ${what}`)) return;
         setBusy(true);
         try { await apiPost(`/plugin/memberships/members/${m.id}/revoke`, {}); setMessage("Membresía revocada."); loadMembers(); } catch (e) { setMessage(`Error: ${e.message}`); } finally { setBusy(false); }
@@ -181,13 +190,22 @@ export default function MembershipsAdminPage() {
         setBusy(true);
         setMessage("");
         try {
-            const payload = { currencyCode: cfg.currencyCode, currencySymbol: cfg.currencySymbol, freeSignup: !!cfg.freeSignup };
-            if (stripeKey.trim() || cfg._clearKey) payload.stripeKey = cfg._clearKey ? "" : stripeKey.trim();
-            if (webhookSecret.trim() || cfg._clearWebhook) payload.webhookSecret = cfg._clearWebhook ? "" : webhookSecret.trim();
+            const payload = { currencyCode: cfg.currencyCode, currencySymbol: cfg.currencySymbol, freeSignup: !!cfg.freeSignup, newsletterEnabled: cfg.newsletterEnabled !== false, newsletterRate: Number(cfg.newsletterRate) || 60 };
+            payload.paymentProvider = cfg.paymentProvider || "";
+            // Write-only: absent = keep, "" = clear, value = replace.
+            const credentials = {};
+            for (const p of cfg.providers || []) {
+                for (const c of p.credentials) {
+                    const typed = ((creds[p.id] || {})[c.key] || "").trim();
+                    const wipe = !!(clear[p.id] || {})[c.key];
+                    if (typed || wipe) (credentials[p.id] = credentials[p.id] || {})[c.key] = wipe ? "" : typed;
+                }
+            }
+            payload.credentials = credentials;
             const next = await apiPost("/plugin/memberships/config", payload);
-            setCfg({ ...cfg, ...next, _clearKey: false, _clearWebhook: false });
-            setStripeKey("");
-            setWebhookSecret("");
+            setCfg({ ...cfg, ...next });
+            setCreds({});
+            setClear({});
             setMessage("Ajustes guardados.");
         } catch (err) {
             setMessage(`Error: ${err.message}`);
@@ -203,7 +221,7 @@ export default function MembershipsAdminPage() {
     );
 
     const activeCount = members.filter((m) => m.active).length;
-    const paidCount = members.filter((m) => m.active && m.source === "stripe").length;
+    const paidCount = members.filter((m) => m.active && m.source !== "comped").length;
 
     return (
         <div className="cf-shell">
@@ -211,7 +229,7 @@ export default function MembershipsAdminPage() {
                 <div className="cf-stamp" aria-hidden="true"><IconCard /></div>
                 <div>
                     <h1 className="cf-title">Membresías</h1>
-                    <p className="cf-subtitle">Contenido para miembros · planes de pago con Stripe · membresías de cortesía</p>
+                    <p className="cf-subtitle">Contenido para miembros · planes de pago (Stripe, Mercado Pago o Wompi) · membresías de cortesía</p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
@@ -219,6 +237,7 @@ export default function MembershipsAdminPage() {
             <div className="cf-tabs" role="tablist">
                 {tabBtn("tiers", "Planes")}
                 {tabBtn("members", "Miembros")}
+                {tabBtn("newsletter", "Newsletter")}
                 {tabBtn("config", "Ajustes")}
             </div>
 
@@ -269,7 +288,7 @@ export default function MembershipsAdminPage() {
                 <div>
                     <div className="cf-stats">
                         <div className="cf-stat"><p className="cf-label" style={{ marginBottom: "0.4rem" }}>Membresías activas</p><p className="cf-stat-value is-ok">{activeCount}</p></div>
-                        <div className="cf-stat"><p className="cf-label" style={{ marginBottom: "0.4rem" }}>De pago (Stripe)</p><p className="cf-stat-value">{paidCount}</p></div>
+                        <div className="cf-stat"><p className="cf-label" style={{ marginBottom: "0.4rem" }}>De pago</p><p className="cf-stat-value">{paidCount}</p></div>
                         <div className="cf-stat"><p className="cf-label" style={{ marginBottom: "0.4rem" }}>Cortesía</p><p className="cf-stat-value">{activeCount - paidCount}</p></div>
                     </div>
 
@@ -335,6 +354,8 @@ export default function MembershipsAdminPage() {
                 </div>
             )}
 
+            {tab === "newsletter" && <NewsletterTab setMessage={setMessage} />}
+
             {tab === "config" && cfg && (
                 <form onSubmit={saveConfig} className="cf-editor" style={{ maxWidth: "46rem" }}>
                     <div className="cf-editor-body">
@@ -354,27 +375,52 @@ export default function MembershipsAdminPage() {
                                 </label>
                                 <p className="cf-help">El registro de cuentas lo controla Ajustes → General («Cualquiera puede registrarse»).</p>
                             </div>
-                            <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="ms-cfg-sk">Clave secreta de Stripe — solo modo de PRUEBA {cfg.hasStripeKey ? `(configurada${cfg.stripeMode ? `, ${cfg.stripeMode}` : ""})` : ""}</label>
-                                <input id="ms-cfg-sk" className="cf-input" type="password" autoComplete="new-password" value={stripeKey} onChange={(e) => { setStripeKey(e.target.value); setCfg({ ...cfg, _clearKey: false }); }} placeholder={cfg.hasStripeKey ? "(configurada — escribe para reemplazar)" : "sk_test_…"} />
-                                <p className="cf-help">Nunca se muestra de vuelta. Esta versión rechaza las claves de producción (sk_live_).</p>
-                                {cfg.hasStripeKey && (
-                                    <label className="cf-check"><input type="checkbox" checked={!!cfg._clearKey} onChange={(e) => { setCfg({ ...cfg, _clearKey: e.target.checked }); if (e.target.checked) setStripeKey(""); }} /> Quitar la clave</label>
-                                )}
+                            <div>
+                                <label className="cf-check">
+                                    <input type="checkbox" checked={cfg.newsletterEnabled !== false} onChange={(e) => setCfg({ ...cfg, newsletterEnabled: e.target.checked })} />
+                                    Newsletters a los miembros
+                                </label>
+                                <p className="cf-help">Añade «Enviar por correo al publicar» al editor. Usa el proveedor de correo del sitio.</p>
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="ms-cfg-rate">Ritmo de envío (correos por minuto)</label>
+                                <input id="ms-cfg-rate" className="cf-input" type="number" min="1" max="600" value={cfg.newsletterRate ?? 60} onChange={(e) => setCfg({ ...cfg, newsletterRate: e.target.value })} />
                             </div>
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="ms-cfg-wh">Secreto de firma del webhook {cfg.hasWebhookSecret ? "(configurado)" : ""}</label>
-                                <input id="ms-cfg-wh" className="cf-input" type="password" autoComplete="new-password" value={webhookSecret} onChange={(e) => { setWebhookSecret(e.target.value); setCfg({ ...cfg, _clearWebhook: false }); }} placeholder={cfg.hasWebhookSecret ? "(configurado — escribe para reemplazar)" : "whsec_…"} />
-                                <p className="cf-help">
-                                    En Stripe → Desarrolladores → Webhooks, añade este endpoint con los eventos <code>checkout.session.completed</code>,{" "}
-                                    <code>customer.subscription.updated</code>, <code>customer.subscription.deleted</code>, <code>invoice.paid</code> e{" "}
-                                    <code>invoice.payment_failed</code>:
-                                </p>
-                                <p className="cf-help"><code style={{ wordBreak: "break-all" }}>{cfg.webhookUrl}</code></p>
-                                {cfg.hasWebhookSecret && (
-                                    <label className="cf-check"><input type="checkbox" checked={!!cfg._clearWebhook} onChange={(e) => { setCfg({ ...cfg, _clearWebhook: e.target.checked }); if (e.target.checked) setWebhookSecret(""); }} /> Quitar el secreto</label>
-                                )}
+                                <label className="cf-label" htmlFor="ms-cfg-provider">Proveedor de pagos</label>
+                                <select id="ms-cfg-provider" className="cf-select" value={cfg.paymentProvider || ""} onChange={(e) => setCfg({ ...cfg, paymentProvider: e.target.value })}>
+                                    <option value="">Ninguno (sin pagos en línea)</option>
+                                    {(cfg.providers || []).map((p) => (
+                                        <option key={p.id} value={p.id}>{p.label}{p.ready ? " — configurado" : ""}</option>
+                                    ))}
+                                </select>
+                                <p className="cf-help">Solo credenciales de PRUEBA / SANDBOX: esta versión rechaza las de producción.</p>
                             </div>
+                            {(cfg.providers || []).filter((p) => p.id === cfg.paymentProvider).map((p) => (
+                                <React.Fragment key={p.id}>
+                                    {p.credentials.map((c) => {
+                                        const id = `ms-cfg-${p.id}-${c.key}`;
+                                        const value = (creds[p.id] || {})[c.key] || "";
+                                        const wiping = !!(clear[p.id] || {})[c.key];
+                                        return (
+                                            <div className="cf-span-2" key={c.key}>
+                                                <label className="cf-label" htmlFor={id}>{c.label} {c.set ? "(configurada)" : ""}</label>
+                                                <input id={id} className="cf-input" type="password" autoComplete="new-password" value={value}
+                                                    onChange={(e) => { setCreds({ ...creds, [p.id]: { ...(creds[p.id] || {}), [c.key]: e.target.value } }); setClear({ ...clear, [p.id]: { ...(clear[p.id] || {}), [c.key]: false } }); }}
+                                                    placeholder={c.set ? "(configurada — escribe para reemplazar)" : ""} />
+                                                {c.set && (
+                                                    <label className="cf-check"><input type="checkbox" checked={wiping} onChange={(e) => { setClear({ ...clear, [p.id]: { ...(clear[p.id] || {}), [c.key]: e.target.checked } }); if (e.target.checked) setCreds({ ...creds, [p.id]: { ...(creds[p.id] || {}), [c.key]: "" } }); }} /> Quitar</label>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                    <div className="cf-span-2">
+                                        <p className="cf-help">Nunca se muestran de vuelta.{p.mode ? ` Modo: ${p.mode}.` : ""}{p.currencies ? ` Moneda: ${p.currencies.join(", ").toUpperCase()}.` : ""}</p>
+                                        <p className="cf-help">{PROVIDER_HELP[p.id]}</p>
+                                        <p className="cf-help"><code style={{ wordBreak: "break-all" }}>{p.webhookUrl}</code></p>
+                                    </div>
+                                </React.Fragment>
+                            ))}
                         </div>
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.5rem" }}>
                             <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar ajustes"}</button>

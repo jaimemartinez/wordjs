@@ -465,6 +465,7 @@ const wordjs = {
         randomInt: (min, max) => callHost('crypto.randomInt', [min, max]),
         // Keyed hashing for signed webhooks: hmac('sha256', secret, rawBody) → hex (or 'base64').
         hmac: (algorithm, key, data, encoding) => callHost('crypto.hmac', [algorithm, key, data, encoding]),
+        hash: (algorithm, data, encoding) => callHost('crypto.hash', [algorithm, data, encoding]),
         timingSafeEqual: (a, b) => callHost('crypto.timingSafeEqual', [a, b]),
     },
 
@@ -483,7 +484,12 @@ const wordjs = {
         findByEmail: (e) => callHost('users.findByEmail', [e]),
         findByLogin: (l) => callHost('users.findByLogin', [l]),
         findById: (i) => callHost('users.findById', [i]),
-        search: (t, lim) => callHost('users.search', [t, lim])
+        search: (t, lim, off) => callHost('users.search', [t, lim, off])
+    },
+    // PUBLISHED entries (gated host-side on posts:read): get(id) → { id, title, url, content, excerpt,
+    // accessLevel, meta, … } or null for anything unpublished / private / non-public.
+    posts: {
+        get: (id) => callHost('posts.get', [id])
     },
     // SAFE site info (gated host-side on settings:read).
     site: {

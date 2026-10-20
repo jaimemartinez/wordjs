@@ -6,7 +6,8 @@
  * system, so core asks exactly the filter the plugin registers in production. Readers:
  *   · anonymous;
  *   · a FREE member (a signed-in subscriber: free sign-up is on);
- *   · PAID members — one comped to the cheaper "Silver" tier, one to "Gold";
+ *   · PAID members — one comped to the cheaper "Silver" tier, one to "Gold", and one whose Gold
+ *     membership comes from each payment provider (Stripe, Mercado Pago, Wompi) in every state;
  * and the managers (the author, an editor) as the positive control that the body is really there.
  *
  * Each gated entry hides a unique marker after its access break. The assertions look for that marker in
@@ -119,6 +120,7 @@ before(async () => {
     await seedUser('free', 'subscriber');
     await seedUser('silver', 'subscriber');
     await seedUser('gold', 'subscriber');
+    await seedUser('payer', 'subscriber');
 
     const coreUser = async (sql: string, v: any) => {
         const row = await db.get(`SELECT id, user_login, user_email, display_name FROM users WHERE ${sql} = ?`, [v]);
@@ -135,7 +137,7 @@ before(async () => {
         },
     });
     const silver = await plugin.call('post', '/tiers', { user: ADMIN, body: { name: 'Silver', price_cents: 500 } });
-    const gold = await plugin.call('post', '/tiers', { user: ADMIN, body: { name: 'Gold', price_cents: 1500, interval: 'year' } });
+    const gold = await plugin.call('post', '/tiers', { user: ADMIN, body: { name: 'Gold', price_cents: 15000, interval: 'year' } });
     assert.strictEqual(silver.status, 200, JSON.stringify(silver.body));
     assert.strictEqual(gold.status, 200, JSON.stringify(gold.body));
     for (const [login, tier] of [['silver', silver], ['gold', gold]] as const) {
@@ -299,6 +301,40 @@ describe('REST: what each reader receives', () => {
     });
 });
 
+describe('whatever provider took the money, a paid post opens only while the membership is live', () => {
+    // The provider writes the membership row (see memberships-providers.test.ts for each provider's
+    // webhooks and return legs); access is decided from that row alone, so every provider × state is
+    // checked here against the real REST surface.
+    const DAY = 86400000;
+    const STATES: Array<[string, string, number, boolean]> = [
+        ['active, in period', 'active', 20 * DAY, true],
+        ['past due (provider retrying), in period', 'past_due', 2 * DAY, true],
+        ['active but the period lapsed past the grace window', 'active', -5 * DAY, false],
+        ['incomplete (checkout not paid)', 'incomplete', 20 * DAY, false],
+        ['canceled', 'canceled', 20 * DAY, false],
+        ['expired', 'expired', -5 * DAY, false],
+    ];
+    for (const provider of ['stripe', 'mercadopago', 'wompi']) {
+        test(`${provider}: gold body only for a live gold membership; never to a lapsed, unpaid or cancelled one`, async () => {
+            const gold = plugin.sdb.prepare(`SELECT id FROM ${plugin.prefix}tiers WHERE slug = 'gold'`).get().id;
+            for (const [label, status, endOffset, opens] of STATES) {
+                plugin.sdb.prepare(`DELETE FROM ${plugin.prefix}members WHERE user_id = ?`).run(U.payer);
+                plugin.sdb.prepare(`INSERT INTO ${plugin.prefix}members (user_id, tier_id, status, source, provider_subscription_id, current_period_end) VALUES (?, ?, ?, ?, ?, ?)`)
+                    .run(U.payer, gold, status, provider, `${provider}-sub-1`, new Date(Date.now() + endOffset).toISOString());
+                for (const key of ['paid', 'gold']) {
+                    const r = await as('payer', 'get', `/posts/${P[key]}`);
+                    assert.strictEqual(r.body.access.granted, opens, `${provider} / ${label} / ${key}`);
+                    if (opens) assert.ok(r.body.content.includes(SECRET[key as keyof typeof SECRET]), `positive control ${provider} / ${label}`);
+                    else assert.deepStrictEqual(leaks(r.body), [], `${provider} / ${label}: ${key} leaks`);
+                }
+                const list = await as('payer', 'get', '/posts');
+                if (!opens) assert.deepStrictEqual(leaks(list.body, [SECRET.paid, SECRET.gold]), [], `${provider} / ${label}: list leaks`);
+            }
+            plugin.sdb.prepare(`DELETE FROM ${plugin.prefix}members WHERE user_id = ?`).run(U.payer);
+        });
+    }
+});
+
 describe('feeds and sitemaps', () => {
     test('RSS, Atom, JSON and a category feed publish teasers only', async () => {
         for (const feed of ['/feed.xml', '/feed.atom', '/feed.json', '/category/news/feed.xml']) {
@@ -382,6 +418,59 @@ describe('the provider contract', () => {
             assert.ok(e.body.content.includes(SECRET.gold));
         } finally {
             for (const [h, cb] of registered) hooks.addFilter(h, cb);
+        }
+    });
+});
+
+describe('the posts bridge and the editor-field seam', () => {
+    const PROBE = 'wjs-posts-bridge-probe';
+    const probeDir = path.join(path.resolve(__dirname, '../../plugins'), PROBE);
+    const { createPluginApi } = require('../core/plugin-api');
+    const { runWithContext } = require('../core/plugin-context');
+
+    test('posts.get: published public entries only, full body + access level; denied without posts:read', async () => {
+        fs.mkdirSync(probeDir, { recursive: true });
+        fs.writeFileSync(path.join(probeDir, 'manifest.json'), JSON.stringify({ name: PROBE, permissions: [{ scope: 'posts', access: 'read' }] }));
+        const grants = require('../core/plugin-permissions');
+        try {
+            grants._setGrantsInMemory(PROBE, []);
+            await runWithContext(PROBE, async () => {
+                await assert.rejects(() => createPluginApi(PROBE).posts.get(P.paid));
+            });
+            grants._setGrantsInMemory(PROBE, ['posts:read']);
+            await runWithContext(PROBE, async () => {
+                const api = createPluginApi(PROBE);
+                const paid = await api.posts.get(P.paid);
+                assert.strictEqual(paid.accessLevel, 'paid');
+                assert.ok(paid.content.includes(SECRET.paid), 'the full body: the plugin decides per recipient');
+                assert.strictEqual(paid.excerpt, '', 'never an excerpt derived from the body');
+                assert.ok(paid.url.endsWith(paid.path) && paid.path.startsWith('/gated-paid-'));
+                assert.ok(!('_wjs_access' in paid.meta) && !('_puck_data' in paid.meta), 'public meta only');
+                const draft = (await db.run(`INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name) VALUES (?, 'D', 'draft body', 'draft', 'post', 'pb-draft')`, [U.author])).lastID;
+                const locked = (await db.run(`INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name, post_password) VALUES (?, 'L', 'pw body', 'publish', 'post', 'pb-pw', 'x')`, [U.author])).lastID;
+                for (const id of [draft, locked, 999999, 'x']) assert.strictEqual(await api.posts.get(id), null, String(id));
+            });
+        } finally {
+            try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* */ }
+        }
+    });
+
+    test('GET /editor/fields: validated plugin declarations for the post type, editors only', async () => {
+        const decl = async (fields: any[]) => [...fields,
+            { metaKey: 'newsletter_audience', label: 'Send', type: 'select', options: [{ value: '', label: 'No' }, { value: 'all', label: 'All' }] },
+            { metaKey: '_internal', label: 'x', type: 'text' },
+            { metaKey: 'page_only', label: 'P', type: 'text', postTypes: ['page'] },
+        ];
+        hooks.addFilter('post_editor_fields', decl);
+        try {
+            const r = await as('author', 'get', '/editor/fields?type=post');
+            assert.strictEqual(r.status, 200);
+            assert.deepStrictEqual(r.body.fields.map((f: any) => f.metaKey), ['newsletter_audience']);
+            assert.deepStrictEqual((await as('author', 'get', '/editor/fields?type=page')).body.fields.map((f: any) => f.metaKey), ['page_only']);
+            assert.strictEqual((await as('free', 'get', '/editor/fields')).status, 403);
+            assert.strictEqual((await anon('get', '/editor/fields')).status, 401);
+        } finally {
+            hooks.removeFilter('post_editor_fields', decl);
         }
     });
 });

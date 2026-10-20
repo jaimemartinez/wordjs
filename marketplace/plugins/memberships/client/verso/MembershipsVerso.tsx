@@ -8,14 +8,14 @@
  *    how core (backend core/content-access) knows where a members-only post's free teaser ends: the
  *    API cuts the post right after this block for anyone without access, and annotates the block with
  *    `accessState` ('locked' | 'granted') and `accessLevel` (what the post requires). Locked, it draws
- *    the call-to-action (sign up, sign in, the tiers that open the post, Stripe Checkout); granted, it
+ *    the call-to-action (sign up, sign in, the tiers that open the post, the provider's checkout); granted, it
  *    draws nothing. In the editor it is a visible marker.
  *  · MembershipsAccount — the member's own account box: plan, renewal, change tier, cancel / resume, or
  *    the tiers to subscribe to.
  *
- * Both return from Stripe Checkout the same way: the success URL carries `?ms_session=<id>`; the block
- * confirms it with the server (which retrieves the session from Stripe) and reloads the page without
- * the parameter, so the members-only body loads with the new access.
+ * Both handle the return from the payment provider the same way (see returnLeg): the block confirms the
+ * payment with the server (which re-reads it from the provider) and reloads the page without the
+ * parameters, so the members-only body loads with the new access.
  *
  * Data comes from the plugin's own endpoints, guarded with res.ok: an inactive plugin 404s and the
  * blocks degrade to nothing (paywall) or a quiet note (account).
@@ -115,13 +115,33 @@ function tiersFor(level, tiers) {
     if (!Array.isArray(tiers)) return [];
     if (typeof level === "string" && level.startsWith("tier:")) {
         const wanted = tiers.find((t) => t.slug === level.slice(5));
-        return wanted ? tiers.filter((t) => t.price_cents >= wanted.price_cents) : tiers;
+        // The plugin ranks tiers by their price PER MONTH (a yearly price covers twelve months).
+        const monthly = (t) => (Number(t.price_cents) || 0) / (t.interval === "year" ? 12 : 1);
+        return wanted ? tiers.filter((t) => monthly(t) >= monthly(wanted)) : tiers;
     }
     return tiers;
 }
 
 /**
- * Load the public tier list and (when signed in) the account; handle the Stripe return leg once.
+ * The provider's return leg, if this page load is one: Stripe appends `ms_session`, Mercado Pago
+ * `preapproval_id` (with our `ms_provider=mercadopago`), Wompi `id` (with `ms_provider=wompi`).
+ */
+function returnLeg(params) {
+    const enc = encodeURIComponent;
+    const sid = params.get("ms_session");
+    if (sid) return { query: `session_id=${enc(sid)}`, strip: ["ms_session"] };
+    const provider = params.get("ms_provider");
+    if (provider === "mercadopago" && params.get("preapproval_id")) {
+        return { query: `provider=mercadopago&preapproval_id=${enc(params.get("preapproval_id"))}`, strip: ["ms_provider", "preapproval_id"] };
+    }
+    if (provider === "wompi" && params.get("id")) {
+        return { query: `provider=wompi&id=${enc(params.get("id"))}`, strip: ["ms_provider", "id", "env"] };
+    }
+    return null;
+}
+
+/**
+ * Load the public tier list and (when signed in) the account; handle the payment return leg once.
  * `me` is null when signed out (401).
  */
 function useMembership(active) {
@@ -137,22 +157,23 @@ function useMembership(active) {
         let cancelled = false;
         (async () => {
             const params = new URLSearchParams(window.location.search);
-            const sid = params.get("ms_session");
-            if (sid) {
+            const ret = returnLeg(params);
+            if (ret) {
                 setBanner("Confirmando tu pago…");
-                const r = await getJson(`/me/confirm?session_id=${encodeURIComponent(sid)}`);
-                params.delete("ms_session");
+                const r = await getJson(`/me/confirm?${ret.query}`);
+                for (const k of ret.strip) params.delete(k);
                 const qs = params.toString();
                 const clean = window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash;
                 if (r.ok && r.body && r.body.active) {
-                    // Reload WITHOUT the parameter: the post's members-only body now loads for this account.
+                    // Reload WITHOUT the parameters: the post's members-only body now loads for this account.
                     window.location.replace(clean);
                     return;
                 }
                 window.history.replaceState(null, "", clean);
                 setBanner(r.ok ? "Tu pago aún se está procesando — recarga en unos segundos." : ((r.body && r.body.error) || "No se pudo confirmar el pago."));
-            } else if (params.get("ms_cancel")) {
-                params.delete("ms_cancel");
+            } else if (params.get("ms_cancel") || params.get("ms_provider")) {
+                // Back from the provider without a payment to confirm (abandoned or cancelled there).
+                for (const k of ["ms_cancel", "ms_provider", "preapproval_id", "id", "env"]) params.delete(k);
                 const qs = params.toString();
                 window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
                 setBanner("Pago cancelado — no se te ha cobrado nada.");
@@ -272,12 +293,12 @@ function PaywallVerso({ title, message, showTiers, accessState, accessLevel, isE
                                     <TierCard key={t.id} tier={t} symbol={symbol} action={
                                         !signedIn ? (
                                             <a className="wjms-btn" href={authHref("/register")}>Suscribirme</a>
-                                        ) : m.cfg && m.cfg.stripeEnabled ? (
+                                        ) : m.cfg && m.cfg.paymentsEnabled ? (
                                             <button type="button" className="wjms-btn" disabled={!!checkout.busy} onClick={() => checkout.start(t.id)}>
                                                 {checkout.busy === t.id ? "Abriendo el pago…" : "Suscribirme"}
                                             </button>
                                         ) : (
-                                            <span className="wjms-note">El pago con tarjeta aún no está disponible.</span>
+                                            <span className="wjms-note">El pago en línea aún no está disponible.</span>
                                         )
                                     } />
                                 ))}
@@ -311,7 +332,105 @@ const accountDef = {
     },
 };
 
-const STATUS_TEXT = { active: "Activa", past_due: "Pago pendiente", canceled: "Cancelada", incomplete: "Incompleta" };
+/** Newsletter preference of the signed-in member (GET/POST /me/newsletter). */
+function NewsletterToggle() {
+    const [pref, setPref] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [note, setNote] = useState("");
+    useEffect(() => {
+        let active = true;
+        getJson("/me/newsletter").then((r) => { if (active && r.ok) setPref(r.body); });
+        return () => { active = false; };
+    }, []);
+    if (!pref || pref.enabled === false) return null;
+    const toggle = async () => {
+        setBusy(true);
+        const r = await postJson("/me/newsletter", { subscribed: !pref.subscribed });
+        setBusy(false);
+        if (r.ok) setPref(r.body);
+    };
+    const askLink = async () => {
+        setBusy(true);
+        const r = await postJson("/me/newsletter/confirm", {});
+        setBusy(false);
+        if (r.ok) { setPref(r.body); setNote(`Te enviamos el enlace de confirmación a ${r.body.email || "tu correo"}.`); }
+        else setNote((r.body && r.body.error) || "No se pudo enviar el enlace.");
+    };
+    return (
+        <div className="wjms-row" style={{ alignItems: "center" }}>
+            <span>Newsletters por correo</span>
+            <label style={{ display: "inline-flex", gap: ".5rem", alignItems: "center", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!pref.subscribed} disabled={busy} onChange={toggle} />
+                {pref.subscribed ? (pref.confirmed ? "Suscrito" : "Pendiente de confirmar") : "No suscrito"}
+            </label>
+            {pref.subscribed && !pref.confirmed ? (
+                <div style={{ flexBasis: "100%", fontSize: ".85rem", marginTop: ".4rem" }}>
+                    <span>Confirma tu correo para recibirlas. </span>
+                    <button type="button" className="wjms-btn wjms-btn-ghost" disabled={busy} onClick={askLink}>Enviarme el enlace</button>
+                    {note ? <div role="status" style={{ marginTop: ".3rem" }}>{note}</div> : null}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+/**
+ * Automatic renewal where the provider does not renew on its own (Wompi): the member links a Nequi
+ * account (approved in the Nequi app) and the site charges it each period.
+ */
+function AutoRenew({ member, onChange }) {
+    const [phone, setPhone] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const st = member.autoRenew || {};
+    const run = async (path, body) => {
+        setError("");
+        setBusy(true);
+        const r = await postJson(path, body);
+        setBusy(false);
+        if (!r.ok) { setError((r.body && r.body.error) || "No se pudo completar la operación."); return; }
+        await onChange();
+    };
+    if (st.state === "active" || st.state === "paused") {
+        return (
+            <div className="wjms-row" style={{ alignItems: "center" }}>
+                <span>Renovación automática</span>
+                <span style={{ display: "inline-flex", gap: ".6rem", alignItems: "center" }}>
+                    <span className="wjms-badge">Nequi</span>
+                    <button type="button" className="wjms-btn wjms-btn-ghost" style={{ padding: ".35rem .7rem", marginTop: 0 }} disabled={busy} onClick={() => run("/me/auto-renew/stop", {})}>Quitar</button>
+                </span>
+            </div>
+        );
+    }
+    if (st.state === "pending") {
+        return (
+            <div className="wjms-row" style={{ alignItems: "center" }}>
+                <span>Renovación automática</span>
+                <span style={{ display: "inline-flex", gap: ".6rem", alignItems: "center" }}>
+                    Aprueba la solicitud en tu app Nequi
+                    <button type="button" className="wjms-btn wjms-btn-ghost" style={{ padding: ".35rem .7rem", marginTop: 0 }} disabled={busy} onClick={onChange}>Ya la aprobé</button>
+                </span>
+            </div>
+        );
+    }
+    return (
+        <div style={{ marginTop: "1rem", textAlign: "left" }}>
+            <p className="wjms-note" style={{ marginTop: 0 }}>
+                {st.state === "declined" ? "Nequi rechazó la autorización. " : ""}
+                Renueva automáticamente con Nequi: escribe tu número y aprueba la solicitud en la app.
+            </p>
+            <div className="wjms-actions" style={{ justifyContent: "flex-start" }}>
+                <input className="wjms-select" inputMode="numeric" autoComplete="tel" placeholder="3001234567" value={phone} onChange={(e) => setPhone(e.target.value)} aria-label="Número de Nequi" />
+                <button type="button" className="wjms-btn" style={{ marginTop: 0 }} disabled={busy || phone.replace(/\D/g, "").length !== 10} onClick={() => run("/me/auto-renew/nequi", { phone })}>
+                    {busy ? "Enviando…" : "Renovar con Nequi"}
+                </button>
+            </div>
+            {error ? <p className="wjms-error">{error}</p> : null}
+        </div>
+    );
+}
+
+const STATUS_TEXT = { active: "Activa", past_due: "Pago pendiente", canceled: "Cancelada", incomplete: "Incompleta", expired: "Vencida" };
 
 function AccountVerso({ title, isEditing, puck }) {
     const editing = !!(isEditing || (puck && puck.isEditing));
@@ -339,7 +458,10 @@ function AccountVerso({ title, isEditing, puck }) {
         const r = await postJson(path, body);
         setBusy("");
         if (!r.ok) { setError((r.body && r.body.error) || "No se pudo completar la operación."); return; }
-        m.setBanner(label === "cancel" ? "Tu suscripción terminará al final del periodo pagado." : label === "resume" ? "Tu suscripción seguirá renovándose." : "Plan cambiado.");
+        const effective = r.body && r.body.effective;
+        m.setBanner(label === "cancel" ? "Tu suscripción terminará al final del periodo pagado." : label === "resume" ? "Tu suscripción seguirá renovándose."
+            : effective === "next-period" ? "El nuevo plan empieza con el próximo periodo." : effective === "next-charge" ? "El nuevo plan empieza con tu próximo cobro (al nuevo precio)."
+            : effective === "pending-payment" ? "Cobramos la diferencia: el nuevo plan se activa en cuanto se confirme el pago." : "Plan cambiado.");
         await m.reload();
     };
 
@@ -364,8 +486,19 @@ function AccountVerso({ title, isEditing, puck }) {
                         {member.source === "comped" ? (
                             <div className="wjms-row"><span>Cortesía</span><span>{member.compedUntil ? `hasta el ${fmtDay(member.compedUntil)}` : "sin fecha de fin"}</span></div>
                         ) : (
-                            <div className="wjms-row"><span>{member.cancelAtPeriodEnd ? "Termina el" : "Se renueva el"}</span><span>{fmtDay(member.currentPeriodEnd)}</span></div>
+                            <div className="wjms-row"><span>{member.cancelAtPeriodEnd ? "Termina el" : member.autoRenew && member.autoRenew.state !== "active" ? "Pagado hasta" : "Se renueva el"}</span><span>{fmtDay(member.currentPeriodEnd)}</span></div>
                         )}
+                        {member.pendingTier ? (
+                            <div className="wjms-row"><span>{member.source === "stripe" ? "Cuando se pague la diferencia" : "Desde el próximo periodo"}</span><span>{member.pendingTier.name}</span></div>
+                        ) : null}
+                        {member.autoRenew ? <AutoRenew member={member} onChange={m.reload} /> : null}
+                        {member.canRenewNow && member.tier ? (
+                            <div className="wjms-actions" style={{ marginTop: "1rem" }}>
+                                <button type="button" className="wjms-btn" disabled={!!checkout.busy} onClick={() => checkout.start(member.tier.id)}>
+                                    {checkout.busy === member.tier.id ? "Abriendo el pago…" : "Pagar el siguiente periodo"}
+                                </button>
+                            </div>
+                        ) : null}
                         {member.canManageBilling && (
                             <div style={{ marginTop: "1rem", display: "grid", gap: ".75rem" }}>
                                 <div className="wjms-actions">
@@ -404,17 +537,18 @@ function AccountVerso({ title, isEditing, puck }) {
                             <div className="wjms-tiers">
                                 {m.tiers.map((t) => (
                                     <TierCard key={t.id} tier={t} symbol={symbol} action={
-                                        m.cfg && m.cfg.stripeEnabled ? (
+                                        m.cfg && m.cfg.paymentsEnabled ? (
                                             <button type="button" className="wjms-btn" disabled={!!checkout.busy} onClick={() => checkout.start(t.id)}>
                                                 {checkout.busy === t.id ? "Abriendo el pago…" : "Suscribirme"}
                                             </button>
-                                        ) : <span className="wjms-note">El pago con tarjeta aún no está disponible.</span>
+                                        ) : <span className="wjms-note">El pago en línea aún no está disponible.</span>
                                     } />
                                 ))}
                             </div>
                         )}
                     </>
                 )}
+                {m.me ? <div style={{ marginTop: "1rem" }}><NewsletterToggle /></div> : null}
                 {error || checkout.error ? <p className="wjms-error">{error || checkout.error}</p> : null}
             </div>
         </section>
