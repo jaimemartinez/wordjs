@@ -147,7 +147,7 @@ import {
     taxonomyFeedPath,
 } from "@/lib/public/archives";
 // The public feed/sitemap URLs and the layout that advertises them (see the last describe block).
-import PublicLayout from "@/app/(public)/layout";
+import PublicLayout from "@/app/(public)/_chrome/PublicLayout";
 import { GET as sitemapRoute } from "@/app/(public)/sitemap.xml/route";
 import { GET as sitemapChunkRoute } from "@/app/(public)/sitemap/[chunk]/route";
 import { GET as categoryFeedRoute } from "@/app/(public)/category/[slug]/feed.xml/route";

@@ -791,7 +791,7 @@ describe('#24 CLASS — no block builds a style object outside the guarded build
 /* ══ THE SECOND SINK ══════════════════════════════════════════════════════════════════════════════
  * THE `class` ATTRIBUTE, which was never part of the class and lands on the same element.
  *
- * Everything above bounds `style`. `globals.css` (imported by app/layout.tsx, so EVERY public route)
+ * Everything above bounds `style`. `globals.css` (imported by app/_root/RootDocument.tsx, so EVERY route)
  * compiles a Tailwind utility bundle containing `.fixed`, `.inset-0`, `.z-50`, `.w-full`, `.h-full`,
  * `.bg-white` — which makes a class name a way to WRITE a declaration, exactly like a custom property
  * is. `className={`button-variant-${variant}`}` with `variant = "x fixed inset-0 z-50 w-full h-full
