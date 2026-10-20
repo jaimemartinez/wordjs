@@ -119,7 +119,9 @@ function buildPgRestoreArgs(cfg: DbDumpConfig, srcPath: string): string[] {
         // drop each object before recreating ⇒ authoritative overwrite; not needed into a fresh schema
         ...(cfg.fresh ? [] : ['--clean', '--if-exists']),
         '--no-owner', '--no-privileges',
-        ...pgSchemaArgs(cfg),
+        // No -n here, ever: a dump taken with -n already holds that schema alone, and pg_restore -n leaves
+        // out the CREATE SCHEMA entry itself — into a site schema that was just dropped, every table then
+        // fails with "schema does not exist".
         '-h', String(cfg.host || 'localhost'),
         '-p', String(cfg.port || 5432),
         '-U', String(cfg.user || 'postgres'),

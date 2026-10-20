@@ -407,7 +407,13 @@ export function runMultisiteEngineSuite(engine: Engine): void {
             const keep = await bearer('post', `${API}/posts`, TWO, tokens.two).send({ title: 'Kept by the backup', content: 'k', status: 'draft' });
             assert.strictEqual(keep.status, 201);
             const made = await bearer('post', `${API}/backups`, TWO, tokens.two).send({});
-            assert.strictEqual(made.status, 200, JSON.stringify(made.body));
+            if (made.status !== 200) {
+                // The route answers a generic 500: say WHY, from the same call made directly as the site.
+                let why = '';
+                try { await siteContext.runWithSite(ids.two, () => require('../../core/backup').createBackup()); why = 'the direct call succeeded'; }
+                catch (e: any) { why = String((e && e.message) || e); }
+                assert.fail(`POST /backups on a ${engine} site answered ${made.status}: ${why}`);
+            }
             const list = await bearer('get', `${API}/backups`, TWO, tokens.two);
             assert.strictEqual(list.status, 200);
             const file = (list.body.backups || list.body)[0].filename;
@@ -417,7 +423,12 @@ export function runMultisiteEngineSuite(engine: Engine): void {
             assert.strictEqual((await bearer('delete', `${API}/posts/${keep.body.id}?force=true`, TWO, tokens.two)).status, 200);
             const threeBefore = await bearer('get', `${API}/posts?status=draft`, THREE, tokens.three);
             const restored = await bearer('post', `${API}/backups/${file}/restore`, TWO, tokens.two).send({ currentPassword: PASSWORD });
-            assert.strictEqual(restored.status, 200, JSON.stringify(restored.body));
+            if (restored.status !== 200) {
+                let why = '';
+                try { await siteContext.runWithSite(ids.two, () => require('../../core/backup').restoreBackup(file)); why = 'the direct call succeeded'; }
+                catch (e: any) { why = String((e && e.message) || e); }
+                assert.fail(`restoring a ${engine} site's backup answered ${restored.status}: ${why}`);
+            }
             assert.deepStrictEqual(restored.body.results.incidents, [], 'the physical restore of the site ran, complete');
             assert.strictEqual(restored.body.results.physical, true);
             const back = await bearer('get', `${API}/posts/${keep.body.id}`, TWO, tokens.two);
