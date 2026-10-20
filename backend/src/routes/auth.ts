@@ -37,8 +37,8 @@ const mfa = require('../core/mfa');
 // against distributed attacks on a single account); a login is refused if either trips.
 const loginThrottle = require('../core/login-throttle');
 const { clientIp, clientIpBucket } = require('../core/client-ip');
-// The ONE self-service email-write rule (shared with routes/users.ts) — see core/mailbox.ts.
-const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/mailbox');
+// The ONE self-service email-write rule (shared with routes/users.ts) — see core/email-address.ts.
+const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/email-address');
 // Append-only audit trail. Every call here is best-effort by construction (recordAudit swallows its
 // own errors) — an unwritable audit row must never turn a successful login into a 500.
 const { recordAudit } = require('../core/audit');
@@ -672,12 +672,12 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
-    // SECURITY (anonymous self-grant of a corporate mailbox). This handler is UNAUTHENTICATED, and when
-    // the operator turns `users_can_register` on it took the address verbatim. An attacker could
-    // register ceo@<mailDomain> and, under the old email-derived rule, walk straight into the mail
-    // surface — and, worse, become the delivery target that inbound mail for that address is matched
-    // against. Corporate addresses are provisioned by an administrator, never claimed at the door. Same
-    // helper as the two self-service PUT routes (`null` target: there is no account yet).
+    // SECURITY (anonymous claim of an organisation address). This handler is UNAUTHENTICATED, and when
+    // the operator turns `users_can_register` on it took the address verbatim. An attacker could register
+    // ceo@<site email domain> and become the account a plugin delivering the site's mail matches that
+    // address's inbound mail against. Addresses on the site's own domain are assigned by an administrator,
+    // never claimed at the door. Same helper as the two self-service PUT routes (`null` target: there is
+    // no account yet).
     const emailRefusal = await refuseSelfServiceEmailChange(null, email);
     if (emailRefusal) return res.status(403).json(emailRefusal);
 

@@ -53,7 +53,7 @@ const crypto = require('crypto');
 router.param('id', requireRouteId({ code: 'rest_comment_invalid_id', message: 'Invalid comment ID.' }));
 
 // Shared, length-capped email validator (the one shape rule) — guards against ReDoS on unbounded input.
-const { isValidAddress } = require('../core/mailbox');
+const { isValidAddress } = require('../core/email-address');
 const { recordAudit } = require('../core/audit');
 const { publicDisplayName } = require('../core/public-identity');
 

@@ -13,7 +13,7 @@
 
 exports.metadata = {
     name: 'Photo Carousel',
-    version: '2.0.1',
+    version: '2.1.0',
     description: 'Create and manage image carousels with admin UI',
     author: 'WordJS'
 };
@@ -189,125 +189,30 @@ exports.deactivate = function () {
 };
 
 // === CAROUSEL RENDERER ===
-function renderCarousel(images, settings) {
-    const uniqueId = 'carousel_' + Math.random().toString(36).substr(2, 9);
-    const { autoplay, interval } = settings;
+//
+// The [carousel] output lands in SANITIZED post HTML: the host's sanitizer drops <style> blocks, layout
+// inline styles and every script, so a carousel here can only be MARKUP that site CSS already styles. It
+// uses the host's plugin-neutral `wjs-snap-strip` primitive (backend/public/css/wordjs-ui.css): a
+// swipeable, scroll-snapping row that needs no JavaScript. (Until 2.1.0 this emitted its own <style> and
+// buttons and relied on an initialiser inside the host's frontend; the sanitizer had always stripped the
+// styles, and the host no longer carries plugin-specific code.) Autoplay is not offered on this path;
+// the Verso block and the hero component keep their own behaviour.
+const escAttr = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escText = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    let html = `
-<style>
-.photo-carousel {
-    position: relative;
-    width: 100%;
-    max-width: 900px;
-    margin: 2rem auto;
-    overflow: hidden;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-    box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
-}
-.photo-carousel .slides {
-    display: flex;
-    transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.photo-carousel .slide {
-    min-width: 100%;
-    aspect-ratio: 16/9;
-    position: relative;
-}
-.photo-carousel .slide img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-.photo-carousel .slide-caption {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding: 1.5rem;
-    background: linear-gradient(transparent, rgba(0,0,0,0.8));
-    color: white;
-    font-size: 1rem;
-}
-.photo-carousel .nav-btn {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    background: rgba(255,255,255,0.95);
-    border: none;
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    cursor: pointer;
-    font-size: 20px;
-    color: #1e293b;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-    z-index: 10;
-    transition: all 0.3s ease;
-}
-.photo-carousel .nav-btn:hover {
-    background: white;
-    transform: translateY(-50%) scale(1.1);
-}
-.photo-carousel .nav-btn.prev { left: 16px; }
-.photo-carousel .nav-btn.next { right: 16px; }
-.photo-carousel .dots {
-    position: absolute;
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: 10px;
-    z-index: 10;
-}
-.photo-carousel .dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.4);
-    cursor: pointer;
-    border: 2px solid transparent;
-    transition: all 0.3s ease;
-}
-.photo-carousel .dot:hover { background: rgba(255,255,255,0.7); }
-.photo-carousel .dot.active { background: white; transform: scale(1.2); }
-.photo-carousel .counter {
-    position: absolute;
-    top: 16px;
-    right: 16px;
-    background: rgba(0,0,0,0.6);
-    color: white;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 14px;
-    font-weight: 500;
-    z-index: 10;
-}
-</style>
-<div class="photo-carousel" id="${uniqueId}" data-autoplay="${autoplay}" data-interval="${interval}">
-    <div class="counter"><span class="current">1</span> / ${images.length}</div>
-    <div class="slides">
-`;
+function renderCarousel(images, _settings) {
+    const total = images.length;
+    let html = `<div class="wjs-snap-strip wjs-snap-strip--16x9 photo-carousel" role="region" aria-roledescription="carousel" aria-label="Photo carousel (${total} images)" tabindex="0">`;
     images.forEach((img, i) => {
-        const url = typeof img === 'string' ? img : img.url;
-        html += `<div class="slide">
-            <img src="${url}" alt="Slide ${i + 1}" loading="${i === 0 ? 'eager' : 'lazy'}">
-        </div>`;
+        const url = typeof img === 'string' ? img : (img && img.url);
+        if (!url) return;
+        const caption = img && typeof img === 'object' ? (img.caption || img.title || '') : '';
+        const alt = (img && typeof img === 'object' && img.alt) || caption || `Slide ${i + 1} of ${total}`;
+        html += `<figure class="wjs-snap-strip__item" aria-roledescription="slide" aria-label="${i + 1} / ${total}">`
+            + `<img src="${escAttr(url)}" alt="${escAttr(alt)}" loading="${i === 0 ? 'eager' : 'lazy'}">`
+            + (caption ? `<figcaption class="wjs-snap-strip__caption">${escText(caption)}</figcaption>` : '')
+            + `</figure>`;
     });
-
-    html += `
-    </div>
-    <button class="nav-btn prev" data-dir="-1">&#10094;</button>
-    <button class="nav-btn next" data-dir="1">&#10095;</button>
-    <div class="dots">
-`;
-    images.forEach((_, i) => {
-        html += `<button class="dot${i === 0 ? ' active' : ''}" data-index="${i}"></button>`;
-    });
-
-    html += `
-    </div>
-</div>
-`;
+    html += `</div>`;
     return html;
 }

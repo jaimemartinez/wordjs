@@ -13,10 +13,11 @@ const { getRoles, getRoleCapabilities } = require('../core/roles');
 // One unique-violation predicate for all three drivers. This file used to carry its own, which knew
 // only SQLite and Postgres — see core/db-errors.ts for what that cost on MySQL.
 const { isUniqueViolation } = require('../core/db-errors');
-// The ACTIVE CORPORATE MAILBOX fact + the one address-shape rule. See core/mailbox.ts.
-const {
-    MAILBOX_META_KEY, EMAIL_FORMAT_RE, normalizeAddress, hasProfessionalMailbox, mailboxFlagValue
-} = require('../core/mailbox');
+// The one address-shape rule (core/email-address.ts) and the plugin-declared per-account grants
+// (core/account-capabilities.ts).
+const { EMAIL_FORMAT_RE, normalizeAddress } = require('../core/email-address');
+const accountCapabilities = require('../core/account-capabilities');
+const { LEGACY_META_KEY } = require('../core/legacy-account-flags');
 
 const SALT_ROUNDS = 12;
 /** The shape bcrypt (bcryptjs) produces: `$2a$`/`$2b$`/`$2y$`, a two-digit cost, 53 base64 characters. */
@@ -47,8 +48,8 @@ function assertValidRole(role: string): void {
  * stored value already fully lowercased, the LOWER()-based index/queries then only have ASCII left to
  * fold and uniqueness holds across engines and scripts.
  *
- * Delegates to core/mailbox.normalizeAddress so the fold used for STORAGE here and the fold used for
- * the corporate-mailbox domain comparison there are literally the same function — a second copy would
+ * Delegates to core/email-address.normalizeAddress so the fold used for STORAGE here and the fold used
+ * for the reserved-domain comparison there are literally the same function — a second copy would
  * eventually disagree about some address and silently split "the same" identity in two.
  */
 function normalizeEmail(email: any): string {
@@ -210,12 +211,12 @@ class User {
     meta?: { [key: string]: any };
     role?: string;
     /**
-     * ACTIVE CORPORATE MAILBOX — the admin-owned fact, materialized from user_meta by loadMeta() so
-     * every projection of this user (plugin bridge, isolate req.user, toJSON) carries the SAME answer
-     * instead of each one re-deriving it. Never write this directly: it is set from
-     * user_meta.professional_mailbox, which only an `edit_users` caller can change.
+     * The plugin-declared account capabilities an administrator granted this account (core/
+     * account-capabilities.ts), materialized from user_meta by loadMeta() so every projection of this user
+     * (plugin bridge, isolate req.user, toJSON) carries the SAME answer. Never write this directly: only an
+     * `edit_users` caller can change the underlying meta.
      */
-    hasProfessionalMailbox?: boolean;
+    accountCapabilities?: string[];
 
     constructor(data: any) {
         this.id = data.id;
@@ -395,14 +396,12 @@ class User {
                 [userId, 'personal_email', String(personalEmail).trim().toLowerCase()]);
         }
 
-        // ACTIVE CORPORATE MAILBOX. Written ONLY from the explicit `professionalMailbox` argument (the
-        // admin user form's toggle) — never derived from the email address, which the account itself can
-        // write. The caller is responsible for proving `edit_users`; routes/users.ts POST / is admin-only
-        // and /auth/register never passes it, so a self-registration can never arrive here with it set.
-        if (data.professionalMailbox !== undefined && mailboxFlagValue(data.professionalMailbox) === '1') {
-            await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)',
-                [userId, MAILBOX_META_KEY, '1']);
-        }
+        // PLUGIN-DECLARED ACCOUNT CAPABILITIES. Written ONLY from the explicit `accountCapabilityChanges`
+        // argument — a plan routes/users.ts built with core/account-capabilities.planAccountCapabilityWrite —
+        // never derived from anything the account writes. The caller is responsible for proving
+        // `edit_users`; routes/users.ts POST / is admin-only and /auth/register never passes it, so a
+        // self-registration can never arrive here with a grant.
+        await accountCapabilities.applyAccountCapabilityChanges(userId, data.accountCapabilityChanges);
 
         return await User.findById(userId);
     }
@@ -592,21 +591,20 @@ class User {
             await User.updateMeta(id, 'role', data.role);
         }
 
-        // ACTIVE CORPORATE MAILBOX — its own guarded branch, exactly like `role`, so it can only be
-        // written by a caller that passed the explicit `professionalMailbox` field. routes/users.ts is
-        // what proves the caller holds `edit_users`; the PROTECTED_META entry below is what stops any
-        // route from reaching the same key through the generic `data.meta` bag.
-        if (data.professionalMailbox !== undefined) {
-            await User.updateMeta(id, MAILBOX_META_KEY, mailboxFlagValue(data.professionalMailbox));
-        }
+        // PLUGIN-DECLARED ACCOUNT CAPABILITIES — their own guarded branch, exactly like `role`, so they can
+        // only be written by a caller that passed an explicit plan. routes/users.ts is what proves the caller
+        // holds `edit_users`; the PROTECTED_META_PREFIXES entry below is what stops any route from reaching
+        // the same keys through the generic `data.meta` bag.
+        await accountCapabilities.applyAccountCapabilityChanges(id, data.accountCapabilityChanges);
 
         if (data.meta) {
             // Protected keys must NEVER be set through the generic meta path: 'role' has a dedicated
             // assertValidRole-guarded branch above (mass-assigning meta.role would bypass the allow-list
             // → privilege escalation, since getRole() reads meta.role and administrators short-circuit
-            // to '*'), 'token_valid_after' is the JWT revocation epoch, and MAILBOX_META_KEY is the
-            // ACTIVE CORPORATE MAILBOX grant (mass-assigning it through a route that forwards req.body.meta
-            // would restore exactly the self-grant this whole change removes). Skip them here so a future
+            // to '*'), 'token_valid_after' is the JWT revocation epoch, and the account-capability grants
+            // (`account_capability:*`, plus the legacy key they were migrated from) are admin-owned:
+            // mass-assigning one through a route that forwards req.body.meta would be a self-grant. Skip
+            // them here so a future
             // route forwarding req.body.meta into update() can't escalate or tamper with auth state.
             //
             // The same reasoning covers three FAMILIES of keys, matched by prefix rather than spelled out
@@ -622,8 +620,9 @@ class User {
             // here, before one does.
             // PREVIOUS_NICENAME_META is an author-archive ALIAS the lookups resolve: writing it would claim
             // another author's old URL.
-            const PROTECTED_META = new Set(['role', 'token_valid_after', MAILBOX_META_KEY, PREVIOUS_NICENAME_META]);
-            const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_', 'network_handoff'];
+            const PROTECTED_META = new Set(['role', 'token_valid_after', LEGACY_META_KEY, PREVIOUS_NICENAME_META]);
+            const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_', 'network_handoff',
+                accountCapabilities.ACCOUNT_CAPABILITY_META_PREFIX];
             const isProtectedMeta = (k: string) =>
                 PROTECTED_META.has(k) || PROTECTED_META_PREFIXES.some((p) => k.startsWith(p));
             for (const [key, value] of Object.entries(data.meta)) {
@@ -738,14 +737,14 @@ class User {
 
     // Meta Methods
 
-    // Single source for every meta-derived field (role, mailbox fact): loadMeta AND the findById
+    // Single source for every meta-derived field (role, account capabilities): loadMeta AND the findById
     // cache rehydration both go through here, so the derivations can never drift apart.
     _applyMeta(meta: { [key: string]: any }) {
         this.meta = meta;
         if (meta.role) this.role = meta.role;
-        // Materialize the ACTIVE CORPORATE MAILBOX fact ONCE, here, so every downstream projection
+        // Materialize the granted account capabilities ONCE, here, so every downstream projection
         // (plugin bridge, isolate req.user, toJSON) reports the same answer without re-deriving it.
-        this.hasProfessionalMailbox = hasProfessionalMailbox(meta);
+        this.accountCapabilities = accountCapabilities.grantedAccountCapabilities(meta);
     }
 
     async loadMeta() {
@@ -772,7 +771,7 @@ class User {
         } else {
             await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)', [userId, key, String(value)]);
         }
-        // role / token_valid_after / mailbox live here — the cached user must die with every write
+        // role / token_valid_after / account capabilities live here — the cached user must die with every write
         await require('../core/cache').del(`user:${userId}`);
         noteAccountSecurityChange(userId, key);
     }
@@ -861,9 +860,9 @@ class User {
             // top-level field for the user form; also present in `meta.personal_email`. It is deliberately
             // NON-sensitive (a mere contact address) so it is not stripped by SENSITIVE_META above.
             personalEmail: (this.meta && this.meta.personal_email) || null,
-            // ACTIVE CORPORATE MAILBOX, as a first-class boolean so the admin user form can render the
-            // "Professional Mail Account" toggle in its true state and send it straight back.
-            professionalMailbox: hasProfessionalMailbox(this),
+            // The granted account capabilities (slugs), so the admin user form can render each plugin's
+            // toggle in its true state and send it straight back.
+            accountCapabilities: accountCapabilities.grantedAccountCapabilities(this),
             meta: safeMeta
         };
     }

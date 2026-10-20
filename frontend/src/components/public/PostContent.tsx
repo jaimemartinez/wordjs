@@ -3,9 +3,8 @@
  *
  * The Puck body renders through ContentRenderer (server twin of the editor canvas: same shared
  * block components, same SharedBlockShell wrapper), so the page ships as HTML with no body
- * hydration. The interactive pieces are their own small islands: comments, the legacy
- * [photo-carousel] initialiser, and whatever interactive/plugin blocks the content
- * itself contains (each code-split per page). Before F3 this file was a client component that
+ * hydration. The interactive pieces are their own small islands: comments and whatever
+ * interactive/plugin blocks the content itself contains (each code-split per page). Before F3 this file was a client component that
  * imported <Render> + the ENTIRE editor config — ~378KB of hydrated JS on every public page.
  */
 import type React from "react";
@@ -16,7 +15,6 @@ import { publicUiStrings, membersGateStrings } from "@/lib/public/uiStrings";
 import MembersOnlyGate from "./MembersOnlyGate";
 import { siteDateLanguage } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
-import LegacyCarousels from "@/components/content/LegacyCarousels";
 import CommentsSection from "@/components/CommentsSection";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
@@ -130,7 +128,6 @@ export default function PostContent({ post, settings, category, showComments }: 
                                 dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                             />
                         ))}
-                        <LegacyCarousels postId={post.id} />
                     </div>
                 )
             ) : (
@@ -194,9 +191,6 @@ export default function PostContent({ post, settings, category, showComments }: 
                                     dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                                 />
                             ))}
-                            {/* Classic-only: it initialises [photo-carousel] shortcodes inside the
-                                sanitized HTML body, which Puck content has no equivalent of. */}
-                            <LegacyCarousels postId={post.id} />
                         </>
                     )}
                 </article>
