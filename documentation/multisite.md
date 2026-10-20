@@ -60,8 +60,13 @@ restore it follows that login, and is dropped when the account is gone.
 
 ## Requirements
 
-- One of the `sqlite-native`, `postgres` or `mysql` (MariaDB too) database drivers. `npm run network --
-  enable` refuses `sqlite-legacy`.
+**Settings → Network** checks all of this for you and says, in plain words, what is missing and how to
+fix it from the panel.
+
+- One of the `sqlite-native`, `postgres` or `mysql` (MariaDB too) database drivers. An install on
+  `sqlite-legacy` is offered **Move to the current SQLite engine** right on that screen: WordJS makes a
+  backup (Settings → Backups), copies every table into `sqlite-native` with a progress bar, keeps the old
+  database file as it was, and restarts by itself.
   - **Postgres**: the WordJS database user needs `CREATE` on its database (each site is a schema of it).
     Without that right, create the schemas `wordjs_network` and `wordjs_site_<id>` for it beforehand.
   - **MySQL / MariaDB**: the user needs `CREATE` (each site is a database named `<db.name>_site_<id>`, and
@@ -72,36 +77,70 @@ restore it follows that login, and is dropped when the account is gone.
 - One backend host on `sqlite-native`; one or more on Postgres and MySQL ([Several backend
   nodes](#several-backend-nodes)). In split and separate mode the gateway is told the network's addresses
   by the backend, as it is told the main site's.
-- An installed site (the install wizard finished).
+- An installed site (the install wizard finished), with a main address (Settings → Site address).
+- Two-factor authentication on the account of whoever turns the network on or off (My account →
+  Two-factor authentication): the switch asks for the password and a current code.
 
 ## Turning it on
 
-On the backend's machine, from the installation:
+**Settings → Network**, as an administrator of the main site:
+
+1. **What the network needs** lists each requirement with a tick or what to do about it (see
+   [Requirements](#requirements)).
+2. **Network administrators**: tick the administrators of the main site who will run the network (you
+   are ticked already). Only they see **Admin → Network**.
+3. Enter your password and a current two-factor code, and click **Turn the network on**.
+
+WordJS records the main site as site 1 (nothing of it moves), creates the network store
+(`<data dir>/network.db` on SQLite, the `wordjs_network` schema on Postgres, the `<db.name>_network`
+database on MySQL), writes `multisite.enabled` in `wordjs-config.json`, records the switch in the network's
+audit log and in the site's (`network.enable`), and **restarts itself**: the page waits a few seconds and
+opens **Admin → Network**. With several backend nodes, every node applies the change and restarts too
+([below](#restarting-by-itself)).
+
+Network administrators are added and removed later on the same screen (your password confirms each
+change; the last one cannot be removed).
+
+**From a terminal instead** (optional, the same result), on the backend's machine, as the install's owner:
 
 ```bash
 npm run network -- enable --admin admin
-```
-
-`--admin` names one or more administrators of the main site (comma-separated logins) who become network
-administrators. The command records the main site as site 1, creates the network store
-(`<data dir>/network.db` on SQLite, the `wordjs_network` schema on Postgres, the `<db.name>_network`
-database on MySQL) and sets `multisite.enabled` in `wordjs-config.json`. **Restart the backend** (the
-monolith, or every backend process in split and separate mode): it reads the setting at start.
-
-Then sign in on the main site as one of those administrators; **Network** appears in the admin menu.
-
-```bash
 npm run network -- status
 npm run network -- admins add <login>
 npm run network -- admins remove <login>
 ```
+
+`--admin` names one or more administrators of the main site (comma-separated logins). The CLI does not
+restart anything: restart the backend afterwards (the monolith, or every backend process in split and
+separate mode).
+
+### Restarting by itself
+
+`multisite.enabled` and the database driver are read when the backend starts, so the panel restarts it
+after turning the network on or off and after a database migration. How depends on how WordJS runs:
+
+| Started with | Restarted by |
+|---|---|
+| `npm start` (split mode), `npm run start:mono` / `node monolith.js` (monolith, the Docker image) | Its own supervisor (`backend/server.js`, `monolith.js`): the app exits with code 75 and is started again at once. A crash is still a crash. |
+| `npm run dev` | `node --watch` (the entry file is touched). |
+| Docker's restart policy, Kubernetes, systemd, pm2 | The service manager (the process exits with code 75). |
+| Anything else (for example `node dist/index.js` typed by hand) | Nobody: the screen says so before you switch, saves the change, and asks you to restart WordJS once. |
+
+Several backend nodes (Postgres or MySQL): the node that made the change announces it on the Redis bus
+(`wordjs:node-restart`); every other node writes the same `multisite.enabled` to its own
+`wordjs-config.json` and restarts. A node that was down at the time reads the switch from the network store
+when it starts, applies it and restarts once.
 
 ## Creating a site
 
 Admin → Network → New site:
 
 - **Site address** — `http(s)://host[:port]`, no path. A domain or subdomain (not an IP address, not
-  `localhost`) that no site of the network answers yet.
+  `localhost`) that no site of the network answers yet. **On a local or development install** (the main
+  site is `localhost`, a loopback IP or a `*.localhost` name), a name under `.localhost` works too, such as
+  `http://blog.localhost:3000` with the main site's port: browsers resolve every `*.localhost` name to the
+  computer itself, so it needs no DNS and no certificate (none is requested for it), and nobody else can
+  reach it. The New site form says so when it applies. A public network refuses `.localhost` names.
 - **Slug** — a short name for the site (lower-case letters, digits and dashes).
 - **Site title**, and the **first administrator**'s username, email and password.
 - **Your current password** — creating a site publishes a new address, so it re-authenticates you.
@@ -349,7 +388,7 @@ refused.
 ## REST API
 
 The network screen is backed by `/api/v1/network` (`backend/src/routes/network.ts`). `GET /status` answers
-any signed-in user. Every other route is for network administrators, on the main site, with an
+any signed-in user; `/setup`, `/enable` and `/disable` are described in the table. Every other route is for network administrators, on the main site, with an
 interactive session (an API token is refused with `403 rest_token_management_forbidden`). A caller who is
 not a network administrator gets `403 rest_forbidden_network`. With multisite off, or on another site,
 the route answers `404 rest_no_route`. Every write re-authenticates with `currentPassword` in the body: a
@@ -358,7 +397,13 @@ wrong one is `403 rest_bad_current_password`.
 | Method | Endpoint | Body | Answer |
 |---|---|---|---|
 | `GET` | `/status` | — | `{ enabled, networkAdmin }` |
-| `GET` | `/sites` | — | `{ sites: [{ id, slug, url, host, status, main, createdAt, updatedAt }] }`, the main site first |
+| `GET` | `/setup` | — | `{ enabled, ready, requirements: [{ id, ok, blocking, message, fix }], administrators, mfaEnrolled, driver, otherSites, restart: { mode, automatic, bootId } }`. While multisite is off: for the main site's administrators (`403 rest_forbidden` otherwise) |
+| `POST` | `/enable` | `{ admins: [userId…], currentPassword, mfaCode }` | `{ enabled: true, admins, restart }`, then the backend restarts. Interactive session at the main address only. `403 network_mfa_enrollment_required` / `rest_mfa_step_up_required`, `400 rest_mfa_invalid`, `400 network_admins_required` / `network_admin_not_administrator`, `409 network_already_enabled` / `network_requirements_unmet` |
+| `POST` | `/disable` | `{ currentPassword, mfaCode }` | `{ enabled: false, restart }`, then the backend restarts. `409 network_has_sites` while another site exists, `409 network_not_enabled` |
+| `GET` | `/admins` | — | `{ administrators: [{ id, login, displayName, networkAdmin }] }` |
+| `POST` | `/admins` | `{ userId, currentPassword }` | `{ administrators }`. `400 network_admin_not_administrator` |
+| `DELETE` | `/admins/:id` | `{ currentPassword }` | `{ administrators }`. `409 network_last_admin`, `404 network_admin_not_found` |
+| `GET` | `/sites` | — | `{ sites: [{ id, slug, url, host, status, main, createdAt, updatedAt }], localAddresses }`, the main site first; `localAddresses` is true when a new site may use a `*.localhost` address |
 | `POST` | `/sites` | `{ slug, url, title, adminUsername, adminEmail, adminPassword, currentPassword }` | `201 { site }`. `400` for an invalid field (`network_invalid_url`, `network_invalid_slug`, `network_invalid_title`, `network_invalid_admin`, `network_weak_password`), `409 network_host_taken` / `network_slug_taken` |
 | `POST` | `/sites/:id/suspend` | `{ currentPassword }` | `{ site }`. `400 network_primary_site` for the main site, `404 network_site_not_found` |
 | `POST` | `/sites/:id/resume` | `{ currentPassword }` | `{ site }` |
@@ -384,19 +429,20 @@ carries `handoff: { networkAdmin, from, expiresAt }` for as long as the session 
 
 ## Turning it off
 
-```bash
-npm run network -- disable
-```
+**Settings → Network → Turn the network off** (network administrators), with your password and a current
+two-factor code. Allowed while the main site is the only site: delete the others in Admin → Network first.
+WordJS writes the change, audits it (`network.disable`) and restarts by itself, on every node.
 
-Allowed while the main site is the only site. Restart the backend afterwards.
+From a terminal instead: `npm run network -- disable`, then restart the backend.
 
 ## Upgrading from 2.7
 
 Nothing changes for a single site, or for an existing network on `sqlite-native`: no migration, no new
 setting. What is new:
 
-- A network can run on Postgres or MySQL (`npm run network -- enable` on such an install), and on several
-  backend nodes there.
+- A network can run on Postgres or MySQL, and on several backend nodes there.
+- The network is turned on and off from Settings → Network, which restarts the backend by itself
+  (`npm run network` still works).
 - Each site other than the main one gets its own certificate (Admin → Network); with ACME on and
   `http-01`, Let's Encrypt issues them on its own after the upgrade, at the next renewal pass.
 - Each site has its own backups and real-time collaboration.
@@ -409,8 +455,9 @@ setting. What is new:
 
 | What you see | Why |
 |---|---|
-| `421` on a new site's address | The backend was not restarted after `enable`, or the address is not the site's main address, or (separate mode) the gateway has not received the network's addresses yet: check the backend log for "could not tell the gateway". |
-| `npm run network -- enable` refuses | The install is not finished, the driver is `sqlite-legacy`, the MySQL `db.name` is not made of lower-case letters, digits and underscores, or a login given to `--admin` is not an administrator of the main site. |
+| `421` on a new site's address | The backend was not restarted after `npm run network -- enable` (the panel restarts it itself), or the address is not the site's main address, or (separate mode) the gateway has not received the network's addresses yet: check the backend log for "could not tell the gateway". |
+| Settings → Network does not let you turn it on | Its list says what is missing: the install is not finished, the driver is `sqlite-legacy` (use **Move to the current SQLite engine** there), the database user may not create schemas/databases (the screen shows the `GRANT` to run), the main address is not set, or your account has no two-factor authentication. The CLI refuses for the same reasons, or when a login given to `--admin` is not an administrator of the main site. |
+| "Restart WordJS to apply it" after a switch | WordJS was not started by something that restarts it (see [Restarting by itself](#restarting-by-itself)). Restart it once the way you started it. |
 | Creating a site fails with "could not be created" | The database user may not create the site's Postgres schema or MySQL database: grant `CREATE`, or create `wordjs_site_<id>` / `<db.name>_site_<id>` for it. |
 | A site's certificate is not served | Admin → Network shows it as installed? Then check the gateway log for "Site certificate installed"; a name must reach the gateway with SNI (any modern browser sends it). "Get certificate" fails while the address does not point at this server, or port 80 does not reach it. |
 | Another node does not answer a new site | Its Redis connection is down: it catches up within 15 seconds (the periodic re-read of the network store). |

@@ -8,11 +8,14 @@ share nothing.
 **Time:** about 15 minutes.
 **You need:**
 
-- a WordJS site on the **`sqlite-native`** database (the default), **Postgres** or **MySQL**. On
-  Postgres and MySQL the database user must be allowed to create schemas (Postgres) or databases
-  (MySQL): each site gets its own;
-- shell access to the server;
-- a second domain name pointing at the same server.
+- a WordJS site you administer. Settings → Network checks the rest for you: the database engine (an
+  older `sqlite-legacy` install is moved to `sqlite-native` there, with one click), the database user's
+  rights on Postgres and MySQL, and the main address;
+- two-factor authentication on your account (**My account → Two-factor authentication**);
+- a second domain name pointing at the same server — or nothing at all to try it on your own computer
+  (step 1).
+
+No terminal is needed.
 
 This tutorial assumes the install from [Tutorial 1](01-install-on-a-linux-server.md): the code in
 `/srv/wordjs`, run by the `wordjs` user as the `wordjs` service.
@@ -26,31 +29,26 @@ the main domain. If nginx is in front ([Tutorial 2](02-nginx-and-https.md)), add
 To try this without DNS, use a wildcard DNS service: `shop.192-168-1-20.sslip.io` resolves to
 `192.168.1.20`.
 
+**Trying it on your own computer** (the main site is `http://localhost:3000`)? Skip this step: use
+`http://shop.localhost:3000` as the address in step 3. Every browser opens `*.localhost` names on the
+computer itself, without DNS.
+
 ## 2. Turn the network on
 
-On the server, run the command **as the `wordjs` user**. It writes the network database and the
-config file, and the service must still be able to write them afterwards. Run as root, it refuses
-and prints the command to use instead:
+Sign in to the main site as an administrator and open **Settings → Network**.
 
-```bash
-cd /srv/wordjs && sudo -u wordjs npm run network -- enable --admin admin
-```
+1. **What the network needs** shows a tick next to each requirement. If one is missing, the line says
+   what to do; on an older `sqlite-legacy` install, click **Move to the current SQLite engine**: WordJS
+   makes a backup, moves the database (a progress bar shows it) and restarts by itself.
+2. Under **Network administrators**, keep yourself ticked (and tick anyone else who should run the
+   network).
+3. Enter your password and the code from your authenticator app, and click **Turn the network on**.
 
-```
-Multisite is on. Site 1 is https://www.example.com; network administrators: admin.
-Restart the backend, then create sites from Admin → Network.
-```
+WordJS restarts itself (a few seconds) and opens **Admin → Network**. Your existing site is now **site 1,
+the main site**; nothing about it changed.
 
-`--admin` names the main site's administrators (comma-separated logins) who will manage the network.
-Your existing site becomes **site 1, the main site**, and nothing about it changes. Restart:
-
-```bash
-sudo systemctl restart wordjs
-```
-
-```bash
-sudo -u wordjs npm run network -- status
-```
+> From a terminal instead: `cd /srv/wordjs && sudo -u wordjs npm run network -- enable --admin admin`,
+> then `sudo systemctl restart wordjs`.
 
 ## 3. Create the second site
 
@@ -105,7 +103,8 @@ Plugins and themes are installed once, on the main site, for the whole network.
   own **backups** (its Settings → Backups) and **real-time co-editing** in its editor.
 - Installing plugin and theme code, the database migration tool and network management are the
   network's, on the main site. [multisite.md](../multisite.md) covers deleting a site, several backend
-  nodes, the REST API and how to turn the network off.
+  nodes and the REST API.
+- **Turning the network off**: delete the other sites, then **Settings → Network → Turn the network off**.
 
 ---
 *Tested on 2026-10-17 with WordJS 2.6.0 on a fresh monolith install (Debian 12, `sqlite-native`),
