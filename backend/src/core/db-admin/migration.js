@@ -75,7 +75,7 @@ const sanitizeValue = (val) => {
 async function listSourceTables(readAll, sourceDriverName) {
     let rows;
     if (sourceDriverName === 'postgres') {
-        rows = await readAll("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'");
+        rows = await readAll("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'");
     } else if (sourceDriverName === 'mysql') {
         rows = await readAll("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'");
     } else {
@@ -287,6 +287,189 @@ exports.listSourceTables = listSourceTables;
 exports.recreateTableOnTarget = recreateTableOnTarget;
 exports.CORE_TABLES = CORE_TABLES;
 
+// ── MULTISITE: the rest of the network moves with site 1 ─────────────────────────────────────────
+//
+// A network keeps one database per site and a network store (core/site-storage: SQLite files, Postgres
+// schemas, MySQL databases). Switching engine moves ALL of them: each site's database is copied into its
+// namespace on the target (data/sites/<id>/wordjs-native.db, schema wordjs_site_<id>, or database
+// <name>_site_<id>) with the same complete, fail-closed copy as site 1's, and the network store's records
+// into the target's network store. Any failure throws, so runMigration never switches the config and the
+// whole network keeps running on the source.
+
+const SITE_NAME_RE = /^[a-z_][a-z0-9_]*$/;
+
+/** A site id from the network registry, checked: a positive integer. */
+function checkedSiteId(id) {
+    const n = Number(id);
+    if (!Number.isSafeInteger(n) || n < 2) throw new Error(`Not a secondary site id: ${String(id)}`);
+    return n;
+}
+
+/** Where site `id` (or the network store, id null) lives on a SERVER target: its schema / database name. */
+function targetNamespace(targetDriver, dbName, id) {
+    const site = id === null ? null : checkedSiteId(id);
+    if (targetDriver === 'postgres') return site === null ? 'wordjs_network' : `wordjs_site_${site}`;
+    if (!SITE_NAME_RE.test(String(dbName || ''))) throw new Error(`A network on MySQL needs a database name of lower-case letters, digits and underscores (got ${JSON.stringify(dbName)}).`);
+    const n = site === null ? `${dbName}_network` : `${dbName}_site_${site}`;
+    if (n.length > 64) throw new Error(`The MySQL database name ${n} is longer than 64 characters.`);
+    return n;
+}
+
+/**
+ * The file of site `id` (or of the network store, id null) on a SQLite target, under data/. Built only
+ * from the checked id and constant segments, and proved contained (core/safe-path resolveWithin): no
+ * part of the request names a path.
+ */
+function sqliteTargetFile(id) {
+    const { resolveWithin } = require('../safe-path');
+    const root = path.resolve('./data');
+    const file = id === null
+        ? resolveWithin(root, 'network.db')
+        : resolveWithin(root, 'sites', String(checkedSiteId(id)), 'wordjs-native.db');
+    if (!file) throw new Error('The target database file could not be placed under data/.');
+    return file;
+}
+
+/**
+ * Open the target namespace: a connected Postgres/MySQL driver pinned to it (created first through the
+ * main target connection), or a fresh SQLite file at `<file>.tmp` that `commit()` moves into place.
+ */
+async function openTargetNamespace(targetDriver, mainTarget, conn, id) {
+    if (targetDriver === 'postgres' || targetDriver === 'mysql') {
+        const ns = targetNamespace(targetDriver, conn && conn.name, id);
+        const q = (s) => (targetDriver === 'postgres' ? `"${s}"` : `\`${s}\``);
+        await mainTarget.pool.query(targetDriver === 'postgres'
+            ? `CREATE SCHEMA IF NOT EXISTS ${q(ns)}`
+            : `CREATE DATABASE IF NOT EXISTS ${q(ns)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+        const Driver = targetDriver === 'postgres' ? require('../../drivers/postgres').PostgresDriver : require('../../drivers/mysql').MysqlDriver;
+        const d = new Driver();
+        d.config = targetDriver === 'postgres' ? { ...conn, schema: ns, poolMax: 2 } : { ...conn, name: ns, connectionLimit: 2 };
+        await d.connect();
+        return { isAsync: true, module: d, wrapper: null, commit: async () => { await d.close(); }, abort: async () => { try { await d.close(); } catch (_) { /* */ } } };
+    }
+    const Database = require('better-sqlite3');
+    const { NativeWrapper } = require('../../drivers/sqlite-native');
+    const ns = sqliteTargetFile(id);
+    fs.mkdirSync(path.dirname(ns), { recursive: true });
+    const tmp = ns + '.tmp';
+    for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch (_) { /* not there */ } }
+    const handle = new Database(tmp);
+    handle.pragma('journal_mode = DELETE');
+    handle.exec('PRAGMA foreign_keys = OFF;');
+    const wrapper = new NativeWrapper(handle);
+    return {
+        isAsync: false, module: null, wrapper,
+        commit: async () => {
+            handle.close();
+            for (const f of [ns, ns + '-wal', ns + '-shm']) { try { fs.unlinkSync(f); } catch (_) { /* not there */ } }
+            fs.renameSync(tmp, ns);
+        },
+        abort: async () => { try { handle.close(); } catch (_) { /* */ } try { fs.unlinkSync(tmp); } catch (_) { /* */ } },
+    };
+}
+
+/** Copy one whole database (a site's) from `source` (a connected driver of the current engine) into `target`. */
+async function copySiteDatabase(source, currentDriver, target, targetDriver, onProgress) {
+    const sourceIsAsync = currentDriver === 'postgres' || currentDriver === 'mysql';
+    const readAll = (sql) => Promise.resolve(source.all(sql));
+    const tables = await listSourceTables(readAll, currentDriver);
+    const nonCore = tables.filter((t) => !CORE_TABLES.has(t));
+    const schemaByTable = {};
+    for (const t of nonCore) {
+        let s = null;
+        if (typeof source.getTableSchema === 'function') { try { s = await source.getTableSchema(t); } catch (_) { s = null; } }
+        let sqlText = s && s.sql;
+        let columns = (s && s.columns) || [];
+        if (!sourceIsAsync) {
+            if (!sqlText) {
+                const r = await readAll(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${escLit(t)}'`);
+                sqlText = r && r[0] && r[0].sql;
+            }
+            columns = await sqliteColumnsFromPragma(readAll, t);
+        }
+        schemaByTable[t] = { sql: sqlText || null, columns };
+    }
+    await dbManager.initializeSchema(target.isAsync ? target.module : target.wrapper, target.isAsync);
+    const targetKind = targetDriver === 'mysql' ? 'mysql' : (targetDriver === 'postgres' ? 'postgres' : 'sqlite');
+    return copyAllTables({
+        tables,
+        nonCore,
+        isAsyncTarget: target.isAsync,
+        isMysqlTarget: targetDriver === 'mysql',
+        targetKind,
+        targetModule: target.module,
+        targetWrapper: target.wrapper,
+        targetExec: target.isAsync ? (s) => target.module.exec(s) : (s) => target.wrapper.exec(s),
+        schemaByTable,
+        readAll,
+        sourceIsSqlite: !sourceIsAsync,
+        sourceRead: source,
+        onProgress,
+    });
+}
+
+/**
+ * Copy every site other than site 1, and the network store, onto the target engine. `mainTarget` is the
+ * connected target driver of site 1 (Postgres/MySQL), used to create the namespaces; `conn` its settings.
+ * Returns the rows copied. Throws on the first failure, after removing what it had written.
+ */
+async function migrateNetwork({ currentDriver, targetDriver, mainTarget, conn, onProgress }) {
+    const siteContext = require('../site-context');
+    if (!siteContext.multisiteEnabled()) return 0;
+    const network = require('../network');
+    const sourceIsSql = currentDriver === 'postgres' || currentDriver === 'mysql';
+    const committed = [];
+    let rows = 0;
+    const sites = network.listSites().filter((s) => s.id !== siteContext.PRIMARY_SITE_ID);
+    for (const site of sites) {
+        const target = await openTargetNamespace(targetDriver, mainTarget, conn, site.id);
+        try {
+            rows += await siteContext.runWithSite(site.id, async () => {
+                await dbManager.openSiteDatabase(site.id, sourceIsSql ? null : (site.dbPath || network.siteDbPath(site.id)));
+                return copySiteDatabase(dbManager.getDbAsync(), currentDriver, target, targetDriver,
+                    (table, i, n) => onProgress && onProgress(`site ${site.id}: ${table}`, i, n));
+            });
+            committed.push(target);
+        } catch (e) {
+            await target.abort();
+            for (const t of committed) await t.abort();
+            throw new Error(`Site ${site.id} (${site.mainHost}) could not be copied: ${e.message}`, { cause: e });
+        }
+    }
+    // The network store: the same records, in the target's network store.
+    const store = await openTargetNamespace(targetDriver, mainTarget, conn, null);
+    try {
+        const exec = store.isAsync ? (s) => store.module.exec(s) : (s) => store.wrapper.exec(s);
+        for (const ddl of network.TABLES) await exec(ddl);
+        const names = network.TABLES.map((ddl) => /CREATE TABLE IF NOT EXISTS (\w+)/.exec(ddl)[1]);
+        const sourceRead = { all: (sql) => network.storeAll(sql) };
+        const copy = async (tx) => copyTablesInto(names, { sourceRead, targetTx: tx });
+        if (store.isAsync) rows += await store.module.transaction(copy);
+        else {
+            const w = store.wrapper;
+            w.exec('BEGIN');
+            try {
+                rows += await copy({ exec: (s) => w.exec(s), run: (s, p) => w.prepare(s).run(...(p || [])), get: (s) => w.prepare(s).get() });
+                w.exec('COMMIT');
+            } catch (e) { try { w.exec('ROLLBACK'); } catch (_) { /* */ } throw e; }
+        }
+    } catch (e) {
+        await store.abort();
+        for (const t of committed) await t.abort();
+        throw new Error(`The network store could not be copied: ${e.message}`, { cause: e });
+    }
+    for (const t of committed) await t.commit();
+    await store.commit();
+    // The sources are left as they were (a rollback is the config backup away); their connections close.
+    try { await dbManager.closeSiteDatabases(); } catch (_) { /* */ }
+    try { network.closeNetworkStore(); } catch (_) { /* */ }
+    return rows;
+}
+
+exports.migrateNetwork = migrateNetwork;
+exports.targetNamespace = targetNamespace;
+exports.sqliteTargetFile = sqliteTargetFile;
+
 // ── What belongs to the database the site is running on ─────────────────────────────────────────
 //
 // POST /cleanup deletes a leftover database from data/ after a migration, and it used to check only that
@@ -433,6 +616,16 @@ exports.runMigration = async (req, res) => {
     }
 
     const currentDriver = config.dbDriver || 'sqlite-legacy';
+    // A network moves whole (every site and the network store, migrateNetwork): onto an engine that can
+    // hold one, and never onto the server it already runs on (its sites' schemas / databases ARE there).
+    if (require('../site-context').multisiteEnabled()) {
+        if (targetDriver === 'sqlite-legacy') {
+            return res.status(400).json({ code: 'db_migration_network_engine', error: 'A network of sites needs the sqlite-native, postgres or mysql driver.' });
+        }
+        if (targetDriver === currentDriver) {
+            return res.status(409).json({ code: 'db_migration_network_same_engine', error: 'A network cannot be re-migrated onto the engine it runs on; move its databases with the tools of the engine.' });
+        }
+    }
     if (targetDriver === currentDriver && targetDriver !== 'postgres' && targetDriver !== 'mysql') {
         // Allow re-migration to postgres/mysql for credential updates, but block file-to-file defaults
         return res.status(400).json({ error: 'Already using this driver' });
@@ -671,6 +864,17 @@ exports.runMigration = async (req, res) => {
                 globalStatus.progress = Math.round((i / n) * 100);
             },
         });
+
+        // Multisite: every other site and the network store follow (all or nothing — a failure throws
+        // before the config is switched, so the network keeps running on the source).
+        const networkRows = await migrateNetwork({
+            currentDriver,
+            targetDriver,
+            mainTarget: isAsyncTarget ? targetDriverModule : null,
+            conn: isAsyncTarget ? { host: dbHost, user: dbUser, password: dbPassword, name: dbName, port: dbPort, ...dbTls } : null,
+            onProgress: (table, i, n) => { globalStatus.currentTable = table; globalStatus.progress = Math.round((i / n) * 100); },
+        });
+        if (networkRows) log.info(`✅ Network copied: ${networkRows} row(s) of the other sites and the network store.`);
 
         // Close Source DB now that we are done reading.
         try { if (dbManager.closeDatabase) await dbManager.closeDatabase(); } catch (e) { log.warn({ err: e }, 'Could not close source DB'); }

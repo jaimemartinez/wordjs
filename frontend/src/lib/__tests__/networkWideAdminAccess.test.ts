@@ -1,8 +1,9 @@
 /**
- * Multisite: the network-wide tools of the admin (backups, the hooks registry, the database migration
- * tool, the site's addresses, the media storage) are offered to a NETWORK administrator on the main site
- * — the server refuses an administrator of the main site who is not one — and, on a single site, to
- * every administrator exactly as before.
+ * Multisite: the network-wide tools of the admin (the hooks registry, the database migration tool, the
+ * site's addresses, the media storage) are offered to a NETWORK administrator on the main site — the
+ * server refuses an administrator of the main site who is not one — and, on a single site, to every
+ * administrator exactly as before. Backups are every site's own: the main site's for its network
+ * administrators, another site's for that site's administrators.
  *
  * MUTATION PROOF (verified once): drop the `networkWide` line from siteOffers, or the network clause from
  * canManageSiteAddress → this file fails.
@@ -17,7 +18,7 @@ const NETWORK_ADMIN = admin({ mainSite: true, networkAdmin: true });
 const MAIN_ONLY = admin({ mainSite: true, networkAdmin: false });
 const OTHER_SITE = admin({ mainSite: false, networkAdmin: false });
 
-const NETWORK_WIDE = ["/admin/settings/backups", "/admin/hooks", "/admin/db-migration", "/admin/settings/site-address", "/admin/settings/media-storage"];
+const NETWORK_WIDE = ["/admin/hooks", "/admin/db-migration", "/admin/settings/site-address", "/admin/settings/media-storage"];
 const hrefs = (user: any) => {
     const { core, management } = sidebarSections(user, []);
     return [...core, ...management].map((i) => i.href);
@@ -35,8 +36,17 @@ describe("network-wide admin tools", () => {
     it("an administrator of the main site who is not a network administrator, or of another site, is not offered them", () => {
         for (const user of [MAIN_ONLY, OTHER_SITE]) {
             for (const p of NETWORK_WIDE) expect(canOpenAdminPath(p, user, []), `${p}`).toBe(false);
-            for (const p of ["/admin/settings/backups", "/admin/hooks", "/admin/db-migration"]) expect(hrefs(user)).not.toContain(p);
+            for (const p of ["/admin/hooks", "/admin/db-migration"]) expect(hrefs(user)).not.toContain(p);
         }
+    });
+
+    it("backups: the main site's for its network administrators, every other site's for its own administrators", () => {
+        for (const user of [SINGLE, NETWORK_ADMIN, OTHER_SITE]) {
+            expect(canOpenAdminPath("/admin/settings/backups", user, [])).toBe(true);
+            expect(hrefs(user)).toContain("/admin/settings/backups");
+        }
+        expect(canOpenAdminPath("/admin/settings/backups", MAIN_ONLY, [])).toBe(false);
+        expect(hrefs(MAIN_ONLY)).not.toContain("/admin/settings/backups");
     });
 
     it("what is the site's own stays (plugins on the main site, settings, users)", () => {

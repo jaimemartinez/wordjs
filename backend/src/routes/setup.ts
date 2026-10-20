@@ -739,13 +739,19 @@ router.post('/install', async (req: Request, res: Response) => {
         // Database selection (chosen in the installer). SQLite drivers use their own file; Postgres
         // stores a connection object. The driver layer reads these from the live config.
         dbDriver,
+        // The connection is written in the shape config/app.ts READS: the database under `name` (it never
+        // read `database`, so the install itself and every restart connected to the default database —
+        // the user's own, on Postgres) and the password under the flat `dbPassword` too, which outranks the
+        // nested one and is otherwise generated at the next boot, shadowing the password given here.
         ...((dbDriver === 'postgres' || dbDriver === 'mysql')
             ? {
+                ...(dbConn.password ? { dbPassword: String(dbConn.password) } : {}),
                 db: {
                     host: dbConn.host,
                     port: Number(dbConn.port) || (dbDriver === 'mysql' ? 3306 : 5432),
                     user: dbConn.user,
                     password: dbConn.password || '',
+                    name: dbConn.database,
                     database: dbConn.database,
                     ...installerDbTls(dbConn)
                 }

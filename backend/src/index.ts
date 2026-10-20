@@ -306,7 +306,14 @@ function limiterStore(prefix: string): any {
         const client = cache.getClient();
         if (!client) return undefined;
         const { RedisStore } = require('rate-limit-redis');
-        return new RedisStore({ sendCommand: (...args: any[]) => client.call(...args), prefix });
+        const store = new RedisStore({ sendCommand: (...args: any[]) => client.call(...args), prefix });
+        // The store loads its scripts at construction. With Redis not reachable yet (a boot during an
+        // outage) those loads reject, and nothing awaits them until the first request — an unhandled
+        // rejection. The store reloads a script on its next failed use, so the first failure is noise.
+        for (const p of [store.incrementScriptSha, store.getScriptSha]) {
+            if (p && typeof p.catch === 'function') p.catch(() => { /* reloaded on first use */ });
+        }
+        return store;
     } catch (e: any) {
         log.warn({ err: e }, '[rate-limit] Redis store unavailable, using in-memory');
         return undefined;
@@ -868,6 +875,16 @@ app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
 });
 // Serve .well-known (ACME support) - Allow dotfiles. NEVER cache challenge tokens (short-lived, per-order).
 app.use('/.well-known', express.static(installPath('public/.well-known'), { dotfiles: 'allow' }));
+// Multisite: an HTTP-01 answer written on ANOTHER node (core/site-certs keeps them in the shared network
+// store), for the CA request the edge sent here. Reached only after the local file missed.
+app.get('/.well-known/acme-challenge/:token', (req: Request, res: Response, next: NextFunction) => {
+    if (!siteContext.multisiteEnabled()) return next();
+    require('./core/site-certs').challengeAnswer(String(req.params.token)).then((answer: string | null) => {
+        if (answer === null) return next();
+        res.set('Cache-Control', 'no-store');
+        res.type('text/plain').send(answer);
+    }, () => next());
+});
 
 // Framework assets (wordjs-ui.css etc.) change only on a WordJS update → 1d + ETag revalidation.
 // DEV: force revalidation (ETag makes it a cheap 304) — wordjs-ui.css and friends change during
@@ -1229,10 +1246,10 @@ app.use('/api/v1/analytics', require('./routes/analytics'));
 // Mounted here in the host (it runs around the DB lifecycle at boot; can't be isolated in a worker).
 require('./core/db-admin').register(app);
 
-// Backups archive the main site's database and files: the main site's only (multisite), and on the main
-// site of a network its network administrators only. Mounted with the app (it used to be mounted late in
-// initialize(), so an app built without the boot had no /backups at all and its guards went untested).
-app.use(`${config.api.prefix}/backups`, multisiteGuards.mainSiteOnly);
+// Backups. Mounted with the app (it used to be mounted late in initialize(), so an app built without the
+// boot had no /backups at all and its guards went untested). Multisite: every site has its own backups
+// (core/backup) — the main site's stay with the network administrators (they carry the network's plugin
+// and theme code); another site's are that site's administrators' and hold that site only.
 app.use(`${config.api.prefix}/backups`, multisiteGuards.networkAdminOnMainSite);
 app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
 
@@ -1616,8 +1633,18 @@ async function initializeMainSite() {
         if (siteContext.multisiteEnabled()) {
             try {
                 const network = require('./core/network');
+                // Postgres/MySQL: connect to the shared store and follow the other nodes' changes to it.
+                await network.ready({ watch: true });
+                // A site suspended, resumed or deleted on another node stops/starts/forgets it here too.
+                require('./core/network-sites').followRegistryChanges();
+                // The monolith serves the sites' certificates itself (gateway/src/site-certs.js reads them
+                // from disk): bring them from the shared store, where any node may have issued one.
+                if (process.env.WORDJS_EMBEDDED === '1') {
+                    require('./core/site-certs').syncSiteCertificatesToEdge()
+                        .catch((e: any) => log.warn(`Multisite: the sites' certificates could not be installed: ${e && e.message}`));
+                }
                 const main = network.normalizeSiteUrl(config.siteUrl);
-                if (main) network.registerPrimarySite(main.url);
+                if (main) await network.registerPrimarySite(main.url);
                 log.info(`🌐 Multisite: ${network.listSites().length} site(s) in the network.`);
                 // Every network administrator row still names an account of the main site, and the same one.
                 await require('./core/network-auth').recheckNetworkAdmins();

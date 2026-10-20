@@ -433,7 +433,7 @@ const PORTAL_NOT_FOUND = { error: 'Portal not found' };
  * /plugins/{slug}/portal:
  *   get:
  *     summary: Describe a plugin portal page
- *     description: For the portal slug an ACTIVE plugin declares in frontend.portalPage.slug, and only while the administrator has granted it browser:script, returns the optional head details of /portal/{slug} (title, themeColor, viewportFit). Anything else - an unknown slug, an inactive plugin, a plugin not granted browser:script - is the same 404. Unauthenticated, because a portal's visitors are not WordJS users.
+ *     description: For the portal slug an ACTIVE plugin declares in frontend.portalPage.slug, and only while the administrator has granted it browser:script, returns the optional head details of /portal/{slug} (title, themeColor, viewportFit), those of its sub-pages (pages), whether it has a service worker (serviceWorker) and, when it declares a file route, the API path that answers its tickets (fileEndpoint). Anything else - an unknown slug, an inactive plugin, a plugin not granted browser:script - is the same 404. Unauthenticated, because a portal's visitors are not WordJS users.
  *     tags: [Plugins]
  *     security: []
  *     parameters:
@@ -461,6 +461,35 @@ const PORTAL_NOT_FOUND = { error: 'Portal not found' };
  *                 viewportFit:
  *                   type: string
  *                   enum: [auto, cover, contain]
+ *                 pages:
+ *                   type: object
+ *                   description: Head details of sub-pages (/portal/{slug}/{page}), keyed by page.
+ *                   additionalProperties:
+ *                     type: object
+ *                     properties:
+ *                       title:
+ *                         type: string
+ *                       private:
+ *                         type: boolean
+ *                       app:
+ *                         type: object
+ *                         required: [name]
+ *                         properties:
+ *                           name:
+ *                             type: string
+ *                           shortName:
+ *                             type: string
+ *                           description:
+ *                             type: string
+ *                           backgroundColor:
+ *                             type: string
+ *                           themeColor:
+ *                             type: string
+ *                 serviceWorker:
+ *                   type: boolean
+ *                 fileEndpoint:
+ *                   type: string
+ *                   description: API path (under /api/v1) of the plugin's public route that turns a ticket (?d=) into a file.
  *       404:
  *         description: No active plugin granted browser:script declares this portal
  */
@@ -473,7 +502,114 @@ router.get('/:slug/portal', asyncHandler(async (req: Request, res: Response) => 
     if (!folder) return res.status(404).json(PORTAL_NOT_FOUND);
     // Presentation of a public page — but per-install state (activation, grants), so never stored.
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ slug, ...portalPages.portalPageHead(readManifest(folder)) });
+    const manifest = readManifest(folder);
+    const { file, ...head } = portalPages.portalPageHead(manifest);
+    const fileRoute = file ? portalPages.portalFileRoute(manifest) : null;
+    // The plugin's own public route (routes are mounted under the plugin FOLDER) — the frontend's
+    // /portal/<slug>/file asks it and answers the bytes.
+    res.json({ slug, ...head, ...(fileRoute ? { fileEndpoint: `/plugin/${folder}${fileRoute}` } : {}) });
+}));
+
+/**
+ * @swagger
+ * /plugins/portals:
+ *   get:
+ *     summary: List the plugin portal pages that are served
+ *     description: The portal pages (/portal/{slug}) that ACTIVE plugins granted browser:script serve right now - the same rule as GET /plugins/{slug}/portal - with their title, for the admin's menu editor to offer them as links. Signed-in users only.
+ *     tags: [Plugins]
+ *     responses:
+ *       200:
+ *         description: The served portals, by slug
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 required: [slug]
+ *                 properties:
+ *                   slug:
+ *                     type: string
+ *                   title:
+ *                     type: string
+ *       401:
+ *         description: Not signed in
+ */
+router.get('/portals', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+    const portalPages = require('../core/portal-pages');
+    const { getActivePlugins } = require('../core/plugins');
+    let active: unknown;
+    try { active = await getActivePlugins(); } catch { active = []; }
+    const out: Array<{ slug: string; title?: string }> = [];
+    for (const folder of Array.isArray(active) ? active : []) {
+        if (typeof folder !== 'string' || !SLUG_RE.test(folder)) continue;
+        const slug = portalPages.portalPageSlugOf(readManifest(folder));
+        // Exactly the portals GET /:slug/portal serves: the slug resolves to THIS folder (one owner, a valid
+        // declaration) and the folder may serve browser code.
+        if (!slug || await servableBundleFolder(slug, 'portal') !== folder) continue;
+        const { title } = portalPages.portalPageHead(readManifest(folder));
+        out.push(title ? { slug, title } : { slug });
+    }
+    out.sort((a, b) => a.slug.localeCompare(b.slug));
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(out);
+}));
+
+const PORTAL_SW_MAX_BYTES = 256 * 1024;
+
+/**
+ * @swagger
+ * /plugins/{slug}/portal/sw:
+ *   get:
+ *     summary: A plugin portal's service worker
+ *     description: The plain JavaScript file an ACTIVE plugin granted browser:script declares in frontend.portalPage.serviceWorker, as-is. The frontend serves it at /portal/{slug}/sw.js, so its scope can be the portal or any page below it. Anything else is the same 404 as GET /plugins/{slug}/portal. Unauthenticated.
+ *     tags: [Plugins]
+ *     security: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$'
+ *     responses:
+ *       200:
+ *         description: The service worker script
+ *         content:
+ *           text/javascript:
+ *             schema:
+ *               type: string
+ *       404:
+ *         description: No active plugin granted browser:script declares this portal, or it has no service worker
+ */
+router.get('/:slug/portal/sw', asyncHandler(async (req: Request, res: Response) => {
+    const { slug } = req.params as { slug: string };
+    const portalPages = require('../core/portal-pages');
+    if (!portalPages.PORTAL_SLUG_RE.test(slug)) return res.status(404).json(PORTAL_NOT_FOUND);
+    const folder = await servableBundleFolder(slug, 'portal');
+    if (!folder) return res.status(404).json(PORTAL_NOT_FOUND);
+    const rel = portalPages.portalServiceWorker(readManifest(folder));
+    // The declaration is validated (a .js file under client/, no ".."), and the join is proven to stay
+    // inside the plugin's folder all the same.
+    const file = rel ? safeJoin(PLUGINS_DIR, folder, ...rel.split('/')) : null;
+    const clientRoot = safeJoin(PLUGINS_DIR, folder, 'client');
+    if (!file || !clientRoot || !file.startsWith(clientRoot + path.sep)) return res.status(404).json(PORTAL_NOT_FOUND);
+    // One descriptor for the check and the read: what is measured is what is served.
+    let body: Buffer;
+    let fd: number | null = null;
+    try {
+        fd = fs.openSync(file, 'r');
+        const st = fs.fstatSync(fd);
+        if (!st.isFile() || st.size > PORTAL_SW_MAX_BYTES) return res.status(404).json(PORTAL_NOT_FOUND);
+        body = fs.readFileSync(fd);
+    } catch { return res.status(404).json(PORTAL_NOT_FOUND); } finally {
+        if (fd !== null) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+    }
+    // Revalidated on every update check (the browser compares it byte for byte); never sniffed.
+    res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(body);
 }));
 
 // ═══ THE ADMIN PAGE'S STYLING — signed-in sessions only ════════════════════════════════════════════

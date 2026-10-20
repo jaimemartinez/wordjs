@@ -314,6 +314,20 @@ jobs:
             src/tests/driver-parity.test.ts \
             src/tests/migration-parity.test.ts
 
+      - name: Multisite on every engine (per-site namespaces, isolation, principals, backups, certificates)
+        # A network of sites keeps one SQLite file, one Postgres schema or one MySQL database per site,
+        # and its network store on the same engine (documentation/multisite-design.md). The same suite -
+        # the real app, twin sites created through the real network API - runs once per engine, each in
+        # its own process. pg_dump and mysqldump come with the runner image; the backup leg of the suite
+        # FAILS (never skips) without them under WORDJS_CI_DB=1.
+        working-directory: backend
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/test-with-flake-retry.mjs" \
+            --test-force-exit --test-concurrency=1 -r ts-node/register \
+            src/tests/multisite-engine-sqlite.test.ts \
+            src/tests/multisite-engine-postgres.test.ts \
+            src/tests/multisite-engine-mysql.test.ts
+
   sandbox-parity-is-consumed-not-rebuilt:
     # The OS-confinement leg of the F6 matrix is DONE, on real runners, in another file. This job is a
     # one-second assertion that the file it delegates to still exists and still certifies all three

@@ -100,7 +100,7 @@ const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSe
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
 const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
-const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite'];
+const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
 const CEILING_DOOR_PERSONAS = ['doorMfaDisable', 'doorMfaBackup', 'doorTokenStepUp', 'doorAgentCreate', 'doorAgentGrant'];
 
@@ -886,6 +886,26 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             site: 'network.ts PUT /sites/:id/quota', name: 'PUT /network/sites/:id/quota', persona: 'doorNetworkQuotaSite',
             send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/sites/999/quota`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, bytes: 1 })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        },
+        // Deleting a site, and its certificate (issue / install): the password is checked first; a site
+        // that does not exist is then a 404 — nothing is deleted, ordered or stored.
+        {
+            site: 'network.ts DELETE /sites/:id', name: 'DELETE /network/sites/:id', persona: 'doorNetworkDelete',
+            send: (p: string, pw: string) => withMultisite(() => request(app).delete(`${B}/network/sites/999`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, confirmSlug: 'none' })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        },
+        {
+            site: 'network.ts POST /sites/:id/certificate', name: 'POST /network/sites/:id/certificate', persona: 'doorNetworkCertIssue',
+            send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites/999/certificate`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        },
+        {
+            site: 'network.ts PUT /sites/:id/certificate', name: 'PUT /network/sites/:id/certificate', persona: 'doorNetworkCertInstall',
+            send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/sites/999/certificate`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, certPem: 'x', keyPem: 'y' })),
             alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
         },
     ];

@@ -26,16 +26,30 @@
  * plugin's own one sub-layer lower) without !important, and they do not depend on any plugin class having
  * been compiled. No DOM access here.
  */
+import { COARSE_FIELDS_CSS } from './overlay';
 
 /** Below this width or this height the conference screen scrolls with the page instead of in a panel. */
 export const SHELL_PANEL_MIN_WIDTH = 768;
 export const SHELL_PANEL_MIN_HEIGHT = 600;
+
+/**
+ * Where the panel IS the scroller (from SHELL_PANEL_MIN_WIDTH wide and SHELL_PANEL_MIN_HEIGHT high), its top
+ * padding (`p-6`, 24 px) is where a sticky element inside it stops (see PERM_MATRIX_STICKY_TOP): the lodging
+ * explorer's breadcrumb (`[data-explorer-crumbs]`, `sticky top-0`) stopped 24 px below the panel's top, and
+ * the explorer's content scrolled visibly through that band above it. In the panel its `top` is minus that
+ * padding, flush with the panel's top. Where the page scrolls instead (the admin's plugin wrapper, which has
+ * no padding) `top: 0` is already flush, so the rule only exists in the panel's media query.
+ */
+export const SHELL_PANEL_STICKY_TOP = '-1.5rem';
 
 export const SHELL_CSS = `
 @media (max-width: ${SHELL_PANEL_MIN_WIDTH - 0.02}px), (max-height: ${SHELL_PANEL_MIN_HEIGHT - 0.02}px) {
   [data-cm-shell] { height: auto; min-height: 100%; overflow: visible; }
   [data-cm-shell-body] { flex: none; min-height: 0; overflow: visible; }
   [data-cm-shell-panel] { height: auto; overflow: visible; }
+}
+@media (min-width: ${SHELL_PANEL_MIN_WIDTH}px) and (min-height: ${SHELL_PANEL_MIN_HEIGHT}px) {
+  [data-cm-shell-panel] [data-explorer-crumbs] { top: ${SHELL_PANEL_STICKY_TOP}; }
 }
 @media (max-width: 639.98px) {
   [data-cm-shell-head] { padding: 1rem 1rem 0; }
@@ -45,6 +59,7 @@ export const SHELL_CSS = `
   [data-cm-shell-body] { padding: 0 0.75rem 1rem; }
   [data-cm-shell-panel] { padding: 1rem; }
 }
+${COARSE_FIELDS_CSS('[data-cm-shell]')}
 `;
 
 /**

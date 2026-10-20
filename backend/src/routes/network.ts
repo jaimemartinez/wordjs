@@ -6,6 +6,10 @@
  *   POST /network/sites                  create a site (re-authenticates: currentPassword)
  *   POST /network/sites/:id/suspend      suspend a site (re-authenticates)
  *   POST /network/sites/:id/resume       resume it (re-authenticates)
+ *   DELETE /network/sites/:id            delete a site and everything it holds (re-authenticates; confirmSlug)
+ *   GET  /network/certificates           every other site's TLS certificate (status, never a key)
+ *   POST /network/sites/:id/certificate  issue it now with Let's Encrypt (re-authenticates)
+ *   PUT  /network/sites/:id/certificate  install one the operator brings (re-authenticates)
  *   GET  /network/audit                  the network's own audit log
  *   GET  /network/plugins                the installed plugins and what the network offers the sites
  *   PUT  /network/plugins/:slug/ceiling  offer a plugin to the sites, up to a grant ceiling (re-authenticates)
@@ -192,11 +196,11 @@ router.post('/sites', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 /** Suspend or resume a site, once the caller re-authenticated. The main site can be neither. */
-function changeStatus(req: Request, res: Response, status: 'active' | 'suspended') {
+async function changeStatus(req: Request, res: Response, status: 'active' | 'suspended') {
     const id = siteIdParam(req.params.id);
     if (id === null) return res.status(404).json({ code: 'network_site_not_found', message: 'No such site.', data: { status: 404 } });
     try {
-        const site = require('../core/network-sites').setSiteStatus(id, status, Number(req.user.id));
+        const site = await require('../core/network-sites').setSiteStatus(id, status, Number(req.user.id));
         return res.json({ site: publicSite(site) });
     } catch (e: any) {
         return sendError(res, e);
@@ -288,6 +292,178 @@ router.post('/sites/:id/resume', asyncHandler(async (req: Request, res: Response
 
 /**
  * @swagger
+ * /network/sites/{id}:
+ *   delete:
+ *     summary: Delete a site and everything it holds
+ *     description: Removes the site for good - its database (SQLite file, Postgres schema or MySQL database), its uploads and private files (on disk and in the media bucket), its plugin and theme workers, the database principals of its plugins, its cached entries, its certificates and its addresses. The site must be suspended first, and the request must repeat its slug. Its id is never given to another site. The main site cannot be deleted.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword, confirmSlug]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *               confirmSlug:
+ *                 type: string
+ *                 description: The slug of the site being deleted, repeated.
+ *     responses:
+ *       200:
+ *         description: "{ deleted: id }"
+ *       400:
+ *         description: The main site (network_primary_site), a confirmSlug that does not match (network_confirm_mismatch), or a wrong currentPassword
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: Not a network administrator
+ *       404:
+ *         description: No such site (network_site_not_found)
+ *       409:
+ *         description: The site is not suspended (network_site_active)
+ */
+router.delete('/sites/:id', asyncHandler(async (req: Request, res: Response) => {
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const id = siteIdParam(req.params.id);
+    if (id === null) return res.status(404).json({ code: 'network_site_not_found', message: 'No such site.', data: { status: 404 } });
+    try {
+        await require('../core/network-sites').deleteSite(id, { confirmSlug: (req.body || {}).confirmSlug, actorUserId: Number(req.user.id) });
+        res.json({ deleted: id });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
+/**
+ * @swagger
+ * /network/certificates:
+ *   get:
+ *     summary: The TLS certificate of every site other than the main one
+ *     description: Each site of a network has its own certificate for its main address, served by SNI at the edge. autoIssue tells whether Let's Encrypt issues and renews them on its own (ACME enabled with http-01 and an email, in Settings → Certificates). Never returns a private key.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ autoIssue, certificates: [{ siteId, host, installed, notAfter, issuer, daysLeft, updatedAt }] }"
+ *       403:
+ *         description: Not a network administrator
+ * /network/sites/{id}/certificate:
+ *   post:
+ *     summary: Issue a site's certificate now (Let's Encrypt, HTTP-01)
+ *     description: Orders a certificate for the site's main address with the install's ACME account. The address must already point at this server.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ certificate } (its status, served: whether the edge has it already)"
+ *       400:
+ *         description: The main site (network_primary_site), or a wrong currentPassword
+ *       404:
+ *         description: No such site (network_site_not_found)
+ *       409:
+ *         description: No ACME email configured (network_acme_unconfigured), or an issuance already running (network_acme_busy)
+ *       502:
+ *         description: The CA refused or could not validate the address (network_acme_failed)
+ *   put:
+ *     summary: Install a certificate the operator brings for a site
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [certPem, keyPem, currentPassword]
+ *             properties:
+ *               certPem:
+ *                 type: string
+ *                 description: The certificate and its chain (PEM).
+ *               keyPem:
+ *                 type: string
+ *                 description: Its private key (PEM).
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ certificate }"
+ *       400:
+ *         description: The pair does not name the site's address, does not match, or has expired (network_invalid_certificate); the main site; a wrong currentPassword
+ *       404:
+ *         description: No such site (network_site_not_found)
+ */
+router.get('/certificates', asyncHandler(async (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    const siteCerts = require('../core/site-certs');
+    const certificates = [];
+    for (const site of require('../core/network').listSites()) {
+        if (site.id === siteContext.PRIMARY_SITE_ID) continue;
+        try { certificates.push({ siteId: site.id, ...(await siteCerts.siteCertificateStatus(site.id)) }); }
+        catch { certificates.push({ siteId: site.id, host: site.mainHost, installed: false }); }
+    }
+    res.json({ autoIssue: siteCerts.autoIssueEnabled(), certificates });
+}));
+
+router.post('/sites/:id/certificate', asyncHandler(async (req: Request, res: Response) => {
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const id = siteIdParam(req.params.id);
+    if (id === null) return res.status(404).json({ code: 'network_site_not_found', message: 'No such site.', data: { status: 404 } });
+    try {
+        res.json({ certificate: await require('../core/site-certs').issueSiteCertificate(id, { actorUserId: Number(req.user.id) }) });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
+router.put('/sites/:id/certificate', asyncHandler(async (req: Request, res: Response) => {
+    const b = req.body || {};
+    if (await requireSudoPassword(req, res, b.currentPassword)) return;
+    const id = siteIdParam(req.params.id);
+    if (id === null) return res.status(404).json({ code: 'network_site_not_found', message: 'No such site.', data: { status: 404 } });
+    try {
+        res.json({ certificate: await require('../core/site-certs').installSiteCertificate(id, b.certPem, b.keyPem, { actorUserId: Number(req.user.id) }) });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
+/**
+ * @swagger
  * /network/audit:
  *   get:
  *     summary: The audit log of the network itself (sites created, suspended, resumed; network administrators)
@@ -310,10 +486,10 @@ router.post('/sites/:id/resume', asyncHandler(async (req: Request, res: Response
  *         description: Not a network administrator
  */
 
-router.get('/audit', (req: Request, res: Response) => {
+router.get('/audit', asyncHandler(async (req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store');
-    res.json({ entries: require('../core/network').auditLog(Number(req.query.limit) || 100) });
-});
+    res.json({ entries: await require('../core/network').auditLog(Number(req.query.limit) || 100) });
+}));
 
 // ── Plugins across the network (phase 2) ─────────────────────────────────────────────────────────────
 
@@ -447,7 +623,7 @@ router.put('/plugins/:slug/ceiling', asyncHandler(async (req: Request, res: Resp
     if (await requireSudoPassword(req, res, body.currentPassword)) return;
     try {
         const ceiling = await require('../core/plugins').offerPluginToSites(slug, body.tokens);
-        require('../core/network').audit('plugin.offered', { actor: Number(req.user.id), detail: { slug, ceiling } });
+        await require('../core/network').audit('plugin.offered', { actor: Number(req.user.id), detail: { slug, ceiling } });
         res.json({ slug, ceiling });
     } catch (e: any) {
         return pluginErrorStatus(res, e);
@@ -459,7 +635,7 @@ router.delete('/plugins/:slug/ceiling', asyncHandler(async (req: Request, res: R
     if (!PLUGIN_SLUG_RE.test(slug)) return res.status(400).json({ code: 'plugin_invalid_slug', message: 'Not a plugin slug.', data: { status: 400 } });
     if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
     const result = await require('../core/plugins').withdrawPluginFromSites(slug);
-    require('../core/network').audit('plugin.withdrawn', { actor: Number(req.user.id), detail: { slug, deactivatedOn: result.deactivatedOn } });
+    await require('../core/network').audit('plugin.withdrawn', { actor: Number(req.user.id), detail: { slug, deactivatedOn: result.deactivatedOn } });
     res.json({ slug, ...result });
 }));
 
@@ -572,8 +748,8 @@ router.put('/quotas/default', asyncHandler(async (req: Request, res: Response) =
     if (await requireSudoPassword(req, res, body.currentPassword)) return;
     try {
         const network = require('../core/network');
-        const defaultQuota = network.setDefaultUploadQuota(body.bytes);
-        network.audit('quota.default', { actor: Number(req.user.id), detail: { bytes: defaultQuota } });
+        const defaultQuota = await network.setDefaultUploadQuota(body.bytes);
+        await network.audit('quota.default', { actor: Number(req.user.id), detail: { bytes: defaultQuota } });
         res.json({ defaultQuota });
     } catch (e: any) {
         return sendError(res, e);
@@ -587,8 +763,8 @@ router.put('/sites/:id/quota', asyncHandler(async (req: Request, res: Response) 
     if (await requireSudoPassword(req, res, body.currentPassword)) return;
     try {
         const network = require('../core/network');
-        const quota = network.setSiteUploadQuota(id, body.bytes);
-        network.audit('quota.site', { actor: Number(req.user.id), siteId: id, detail: { bytes: quota } });
+        const quota = await network.setSiteUploadQuota(id, body.bytes);
+        await network.audit('quota.site', { actor: Number(req.user.id), siteId: id, detail: { bytes: quota } });
         res.json({ id, quota, effectiveQuota: network.effectiveUploadQuota(id) });
     } catch (e: any) {
         return sendError(res, e);

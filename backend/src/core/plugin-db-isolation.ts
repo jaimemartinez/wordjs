@@ -185,7 +185,59 @@ async function runScoped(slug: string, method: 'all' | 'get' | 'run', sql: strin
     return dbAsync[method](sql, params);
 }
 
+/**
+ * A site of the network is being deleted: drop the principal each plugin had on it (Postgres role / MySQL
+ * user `…__s<id>`), whether or not this process provisioned it — another node may have. Runs in the
+ * deleted site's context, before its database goes; site 1's principals are never named here.
+ */
+async function dropSitePrincipals(slugs: string[]): Promise<void> {
+    if (siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID) throw new Error('dropSitePrincipals: not for the main site');
+    const pg = pgDriver();
+    const my = pg ? null : mysqlDriver();
+    const suffix = principalSuffix();
+    // The installed plugins' principals, those this process provisioned, and — on Postgres — every role the
+    // server holds with this site's suffix (another node, or a plugin since deleted, may have made one).
+    const names = new Set<string>(slugs.map((s) => (pg ? roleName(s) : userName(s))));
+    for (const key of Array.from(provisioned)) {
+        if (key.endsWith(suffix)) names.add(pg ? roleName(key.slice(0, -suffix.length)) : userName(key.slice(0, -suffix.length)));
+    }
+    if (pg) {
+        try {
+            const rows = await pg.all("SELECT rolname FROM pg_roles WHERE rolname LIKE 'wjp!_role!_%' ESCAPE '!' AND right(rolname, length(?)) = ?", [suffix, suffix]);
+            for (const r of rows) names.add(String(r.rolname));
+        } catch { /* the roles above are still dropped */ }
+    } else if (my) {
+        try {
+            const rows = await my.all("SELECT User AS u FROM mysql.user WHERE User LIKE 'wjp!_%' ESCAPE '!' AND RIGHT(User, CHAR_LENGTH(?)) = ?", [suffix, suffix]);
+            for (const r of rows) names.add(String(r.u || r.User));
+        } catch { /* no read access to mysql.user: the names above are still dropped */ }
+    }
+    for (const key of Array.from(provisioned)) {
+        if (key.endsWith(suffix)) { provisioned.delete(key); pluginPasswords.delete(key); }
+    }
+    for (const name of names) {
+        try {
+            if (pg) await pg.dropPluginRole(name);
+            else if (my) await my.dropPluginUser(name);
+        } catch (e: any) {
+            log.warn({ principal: clean(name), err: e }, `[plugin-db-roles] could not drop the principal '${clean(name)}' of a deleted site`);
+        }
+    }
+}
+
+/**
+ * A site's database was replaced (a restore) or dropped: its grants are gone, so its principals must be
+ * provisioned again (the role / user itself may remain). Forgets this process's record of them.
+ */
+function forgetSiteProvisioning(siteId: number): void {
+    const suffix = principalSuffix(siteId);
+    for (const key of Array.from(provisioned)) {
+        const mine = suffix ? key.endsWith(suffix) : !key.includes('__s');
+        if (mine) { provisioned.delete(key); pluginPasswords.delete(key); }
+    }
+}
+
 module.exports = {
-    provision, reconcile, deprovision, grantNewTable, runScoped,
+    provision, reconcile, deprovision, grantNewTable, runScoped, dropSitePrincipals, forgetSiteProvisioning,
     roleName, userName, tablePrefix, isProvisioned: (s: string) => provisioned.has(principalKey(s)),
 };

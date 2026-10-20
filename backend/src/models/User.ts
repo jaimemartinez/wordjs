@@ -648,7 +648,7 @@ class User {
         // Multisite: a deleted account of the main site is no longer a network administrator (user ids of
         // the other sites are other people, so only the main site's delete touches the network store).
         const siteContext = require('../core/site-context');
-        if (siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID) require('../core/network').forgetNetworkAdmin(id);
+        if (siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID) await require('../core/network').forgetNetworkAdmin(id);
         await require('../core/cache').del(`user:${id}`);
         noteAccountSecurityChange(id, 'role');
         return true;

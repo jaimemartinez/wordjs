@@ -4,8 +4,9 @@
  * The gate blocks every pull request while a production dependency carries a high/critical advisory.
  * scripts/audit-exceptions.json lets ONE advisory of ONE package through when no fixed release exists,
  * for at most 60 days. These tests pin the narrowness of that door: anything else on the same package,
- * any other package, an expired entry or a malformed file must still block; and the reasoning recorded
- * for the node-forge exception (WordJS never verifies a signature with node-forge) must stay true.
+ * any other package, an expired entry or a malformed file must still block. The fixtures model the
+ * node-forge advisory (1240912) the gate once excepted; node-forge itself is no longer installed
+ * anywhere, and the last block below keeps it that way.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
@@ -189,34 +190,31 @@ describe('ci-audit exceptions — the file', () => {
     });
 });
 
-describe('the node-forge exception stays true', () => {
-    // The exception's justification is that no WordJS code verifies a signature with node-forge. Every
-    // tracked, non-test source file that loads node-forge must therefore contain no `.verify(` call other
-    // than Node's own crypto.verify / verifier.verify and jsonwebtoken's jwt.verify.
-    it('no tracked source that loads node-forge calls a node-forge verify', () => {
-        const files = execFileSync('git', ['ls-files', '--', 'gateway/src', 'setup', 'backend/src', 'backend/scripts', 'scripts', 'monolith.js'],
-            { cwd: REPO_ROOT, encoding: 'utf8' }).split('\n').filter((f: string) => /\.(c?js|mjs|ts)$/.test(f) && !/(^|\/)tests?\//.test(f) && !/\.test\./.test(f));
-        const offenders: string[] = [];
-        let forgeFiles = 0;
-        for (const f of files) {
+describe('node-forge is gone and stays gone', () => {
+    // node-forge has unfixed advisories and no maintained release. Certificates, CSRs and the ACME client
+    // are built on Node's crypto (backend/src/core/x509.js, gateway/src/x509.js, setup/x509.js,
+    // backend/src/core/acme-client.ts); nothing may load it again, and no lockfile may install it, as a
+    // direct or a transitive dependency.
+    it('no tracked source or test loads node-forge', () => {
+        const files = execFileSync('git', ['ls-files', '--', 'gateway', 'setup', 'backend/src', 'backend/scripts', 'frontend/src', 'scripts', 'monolith.js'],
+            { cwd: REPO_ROOT, encoding: 'utf8' }).split('\n').filter((f: string) => /\.(c?js|mjs|ts|tsx)$/.test(f));
+        const offenders = files.filter((f: string) => {
             const src = fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
-            if (!/require\(\s*['"]node-forge['"]\s*\)|from\s+['"]node-forge['"]/.test(src)) continue;
-            forgeFiles += 1;
-            src.split('\n').forEach((line: string, i: number) => {
-                // Comments are prose, not calls: a `//` tail, an inline /* … */ span, and the lines of a
-                // block comment (` * …`, ` */`, an opening `/*`) — gateway/src/cluster-ca.js documents in a
-                // JSDoc block that it no longer uses node-forge's csr.verify(). Judged per line, so a string
-                // holding `/*` cannot hide the code after it, as stripping /* … */ across the file could.
-                if (/^\s*\*/.test(line)) return;
-                let code = line.replace(/\/\*.*?\*\//g, '');
-                if (/^\s*\/\*/.test(code)) return;
-                code = code.replace(/\/\/.*$/, '');
-                if (/verifyCertificateChain|\.verify\s*\(/.test(code) && !/\b(crypto|nodeCrypto|verifier|jwt)\.verify\s*\(/.test(code)) {
-                    offenders.push(`${f}:${i + 1}: ${line.trim()}`);
-                }
-            });
+            return /require\(\s*['"]node-forge['"]\s*\)|from\s+['"]node-forge['"]|\(\s*['"]node-forge['"]\s*\)/.test(src);
+        });
+        assert.ok(files.length > 100, `expected to scan the tracked sources, found ${files.length}`);
+        assert.deepStrictEqual(offenders, []);
+    });
+
+    it('no package manifest or lockfile installs node-forge or acme-client', () => {
+        for (const dir of ['.', 'backend', 'frontend', 'gateway', 'setup']) {
+            for (const file of ['package.json', 'package-lock.json']) {
+                const p = path.join(REPO_ROOT, dir, file);
+                if (!fs.existsSync(p)) continue;
+                const text = fs.readFileSync(p, 'utf8');
+                assert.doesNotMatch(text, /"(node_modules\/)?node-forge"/, `${dir}/${file} installs node-forge`);
+                assert.doesNotMatch(text, /"(node_modules\/)?acme-client"/, `${dir}/${file} installs acme-client (it depends on node-forge)`);
+            }
         }
-        assert.ok(forgeFiles >= 3, `expected the known node-forge users, found ${forgeFiles}`);
-        assert.deepStrictEqual(offenders, [], 'a node-forge signature verification is back; the audit exception no longer holds');
     });
 });

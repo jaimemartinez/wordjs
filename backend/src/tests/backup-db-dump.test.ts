@@ -138,6 +138,19 @@ describe('db-dump: fail-loud + correct invocation', () => {
         assert.strictEqual(dbdump.passwordEnv('mysql', MY).MYSQL_PWD, 'mysecret');
     });
 
+    test('a site of a Postgres network: its schema alone is dumped, and the restore never filters by schema', () => {
+        // pg_restore -n leaves out the CREATE SCHEMA entry, so restoring into a site schema that was just
+        // dropped failed on every table ("schema does not exist"). The dump is already that schema alone.
+        const dump = dbdump.buildPgDumpArgs({ ...PG, schema: 'wordjs_site_2' }, '/d');
+        assert.ok(dump.join(' ').includes('-n wordjs_site_2'), 'the dump is limited to the site schema');
+        const fresh = dbdump.buildPgRestoreArgs({ ...PG, schema: 'wordjs_site_2', fresh: true }, '/d');
+        assert.ok(!fresh.includes('-n'), 'no schema filter on the restore');
+        assert.ok(!fresh.includes('--clean'), 'nothing to drop in a fresh schema');
+        const main = dbdump.buildPgRestoreArgs({ ...PG, schema: 'public' }, '/d');
+        assert.ok(!main.includes('-n') && main.includes('--clean'));
+        assert.throws(() => dbdump.buildPgDumpArgs({ ...PG, schema: 'x; DROP' }, '/d'), /unsafe schema name/);
+    });
+
     test('usesExternalDump / dumpEntryName map only pg + mysql', () => {
         assert.ok(dbdump.usesExternalDump('postgres') && dbdump.usesExternalDump('mysql'));
         assert.ok(!dbdump.usesExternalDump('sqlite-native'));

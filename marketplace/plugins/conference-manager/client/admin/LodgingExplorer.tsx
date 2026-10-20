@@ -14,7 +14,9 @@
  * It replaces the 2.5.0 accommodation board inside AssignmentPage and keeps everything it could do:
  * drag & drop between rooms and back to «Sin asignar» (grouped by location, searchable, capped at
  * BOARD_CHIP_CAP chips), the room-picker modal (keyboard / touch path), the location filter, the
- * «N sin asignar» counter, the run summary chip and the frozen / cancelled protections.
+ * «N sin asignar» counter, the run summary chip and the cancelled protections. A submitted / validated
+ * location is no longer read-only here (2.17.0): the administration adjusts it directly — the room, the
+ * occupant and the pickers say so, and the server records each change on the location.
  *
  * Contract with the page: `onMove(inscriptionId, roomId | null)` is AssignmentPage.moveAttendee
  * (optimistic update + POST /inscriptions/:id/assign + silent reload; resolves true when the move
@@ -37,12 +39,13 @@ import { Overlay } from "./Overlay";
 import {
     BOARD_CHIP_CAP, BOARD_DRAG_TYPE, DEFAULT_ROOM_FILTERS, POOL_FILTER,
     assignCandidates, candidateExclusions, dropBlock, dragBlock, fieldVal, fillVars, filterRooms, filtersActive,
-    frozenLocationIds, genderKey, genderMismatch, groupUnassigned, hotelStats, indexOccupants, lodgingStatusMeta, moveBlock,
+    genderKey, genderMismatch, groupUnassigned, hotelStats, indexOccupants, lodgingStatusMeta, moveBlock,
     nameFields, navStorageKey, neighbors, occupantsOf, overallStats, parseNav, personDisplayName,
-    normalizeText, personLocationId, rawLocationId, reconcileNav, roomGender, roomLock, roomMatches, roomStats, sortRooms,
-    stateCounts, unassignBlock, unassignedCount, withName,
+    normalizeText, personLocationId, rawLocationId, reconcileNav, reviewedInRoom, reviewedLocationOf, roomGender, roomMatches, roomStats, sortRooms,
+    stateCounts, unassignBlock, unassignedCount, withName, pinnedHere,
 } from "../lib/lodgingView";
 import { hasGenderField } from "../lib/fields";
+import { adjustText } from "./LodgingAdjust";
 
 // ---------------------------------------------------------------------------------------------
 // Small pure helpers (module level: nothing here is a component defined inside another one)
@@ -88,10 +91,11 @@ const focusablesIn = (el: HTMLElement | null): HTMLElement[] =>
 
 const BLOCK_FALLBACK: Record<string, string> = {
     'board.cancelled': 'Participante cancelado: no ocupa habitación',
-    'board.frozen': 'Hospedaje en validación/validado — reábrelo en Localidades',
     'board.moving': 'Movimiento en curso — espera a que termine',
     'board.room.foreign': 'Habitación de otra localidad',
     'board.room.full': 'Habitación llena',
+    'board.room.shared.full': 'Sin cama para su localidad en esta habitación compartida',
+    'board.room.locked': 'Habitación compartida fijada para otro género',
 };
 const blockText = (tx, key: string | null) => (key ? tx(key, BLOCK_FALLBACK[key] || key) : '');
 
@@ -158,7 +162,7 @@ const inputCls = 'w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-whit
 
 export default function LodgingExplorer({
     conferenceId, inscriptions, hotels, locations, fields, onMove, pending, loading, runSummary, boardRef,
-    focus, onFocusConsumed, suspendKeys, loadFailed, onRetry, readOnly = false,
+    focus, onFocusConsumed, suspendKeys, loadFailed, onRetry, readOnly = false, onToggleBlock, onTogglePin,
 }: {
     conferenceId: number;
     inscriptions: any[];
@@ -168,10 +172,14 @@ export default function LodgingExplorer({
     onMove: (inscriptionId: number, roomId: number | null) => Promise<boolean>;
     pending: Set<number>;
     loading: boolean;
-    runSummary: { assigned: number; remaining: number } | null;
+    /** The last run (lib/lodgingView.ts runSummaryOf): `remaining` includes the `skipped` it did not touch. */
+    runSummary: { assigned: number; remaining: number; skipped?: number } | null;
     boardRef: React.RefObject<HTMLDivElement>;
-    /** Open this hotel (and room) once — set by «Hoteles y habitaciones»; cleared through onFocusConsumed. */
-    focus?: { hotelId: number; roomId?: number | null } | null;
+    /**
+     * Open this hotel (and room) once — set by «Hoteles y habitaciones» — or, with `locationId`, the hotels
+     * filtered by that location (the lodging review's «Ajustar en Asignación»); cleared through onFocusConsumed.
+     */
+    focus?: { hotelId?: number | null; roomId?: number | null; locationId?: number | null } | null;
     onFocusConsumed?: () => void;
     /** The page has a modal of its own open: the explorer's Esc / ← → shortcuts stand down. */
     suspendKeys?: boolean;
@@ -183,6 +191,9 @@ export default function LodgingExplorer({
     onRetry?: () => void;
     /** View only: nothing can be dragged, dropped, moved, removed or assigned. */
     readOnly?: boolean;
+    /** Held by the administration (2.21.0): block / unblock a room, fix / unfix a person in their room. */
+    onToggleBlock?: (room: any) => void;
+    onTogglePin?: (person: any) => void;
 }) {
     const { t } = useI18n();
     const tx = makeTx(t);
@@ -245,10 +256,17 @@ export default function LodgingExplorer({
     }, [nav.hotelId, nav.roomId, shownLevel]);
 
     // «Ver ocupación» from «Hoteles y habitaciones»: open that hotel / room once, with clean filters.
+    // «Ajustar en Asignación» from the lodging review: the hotels, filtered by that location, with its
+    // «Sin asignar» open.
     useEffect(() => {
-        if (!focus || focus.hotelId == null) return;
-        navigatedRef.current = { scroll: 'always', heading: true, selector: null };
-        setNav(n => ({ ...n, hotelId: Number(focus.hotelId), roomId: focus.roomId != null ? Number(focus.roomId) : null, filters: { ...DEFAULT_ROOM_FILTERS } }));
+        if (!focus) return;
+        if (focus.hotelId != null) {
+            navigatedRef.current = { scroll: 'always', heading: true, selector: null };
+            setNav(n => ({ ...n, hotelId: Number(focus.hotelId), roomId: focus.roomId != null ? Number(focus.roomId) : null, filters: { ...DEFAULT_ROOM_FILTERS } }));
+        } else if (focus.locationId != null) {
+            navigatedRef.current = { scroll: 'always', heading: true, selector: null };
+            setNav(n => ({ ...n, hotelId: null, roomId: null, unassignedOpen: true, filters: { ...DEFAULT_ROOM_FILTERS, location: String(focus.locationId) } }));
+        } else return;
         if (onFocusConsumed) onFocusConsumed();
     }, [focus]);
 
@@ -271,7 +289,9 @@ export default function LodgingExplorer({
 
     // --- Derived data ---------------------------------------------------------------------------
     const idx = useMemo(() => indexOccupants(people), [people]);
-    const ctx = useMemo(() => ({ frozen: frozenLocationIds(locs), pending }), [locs, pending]);
+    const ctx = useMemo(() => ({ pending }), [pending]);
+    // A submitted / validated location (2.17.0): still editable here, with a notice — see AdjustNotice.
+    const reviewedOf = useCallback((locationId: number | null | undefined) => reviewedLocationOf(locationId, locs), [locs]);
     const locById = useMemo(() => {
         const m = new Map<number, any>();
         for (const l of locs) m.set(Number(l.id), l);
@@ -533,9 +553,10 @@ export default function LodgingExplorer({
     }, []);
 
     // --- Render -----------------------------------------------------------------------------------
-    const env = { tx, txn, ctx, idx, nameOf, locNameOf, locationIdOf, roomLocName, roomLabel, fields, dnd, locById, filters: viewFilters, readOnly, genderOn };
+    const env = { tx, txn, ctx, idx, nameOf, locNameOf, locationIdOf, roomLocName, roomLabel, fields, dnd, locById, locs, filters: viewFilters, readOnly, genderOn, reviewedOf, onToggleBlock, onTogglePin };
     const overall = overallStats(hotelList, people, idx);
     const locationOnly = { ...DEFAULT_ROOM_FILTERS, location: viewFilters.location };
+    const filterReviewed = readOnly || !/^[0-9]+$/.test(String(viewFilters.location || '')) ? null : reviewedOf(Number(viewFilters.location));
 
     const spinner = (
         <div className="p-12 text-center">
@@ -623,10 +644,14 @@ export default function LodgingExplorer({
     const otherHotelDrop = hotelList.length > 1 && dragging != null && !!draggedPerson;
     const otherHotelWhy = otherHotelDrop && over === 'other-hotel' ? dragBlock(draggedPerson, ctx) : null;
 
+    // «Pendientes» = everyone the run left without a bed — the «N sin asignar» beside it once the run is done —
+    // and, when the run skipped submitted / validated locations, how many of them it did not touch (2.17.0).
     const runChip = runSummary && (
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] font-black uppercase tracking-widest">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] font-black uppercase tracking-widest" data-run-chip="">
             <i className="fa-solid fa-wand-magic-sparkles text-[9px]"></i>
-            {tx('board.run.summary', 'Asignados: {n} · Pendientes: {m}', { n: runSummary.assigned, m: runSummary.remaining })}
+            {runSummary.skipped
+                ? tx('board.run.summary.skipped', 'Asignados: {n} · Pendientes: {m} ({k} sin tocar)', { n: runSummary.assigned, m: runSummary.remaining, k: runSummary.skipped })
+                : tx('board.run.summary', 'Asignados: {n} · Pendientes: {m}', { n: runSummary.assigned, m: runSummary.remaining })}
         </div>
     );
 
@@ -679,8 +704,10 @@ export default function LodgingExplorer({
 
             {/* Breadcrumb — always visible (sticky in the admin's scroll pane) and clickable. Below `sm`
                 it is ONE line (icon-only «Volver» and «Hoteles», the hotel name truncated, the room by its
-                number) so the pinned bar does not eat the phone's small scroll pane. */}
-            <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-100 px-3 sm:px-8 py-2 sm:py-3 flex flex-nowrap sm:flex-wrap items-center gap-2 sm:gap-3">
+                number) so the pinned bar does not eat the phone's small scroll pane. In the conference panel
+                its `top` is minus the panel's padding (lib/phoneLayout.ts SHELL_CSS), so it sits flush with the
+                panel's top instead of 24 px below it with the content showing through that band. */}
+            <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-100 px-3 sm:px-8 py-2 sm:py-3 flex flex-nowrap sm:flex-wrap items-center gap-2 sm:gap-3" data-explorer-crumbs="">
                 {level > 1 && (
                     <button type="button" onClick={goUp} aria-label={tx('explorer.back', 'Volver')} className="shrink-0 inline-flex items-center justify-center gap-2 px-3 sm:px-4 py-2.5 min-h-[44px] min-w-[44px] rounded-xl bg-gray-900 text-white hover:bg-indigo-600 font-black text-[11px] uppercase tracking-widest transition-all focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200">
                         <i className="fa-solid fa-arrow-left text-[10px]" aria-hidden="true"></i><span className="hidden sm:inline">{tx('explorer.back', 'Volver')}</span>
@@ -755,7 +782,13 @@ export default function LodgingExplorer({
                     onOptions={(p: any) => openMove(p)}
                     env={env}
                 />
-                <div className="p-4 sm:p-6 min-w-0">{main}</div>
+                <div className="p-4 sm:p-6 min-w-0">
+                    {/* The location filter points at a submitted / validated arrangement (the lodging review's
+                        «Ajustar en Asignación» lands here): ONE notice above the hotels / the hotel's rooms says
+                        what changing it means. The room level shows its own (RoomLevel). */}
+                    {filterReviewed && level < 3 && contentReady && <div className="mb-4" data-filter-adjust=""><AdjustNotice location={filterReviewed} env={env} /></div>}
+                    {main}
+                </div>
             </div>
 
             {moveTarget && (
@@ -946,16 +979,40 @@ function HotelCard({ hotel, stats, matching, matchingPool, onOpen, env }: any) {
 }
 
 function RoomBadges({ room, env, large }: any) {
-    const { tx, ctx, roomLocName } = env;
+    const { tx, roomLocName } = env;
     const g = roomGender(room);
     const loc = roomLocName(room);
-    const locked = roomLock(room, ctx);
+    const reviewed = env.reviewedOf(room.location_id);
+    const meta = reviewed ? lodgingStatusMeta(reviewed.lodging_status) : null;
     const size = large ? 'text-[10px] px-2 py-1' : 'text-[9px] px-1.5 py-0.5';
     return (
         <div className="flex flex-wrap items-center gap-1">
+            {Number(room.blocked) ? (
+                <span className={`${size} rounded-md bg-amber-50 text-amber-800 font-black uppercase tracking-widest`} data-room-blocked="">
+                    <i className="fa-solid fa-lock mr-1" aria-hidden="true"></i>{tx('room.blocked.chip', 'Bloqueada')}
+                </span>
+            ) : null}
             {loc && (
                 <span className={`${size} rounded-md bg-indigo-50 text-indigo-700 font-black uppercase tracking-widest max-w-full truncate`} title={loc}>
                     <i className="fa-solid fa-map-pin mr-1"></i>{loc}
+                </span>
+            )}
+            {/* A shared room (2.18.0): each location's beds (taken / given), then the pool's. */}
+            {(room.shares || []).map(s => {
+                const name = s.location_name || env.locById.get(Number(s.location_id))?.name || `#${s.location_id}`;
+                const count = `${s.occupied || 0}/${s.beds}`;
+                // Only the name is cut: the beds count always shows.
+                return (
+                    <span key={`share-${s.location_id}`} className={`${size} rounded-md bg-violet-50 text-violet-700 font-black uppercase tracking-widest max-w-full min-w-0 inline-flex items-center gap-1`} title={`${name} ${count}`} data-room-share={s.location_id}>
+                        <i className="fa-solid fa-bed shrink-0" aria-hidden="true"></i>
+                        <span className="truncate min-w-0">{name}</span>
+                        <span className="shrink-0 tabular-nums">{count}</span>
+                    </span>
+                );
+            })}
+            {(room.shares || []).length > 0 && (Number(room.pool_beds) || 0) > 0 && (
+                <span className={`${size} rounded-md bg-gray-100 text-gray-500 font-black uppercase tracking-widest`}>
+                    {tx('beds.pool.chip', 'Pool')} {room.pool_occupied || 0}/{room.pool_beds}
                 </span>
             )}
             {g !== 'Mixed' && (
@@ -968,9 +1025,9 @@ function RoomBadges({ room, env, large }: any) {
                     <i className="fa-solid fa-people-roof mr-1"></i>{tx('explorer.room.family', 'Familiar')}{room.family_name ? ` · ${room.family_name}` : ''}
                 </span>
             )}
-            {locked && (
-                <span className={`${size} rounded-md bg-amber-50 text-amber-700 font-black uppercase tracking-widest`} title={blockText(tx, locked)}>
-                    <i className="fa-solid fa-lock mr-1"></i>{tx('explorer.room.locked.badge', 'Bloqueada')}
+            {meta && (
+                <span className={`${size} rounded-md font-black uppercase tracking-widest ${meta.cls}`} title={tx('lodging.adjust.short', 'Cada cambio queda registrado como ajuste de la administración')} data-room-reviewed={reviewed.lodging_status}>
+                    <i className={`fa-solid ${meta.icon} mr-1`} aria-hidden="true"></i>{tx(meta.key, meta.fallback)}
                 </span>
             )}
         </div>
@@ -996,11 +1053,12 @@ function HotelLevel({ hotel, stats, rooms, counts, total, setFilters, clearFilte
     const specificLocation = !!filters.location && filters.location !== POOL_FILTER;
     return (
         <div className="space-y-5">
-            {/* Hotel header */}
-            <div className="rounded-3xl border border-gray-100 bg-gray-50/40 p-5 sm:p-6">
-                <div className="flex flex-col md:flex-row md:items-start gap-4 md:gap-6">
+            {/* Hotel header — by its own width, like the room header (RoomLevel): the beds box goes beside the
+                name only when the header holds both, so a long word of the name is never cut mid-word. */}
+            <div className="@container rounded-3xl border border-gray-100 bg-gray-50/40 p-5 sm:p-6" data-hotel-header="">
+                <div className="flex flex-col @2xl:flex-row @2xl:items-start gap-4 @2xl:gap-6">
                     <div className="min-w-0 flex-1">
-                        <h4 ref={headingRef} tabIndex={-1} className="text-3xl font-black text-gray-900 italic tracking-tighter leading-tight break-words outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 rounded-lg">{hotel.name}</h4>
+                        <h4 ref={headingRef} tabIndex={-1} className="text-2xl @sm:text-3xl font-black text-gray-900 italic tracking-tighter leading-tight break-words outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 rounded-lg">{hotel.name}</h4>
                         {hotel.address && <p className="text-sm text-gray-500 font-medium mt-1 break-words"><i className="fa-solid fa-location-dot mr-1.5 text-gray-300"></i>{hotel.address}</p>}
                         {stats.locations.length > 0 && (
                             <div className="mt-3 flex flex-wrap gap-1.5">
@@ -1010,7 +1068,7 @@ function HotelLevel({ hotel, stats, rooms, counts, total, setFilters, clearFilte
                             </div>
                         )}
                     </div>
-                    <div className="md:w-72 shrink-0 space-y-2">
+                    <div className="@2xl:w-72 shrink-0 space-y-2">
                         <div className="flex items-baseline justify-between gap-3">
                             <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">{tx('explorer.beds.label', 'Camas ocupadas')}</span>
                             <span className={`text-lg font-black ${full ? 'text-rose-600' : 'text-gray-900'}`}>{stats.occupied} / {stats.beds}</span>
@@ -1176,7 +1234,6 @@ function RoomCard({ room, onOpen, env }: any) {
                         >
                             <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${genderDot(p.gender)}`} aria-hidden="true"></span>
                             <span className={`font-semibold text-gray-800 break-words min-w-0 ${p.status === 'cancelled' ? 'line-through text-gray-400' : ''}`}>{nameOf(p)}</span>
-                            {block === 'board.frozen' && <i className="fa-solid fa-lock text-[10px] text-amber-500 mt-1 shrink-0" aria-hidden="true"></i>}
                             {block === 'board.moving' && <i className="fa-solid fa-spinner fa-spin text-[10px] text-indigo-400 mt-1 shrink-0" aria-hidden="true"></i>}
                             {foreign && <span className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-0.5 shrink-0 truncate max-w-[7rem]">{locNameOf(p) || tx('board.no.location', 'Sin localidad')}</span>}
                         </li>
@@ -1199,11 +1256,14 @@ function RoomCard({ room, onOpen, env }: any) {
     );
 }
 
-function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassign, onAssign, headingRef, env }: any) {
+// Exported for the unit checks (the room level renders without the explorer's state: everything comes in `env`).
+export function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassign, onAssign, headingRef, env }: any) {
     const { tx, txn, ctx, idx, dnd, roomLocName } = env;
     const s = roomStats(room, idx);
     const occupants = [...occupantsOf(room, idx)].sort((a, b) => env.nameOf(a).localeCompare(env.nameOf(b), 'es', { sensitivity: 'base' }));
-    const locked = roomLock(room, ctx);
+    // The submitted / validated arrangements this room is part of (2.17.0): ONE notice each, here — the occupant
+    // cards do not repeat it (a room of N occupants used to show the same paragraph N+1 times).
+    const reviewedHere = env.readOnly ? [] : reviewedInRoom(room, occupants, env.locs);
     const locName = roomLocName(room);
     const slots = Math.min(s.free, ROOM_FREE_SLOTS_CAP);
     const isOver = dnd.over === `room:${room.id}`;
@@ -1211,17 +1271,20 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
     const ring = isOver && dnd.draggedPerson ? (why ? 'ring-4 ring-rose-200 bg-rose-50/30' : 'ring-4 ring-indigo-200 bg-indigo-50/30') : '';
     return (
         <div className="space-y-5">
-            {/* Room header */}
-            <div className="rounded-3xl border border-gray-100 bg-gray-50/40 p-5 sm:p-6 space-y-4">
-                <div className="flex flex-col md:flex-row md:items-start gap-4">
+            {/* Room header — laid out by ITS OWN width (a container), not the viewport's: at 1280 px with the
+                admin sidebar open the explorer's room column is ~430 px, and the viewport's `md:` row left the
+                title ~130 px beside the beds box, breaking «Habitaci/ón 103» mid-word. The beds box goes beside
+                the title only when the header is wide enough for both, and the title's size follows the same width. */}
+            <div className="@container rounded-3xl border border-gray-100 bg-gray-50/40 p-5 sm:p-6 space-y-4" data-room-header="">
+                <div className="flex flex-col @2xl:flex-row @2xl:items-start gap-4">
                     <div className="min-w-0 flex-1">
-                        <h4 ref={headingRef} tabIndex={-1} className="text-3xl sm:text-4xl font-black text-gray-900 italic tracking-tighter leading-tight break-words outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 rounded-lg">
+                        <h4 ref={headingRef} tabIndex={-1} className="text-2xl @sm:text-3xl @lg:text-4xl font-black text-gray-900 italic tracking-tighter leading-tight break-words outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 rounded-lg">
                             {tx('explorer.room.title', 'Habitación {n}', { n: room.room_number })}
                         </h4>
                         <p className="text-sm text-gray-500 font-bold mt-1 break-words"><i className="fa-solid fa-hotel mr-1.5 text-gray-300"></i>{hotel.name}</p>
                         <div className="mt-3"><RoomBadges room={room} env={env} large /></div>
                     </div>
-                    <div className="md:w-72 shrink-0 space-y-2">
+                    <div className="@2xl:w-72 shrink-0 space-y-2">
                         <div className="flex items-baseline justify-between gap-3">
                             <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">{tx('explorer.beds.label', 'Camas ocupadas')}</span>
                             <span className={`text-lg font-black ${s.state === 'full' ? 'text-rose-600' : 'text-gray-900'}`}>{s.occupied} / {s.capacity}</span>
@@ -1230,6 +1293,21 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
                         <p className="text-xs font-bold text-emerald-600">{txn('explorer.room.free.count', '{n} camas libres', '{n} cama libre', s.free)}</p>
                     </div>
                 </div>
+                {/* Held by the administration (2.21.0): the engine leaves a blocked room as it is. */}
+                {!env.readOnly && env.onToggleBlock && (
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" onClick={() => env.onToggleBlock(room)} className={`${btnGhost} ${Number(room.blocked) ? 'border-amber-300 text-amber-800' : ''}`} data-room-block-toggle={Number(room.blocked) ? 'on' : 'off'} aria-pressed={!!Number(room.blocked)}>
+                            <i className={`fa-solid ${Number(room.blocked) ? 'fa-lock-open' : 'fa-lock'} text-[9px]`} aria-hidden="true"></i>
+                            {Number(room.blocked) ? tx('room.block.off', 'Desbloquear habitación') : tx('room.block.on', 'Bloquear habitación')}
+                        </button>
+                    </div>
+                )}
+                {Number(room.blocked) ? (
+                    <div className="rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900 break-words" data-room-blocked-note="">
+                        <i className="fa-solid fa-lock mr-1.5" aria-hidden="true"></i>
+                        {tx('room.blocked.note', 'Bloqueada: ni «Sugerir reparto» (tampoco con «Rehacer todo»), ni la asignación automática, ni «Dar camas» ponen o quitan a nadie aquí. Los encargados no pueden cambiarla; tú sí, a mano.')}
+                    </div>
+                ) : null}
                 {room.notes && (
                     <div className="rounded-2xl bg-blue-50/60 border border-blue-100 px-4 py-3 text-sm text-blue-900 break-words">
                         <span className="text-[9px] font-black uppercase tracking-widest text-blue-400 block mb-0.5">{tx('explorer.room.notes', 'Notas')}</span>
@@ -1255,9 +1333,8 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
             </div>
 
             {/* State, in plain words */}
-            {locked ? (
-                <Notice tone="amber" icon="fa-lock">{withName(tx('explorer.room.locked', 'El hospedaje de la localidad «{name}» está en validación o validado: esta habitación no admite cambios hasta reabrirlo en Localidades.'), locName)}</Notice>
-            ) : s.overbooked ? (
+            {reviewedHere.map((l: any) => <AdjustNotice key={l.id} location={l} env={env} />)}
+            {s.overbooked ? (
                 <Notice tone="rose" icon="fa-triangle-exclamation">{tx('explorer.room.overbooked.notice', 'Hay más ocupantes que camas ({occ} / {cap}). Mueve o quita a alguien para corregirlo.', { occ: s.occupied, cap: s.capacity })}</Notice>
             ) : s.occupied === 0 && s.capacity > 0 ? (
                 <Notice tone="gray" icon="fa-bed">{env.readOnly ? tx('explorer.room.empty.readonly', 'Nadie duerme aquí todavía.') : tx('explorer.room.empty', 'Nadie duerme aquí todavía. Usa «Asignar participante» en una cama libre o arrastra a alguien desde «Sin asignar».')}</Notice>
@@ -1266,14 +1343,14 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
                     ? tx('explorer.room.no.beds', 'Esta habitación no tiene camas (capacidad 0): no admite participantes.')
                     : tx('explorer.room.full', 'Habitación completa. Para hacer sitio, mueve o quita a alguien.')}</Notice>
             ) : null}
-            {!locked && (
-                <p className="text-xs text-gray-500 font-medium px-1">
-                    <i className={`fa-solid ${locName ? 'fa-map-pin text-indigo-400' : 'fa-layer-group text-gray-300'} mr-1.5`}></i>
-                    {locName
-                        ? withName(tx('explorer.room.allotted', 'Reservada para la localidad «{name}»: solo admite participantes de esa localidad.'), locName)
+            <p className="text-xs text-gray-500 font-medium px-1">
+                <i className={`fa-solid ${locName ? 'fa-map-pin text-indigo-400' : (room.shares || []).length ? 'fa-people-arrows text-violet-400' : 'fa-layer-group text-gray-300'} mr-1.5`}></i>
+                {locName
+                    ? withName(tx('explorer.room.allotted', 'Reservada para la localidad «{name}»: solo admite participantes de esa localidad.'), locName)
+                    : (room.shares || []).length
+                        ? tx('explorer.room.shared', 'Habitación compartida: cada localidad ocupa sus camas; las del pool admiten participantes de cualquier localidad.')
                         : tx('explorer.room.pool', 'Habitación del pool: admite participantes de cualquier localidad.')}
-                </p>
-            )}
+            </p>
 
             {/* Occupants + free beds; the whole body is a drop target for this room. */}
             <div
@@ -1289,7 +1366,7 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
                 )}
                 <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
                     {occupants.map(p => (
-                        <OccupantCard key={p.id} person={p} onMove={() => onMove(p)} onUnassign={() => onUnassign(p)} env={env} />
+                        <OccupantCard key={p.id} person={p} roomLocationId={room.location_id} onMove={() => onMove(p)} onUnassign={() => onUnassign(p)} env={env} />
                     ))}
                     {Array.from({ length: slots }).map((_, i) => (
                         <div key={`slot-${i}`} className="rounded-3xl border-2 border-dashed border-gray-200 bg-gray-50/40 p-5 flex flex-col items-center justify-center text-center gap-3 min-h-[10rem]">
@@ -1298,13 +1375,11 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
                             {onAssign && <button
                                 type="button"
                                 data-assign-bed=""
-                                disabled={!!locked}
                                 onClick={onAssign}
                                 className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-500/20 transition-all disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200"
                             >
                                 <i className="fa-solid fa-user-plus text-[9px]"></i> {tx('explorer.assign', 'Asignar participante')}
                             </button>}
-                            {onAssign && locked && <p className="text-[11px] text-amber-700 font-medium">{blockText(tx, locked)}</p>}
                         </div>
                     ))}
                 </div>
@@ -1316,15 +1391,33 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
     );
 }
 
-function Notice({ tone, icon, children }: any) {
+function Notice({ tone, icon, children, ...rest }: any) {
     const cls = tone === 'amber' ? 'bg-amber-50 border-amber-200 text-amber-800'
         : tone === 'rose' ? 'bg-rose-50 border-rose-200 text-rose-800'
-            : 'bg-gray-50 border-gray-100 text-gray-600';
+            : tone === 'blue' ? 'bg-blue-50 border-blue-200 text-blue-900'
+                : 'bg-gray-50 border-gray-100 text-gray-600';
     return (
-        <div className={`rounded-2xl border px-4 py-3 text-sm font-medium flex items-start gap-3 ${cls}`}>
+        <div className={`rounded-2xl border px-4 py-3 text-sm font-medium flex items-start gap-3 ${cls}`} {...rest}>
             <i className={`fa-solid ${icon} mt-0.5 shrink-0`} aria-hidden="true"></i>
             <span className="min-w-0 break-words">{children}</span>
         </div>
+    );
+}
+
+/**
+ * The location's arrangement is submitted / validated (2.17.0): the administration may still change it —
+ * the change is recorded on the location as an administration adjustment, and the coordinator sees it.
+ * Shown where such a change is made, once per location: the room (its own location and its occupants'), the
+ * hotels filtered by that location, the room picker, the «Asignar» picker. The text says the ACTUAL state.
+ */
+export function AdjustNotice({ location, env }: any) {
+    const { tx } = env;
+    const meta = lodgingStatusMeta(location.lodging_status);
+    return (
+        <Notice tone="blue" icon="fa-pen-to-square" data-adjust-notice={location.lodging_status}>
+            <span className={`inline-block mr-1.5 px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest align-middle ${meta.cls}`}>{tx(meta.key, meta.fallback)}</span>
+            {adjustText(tx, 'lodging.adjust.notice', 'El hospedaje de «{name}» {state}: puedes cambiarlo igualmente. Cada cambio queda registrado como ajuste de la administración y el encargado lo verá en su portal.', location)}
+        </Notice>
     );
 }
 
@@ -1337,7 +1430,7 @@ function InfoRow({ label, children }: any) {
     );
 }
 
-function OccupantCard({ person: p, onMove, onUnassign, env }: any) {
+function OccupantCard({ person: p, roomLocationId, onMove, onUnassign, env }: any) {
     const { tx, ctx, nameOf, locNameOf, fields, dnd } = env;
     const block = dragBlock(p, ctx);
     const outBlock = unassignBlock(p, ctx);
@@ -1349,8 +1442,10 @@ function OccupantCard({ person: p, onMove, onUnassign, env }: any) {
     const fixed = { gender: p.gender, email: p.email, phone: p.phone, document_number: p.document_number, family_group: p.family_group };
     for (const [k, v] of Object.entries(fixed)) if (v !== '' && v != null) shown.add(k);
     const formRows = (fields || []).filter(f => !shown.has(f.name)).map(f => ({ f, v: fieldVal(p, f) })).filter(r => r.v !== '' && r.v != null);
-    // Notices say WHY a button is disabled (a cancelled AND frozen attendee gets both).
-    const frozen = outBlock === 'board.frozen';
+    // Notices say WHY a button is disabled. A submitted / validated location is no refusal (2.17.0): the room
+    // level names it once; here, a pill marks an occupant whose reviewed arrangement is not the room's own.
+    const reviewed = env.readOnly ? null : env.reviewedOf(rawLocationId(p));
+    const reviewedPill = reviewed && Number(reviewed.id) !== Number(roomLocationId) ? lodgingStatusMeta(reviewed.lodging_status) : null;
     const moving = !!(ctx.pending && ctx.pending.has(p.id));
     return (
         <article className={`rounded-3xl border-2 bg-white p-5 shadow-sm flex flex-col gap-4 ${p.status === 'cancelled' ? 'border-rose-100' : 'border-gray-100'} ${dnd.dragging === p.id ? 'opacity-50' : ''}`}>
@@ -1362,6 +1457,16 @@ function OccupantCard({ person: p, onMove, onUnassign, env }: any) {
                         {p.gender && <span className="px-2 py-0.5 rounded-md bg-gray-50 text-gray-600 text-[10px] font-black uppercase tracking-widest">{genderLabel(tx, p.gender)}</span>}
                         {status && <span className={`px-2 py-0.5 rounded-md border text-[10px] font-black uppercase tracking-widest ${status.cls}`}>{tx(status.key, status.fallback)}</span>}
                         {pay && <span className={`px-2 py-0.5 rounded-md border text-[10px] font-black uppercase tracking-widest ${pay.cls}`}>{tx(pay.key, pay.fallback)}</span>}
+                        {pinnedHere(p) ? (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 text-[10px] font-black uppercase tracking-widest" data-occupant-pinned="">
+                                <i className="fa-solid fa-thumbtack mr-1" aria-hidden="true"></i>{tx('person.pinned.chip', 'Fijada aquí')}
+                            </span>
+                        ) : null}
+                        {reviewedPill && (
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest ${reviewedPill.cls}`} title={tx('lodging.adjust.short', 'Cada cambio queda registrado como ajuste de la administración')} data-occupant-reviewed={reviewed.lodging_status}>
+                                <i className={`fa-solid ${reviewedPill.icon} mr-1`} aria-hidden="true"></i>{tx('lodging.block', 'Hospedaje')} · {tx(reviewedPill.key, reviewedPill.fallback)}
+                            </span>
+                        )}
                     </div>
                 </div>
                 {!block && !env.readOnly && (
@@ -1380,9 +1485,6 @@ function OccupantCard({ person: p, onMove, onUnassign, env }: any) {
 
             {p.status === 'cancelled' && (
                 <Notice tone="rose" icon="fa-ban">{tx('explorer.occupant.cancelled', 'Inscripción cancelada: aún ocupa esta cama. Quítala de la habitación para liberarla.')}</Notice>
-            )}
-            {frozen && (
-                <Notice tone="amber" icon="fa-lock">{withName(tx('explorer.occupant.frozen', 'El hospedaje de la localidad «{name}» está en validación o validado: reábrelo en Localidades para mover a este participante.'), loc || `#${rawLocationId(p)}`)}</Notice>
             )}
             {moving && (
                 <Notice tone="gray" icon="fa-spinner fa-spin">{blockText(tx, 'board.moving')}</Notice>
@@ -1433,6 +1535,13 @@ function OccupantCard({ person: p, onMove, onUnassign, env }: any) {
                 <button type="button" disabled={!!outBlock} onClick={onUnassign} className={`${btnGhost} hover:border-rose-300 hover:text-rose-600`}>
                     <i className="fa-solid fa-user-minus text-[9px]"></i> {tx('explorer.unassign', 'Quitar de la habitación')}
                 </button>
+                {/* Held by the administration (2.21.0): the engine never moves a fixed person. */}
+                {env.onTogglePin && (
+                    <button type="button" disabled={moving} onClick={() => env.onTogglePin(p)} className={`${btnGhost} ${pinnedHere(p) ? 'border-amber-300 text-amber-800' : ''}`} aria-pressed={!!pinnedHere(p)} data-occupant-pin-toggle={pinnedHere(p) ? 'on' : 'off'}
+                        title={tx('person.pin.hint', 'Ni «Sugerir reparto» (tampoco con «Rehacer todo»), ni la asignación automática, ni los encargados la mueven de esta habitación.')}>
+                        <i className="fa-solid fa-thumbtack text-[9px]" aria-hidden="true"></i> {pinnedHere(p) ? tx('person.pin.off', 'Dejar de fijar') : tx('person.pin.on', 'Fijar en esta habitación')}
+                    </button>
+                )}
             </footer>}
         </article>
     );
@@ -1464,7 +1573,6 @@ function PersonChip({ person: p, onOptions, env }: any) {
                     <i className="fa-solid fa-people-roof mr-1"></i>{p.family_group}
                 </span>
             )}
-            {block === 'board.frozen' && <i className="fa-solid fa-lock text-[8px] text-amber-500" aria-hidden="true"></i>}
             {block === 'board.moving' && <i className="fa-solid fa-spinner fa-spin text-[8px] text-indigo-400" aria-hidden="true"></i>}
             {!ro && <button
                 type="button"
@@ -1521,12 +1629,16 @@ function UnassignedPanel({ panelRef, searchRef, groups, total, loading, spinner,
                         aria-label={tx('board.search', 'Buscar participante…')}
                         className={`${inputCls} pl-9 min-h-[44px] text-xs`}
                     />
+                    {/* While a placed attendee is dragged, the drop hint COVERS the search box (nobody searches
+                        mid-drag) instead of being inserted above the list: the insertion pushed the list down,
+                        the panel's scroll anchoring scrolled to compensate, the chip under the pointer slid away
+                        and the browser cancelled the drag. Nothing moves when it appears. */}
+                    {dnd.dragging != null && dnd.draggedPerson && dnd.draggedPerson.room_id != null && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center px-2 rounded-xl bg-rose-50 border-2 border-dashed border-rose-200 text-[10px] font-bold text-rose-500 uppercase tracking-widest text-center leading-tight" data-drop-unassign-hint="">
+                            <span><i className="fa-solid fa-arrow-down mr-1" aria-hidden="true"></i>{tx('board.drop.here', 'Suelta aquí para quitar la habitación')}</span>
+                        </div>
+                    )}
                 </div>
-                {dnd.dragging != null && dnd.draggedPerson && dnd.draggedPerson.room_id != null && (
-                    <div className="text-[10px] font-bold text-rose-500 uppercase tracking-widest text-center py-2 border-2 border-dashed border-rose-200 rounded-xl">
-                        <i className="fa-solid fa-arrow-down mr-1"></i>{tx('board.drop.here', 'Suelta aquí para quitar la habitación')}
-                    </div>
-                )}
                 <div className="space-y-3 xl:max-h-[70vh] xl:overflow-y-auto modern-scrollbar pr-1">
                     {loading && total === 0 && groups.total === 0 ? spinner : groups.total === 0 ? (
                         <div className="text-center py-10 text-gray-300">
@@ -1549,7 +1661,11 @@ function UnassignedPanel({ panelRef, searchRef, groups, total, loading, spinner,
                                     <span className="flex items-center gap-2 min-w-0">
                                         <i className={`fa-solid fa-chevron-${collapsed ? 'right' : 'down'} text-[8px] text-gray-300`} aria-hidden="true"></i>
                                         <span className="text-[10px] font-black uppercase tracking-widest text-gray-600 truncate">{g.name || tx('board.no.location', 'Sin localidad')}</span>
-                                        {g.frozen && <i className="fa-solid fa-lock text-[9px] text-amber-500" title={blockText(tx, 'board.frozen')}></i>}
+                                        {g.reviewed && (
+                                            <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest ${lodgingStatusMeta(g.status).cls}`} title={tx('lodging.adjust.short', 'Cada cambio queda registrado como ajuste de la administración')} data-group-reviewed={g.status}>
+                                                <i className={`fa-solid ${lodgingStatusMeta(g.status).icon} mr-1`} aria-hidden="true"></i>{tx(lodgingStatusMeta(g.status).key, lodgingStatusMeta(g.status).fallback)}
+                                            </span>
+                                        )}
                                     </span>
                                     <span className="text-[9px] font-black text-gray-400">{g.people.length}</span>
                                 </button>
@@ -1597,7 +1713,7 @@ function ModalShell({ title, subtitle, onClose, children, closeLabel, restoreFoc
     const lastInner = useRef<HTMLElement | null>(null);
     useEffect(() => {
         const dialog = dialogRef.current;
-        // Branches without a search box (frozen / locked notices, phones): bring focus into the dialog.
+        // Branches without a search box (cancelled / moving / full notices, phones): bring focus into the dialog.
         if (dialog && !dialog.contains(document.activeElement)) {
             const again = lastInner.current && lastInner.current.isConnected && dialog.contains(lastInner.current) ? lastInner.current : dialog;
             again.focus({ preventScroll: true });
@@ -1654,7 +1770,7 @@ function ModalShell({ title, subtitle, onClose, children, closeLabel, restoreFoc
  * one hotel's, with a way back to all), the refused ones with their reason.
  */
 function RoomPickerModal({ person, hotels, scopeHotelId, onClose, onMove, restoreFocus, env }: any) {
-    const { tx, ctx, idx, nameOf, locNameOf, locById, roomLabel, roomLocName } = env;
+    const { tx, ctx, idx, nameOf, locNameOf, roomLabel, roomLocName } = env;
     const [busy, setBusy] = useState(false);
     const [q, setQ] = useState('');
     const [scope, setScope] = useState<number | null>(scopeHotelId ?? null);
@@ -1671,9 +1787,7 @@ function RoomPickerModal({ person, hotels, scopeHotelId, onClose, onMove, restor
     };
     const block = dragBlock(person, ctx);
     const outBlock = unassignBlock(person, ctx);
-    const frozen = block === 'board.frozen';
-    const loc = person.location_id != null ? locById.get(Number(person.location_id)) : null;
-    const meta = lodgingStatusMeta(loc?.lodging_status);
+    const reviewed = env.reviewedOf(rawLocationId(person));
     // Accent- and case-insensitive, like every other search of the explorer («senorial» finds «Señorial»).
     const needle = normalizeText(q);
     const scopedHotel = scope == null ? null : hotels.find(h => Number(h.id) === Number(scope)) || null;
@@ -1686,17 +1800,7 @@ function RoomPickerModal({ person, hotels, scopeHotelId, onClose, onMove, restor
     const subtitle = [nameOf(person), locNameOf(person), person.room_id != null ? roomLabel(person.room_id) : ''].filter(Boolean).join(' · ');
     return (
         <ModalShell title={tx('assign.room', 'Asignar habitación')} subtitle={subtitle} onClose={onClose} restoreFocus={restoreFocus} closeLabel={tx('explorer.close', 'Cerrar')}>
-            {frozen ? (
-                <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0"><i className="fa-solid fa-lock" aria-hidden="true"></i></div>
-                    <div>
-                        <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${meta.cls}`}>{tx(meta.key, meta.fallback)}</span>
-                        <p className="text-sm text-amber-800 font-medium leading-relaxed mt-1">
-                            {withName(tx('lodging.frozen.notice', 'El hospedaje de la localidad «{name}» está en validación o validado. Reábrelo desde Localidades antes de cambiar la habitación de este participante.'), loc?.name || locNameOf(person))}
-                        </p>
-                    </div>
-                </div>
-            ) : (
+            {reviewed && <div className="mb-4"><AdjustNotice location={reviewed} env={env} /></div>}
                 <>
                     {person.room_id != null && (
                         <button
@@ -1780,7 +1884,6 @@ function RoomPickerModal({ person, hotels, scopeHotelId, onClose, onMove, restor
                         </div>
                     )}
                 </>
-            )}
         </ModalShell>
     );
 }
@@ -1798,7 +1901,7 @@ function AssignPickerModal({ room, hotel, people, onClose, onMove, restoreFocus,
     // row now at the same position, else the search box — so the next bed can be filled from the keyboard.
     const refocusAt = useRef<number | null>(null);
     const s = roomStats(room, idx);
-    const locked = roomLock(room, ctx);
+    const reviewed = env.reviewedOf(room.location_id);
     const candidates = assignCandidates(people, room, ctx, { q, includePlaced, nameOf, extraText: locNameOf });
     const excluded = candidateExclusions(people, room, ctx, includePlaced);
     const rLoc = roomLocName(room);
@@ -1828,8 +1931,9 @@ function AssignPickerModal({ room, hotel, people, onClose, onMove, restoreFocus,
     };
     const reasons = [
         excluded.cancelled > 0 && txn('explorer.picker.excluded.cancelled', '{n} cancelados', '{n} cancelado', excluded.cancelled),
-        excluded.frozen > 0 && tx('explorer.picker.excluded.frozen', '{n} de localidades en validación', { n: excluded.frozen }),
         excluded.foreign > 0 && tx('explorer.picker.excluded.foreign', '{n} de otras localidades', { n: excluded.foreign }),
+        excluded.noBed > 0 && tx('explorer.picker.excluded.nobed', '{n} sin cama libre de su localidad aquí', { n: excluded.noBed }),
+        excluded.locked > 0 && tx('explorer.picker.excluded.locked', '{n} de otro género que el fijado para esta habitación compartida', { n: excluded.locked }),
         excluded.moving > 0 && tx('explorer.picker.excluded.moving', '{n} con un movimiento en curso', { n: excluded.moving }),
     ].filter(Boolean);
     return (
@@ -1843,9 +1947,8 @@ function AssignPickerModal({ room, hotel, people, onClose, onMove, restoreFocus,
             restoreFocus={restoreFocus}
             closeLabel={tx('explorer.close', 'Cerrar')}
         >
-            {locked ? (
-                <Notice tone="amber" icon="fa-lock">{withName(tx('explorer.room.locked', 'El hospedaje de la localidad «{name}» está en validación o validado: esta habitación no admite cambios hasta reabrirlo en Localidades.'), rLoc)}</Notice>
-            ) : s.free <= 0 ? (
+            {reviewed && <div className="mb-4"><AdjustNotice location={reviewed} env={env} /></div>}
+            {s.free <= 0 ? (
                 <Notice tone="gray" icon="fa-circle-check">{tx('explorer.room.full', 'Habitación completa. Para hacer sitio, mueve o quita a alguien.')}</Notice>
             ) : (
                 <div className="space-y-4">

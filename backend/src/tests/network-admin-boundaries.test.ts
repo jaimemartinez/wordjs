@@ -244,7 +244,8 @@ describe('network-wide actions on the main site take a network administrator', (
     });
 
     test('another site\'s administrator is answered as before (404 for the main site\'s subtrees)', async () => {
-        assert.strictEqual((await as('two', 'get', `${API}/backups`, TWO)).status, 404);
+        // Except its own backups: every site of a network has them (core/backup).
+        assert.strictEqual((await as('two', 'get', `${API}/backups`, TWO)).status, 200);
         assert.strictEqual((await as('two', 'get', `${API}/site-address`, TWO)).status, 404);
         assert.strictEqual((await as('two', 'post', `${API}/plugins/upload`, TWO).send({})).status, 403);
     });

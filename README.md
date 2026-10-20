@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/create-wordjs?label=create-wordjs&color=cb3837)](https://www.npmjs.com/package/create-wordjs)
 [![CI](https://github.com/jaimemartinez/wordjs/actions/workflows/ci.yml/badge.svg)](https://github.com/jaimemartinez/wordjs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/jaimemartinez/wordjs?color=blue)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.9-brightgreen)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Security Policy](https://img.shields.io/badge/security-policy-brightgreen)](SECURITY.md)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jaimemartinez/wordjs)
 
@@ -137,7 +137,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - **WordPress (WXR) importer** — upload a `.xml` export to bring over authors, categories/tags, posts/pages (with meta, term relationships, and threaded comments), preserving publish dates. **Attachments are downloaded** through the same SSRF guard as webhooks (50 MB per file and 1 GB per run by default, resumable, failures reported per item) and **menus come across with hierarchy**, targets and locations; content and editor-tree URLs are rewritten to the new library. Idempotent and re-runnable.
 - **Backups** — full-site export/restore with retention pruning, plus **privacy-first analytics** (no cookies, daily-rotated salted IP hashing) and a **built-in cron**.
 - **AI suggestions in the editor** — one provider layer (`backend/src/core/ai-provider.ts`) holds the site's AI credentials; the editor offers "Suggest with AI" for excerpts, meta descriptions and image alt text, always as a suggestion the user accepts, and plugins granted `ai:use` reach it through the bridge. The key is never shown to the browser, plugins or logs. See [AI provider](documentation/ai-provider.md).
-- **Multisite** — one install serves a network of sites, each with its own address, database, uploads, users, roles, settings and theme choice (`npm run network -- enable`, then **Admin → Network**; `sqlite-native` driver in this version). See [Multisite](documentation/multisite.md).
+- **Multisite** — one install serves a network of sites, each with its own address, database, uploads, users, roles, settings and theme choice (`npm run network -- enable`, then **Admin → Network**), on SQLite, Postgres or MySQL and, on the server engines, on several backend nodes; each site with its own TLS certificate (SNI), backups and real-time co-editing. See [Multisite](documentation/multisite.md).
 
 **Operations**
 - **Gateway** — a clustered reverse proxy (one worker per CPU core, capped at 16 — or 4 in development — with automatic respawn of dead workers), health-check eviction, an mTLS internal control channel, and SSE-aware proxying. It also acts as the cluster CA for multi-machine deployments.
@@ -284,14 +284,14 @@ Before exposing WordJS to the internet: have it **independently audited**, **rot
 
 <br/>
 
-- **Runtime:** Node.js (≥ 20.9; Node 20/22 LTS recommended)
+- **Runtime:** Node.js (≥ 22; Node 22/24 LTS recommended)
 - **Backend:** TypeScript — compiled with `tsc` for production, `ts-node` for dev
 - **Frontend:** Next.js (React 19)
 - **Editor:** Verso — in-house; its editor state, drag-and-drop resolver and rich-text engine carry no third-party dependency · **Styling:** vanilla CSS + Tailwind
 - **Communication:** REST + JWT + scoped API tokens + WebSockets/SSE
 - **Gateway:** Express + Node `cluster`, http-proxy, mTLS internal channel
 - **Sandbox:** `child_process` OS-process isolation + native kernel confinement (Landlock/seccomp-bpf, AppContainer, Seatbelt) + `acorn` code scanning + runtime require proxies + layered memory caps (cgroup / Windows Job Object / RSS-poll) + a reactive per-plugin CPU watchdog (`sandbox.cpuBurstSeconds`, default 60 s at ≥ 95% of one core)
-- **TLS:** `acme-client` (Let's Encrypt HTTP-01 / DNS-01)
+- **TLS:** a built-in RFC 8555 ACME client (Let's Encrypt HTTP-01 / DNS-01) and X.509 toolkit on Node's own `crypto` — no third-party crypto code
 - **Database:** SQLite (`better-sqlite3` / `sql.js`), PostgreSQL (`pg`), or MySQL/MariaDB (`mysql2`)
 - **Tooling:** ESLint + Prettier, `node:test`, GitHub Actions CI
 
@@ -329,7 +329,7 @@ CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compile
 
 - **🧩 Third-party marketplace** — the on-ramp is built and only the authors are missing: the review policy is public ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)), decisions are recorded in a tracked ledger (`marketplace/reviews.json`), every catalog entry publishes `review.status` (`first-party` / `reviewed` / `unreviewed`), and the badge is shown for `reviewed`. The gate is real: `npm run verify:marketplace` fails if an entry claims a review with no ledger record, if a reviewed plugin's permissions have changed since the review that granted the badge, or if a first-party plugin marks *itself* reviewed. What remains is the community — all 32 catalog plugins are first-party today.
 - **✅ Shipped in 2.6.0** (both were on this list): **media CDN** — S3-compatible offload served from a CDN ([Media storage](documentation/media-storage.md)) — and **multisite** — several sites, each on its own domain, from one install ([Multisite](documentation/multisite.md)).
-- **🌐 Multisite, next steps** — networks of sites shipped in 2.6.0 on the `sqlite-native` driver; Postgres/MySQL networks and a TLS certificate per site (SNI) are planned ([Multisite](documentation/multisite.md)).
+- **✅ Multisite, next steps — shipped**: networks on Postgres (a schema per site) and MySQL (a database per site), on several backend nodes, with a TLS certificate per site (SNI), per-site backups and co-editing on every site ([Multisite](documentation/multisite.md)).
 - **🛡️ More kernel hardening** — building on the default-on Landlock/AppContainer/Seatbelt layer; preventive memory caps outside systemd Linux and Windows are the open gap.
 
 ---

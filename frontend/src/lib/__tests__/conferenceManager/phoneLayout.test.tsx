@@ -260,7 +260,8 @@ describe('«Campos» on a phone', () => {
     });
     it('a field card puts its actions in a row under the label instead of a column of four', () => {
         const card = src.split('\n').find((l) => l.includes('rounded-2xl p-4 flex items-center justify-between'))!;
-        expect(card).toMatch(/\bmax-sm:flex-wrap\b/);
+        // Wraps at every width (a tablet's narrow column too), not only under `sm`.
+        expect(card).toMatch(/(^|[\s`"])flex-wrap\b/);
         const actions = classesOf(src, 'data-field-actions=');
         expect(actions).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'max-sm:ml-auto']));
         expect(src).toMatch(/w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-300/);   // the grip keeps its size

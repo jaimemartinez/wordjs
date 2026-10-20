@@ -563,6 +563,6 @@ async function migrateSiteKeysOnce(opts: { adapterFor?: (store: any) => any }): 
 
 module.exports = {
     runMigration, getState, getProgress, isRunning, isRunningAnywhere, isLiveRecord, PROGRESS_STALE_MS, countOffloaded, bucketUsage, migrateOne,
-    runNetworkMigration, isRunningOnAnySite, siteStates, networkSiteIds, migrateSiteKeys,
+    runNetworkMigration, isRunningOnAnySite, siteStates, networkSiteIds, migrateSiteKeys, offloadedItems,
     STATE_OPTION, PROGRESS_OPTION, KEY_LAYOUT_OPTION,
 };

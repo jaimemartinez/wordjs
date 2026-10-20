@@ -1251,6 +1251,7 @@ async function pushPolicyToGateway(cfg: any, opts: { periodic?: boolean } = {}):
         const answer = await require('./cert-manager').pushHostPolicyToGateway({ ...gatewayPolicyPush(cfg), ...(onlyIfMissing ? { onlyIfMissing: true } : {}) });
         noteEdgeRefusals(answer);
         noteEdgeOwnAddresses(answer);
+        syncSiteCertificatesAfterPush(answer);
         if (gatewayPushFailing) mlog.info('[site-address] the gateway is reachable again and has the site\'s addresses.');
         else if (opts.periodic && answer && answer.stored === 'written') mlog.info('[site-address] the gateway had no site addresses stored (restarted or replaced); it has them again.');
         if (answer && answer.stored === 'kept') {
@@ -1268,6 +1269,25 @@ async function pushPolicyToGateway(cfg: any, opts: { periodic?: boolean } = {}):
         gatewayPushFailing = true;
         return 'The gateway could not be told which addresses the site answers; it keeps checking addresses against the last set it received until it can be told again (within about half a minute of it coming back).';
     }
+}
+
+/**
+ * Multisite: the gateway also serves each site's own certificate (core/site-certs). They are handed to it
+ * after this backend's first successful push, and again whenever the gateway answers that it held no
+ * policy (restarted without its files, or a new one): the certificates live in the network store, so a
+ * gateway that lost them gets them back from any node. Never throws, never delays the push.
+ */
+let siteCertsSynced = false;
+function syncSiteCertificatesAfterPush(answer: any): void {
+    try {
+        if (!require('./site-context').multisiteEnabled()) return;
+        if (siteCertsSynced && !(answer && answer.stored === 'written')) return;
+        siteCertsSynced = true;
+        require('./site-certs').syncSiteCertificatesToEdge().catch((e: any) => {
+            siteCertsSynced = false;
+            mlog.warn(`[site-address] the sites' certificates could not be handed to the gateway: ${e && e.message}`);
+        });
+    } catch { /* not a network */ }
 }
 
 /**
