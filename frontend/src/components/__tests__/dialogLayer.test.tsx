@@ -58,10 +58,10 @@ describe("the admin's stacking order", () => {
         // The numbers the shell actually uses (Tailwind classes) must be the ones this scale assumes.
         const shell = read("app/admin/DashboardLayoutClient.tsx");
         const sidebar = read("components/Sidebar.tsx");
-        expect(shell).toMatch(/<header className="md:hidden[^"]*\bz-\[5000\]/);
-        expect(shell).toMatch(/hidden md:flex absolute top-10 z-\[5003\]/);
+        expect(shell).toMatch(/<header className="lg:hidden[^"]*\bz-\[5000\]/);
+        expect(shell).toMatch(/hidden lg:flex absolute top-10 z-\[5003\]/);
         expect(sidebar).toMatch(/fixed inset-y-0 left-0 z-\[5002\]/);
-        expect(sidebar).toMatch(/backdrop-blur-sm z-\[5001\] md:hidden/);
+        expect(sidebar).toMatch(/backdrop-blur-sm z-\[5001\] lg:hidden/);
         expect(read("contexts/ToastContext.tsx")).toMatch(/data-wjs-toasts=""[^>]*\bz-\[9999\]/);
         const overlay = fs.readFileSync(path.resolve(SRC, "../../marketplace/plugins/conference-manager/client/lib/overlay.ts"), "utf8");
         expect(overlay).toMatch(/OVERLAY_BASE_Z = 6000;/);

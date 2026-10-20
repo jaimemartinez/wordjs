@@ -51,17 +51,18 @@ const InitialsAvatar = ({ name }: { name: string }) => {
 
 // Premium Stat Card Component
 const StatCard = ({ statKey, label, value, icon, gradient }: { statKey: DashboardStatKey, label: string, value: number, icon: string, color: string, gradient: string }) => (
-    <div data-dashboard-stat={statKey} className="group relative overflow-hidden bg-white rounded-[40px] p-8 border-2 border-gray-50 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-2 transition-all duration-500">
+    <div data-dashboard-stat={statKey} className="group relative overflow-hidden bg-white rounded-3xl sm:rounded-[40px] p-5 sm:p-8 border-2 border-gray-50 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-2 transition-all duration-500">
         {/* Background Blob */}
-        <div className={`absolute -right-10 -top-10 w-40 h-40 bg-gradient-to-br ${gradient} rounded-full blur-[60px] opacity-20 group-hover:opacity-40 transition-opacity duration-700`}></div>
+        <div aria-hidden="true" className={`pointer-events-none absolute -right-10 -top-10 w-40 h-40 bg-gradient-to-br ${gradient} rounded-full blur-[60px] opacity-20 group-hover:opacity-40 transition-opacity duration-700`}></div>
 
-        <div className="relative z-10">
-            <div className={`w-16 h-16 shrink-0 rounded-3xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white text-2xl mb-6 shadow-lg shadow-gray-200 group-hover:scale-110 transition-transform duration-500`}>
+        {/* A row (icon beside the count) on a phone, where a stacked card was a screen tall per number. */}
+        <div className="relative z-10 flex items-center gap-4 sm:block">
+            <div aria-hidden="true" className={`w-12 h-12 sm:w-16 sm:h-16 shrink-0 rounded-2xl sm:rounded-3xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white text-xl sm:text-2xl sm:mb-6 shadow-lg shadow-gray-200 group-hover:scale-110 transition-transform duration-500`}>
                 <i className={`fa-solid ${icon}`}></i>
             </div>
-            <div>
-                <h3 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-1">{value}</h3>
-                <p className="text-[10px] uppercase font-black tracking-widest text-gray-500 group-hover:text-gray-600 transition-colors break-words">{label}</p>
+            <div className="min-w-0">
+                <h3 className="text-3xl sm:text-4xl font-black text-gray-900 italic tracking-tighter mb-1">{value}</h3>
+                <p className="text-[11px] uppercase font-black tracking-widest text-gray-500 group-hover:text-gray-600 transition-colors break-words">{label}</p>
             </div>
         </div>
     </div>
@@ -69,13 +70,13 @@ const StatCard = ({ statKey, label, value, icon, gradient }: { statKey: Dashboar
 
 // Premium Quick Action Component
 const QuickAction = ({ href, icon, label, subLabel, color }: { href: string, icon: string, label: string, subLabel: string, color: string }) => (
-    <a href={href} className="group relative flex items-center gap-6 p-6 bg-white rounded-[40px] border-2 border-gray-50 hover:border-blue-200 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-1 transition-all duration-500">
+    <a href={href} className="group relative flex items-center gap-4 sm:gap-6 p-4 sm:p-6 bg-white rounded-3xl sm:rounded-[40px] border-2 border-gray-50 hover:border-blue-200 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-1 transition-all duration-500">
         <div className={`w-12 h-12 shrink-0 rounded-2xl ${color} flex items-center justify-center text-white text-lg shadow-md group-hover:scale-110 transition-transform`}>
             <i className={`fa-solid ${icon}`}></i>
         </div>
         <div className="min-w-0" data-quick-action-text="">
             <h4 className="font-bold text-gray-900 text-sm group-hover:text-blue-600 transition-colors break-words">{label}</h4>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mt-0.5 break-words">{subLabel}</p>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 mt-0.5 break-words">{subLabel}</p>
         </div>
         <div className="absolute right-6 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300 pointer-events-none">
             <i className="fa-solid fa-arrow-right text-gray-300"></i>
@@ -195,11 +196,11 @@ export default function DashboardPage() {
     if (!allowed) return null;
 
     return (
-        <div className="@container p-8 md:p-12 pb-20 space-y-12 animate-in fade-in duration-700 bg-gray-50 h-full w-full overflow-auto" data-dashboard-root="">
+        <div className="@container px-4 py-6 sm:p-8 md:p-12 pb-20 space-y-8 md:space-y-12 animate-in fade-in duration-700 bg-gray-50 h-full w-full overflow-auto" data-dashboard-root="">
             {/* Header */}
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                 <div>
-                    <h1 className="text-4xl md:text-5xl font-black text-gray-900 italic tracking-tighter mb-2">
+                    <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-gray-900 italic tracking-tighter mb-2">
                         {t('dashboard.overview')}
                     </h1>
                     <div className="flex items-center gap-2">
@@ -215,12 +216,12 @@ export default function DashboardPage() {
                     <div className="hidden lg:flex shrink-0 items-center gap-4 px-6 py-3 bg-white rounded-full shadow-lg shadow-gray-200/50 border border-gray-100" data-dashboard-mini-pill="">
                         <div className="flex items-center gap-2">
                             <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.database.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">DB: {systemStatus.database.driver}</span>
+                            <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">DB: {systemStatus.database.driver}</span>
                         </div>
                         <div className="w-px h-4 bg-gray-200"></div>
                         <div className="flex items-center gap-2">
                             <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.mtls.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">mTLS: {systemStatus.mtls.status}</span>
+                            <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">mTLS: {systemStatus.mtls.status}</span>
                         </div>
                     </div>
                 )}
@@ -346,23 +347,23 @@ export default function DashboardPage() {
 
                     {/* Chart/Graph — administrators only (so is its endpoint) */}
                     {sections.activityChart && (
-                    <div data-dashboard-activity-chart="" className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-10 relative overflow-hidden group hover:shadow-2xl transition-all duration-500">
+                    <div data-dashboard-activity-chart="" className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-10 relative overflow-hidden group hover:shadow-2xl transition-all duration-500">
                         <div className="absolute top-0 right-0 w-64 h-64 bg-gray-50 rounded-full blur-[80px] opacity-50 pointer-events-none"></div>
                         <div className="flex flex-wrap items-center justify-between gap-y-3 mb-8 relative z-10">
                             <div>
                                 <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">{t('dashboard.activity.overview')}</h2>
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mt-1">{t('dashboard.traffic.engagement')}</p>
+                                <p className="text-[11px] font-bold uppercase tracking-widest text-gray-500 mt-1">{t('dashboard.traffic.engagement')}</p>
                             </div>
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => setChartPeriod('weekly')}
-                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                    className={`px-3 py-1 rounded-lg text-[11px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                                 >
                                     {t('dashboard.weekly')}
                                 </button>
                                 <button
                                     onClick={() => setChartPeriod('monthly')}
-                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'monthly' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                                    className={`px-3 py-1 rounded-lg text-[11px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'monthly' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
                                 >
                                     {t('dashboard.monthly')}
                                 </button>
@@ -428,14 +429,14 @@ export default function DashboardPage() {
 
                 {/* Sidebar: Recent Comments — only for whoever may moderate them (the only viewers they load for) */}
                 {sections.recentComments && (
-                <div data-dashboard-recent-comments="" className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 relative overflow-hidden">
+                <div data-dashboard-recent-comments="" className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-5 sm:p-8 relative overflow-hidden">
                     <div className="flex items-center gap-3 mb-8">
                         <span className="w-10 h-10 shrink-0 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-lg shadow-amber-100" data-recent-comments-icon="">
                             <i className="fa-solid fa-comments"></i>
                         </span>
                         <div className="min-w-0">
                             <h2 className="text-xl font-black text-gray-900 italic tracking-tight">{t('dashboard.recent.comments')}</h2>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mt-0.5">{t('dashboard.community.engagement')}</p>
+                            <p className="text-[11px] font-bold uppercase tracking-widest text-gray-500 mt-0.5">{t('dashboard.community.engagement')}</p>
                         </div>
                     </div>
 
@@ -470,7 +471,7 @@ export default function DashboardPage() {
                                                 <p className="text-sm font-black text-gray-900 truncate">
                                                     {comment.author}
                                                 </p>
-                                                <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-gray-500 bg-white px-2 py-0.5 rounded-full shadow-sm border border-gray-100">
+                                                <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-gray-500 bg-white px-2 py-0.5 rounded-full shadow-sm border border-gray-100">
                                                     {new Date(comment.date).toLocaleDateString()}
                                                 </span>
                                             </div>
@@ -489,7 +490,7 @@ export default function DashboardPage() {
                     {mayOpen("/admin/comments") && (
                     <a
                         href="/admin/comments"
-                        className="mt-8 flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gray-50 text-gray-600 font-black text-[10px] uppercase tracking-widest hover:bg-gray-900 hover:text-white transition-all duration-300 group"
+                        className="mt-8 flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gray-50 text-gray-600 font-black text-[11px] uppercase tracking-widest hover:bg-gray-900 hover:text-white transition-all duration-300 group"
                     >
                         {t('dashboard.view.all')} <i className="fa-solid fa-arrow-right-long group-hover:translate-x-1 transition-transform"></i>
                     </a>

@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import DialogLayer from "@/components/DialogLayer";
 import { useSearchParams } from "next/navigation";
-import { PageHeader } from "@/components/ui";
+import { PageHeader, DataTable } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -56,8 +56,8 @@ import { RefusedByLabel } from "./RefusedByLabel";
 
 type T = (key: string) => string;
 
-const card = "bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden";
-const cardHead = "px-8 py-6 border-b border-gray-50 bg-gray-50/30";
+const card = "bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden";
+const cardHead = "px-5 sm:px-8 py-5 sm:py-6 border-b border-gray-50 bg-gray-50/30";
 const cardTitle = "text-lg font-bold text-gray-900 flex items-center gap-2";
 const inputCls = "block w-full rounded-2xl border-2 border-gray-100 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-blue-500";
 const labelCls = "block text-sm font-bold text-gray-700 mb-2";
@@ -455,7 +455,7 @@ export default function SiteAddressPage() {
 
     if (isLoading) return null;
     if (!isAdmin) {
-        return <div className="p-8 md:p-12"><p className="text-sm text-gray-600">{t("siteAddress.adminOnly")}</p></div>;
+        return <div className="px-4 py-6 sm:p-8 md:p-12"><p className="text-sm text-gray-600">{t("siteAddress.adminOnly")}</p></div>;
     }
 
     const finished = (result: WriteResult) => {
@@ -535,7 +535,7 @@ export default function SiteAddressPage() {
     const openChange = (prefillUrl: string) => setDialog({ kind: "canonical", prefillUrl });
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
             <div className="max-w-5xl mx-auto space-y-8">
                 <PageHeader title={t("siteAddress.title")} subtitle={t("siteAddress.subtitle")} />
 
@@ -624,52 +624,63 @@ export default function SiteAddressPage() {
                             {state.aliases.length === 0 ? (
                                 <p className="p-8 text-sm text-gray-500">{t("siteAddress.aliases.empty")}</p>
                             ) : (
-                                <div className="overflow-x-auto">
-                                    {/* Wide on purpose: an address must read as one unbroken line, so a narrow screen scrolls
-                                        the table rather than wrapping a URL letter by letter. */}
-                                    <table className="w-full min-w-[60rem] text-left text-sm">
-                                        <thead className="bg-gray-50/60 text-xs uppercase tracking-wider text-gray-500">
-                                            <tr>
-                                                {["address", "label", "mode", "signIn", "source", "expires", "lastSeen", "actions"].map((col) => (
-                                                    <th key={col} scope="col" className="px-4 py-3 font-bold">{t(`siteAddress.col.${col}`)}</th>
-                                                ))}
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-50">
-                                            {state.aliases.map((alias) => {
+                                <DataTable
+                                    rows={state.aliases}
+                                    rowKey={(alias) => alias.hostname}
+                                    caption={t("siteAddress.aliases.title")}
+                                    rowLabel={(alias) => alias.origin}
+                                    actionsLabel={t("siteAddress.col.actions")}
+                                    stackBelow="lg"
+                                    density="compact"
+                                    rowClassName={(alias) => (alias.expiresAt !== null && Date.parse(alias.expiresAt) <= loadedAt ? "text-gray-400" : "text-gray-800")}
+                                    columns={[
+                                        {
+                                            key: "address",
+                                            header: t("siteAddress.col.address"),
+                                            primary: true,
+                                            // An address reads as one unbroken line in the table; in a card it may break anywhere.
+                                            cell: (alias) => <span className="font-mono text-sm lg:whitespace-nowrap break-all">{alias.origin}</span>,
+                                        },
+                                        { key: "label", header: t("siteAddress.col.label"), cell: (alias) => <span className="text-sm">{alias.label ?? ""}</span> },
+                                        { key: "mode", header: t("siteAddress.col.mode"), cell: (alias) => <span className="text-sm">{t(`siteAddress.mode.${alias.mode}`)}</span> },
+                                        {
+                                            key: "signIn",
+                                            header: t("siteAddress.col.signIn"),
+                                            cell: (alias) => {
                                                 const policy = signInPolicy(alias, state.canonical);
+                                                return (
+                                                    <span className="text-sm">
+                                                        {policy.relevant && policy.effective && (
+                                                            <i className="fa-solid fa-triangle-exclamation mr-1 text-amber-500" aria-hidden="true" title={policy.warning ? t(`siteAddress.signIn.warn.${policy.warning}`) : undefined}></i>
+                                                        )}
+                                                        {t(policy.effective ? "siteAddress.signIn.on" : "siteAddress.signIn.off")}
+                                                    </span>
+                                                );
+                                            },
+                                        },
+                                        { key: "source", header: t("siteAddress.col.source"), showFrom: "xl", cell: (alias) => <span className="text-sm">{labelFor(t, "siteAddress.source", alias.source)}</span> },
+                                        {
+                                            key: "expires",
+                                            header: t("siteAddress.col.expires"),
+                                            cell: (alias) => {
                                                 const expired = alias.expiresAt !== null && Date.parse(alias.expiresAt) <= loadedAt;
                                                 return (
-                                                    <tr key={alias.hostname} className={expired ? "text-gray-400" : "text-gray-800"}>
-                                                        <td className="px-4 py-3 font-mono whitespace-nowrap">{alias.origin}</td>
-                                                        <td className="px-4 py-3">{alias.label ?? ""}</td>
-                                                        <td className="px-4 py-3">{t(`siteAddress.mode.${alias.mode}`)}</td>
-                                                        <td className="px-4 py-3">
-                                                            {policy.relevant && policy.effective && (
-                                                                <i className="fa-solid fa-triangle-exclamation mr-1 text-amber-500" aria-hidden="true" title={policy.warning ? t(`siteAddress.signIn.warn.${policy.warning}`) : undefined}></i>
-                                                            )}
-                                                            {t(policy.effective ? "siteAddress.signIn.on" : "siteAddress.signIn.off")}
-                                                        </td>
-                                                        <td className="px-4 py-3">{labelFor(t, "siteAddress.source", alias.source)}</td>
-                                                        <td className="px-4 py-3">
-                                                            {alias.expiresAt === null
-                                                                ? t("siteAddress.expires.never")
-                                                                : expired ? t("siteAddress.expires.expired") : new Date(alias.expiresAt).toLocaleDateString()}
-                                                        </td>
-                                                        <td className="px-4 py-3 whitespace-nowrap">{formatTime(alias.lastSeenAt) ?? t("siteAddress.lastSeen.never")}</td>
-                                                        <td className="px-4 py-3">
-                                                            <div className="flex gap-3 whitespace-nowrap">
-                                                                <button type="button" className={linkBtn} onClick={() => openChange(alias.origin)}>{t("siteAddress.action.makeMain")}</button>
-                                                                <button type="button" className={linkBtn} onClick={() => setDialog({ kind: "alias", previous: alias, prefillUrl: alias.origin, fromRefused: false })}>{t("siteAddress.action.edit")}</button>
-                                                                <button type="button" className={`${linkBtn} text-red-600 hover:text-red-800`} onClick={() => void removeAlias(alias)}>{t("siteAddress.action.remove")}</button>
-                                                            </div>
-                                                        </td>
-                                                    </tr>
+                                                    <span className="text-sm">
+                                                        {alias.expiresAt === null
+                                                            ? t("siteAddress.expires.never")
+                                                            : expired ? t("siteAddress.expires.expired") : new Date(alias.expiresAt).toLocaleDateString()}
+                                                    </span>
                                                 );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                            },
+                                        },
+                                        { key: "lastSeen", header: t("siteAddress.col.lastSeen"), showFrom: "xl", className: "lg:whitespace-nowrap", cell: (alias) => <span className="text-sm">{formatTime(alias.lastSeenAt) ?? t("siteAddress.lastSeen.never")}</span> },
+                                    ]}
+                                    actions={(alias) => [
+                                        { key: "main", label: t("siteAddress.action.makeMain"), icon: "fa-star", onClick: () => openChange(alias.origin), tone: "primary" },
+                                        { key: "edit", label: t("siteAddress.action.edit"), icon: "fa-pen", onClick: () => setDialog({ kind: "alias", previous: alias, prefillUrl: alias.origin, fromRefused: false }), tone: "primary" },
+                                        { key: "remove", label: t("siteAddress.action.remove"), icon: "fa-trash", onClick: () => void removeAlias(alias), tone: "danger" },
+                                    ]}
+                                />
                             )}
                         </section>
 
@@ -747,44 +758,36 @@ export default function SiteAddressPage() {
                             {state.recentlyRefused.length === 0 ? (
                                 <p className="p-8 text-sm text-gray-500">{t("siteAddress.refused.empty")}</p>
                             ) : (
-                                <div className="overflow-x-auto">
-                                    <table className="w-full min-w-[48rem] text-left text-sm">
-                                        <thead className="bg-gray-50/60 text-xs uppercase tracking-wider text-gray-500">
-                                            <tr>
-                                                {["address", "count", "lastSeen", "hint", "actions"].map((col) => (
-                                                    <th key={col} scope="col" className="px-4 py-3 font-bold">{t(`siteAddress.col.${col}`)}</th>
-                                                ))}
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-50">
-                                            {state.recentlyRefused.map((entry) => (
-                                                <tr key={entry.host} className="text-gray-800">
-                                                    <td className="px-4 py-3 font-mono whitespace-nowrap">
-                                                        {entry.host}
-                                                        {/* Who refused it: the public listener's edge, the backend's own gate, or each. */}
-                                                        <RefusedByLabel source={entry.source} t={t} />
-                                                    </td>
-                                                    <td className="px-4 py-3">{entry.count}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap">{formatTime(entry.lastSeen) ?? ""}</td>
-                                                    <td className="px-4 py-3 text-xs text-gray-600">{entry.hint ? t(`siteAddress.hint.${entry.hint}`) : ""}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap">
-                                                        {/* A proxy that does not forward Host is fixed in the proxy: declaring the
-                                                            address it substitutes would accept every name behind it. */}
-                                                        {entry.hint !== "forward-host" && (
-                                                            <button
-                                                                type="button"
-                                                                className={linkBtn}
-                                                                onClick={() => setDialog({ kind: "alias", previous: null, prefillUrl: `https://${entry.host}`, fromRefused: true })}
-                                                            >
-                                                                {t("siteAddress.refused.add")}
-                                                            </button>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                <DataTable
+                                    rows={state.recentlyRefused}
+                                    rowKey={(entry) => entry.host}
+                                    caption={t("siteAddress.refused.title")}
+                                    rowLabel={(entry) => entry.host}
+                                    actionsLabel={t("siteAddress.col.actions")}
+                                    density="compact"
+                                    columns={[
+                                        {
+                                            key: "address",
+                                            header: t("siteAddress.col.address"),
+                                            primary: true,
+                                            cell: (entry) => (
+                                                <span className="font-mono text-sm text-gray-800 lg:whitespace-nowrap break-all">
+                                                    {entry.host}
+                                                    {/* Who refused it: the public listener's edge, the backend's own gate, or each. */}
+                                                    <RefusedByLabel source={entry.source} t={t} />
+                                                </span>
+                                            ),
+                                        },
+                                        { key: "count", header: t("siteAddress.col.count"), cell: (entry) => <span className="text-sm">{entry.count}</span> },
+                                        { key: "lastSeen", header: t("siteAddress.col.lastSeen"), className: "md:whitespace-nowrap", cell: (entry) => <span className="text-sm">{formatTime(entry.lastSeen) ?? ""}</span> },
+                                        { key: "hint", header: t("siteAddress.col.hint"), cell: (entry) => <span className="text-xs text-gray-600">{entry.hint ? t(`siteAddress.hint.${entry.hint}`) : ""}</span> },
+                                    ]}
+                                    // A proxy that does not forward Host is fixed in the proxy: declaring the
+                                    // address it substitutes would accept every name behind it.
+                                    actions={(entry) => entry.hint === "forward-host" ? [] : [
+                                        { key: "add", label: t("siteAddress.refused.add"), icon: "fa-plus", onClick: () => setDialog({ kind: "alias", previous: null, prefillUrl: `https://${entry.host}`, fromRefused: true }), tone: "primary" },
+                                    ]}
+                                />
                             )}
                         </section>
                     </>

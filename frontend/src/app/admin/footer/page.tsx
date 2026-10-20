@@ -167,7 +167,7 @@ export default function FooterSettingsPage() {
                         </div>
                         <div className="hidden md:block">
                             <h1 className="font-black italic text-xl tracking-tighter leading-none">{t('footer.admin.title')}</h1>
-                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{t('footer.admin.subtitle')}</span>
+                            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest leading-none">{t('footer.admin.subtitle')}</span>
                         </div>
                     </div>
                     <div className="h-8 w-px bg-gray-100 hidden md:block"></div>
@@ -211,8 +211,8 @@ export default function FooterSettingsPage() {
                                 <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.siteDescription')}</h3>
                             </div>
                             <div className="pl-9 space-y-2">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('footer.admin.footerText')}</label>
-                                <textarea
+                                <label htmlFor="footer-field-1" className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">{t('footer.admin.footerText')}</label>
+                                <textarea id="footer-field-1"
                                     rows={4}
                                     value={settings.footer_text}
                                     onChange={(e) => setSettings({ ...settings, footer_text: e.target.value })}
@@ -238,8 +238,8 @@ export default function FooterSettingsPage() {
                                                 <i className={link.icon}></i>
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-[10px] font-black uppercase text-gray-700 tracking-wide">{link.platform}</p>
-                                                <p className="text-[10px] text-gray-400 truncate">{link.url}</p>
+                                                <p className="text-[11px] font-black uppercase text-gray-700 tracking-wide">{link.platform}</p>
+                                                <p className="text-[11px] text-gray-400 truncate">{link.url}</p>
                                             </div>
                                             <button
                                                 onClick={() => removeSocialLink(idx)}
@@ -251,14 +251,14 @@ export default function FooterSettingsPage() {
                                     ))}
                                     {socialLinks.length === 0 && (
                                         <div className="text-center py-4 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                                            <p className="text-[10px] text-gray-400 font-bold uppercase">{t('footer.admin.noSocials')}</p>
+                                            <p className="text-[11px] text-gray-400 font-bold uppercase">{t('footer.admin.noSocials')}</p>
                                         </div>
                                     )}
                                 </div>
 
                                 {/* Add New */}
                                 <div className="bg-gray-50/50 p-4 rounded-2xl border border-gray-100 space-y-3">
-                                    <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest">{t('footer.admin.addSocial')}</h4>
+                                    <h4 className="text-[11px] font-black text-gray-400 uppercase tracking-widest">{t('footer.admin.addSocial')}</h4>
                                     <ModernSelect
                                         value={newPlatform}
                                         onChange={(e) => setNewPlatform(e.target.value)}
@@ -277,7 +277,9 @@ export default function FooterSettingsPage() {
                                             type="button"
                                             onClick={addSocialLink}
                                             disabled={!newUrl}
-                                            className="bg-gray-900 text-white w-9 h-9 shrink-0 rounded-xl hover:bg-purple-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-gray-200 flex items-center justify-center"
+                                            aria-label={t('common.add')}
+                                            title={t('common.add')}
+                                            className="bg-gray-900 text-white w-11 h-11 shrink-0 rounded-xl hover:bg-purple-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-gray-200 flex items-center justify-center"
                                         >
                                             <i className="fa-solid fa-plus text-xs"></i>
                                         </button>
@@ -293,8 +295,8 @@ export default function FooterSettingsPage() {
                                 <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.copyright')}</h3>
                             </div>
                             <div className="pl-9 space-y-2">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('footer.admin.legalText')}</label>
-                                <input
+                                <label htmlFor="footer-field-2" className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">{t('footer.admin.legalText')}</label>
+                                <input id="footer-field-2"
                                     type="text"
                                     value={settings.footer_copyright}
                                     onChange={(e) => setSettings({ ...settings, footer_copyright: e.target.value })}
@@ -314,11 +316,11 @@ export default function FooterSettingsPage() {
                                 <div className="bg-white border-2 border-gray-50 p-4 rounded-2xl shadow-sm flex items-center justify-between group hover:border-emerald-100 transition-all">
                                     <div>
                                         <h4 className="font-black text-gray-700 text-xs uppercase tracking-wide">{t('footer.admin.quickLinks')}</h4>
-                                        <p className="text-[10px] text-gray-400 mt-1">
+                                        <p className="text-[11px] text-gray-400 mt-1">
                                             {t('footer.admin.managedInMenus')}
                                         </p>
                                     </div>
-                                    <Link href="/admin/menus" className="bg-gray-50 text-gray-600 border border-gray-200 px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200 transition-all">
+                                    <Link href="/admin/menus" className="shrink-0 inline-flex items-center min-h-11 bg-gray-50 text-gray-600 border border-gray-200 px-3 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200 transition-all">
                                         {t('footer.admin.edit')}
                                     </Link>
                                 </div>
@@ -334,7 +336,7 @@ export default function FooterSettingsPage() {
                     <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
 
                     <div className="relative w-full max-w-5xl h-full flex flex-col">
-                        <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1.5 rounded-xl text-[10px] font-black text-gray-400 uppercase tracking-widest shadow-sm pointer-events-none z-20 border border-gray-100">
+                        <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1.5 rounded-xl text-[11px] font-black text-gray-400 uppercase tracking-widest shadow-sm pointer-events-none z-20 border border-gray-100">
                             <i className="fa-solid fa-eye mr-2 text-blue-500"></i>{t('footer.admin.livePreview')}
                         </div>
 
