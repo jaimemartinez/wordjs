@@ -35,7 +35,7 @@ export default function ChromeLogo({ size = "md", showTitle = false, location = 
     // `a` rule and rendered underlined in the link colour on the footer band.
     const hook = location === "header" ? " wjs-header-logo" : " wjs-footer-logo";
     return (
-        <Link href="/" className={`wjs-chrome-logo${hook} flex items-center gap-2`}>
+        <Link href="/" className={`wjs-chrome-logo${hook} flex items-center gap-2 pointer-coarse:min-h-11`}>
             {logoUrl ? (
                 <>
                     {/* With the title printed next to it, the image is decorative: an alt repeating the

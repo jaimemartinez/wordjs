@@ -928,6 +928,10 @@ the boot error links there too.
 
 ### Fixed
 
+- **Public header and footer on a touch screen.** Menu links, the site title and the logo are at least 44 px
+  tall where the pointer is a finger (a mouse keeps the theme's own line height), the drawer's close button is
+  44 px, and a header menu with submenus uses the drawer up to 1024 px on a touch screen: its dropdowns open on
+  hover or focus, and a tap on the parent link navigated away before either could happen.
 - **Static front page: plugin `[tag]` embeds come from the plugins' manifests.** The front page kept its
   own list (`[cards]` → card-gallery, `[vgallery]` → video-gallery). It now renders whatever tags the
   active plugins declare in their manifest `shortcodes` and render with their own site component, with
