@@ -145,7 +145,8 @@ Point the new name at the server the main site runs on, exactly as you did for t
 ## Suspending a site
 
 Admin → Network → Suspend (your password confirms it). A suspended site answers `503` (code `rest_site_suspended`) to
-every request, pages and API alike; its data is kept. Resume brings it back. The main site cannot be suspended.
+every request, pages and API alike; its data is kept, and its plugin and theme workers stop. Resume brings it back
+(its workers start again on its next request). The main site cannot be suspended.
 
 ## Plugins on the sites
 
@@ -179,6 +180,21 @@ allowed provider plugins; a secondary site's relay must be a public server (a re
 private network is accepted only on the main site).
 
 Each site's theme server code (`functions.js`) also runs per site, in its own worker.
+
+### Idle sites stop their workers
+
+A site's plugin and theme workers start on its first need — a request to the site, a due scheduled event
+or content event — not when the backend starts, and they stop again once the site has been idle (no
+request, scheduled event, content event or bus message for it) for `multisite.workerIdleMinutes`
+(`wordjs-config.json`, default **15**; `0` keeps them running). So a network of many quiet sites does not
+keep one process per site and plugin. The next request starts them again before it is answered: nothing
+is lost, the first request after a pause just takes a moment longer (the time the workers take to start).
+A request in progress keeps its site's workers up however long it lasts. The site's activations, grants,
+egress allowlist and the network's ceiling are kept as they are; the new workers start under them.
+
+The main site's workers, and those of a single-site install, never stop. On a network, a plugin that needs
+to do something regularly on another site uses a scheduled event (which starts the site's workers when it
+is due), not a timer of its own: a timer stops with its worker.
 
 ## Opening a site as administrator
 
@@ -317,7 +333,8 @@ and the network store) and Redis.
 - **Background work.** Each site has its own cron leader (a lease in the site's own database), so a
   site's scheduled events run on one node at a time; the content outbox claims its events per site.
 - **Plugin and theme workers.** Each node runs the workers of the sites it serves, started when it first
-  serves a site and kept in step with the other nodes' activations, grants and reloads.
+  needs them and kept in step with the other nodes' activations, grants and reloads; each node stops its
+  own when a site has been idle there ([Idle sites stop their workers](#idle-sites-stop-their-workers)).
 - **Certificates.** Each site's certificate is in the network store; any node renews it (the main site's
   cron leader runs the renewal pass) and the challenge answers are shared ([TLS](#dns-the-gateway-and-tls)).
 

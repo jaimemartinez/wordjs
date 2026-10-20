@@ -8,6 +8,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Multisite: an idle site's plugin and theme workers stop, and start again on its next need.** On a network,
+  the workers of a site other than the main one now start on the site's first request, due scheduled event
+  or content event (not when a background pass opens the site) and stop once the site has been idle for
+  `multisite.workerIdleMinutes` (default 15; `0` keeps them running), so many quiet sites no longer keep one
+  process per site and plugin. The next request waits for them to start and is answered as usual; the site's
+  activations, grants, egress allowlist and the network's ceiling are kept. Each node stops its own. The main
+  site and single-site installs are unchanged. See
+  [multisite.md](documentation/multisite.md#idle-sites-stop-their-workers).
 - **Multisite: a network administrator can open any other site's admin as administrator.** Admin → Network →
   *Open as administrator* re-checks the password and sends the browser to the site's own address with a
   one-time link (signed with that site's key, bound to its address, valid once and for one minute). It starts a

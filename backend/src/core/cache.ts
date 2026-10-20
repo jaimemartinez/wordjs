@@ -421,6 +421,8 @@ function subscribe(channel: string, handler: (message: string) => void): void {
             // on a closed database; one still opening gets the message once it is ready.
             const routing = siteRouting(siteId);
             if (routing === 'skip') return;
+            // A message for the site is activity: its workers, if running, are not stopped as idle yet.
+            try { require('./site-workers').touch(siteId); } catch { /* not loaded in this process */ }
             if (routing === 'now') { siteContext.runWithSite(siteId, run); return; }
             routing.then(() => siteContext.runWithSite(siteId, run), () => { /* it failed to open: nothing to update */ });
         });

@@ -1637,6 +1637,8 @@ async function initializeMainSite() {
                 await network.ready({ watch: true });
                 // A site suspended, resumed or deleted on another node stops/starts/forgets it here too.
                 require('./core/network-sites').followRegistryChanges();
+                // The other sites' plugin and theme workers stop when the site is idle (core/site-workers).
+                require('./core/site-workers').startReaper();
                 // The monolith serves the sites' certificates itself (gateway/src/site-certs.js reads them
                 // from disk): bring them from the shared store, where any node may have issued one.
                 if (process.env.WORDJS_EMBEDDED === '1') {
