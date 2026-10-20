@@ -763,19 +763,41 @@ Always use unique paths (e.g., `/admin/plugin/my-plugin-media`) unless you inten
 The backend marks standard menus with `plugin: 'core'`. The frontend filters these out from the dynamic list.
 
 ### 10.2 Widgets API
-Core can register "Widgets" (they appear in the `Widgets` admin panel and can be assigned to sidebars):
+A plugin registers sidebar widgets with `wordjs.widgets.register(id, def)`. They appear in **Appearance →
+Widgets**, where an administrator drops them into a sidebar and fills in the settings form `fields`
+declares; `render(settings)` runs in the plugin's sandbox and returns the widget's HTML:
 
 ```javascript
-const { registerWidget } = require('../../src/core/widgets'); // core / non-isolated context only
-registerWidget('my_weather_widget', 'Weather Widget', {
-    description: 'Shows local weather',
-    render: (options) => `<div>It is sunny!</div>`
-});
+const escapeHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+exports.init = (wordjs) => {
+    wordjs.widgets.register('my_weather', {
+        name: 'Weather',
+        description: 'Shows the local weather',
+        // The instance settings form. Types: text, textarea, html, number (min/max), checkbox.
+        fields: [
+            { name: 'title', label: 'Title', type: 'text' },
+            { name: 'city', label: 'City', type: 'text', default: 'Lima' },
+        ],
+        render: async (settings) => `<div class="weather">Sunny in ${escapeHtml(settings.city)}</div>`,
+    });
+};
 ```
 
-> ⚠️ **Not yet bridge-exposed.** `registerWidget` is NOT on the `wordjs` bridge, so an isolated plugin
-> cannot register a widget today (there is no `wordjs.widgets.*`). Expose data via a route + an admin
-> page instead, or open an issue to add a `widgets` bridge capability.
+- Only the declared fields are stored, coerced to their type and bounded; `title` is printed (escaped)
+  above the widget by the sidebar. Escape whatever else you interpolate: the public site sanitizes the
+  sidebar HTML, but your output should not rely on it.
+- `render` is capped at 2 s, like a shortcode: a slow or crashed child renders the widget empty, never
+  holds the page.
+- Ids are letters, digits, `_` and `-` (64 at most), at most 50 widgets per plugin. An id that core or
+  another plugin already registered is refused (the core `text`, `recent_posts`, `categories`, `search`
+  and `custom_html` widgets cannot be replaced). Widgets are registered per site and disappear when the
+  plugin is deactivated; the instances placed in sidebars render nothing until it is back.
+- No permission is needed to register a widget; what `render` reads goes through the bridge and its
+  own grants (e.g. `settings:read` for `wordjs.options.get`).
+
+Core code (not a plugin) registers widgets with `registerWidget(id, name, { description, fields, render })`
+from `backend/src/core/widgets.ts` — see [api.md §12](api.md#12-widgets-system-).
 
 ### 10.3 Sending Notifications 🔔
 Plugins push real-time alerts to the Admin UI via `wordjs.notify(n)` (`notifications:send` permission).
@@ -926,6 +948,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Core hooks that carry other parties' data need the matching grant — `comments:read` (`comments:pii` for commenter email/IP/agent), `posts:read`, `notifications:read`, `settings:read` — and arrive minimized (see §10.5); reserved core-namespace names are refused. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` and `dynamic_sidebar` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
 | `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `access: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. `req` carries `method`, `path`, `query`, `params`, `body`, plus `clientKey` (a stable HMAC of the caller's IP — rate-limit or dedup by caller without seeing the IP), `cookies` (the host's auth/session cookies always stripped), `headers` (only `x-portal-token` is forwarded) and, for a `multipart` route, `file` (`{ path, originalname, mimetype, size, filename }` of the saved upload, removed when the response finishes). With `auth`, `req.user` is `{ id, role, hasProfessionalMailbox, pluginCapabilities }`, plus `userEmail` and `userLogin` only when the plugin holds the **`users:read` grant** (they are personal data) — `pluginCapabilities` being the caller's capabilities in your own namespace (§12a); `null` for an anonymous request. `res` offers `status`, `set` (headers — `Set-Cookie`, CSP, HSTS, `Location`, `Content-Type`, `Refresh` and `Access-Control-*` are dropped by the host), `cookie` / `clearCookie` (renamed into your `wjp_<slug>_` namespace, path-confined to your routes, lifetime capped at 7 days, at most 20 per reply), `json`, `send`, `end`, and `sendPrivateMedia` (row above). |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
+| `wordjs.widgets.register(id, { name, description, fields, render })` | — | A sidebar widget; `render(settings)` may be async, capped at 2 s ([§10.2](#102-widgets-api)). |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
 | `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant, shown to the administrator as **administrator-level**). Password-reset and verification email reaches your provider only if the administrator allows your plugin by name in Settings → Account email; by default the host sends it with its built-in SMTP transport. |

@@ -2687,7 +2687,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         // register-* kinds (hooks/routes/shortcodes) were unbounded — a plugin could spam them to
         // exhaust host memory (accumulated shims) and flood the event loop. Cap per kind, and hard-kill
         // a worker that keeps spamming after being capped (event-loop-flood DoS).
-        const MAX_HOOKS = 500, MAX_ROUTES = 200, MAX_SHORTCODES = 200;
+        const MAX_HOOKS = 500, MAX_ROUTES = 200, MAX_SHORTCODES = 200, MAX_WIDGETS = 50;
         const MAX_PER_HOOK = 16; // cap callbacks on a SINGLE hook name (latency-amplification DoS)
         const hookNameCounts = new Map<string, number>();
         let registrationAttempts = 0;
@@ -2800,6 +2800,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         let providedMail = false;                                                   // did this plugin become the mail sender
         let mailProviderFn: ((m: any) => any) | null = null;                        // ...with this function, for its site only
         const invokeShortcode = (scId: string, payload: any) => rpcSend(pendingShortcode, { kind: 'invoke-shortcode', scId, ...payload });
+        // Sidebar widgets (wordjs.widgets.register): the renderer lives in the child, like a shortcode's.
+        const pendingWidget = new Map<number, any>();
+        const registeredWidgetIds: string[] = [];
+        const invokeWidget = (wId: string, settings: any) => rpcSend(pendingWidget, { kind: 'invoke-widget', wId, settings });
 
         const pendingMail = new Map<number, any>();
         const invokeMail = (mailMsg: any) => rpcSend(pendingMail, { kind: 'invoke-mail', msg: mailMsg });
@@ -3212,6 +3216,37 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 runWithContext(slug, () => addShortcode(msg.tag, shim));
             } else if (msg.kind === 'shortcode-reply') {
                 rpcSettle(pendingShortcode, msg, msg.value);
+            } else if (msg.kind === 'register-widget') {
+                if (registrationRejected(registeredWidgetIds, MAX_WIDGETS, 'widgets')) return;
+                const id = typeof msg.id === 'string' ? msg.id : '';
+                if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id) || typeof msg.wId !== 'string') {
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] widgets.register refused: the widget id must be letters, digits, '_' or '-' (64 at most).`);
+                    return;
+                }
+                // The sidebar renders inside a PUBLIC request, so the child's renderer is capped at 2 s like a
+                // shortcode's: a hung worker renders the widget empty, never holds the page.
+                const render = (settings: any) => {
+                    let timer: any;
+                    const capped = new Promise((resolve) => {
+                        timer = setTimeout(() => resolve(''), 2000);
+                        if (timer && timer.unref) timer.unref();
+                    });
+                    // A plugin's markup lands in every page's sidebar, so it is sanitized HERE with the post-content
+                    // sanitizer (core/formatting) — raw-HTML output is never a plugin's to emit (hook-access RAW_HTML).
+                    return Promise.race([invokeWidget(msg.wId, settings), capped])
+                        .then((v) => require('./formatting').sanitizeContent(v == null ? '' : String(v)), () => '')
+                        .finally(() => clearTimeout(timer));
+                };
+                // Registered IN the plugin's context: core/widgets records it as this plugin's, on this site,
+                // and refuses an id core or another plugin already holds.
+                const registered = runWithContext(slug, () => require('./widgets').registerWidget(id, String(msg.name || id).slice(0, 100), {
+                    description: String(msg.description || '').slice(0, 300),
+                    fields: Array.isArray(msg.fields) ? msg.fields.slice(0, 30) : undefined,
+                    render,
+                }));
+                if (registered) registeredWidgetIds.push(id);
+            } else if (msg.kind === 'widget-reply') {
+                rpcSettle(pendingWidget, msg, msg.value);
             } else if (msg.kind === 'register-mail-provider') {
                 // Becoming the host-wide mail sender is host-level hijack potential, so it requires an
                 // explicit admin grant of the email:provider capability (Android-style, default-deny).
@@ -3306,6 +3341,8 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             // tried to squat (refused at add time, but still tracked here) is owned by core/another plugin,
             // so removeShortcode safely skips it instead of deleting a victim's shortcode from host context.
             for (const tag of registeredShortcodes) { try { runWithContext(slug, () => removeShortcode(tag)); } catch { /* */ } }
+            // Same owner guard for widgets: only this plugin's own registrations on this site are removed.
+            for (const id of registeredWidgetIds) { try { runWithContext(slug, () => require('./widgets').unregisterWidget(id)); } catch { /* */ } }
             if (providedMail) { try { require('./mail-provider').clearMailProvider(mailProviderFn || undefined); } catch { /* */ } }
             try { require('./notifications').unregisterPluginTransports(slug); } catch { /* */ }
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }

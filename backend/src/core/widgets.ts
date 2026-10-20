@@ -7,9 +7,28 @@ const crypto = require('crypto');
 const { getOption, updateOption } = require('./options');
 const { applyFilters } = require('./hooks');
 const { escHtml, escAttr } = require('./formatting');
+const log = require('./module-logger').moduleLogger('core/widgets');
 
-// Registered widgets
+// Registered widgets. CORE widgets (registered with no plugin in context) are global; a PLUGIN's widgets
+// (an isolated plugin's, through the wordjs.widgets bridge — core/plugin-isolate) belong to the site whose
+// worker registered them and to that plugin: another plugin cannot replace or remove them, and none can
+// replace a core widget. Same ownership model as core/shortcodes.
 const registeredWidgets = new Map();
+const siteContext = require('./site-context');
+const siteWidgets = new Map<number, Map<string, any>>();
+
+function pluginWidgetTable(create: boolean): Map<string, any> | undefined {
+    const siteId = siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID;
+    let t = siteWidgets.get(siteId);
+    if (!t && create) { t = new Map(); siteWidgets.set(siteId, t); }
+    return t;
+}
+
+// The effective plugin (null = core) of the current call, resolved lazily (plugin-context loads later).
+function currentOwner(): string | null {
+    try { return require('./plugin-context').getEffectivePlugin() || null; }
+    catch { return null; }
+}
 
 // Registered sidebars
 const registeredSidebars = new Map();
@@ -26,6 +45,8 @@ class Widget {
     form: any;
     update: any;
     fields: WidgetField[] | null;
+    /** The plugin that registered it (null for a core widget). */
+    owner: string | null = null;
 
     constructor(id: string, name: string, options: Record<string, any> = {}) {
         this.id = id;
@@ -120,13 +141,25 @@ function sanitizeWidgetSettings(widget: any, input: unknown): { ok: true; settin
  */
 function registerWidget(id: string, name: string, options: Record<string, any> = {}) {
     const widget = new Widget(id, name, options);
-    registeredWidgets.set(id, widget);
+    const owner = currentOwner();
+    if (owner === null) {
+        registeredWidgets.set(id, widget);
+        return widget;
+    }
+    const existing = getWidget(id);
+    if (existing && existing.owner !== owner) {
+        log.warn(`[Security Block] Plugin '${owner}' tried to override widget '${id}' owned by '${existing.owner ?? 'core'}' — refused.`);
+        return null;
+    }
+    widget.owner = owner;
+    pluginWidgetTable(true)!.set(id, widget);
     return widget;
 }
 
-/** A registered widget by id (own entries only). */
+/** A registered widget by id: a core one, else one of the current site's plugin widgets. */
 function getWidget(id: string) {
-    return registeredWidgets.get(String(id)) || null;
+    const key = String(id);
+    return registeredWidgets.get(key) || pluginWidgetTable(false)?.get(key) || null;
 }
 
 /**
@@ -134,14 +167,22 @@ function getWidget(id: string) {
  * Equivalent to unregister_widget()
  */
 function unregisterWidget(id: string) {
-    return registeredWidgets.delete(id);
+    const owner = currentOwner();
+    if (owner === null) return registeredWidgets.delete(id);
+    const table = pluginWidgetTable(false);
+    const existing = table?.get(id);
+    if (!existing || existing.owner !== owner) return false; // never another owner's widget, never core's
+    return table!.delete(id);
 }
 
 /**
- * Get all registered widgets
+ * Get all registered widgets: the core ones and the current site's plugin widgets.
  */
 function getWidgets() {
-    return Array.from(registeredWidgets.values());
+    const out = Array.from(registeredWidgets.values());
+    const site = pluginWidgetTable(false);
+    if (site) for (const [id, w] of site) if (!registeredWidgets.has(id)) out.push(w);
+    return out;
 }
 
 /**
@@ -249,7 +290,7 @@ async function setWidgetSettings(widgetId: string, instanceId: string, settings:
 function parseInstanceKey(instanceKey: string): { widgetId: string; instanceId: string } | null {
     if (typeof instanceKey !== 'string' || !instanceKey) return null;
     let best: string | null = null;
-    for (const id of registeredWidgets.keys()) {
+    for (const id of getWidgets().map((w: any) => w.id)) {
         if (instanceKey === id || instanceKey.startsWith(`${id}-`)) {
             if (best === null || id.length > best.length) best = id;
         }
@@ -278,7 +319,7 @@ async function renderSidebar(sidebarId: string) {
         const parsed = parseInstanceKey(instanceKey);
         if (!parsed) continue;
         const { widgetId, instanceId } = parsed;
-        const widget = registeredWidgets.get(widgetId);
+        const widget = getWidget(widgetId);
 
         if (!widget) continue;
 
