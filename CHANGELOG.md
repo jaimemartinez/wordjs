@@ -830,6 +830,8 @@ the boot error links there too.
 - Dependency updates: next 16.4.2, react 19.3.1, @anthropic-ai/sdk 0.135, @modelcontextprotocol/sdk 1.32,
   zod 4.6, nodemailer 10.1, smtp-server 3.20, mailparser 3.10, mysql2 3.24.6, sql.js 1.15,
   sanitize-html 2.18.1, dotenv 18.0.8, express-rate-limit 8.7.1, puppeteer-core 25.14 and patch updates.
+- file-type 22 (upload MIME detection; its single entry replaces the `file-type/core` subpath). The unused
+  `dnsbl` dependency is removed: the mail-server plugin has done its own DNSBL lookups for a while.
 - **Password-reset and verification email has its own transport.** WordJS now sends these links itself
   through an SMTP relay you configure in **Settings → Account email** (host, port, TLS mode, credentials,
   test message). A mail provider plugin carries them only if an administrator allows that plugin by name
