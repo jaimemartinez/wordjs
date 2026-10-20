@@ -166,7 +166,7 @@ function invalidateDeclarations(): void {
 
 /** The declarations of the ACTIVE plugins — what the user screen renders and what a write may name. */
 async function activeDeclarations(): Promise<AccountCapabilityDeclaration[]> {
-    let active: string[] = [];
+    let active: string[];
     try { active = await require('./plugins').getActivePlugins(); } catch { active = []; }
     const on = new Set(Array.isArray(active) ? active : []);
     return installedDeclarations().filter((d) => on.has(d.plugin));
@@ -207,7 +207,7 @@ function hasAccountCapability(user: any, slug: string): boolean {
  */
 function accountCapabilitiesFor(user: any, pluginId: string): string[] {
     if (!user || !pluginId) return [];
-    let installed: string[] = [];
+    let installed: string[];
     try { installed = require('./plugins').listInstalledPluginIdsCached(); } catch { installed = []; }
     const others = installed.filter((id) => id !== pluginId);
     return grantedAccountCapabilities(user).filter((slug) => pluginRoles.pluginOwnsCapability(pluginId, slug, others));
@@ -236,7 +236,7 @@ async function planAccountCapabilityWrite(target: any, input: any): Promise<{ ch
     }
     const declared = new Set((await activeDeclarations()).map((d) => d.slug));
     // DEPRECATED — the capability an outdated, active mail plugin still writes (core/legacy-account-flags.ts).
-    let active: string[] = [];
+    let active: string[];
     try { active = await require('./plugins').getActivePlugins(); } catch { active = []; }
     for (const slug of require('./legacy-account-flags').legacyWritableCapabilities(active)) declared.add(slug);
     const current = new Set(target ? grantedAccountCapabilities(target) : []);
