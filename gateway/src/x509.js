@@ -154,19 +154,24 @@ function generalName(host) {
     const family = net.isIP(h);
     if (family === 4) return tlv(0x87, Buffer.from(h.split('.').map(Number)));
     if (family === 6) return tlv(0x87, ipv6Bytes(h));
-    if (!/^[A-Za-z0-9*]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$/.test(h)) {
-        throw new Error(`Invalid subjectAltName ${JSON.stringify(h)}`);
-    }
-    return tlv(0x82, Buffer.from(h, 'ascii'));
+    // A DNS name, label by label (no nested quantifiers): 1-63 letters, digits or inner hyphens each, a
+    // leading `*` label allowed, 253 characters at most, one optional trailing dot.
+    const name = h.endsWith('.') ? h.slice(0, -1) : h;
+    const labels = name.split('.');
+    const ok = name.length > 0 && name.length <= 253 && labels.every((label, i) =>
+        (i === 0 && label === '*') || /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label));
+    if (!ok) throw new Error(`Invalid subjectAltName ${JSON.stringify(h)}`);
+    return tlv(0x82, Buffer.from(name, 'ascii'));
 }
 
 function ipv6Bytes(addr) {
     let a = addr.toLowerCase();
     if (a.includes('%')) throw new Error(`Invalid subjectAltName ${JSON.stringify(addr)}: zone ids are not allowed`);
-    const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(a);
-    if (v4) {
-        const p = v4[1].split('.').map(Number);
-        a = a.slice(0, -v4[1].length) + ((p[0] << 8) | p[1]).toString(16) + ':' + ((p[2] << 8) | p[3]).toString(16);
+    // An embedded IPv4 tail (::ffff:10.0.0.5) becomes two hex groups. (net.isIP already validated it.)
+    const v4Tail = a.slice(a.lastIndexOf(':') + 1);
+    if (v4Tail.includes('.')) {
+        const p = v4Tail.split('.').map(Number);
+        a = a.slice(0, a.length - v4Tail.length) + ((p[0] << 8) | p[1]).toString(16) + ':' + ((p[2] << 8) | p[3]).toString(16);
     }
     const halves = a.split('::');
     if (halves.length > 2) throw new Error(`Invalid IPv6 address ${addr}`);

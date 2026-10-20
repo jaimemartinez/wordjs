@@ -112,13 +112,20 @@ describe('cert-manager stores certificates only under ssl/live', () => {
     const CANARY = path.join(BACKEND_ROOT, 'wordjs-path-injection-canary');
 
     /** A client stub that issues instantly — the I/O boundary, nothing else. */
+    const x509 = require('../core/x509');
+    const stubCa = x509.generateRsaKeyPair(2048);
+    let lastCsr: any = null;
     const stubClient = () => ({
         verifyChallenge: async () => { /* advisory */ },
         completeChallenge: async () => { /* ok */ },
         waitForValidStatus: async () => { /* ok */ },
         getOrder: async ({ url }: any) => ({ url, finalize: `${url}/finalize` }),
-        finalizeOrder: async () => ({ url: 'https://ca.example/order/1' }),
-        getCertificate: async () => '-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n',
+        finalizeOrder: async (_o: any, csr: any) => { lastCsr = csr; return { url: 'https://ca.example/order/1' }; },
+        // A real certificate for the CSR's key (cert-manager refuses a chain that is not).
+        getCertificate: async () => x509.createCertificate({
+            subject: [['CN', 'unit-test-contained.invalid']], issuer: [['CN', 'Stub CA']], publicKey: x509.parseCsr(lastCsr).publicKey,
+            signingKey: stubCa.privateKey, notAfter: new Date(Date.now() + 864e5), altNames: ['unit-test-contained.invalid'],
+        }),
         createOrder: async () => ({ url: 'https://ca.example/order/1' }),
         getAuthorizations: async () => ([{ url: 'https://ca.example/authz/1', challenges: [{ type: 'dns-01', url: 'https://ca.example/chal/1', token: 't' }] }]),
         getChallengeKeyAuthorization: async () => 'txt-value',

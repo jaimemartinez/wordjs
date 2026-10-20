@@ -273,7 +273,7 @@ describe('one certificate for several names', () => {
         certManager.initClient = async () => { /* no network */ };
         certManager.writeChallengeFile = async (token: string) => { calls.push(['writeChallengeFile', token]); };
         certManager.pushCertToGateway = async () => { calls.push(['push']); };
-        acme.crypto.createCsr = async (opts: any) => { calls.push(['createCsr', opts]); return [Buffer.from('key'), Buffer.from('csr')]; };
+        acme.crypto.createCsr = async (opts: any) => { calls.push(['createCsr', opts]); return saved.createCsr(opts); };
     });
     afterEach(() => {
         for (const k of Object.keys(saved)) {
@@ -282,6 +282,7 @@ describe('one certificate for several names', () => {
         for (const d of [A, B]) fs.rmSync(path.join(LIVE, d), { recursive: true, force: true });
     });
 
+    let lastCsr: any = null;
     function stubClient(authzs: any[]) {
         return {
             createOrder: async (o: any) => { calls.push(['createOrder', o.identifiers.map((i: any) => i.value)]); return { url: 'https://ca.example/order/1' }; },
@@ -291,8 +292,9 @@ describe('one certificate for several names', () => {
             completeChallenge: async (c: any) => { calls.push(['complete', c.token]); },
             waitForValidStatus: async (c: any) => { calls.push(['wait', c.token]); },
             getOrder: async ({ url }: any) => ({ url, finalize: `${url}/finalize` }),
-            finalizeOrder: async (o: any) => o,
-            getCertificate: async () => '-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n',
+            finalizeOrder: async (o: any, csr: any) => { lastCsr = csr; return o; },
+            // A real certificate for the CSR's key: cert-manager refuses a chain that is not.
+            getCertificate: async () => certificate(A, { pub: x509.parseCsr(lastCsr).publicKey }, issuer, [A, B]).pem,
         };
     }
 

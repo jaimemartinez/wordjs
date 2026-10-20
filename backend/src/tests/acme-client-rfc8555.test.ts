@@ -348,6 +348,32 @@ describe('core/acme-client against a strict RFC 8555 CA, through cert-manager', 
         assert.strictEqual(pushed.length, 0);
     });
 
+    it('a certificate for a key other than ours is never written', async () => {
+        certManager.accountKeyPath = path.join(tmp, 'fresh-account.key');
+        const step1 = await certManager.startDNSChallenge('dns-e2e.example.test', 'ops@example.test', false);
+        ca.state.published.set('dns-e2e.example.test', step1.txtValue);
+        fs.rmSync(path.join(LIVE, 'dns-e2e.example.test'), { recursive: true, force: true });
+        const realCreateCsr = acme.crypto.createCsr;
+        // Sign the CSR with one key and hand cert-manager ANOTHER as "its" key: the CA's certificate then
+        // belongs to a key cert-manager does not hold.
+        acme.crypto.createCsr = async (opts: any) => { const [, csr] = await realCreateCsr(opts); const [other] = await realCreateCsr(opts); return [other, csr]; };
+        try {
+            await assert.rejects(certManager.finishDNSChallenge(step1, 'ops@example.test', false), /certificate for a different key/);
+        } finally {
+            acme.crypto.createCsr = realCreateCsr;
+        }
+        assert.ok(!fs.existsSync(path.join(LIVE, 'dns-e2e.example.test', 'fullchain.pem')), 'nothing was written');
+        assert.strictEqual(pushed.length, 0);
+    });
+
+    it('a two-step flow cannot name a directory this site never uses', async () => {
+        const step1 = await certManager.startDNSChallenge('dns-e2e.example.test', 'ops@example.test', false);
+        const requestsBefore = ca.state.requests.length;
+        await assert.rejects(certManager.finishDNSChallenge({ ...step1, directoryUrl: 'https://169.254.169.254/latest/meta-data/' }, 'ops@example.test', false),
+            /names a certificate authority this site does not use/);
+        assert.strictEqual(ca.state.requests.length, requestsBefore);
+    });
+
     it('a challenge the CA does not know maps to the "start again" explanation', async () => {
         certManager.accountKeyPath = path.join(tmp, 'fresh-account.key');
         const step1 = await certManager.startDNSChallenge('dns-e2e.example.test', 'ops@example.test', false);
@@ -365,6 +391,37 @@ describe('core/acme-client unit behaviour', () => {
         const tp = b64url(crypto.createHash('sha256').update(`{"e":"${jwk.e}","kty":"RSA","n":"${jwk.n}"}`).digest());
         assert.strictEqual(await client.getChallengeKeyAuthorization({ type: 'http-01', token: 'tok' }), `tok.${tp}`);
         assert.strictEqual(await client.getChallengeKeyAuthorization({ type: 'dns-01', token: 'tok' }), b64url(crypto.createHash('sha256').update(`tok.${tp}`).digest()));
+    });
+
+    it('the directory must be https, or http on loopback only', () => {
+        const key = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+        for (const bad of ['http://10.0.0.5/dir', 'http://ca.example/dir', 'ftp://ca.example/dir', 'https://user:pw@ca.example/dir', 'not a url']) {
+            assert.throws(() => new acme.Client({ directoryUrl: bad, accountKey: key }), /ACME directory/, bad);
+        }
+        for (const good of ['https://acme-v02.api.letsencrypt.org/directory', 'http://127.0.0.1:14000/dir', 'http://localhost:14000/dir']) {
+            assert.doesNotThrow(() => new acme.Client({ directoryUrl: good, accountKey: key }), good);
+        }
+    });
+
+    it('a URL the CA answers with must stay on the directory\'s origin — nothing else is ever requested', async () => {
+        const seen: string[] = [];
+        const evil = http.createServer((req: any, res: any) => { seen.push(req.url); res.writeHead(200, { 'Replay-Nonce': 'n' }); res.end('{}'); });
+        await new Promise<void>((r) => evil.listen(0, '127.0.0.1', () => r()));
+        const internal = `http://localhost:${evil.address().port}`;
+        const dir = http.createServer((_req: any, res: any) => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ newNonce: `${internal}/nonce`, newAccount: `${internal}/acct`, newOrder: `${internal}/order` }));
+        });
+        await new Promise<void>((r) => dir.listen(0, '127.0.0.1', () => r()));
+        try {
+            const key = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+            const client = new acme.Client({ directoryUrl: `http://127.0.0.1:${dir.address().port}/dir`, accountKey: key });
+            await assert.rejects(client.createAccount({ termsOfServiceAgreed: true }), /outside its own origin/);
+            assert.deepStrictEqual(seen, [], 'the client requested a URL on another origin');
+        } finally {
+            await new Promise<void>((r) => evil.close(() => r()));
+            await new Promise<void>((r) => dir.close(() => r()));
+        }
     });
 
     it('refuses account keys it cannot sign with', () => {

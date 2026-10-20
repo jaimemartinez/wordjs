@@ -68,6 +68,28 @@ function parseRetryAfter(value: string | null): number | null {
 
 const PENDING = new Set(['pending', 'processing']);
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * The CA's directory URL, refused unless it is https — or plain http on the loopback interface (a local
+ * test CA such as Pebble). Everything this client ever requests is then pinned to that ORIGIN.
+ */
+function directoryOrigin(directoryUrl: string): string {
+    let u: URL;
+    try { u = new URL(directoryUrl); } catch { throw new Error(`Invalid ACME directory URL ${JSON.stringify(String(directoryUrl))}`); }
+    if (u.username || u.password) throw new Error('The ACME directory URL must not carry credentials');
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname))) {
+        throw new Error(`The ACME directory must be served over https (got ${u.protocol}//${u.host})`);
+    }
+    return u.origin;
+}
+
+/** A DNS name as an ACME identifier carries it: LDH labels, an optional leading `*.`, nothing else. */
+function isDnsName(name: string): boolean {
+    const n = String(name).replace(/^\*\./, '');
+    return n.length > 0 && n.length <= 253 && n.split('.').every((l) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(l));
+}
+
 interface ClientOptions {
     directoryUrl: string;
     accountKey: string | Buffer;
@@ -79,6 +101,7 @@ interface ClientOptions {
 
 class Client {
     directoryUrl: string;
+    origin: string;
     backoffAttempts: number;
     backoffMin: number;
     backoffMax: number;
@@ -92,6 +115,7 @@ class Client {
 
     constructor({ directoryUrl, accountKey, backoffAttempts = 10, backoffMin = 5000, backoffMax = 30000, timeout = 10000 }: ClientOptions) {
         if (!directoryUrl) throw new Error('ACME directoryUrl is required');
+        this.origin = directoryOrigin(directoryUrl);
         this.directoryUrl = directoryUrl;
         this.key = nodeCrypto.createPrivateKey(accountKey);
         const pub = nodeCrypto.createPublicKey(this.key).export({ format: 'jwk' });
@@ -112,8 +136,20 @@ class Client {
 
     // ─── transport ───────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Every URL the CA hands back (newNonce, newAccount, orders, authorizations, challenges, finalize,
+     * certificate) must be on the directory's own origin. A directory answer can therefore never steer
+     * this server into requesting an internal address on its behalf.
+     */
+    private caUrl(url: string): string {
+        let u: URL;
+        try { u = new URL(url); } catch { throw new AcmeError(`The CA answered with an invalid URL ${JSON.stringify(String(url))}`); }
+        if (u.origin !== this.origin) throw new AcmeError(`The CA answered with a URL outside its own origin (${u.origin}, expected ${this.origin})`);
+        return u.href;
+    }
+
     private async http(url: string, init: any): Promise<Response> {
-        const res = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(this.timeout) });
+        const res = await fetch(this.caUrl(url), { ...init, redirect: 'manual', signal: AbortSignal.timeout(this.timeout) });
         const nonce = res.headers.get('replay-nonce');
         if (nonce) this.nonce = nonce;
         return res;
@@ -247,8 +283,15 @@ class Client {
     async verifyChallenge(authz: { identifier: { value: string } }, challenge: { type: string; token: string }) {
         const expected = await this.getChallengeKeyAuthorization(challenge);
         const name = authz.identifier.value;
+        if (!isDnsName(name)) throw new Error(`Not a DNS identifier: ${JSON.stringify(String(name))}`);
         if (challenge.type === 'http-01') {
-            const res = await fetch(`http://${name}/.well-known/acme-challenge/${challenge.token}`, { signal: AbortSignal.timeout(this.timeout) });
+            // The identifier is a validated DNS name and the token is base64url (RFC 8555 §8.1); the URL is
+            // assembled from parts, so neither can add a port, a userinfo or a path.
+            if (!/^[A-Za-z0-9_-]+$/.test(String(challenge.token))) throw new Error('The CA sent an unusable challenge token');
+            const url = new URL('http://localhost/');
+            url.hostname = name;
+            url.pathname = `/.well-known/acme-challenge/${challenge.token}`;
+            const res = await fetch(url.href, { signal: AbortSignal.timeout(this.timeout), redirect: 'manual' });
             const body = (await res.text()).replace(/\s+$/, '');
             if (body !== expected) throw new Error(`Authorization not found in HTTP response from ${name}`);
             return true;

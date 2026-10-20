@@ -21,6 +21,17 @@ const path = require('path');
 const fs = require('fs');
 
 const certManager = require('../core/cert-manager');
+const x509 = require('../core/x509');
+
+// What a CA hands back for a CSR: a certificate for the CSR's own key naming `names`. cert-manager checks
+// the chain against the key it generated before writing anything, so a placeholder PEM is refused.
+const stubCa = x509.generateRsaKeyPair(2048);
+function issueFor(csr: any, names: string[]): string {
+    return x509.createCertificate({
+        subject: [['CN', names[0]]], issuer: [['CN', 'Stub CA']], publicKey: x509.parseCsr(csr).publicKey,
+        signingKey: stubCa.privateKey, notAfter: new Date(Date.now() + 864e5), altNames: names,
+    });
+}
 
 const b64url = (buf: Buffer) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 
@@ -78,6 +89,7 @@ test('resolveTxtValues does not follow CNAMEs beyond the depth cap (no infinite 
 test('finishDNSChallenge treats local pre-verify as advisory and AWAITS the gateway push', async () => {
     const calls: string[] = [];
     const domain = 'unit-test-finish.invalid';
+    let lastCsr: any = null;
     const origInit = certManager.initClient;
     const origClient = certManager.client;
     const origUpdate = certManager.updateSSLConfig;
@@ -98,8 +110,8 @@ test('finishDNSChallenge treats local pre-verify as advisory and AWAITS the gate
             // The order is RE-FETCHED from its URL before finalizing — acme-client needs the CA's
             // `finalize` URL, which the order URL alone does not carry.
             getOrder: async ({ url }: any) => { calls.push('getOrder'); return { url, finalize: `${url}/finalize` }; },
-            finalizeOrder: async () => { calls.push('finalizeOrder'); return { url: 'https://ca.example/order/1' }; },
-            getCertificate: async () => { calls.push('getCertificate'); return '-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n'; },
+            finalizeOrder: async (_o: any, csr: any) => { calls.push('finalizeOrder'); lastCsr = csr; return { url: 'https://ca.example/order/1' }; },
+            getCertificate: async () => { calls.push('getCertificate'); return issueFor(lastCsr, [domain]); },
         };
         const res = await certManager.finishDNSChallenge({
             domain,
@@ -277,6 +289,7 @@ test('an already-valid authorization is not treated as a missing challenge', asy
 test('finishDNSChallenge finalizes directly when the authorization is already valid', async () => {
     const domain = 'unit-test-alreadyvalid.invalid';
     const calls: string[] = [];
+    let lastCsr: any = null;
     const origInit = certManager.initClient;
     const origClient = certManager.client;
     const origUpdate = certManager.updateSSLConfig;
@@ -287,8 +300,8 @@ test('finishDNSChallenge finalizes directly when the authorization is already va
             completeChallenge: async () => { calls.push('completeChallenge'); },
             waitForValidStatus: async () => { calls.push('waitForValidStatus'); },
             getOrder: async ({ url }: any) => { calls.push('getOrder'); return { url, finalize: `${url}/finalize` }; },
-            finalizeOrder: async (o: any) => { calls.push('finalizeOrder'); return { url: o.url }; },
-            getCertificate: async () => { calls.push('getCertificate'); return '-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n'; },
+            finalizeOrder: async (o: any, csr: any) => { calls.push('finalizeOrder'); lastCsr = csr; return { url: o.url }; },
+            getCertificate: async () => { calls.push('getCertificate'); return issueFor(lastCsr, [domain]); },
         };
         const res = await certManager.finishDNSChallenge({
             domain, alreadyValid: true, challenge: null,

@@ -147,6 +147,26 @@ function gatewayError(status: number, text: string): Error {
 }
 
 /**
+ * The chain a CA returned, checked before a byte of it is written: it must parse as certificates, its
+ * leaf must belong to the private key WE generated for the CSR, and it must cover every name that was
+ * ordered. What is written is the chain as OpenSSL re-encodes it, not the raw download.
+ */
+function verifiedChain(keyPem: string | Buffer, chainPem: string | Buffer, names: string[]): string {
+    const crypto = require('crypto');
+    const blocks = String(chainPem).match(/-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+?-----END CERTIFICATE-----/g) || [];
+    if (blocks.length === 0) throw new Error('The certificate authority returned no certificate.');
+    const certs = blocks.map((b: string) => new crypto.X509Certificate(b));
+    if (!certs[0].checkPrivateKey(crypto.createPrivateKey(keyPem))) {
+        throw new Error('The certificate authority returned a certificate for a different key.');
+    }
+    for (const name of names) {
+        const probe = name.startsWith('*.') ? `wildcard-probe.${name.slice(2)}` : name;
+        if (!certs[0].checkHost(probe, { wildcards: true })) throw new Error(`The issued certificate does not cover ${name}.`);
+    }
+    return certs.map((c: any) => c.toString()).join('');
+}
+
+/**
  * The names ONE certificate order covers (multi-identifier ACME: the main address and its www/apex twin
  * can share one certificate). Each name must be storable as a certificate directory name — the same gate
  * the single-name flow always had, applied BEFORE any CA work — and the first one names the directory.
@@ -184,6 +204,12 @@ class CertManager {
         // to staging too. A restart then reset it back to production via the constructor. That is how a
         // two-step DNS-01 flow ended up starting at one CA and finishing at the other, where the
         // challenge URL does not exist — boulder answers "No such challenge".
+        // The override is the directory a two-step DNS flow was minted at, round-tripped through the
+        // browser — request input. It can only name a CA this method itself would have chosen.
+        const known = [acme.directory.letsencrypt.production, acme.directory.letsencrypt.staging];
+        if (directoryUrlOverride && !known.includes(directoryUrlOverride)) {
+            throw new Error('This challenge names a certificate authority this site does not use. Start the certificate request again.');
+        }
         this.directoryUrl = directoryUrlOverride
             || (useStaging ? acme.directory.letsencrypt.staging : acme.directory.letsencrypt.production);
 
@@ -347,7 +373,7 @@ class CertManager {
 
             const finalized = await this.finalizeOrderByUrl(orderData.orderUrl, csr);
 
-            const cert = await this.client.getCertificate(finalized);
+            const cert = verifiedChain(key, await this.client.getCertificate(finalized), domains);
             log.info('[CertManager] Certificate downloaded.');
 
             // 5. Save locally (backup/reference) — into the directory resolved and proved contained
@@ -479,8 +505,8 @@ class CertManager {
             // Finalize the order
             const finalized = await this.finalizeOrderByUrl(step1Data.orderUrl, csr);
 
-            // Get certificate
-            const cert = await this.client.getCertificate(finalized);
+            // Get certificate — checked against our key and the domain before anything is written
+            const cert = verifiedChain(key, await this.client.getCertificate(finalized), [step1Data.domain]);
 
             // Save to files — `domainDir` is the value resolved and proved contained at the top of
             // this method, never a fresh join of step1Data.domain.
