@@ -57,7 +57,9 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                 domains: parseDomains(),
                 staging: cfg.staging,
                 renewBeforeDays: Number(cfg.renewBeforeDays) || 30,
-                challengeType: 'http-01'
+                challengeType: 'http-01',
+                // Sent every time: leaving it out used to drop a port set earlier.
+                http01Port: cfg.http01Port || null
             });
             if (res?.error) { await alert('Could not save: ' + res.error); }
             else { await alert('Auto-renewal settings saved.'); await load(); }
@@ -168,6 +170,19 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     />
                     <p className="text-xs text-gray-500 ml-1">Comma-separated. The first domain is the certificate&apos;s primary name.</p>
                 </div>
+                <div className="space-y-2">
+                    <label htmlFor="acme-http01-port" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Port 80 listener</label>
+                    <input
+                        id="acme-http01-port"
+                        type="number" min={1} max={65535}
+                        value={cfg.http01Port ?? ''}
+                        onChange={e => setCfg({ ...cfg, http01Port: e.target.value === '' ? null : Number(e.target.value) })}
+                        placeholder="off"
+                        data-testid="acme-http01-port"
+                        className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all font-mono text-gray-800 dark:text-gray-200"
+                    />
+                    <p className="text-xs text-gray-500 ml-1">Usually 80. Answers the challenge and redirects everything else to HTTPS. Empty = off. Applies within seconds, no restart.</p>
+                </div>
             </div>
 
             {/* Staging */}
@@ -183,8 +198,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     Auto-renewal runs in the <span className="font-semibold">split (gateway) deployment</span> and uses the
                     <span className="font-semibold"> HTTP-01</span> challenge, so
                     <span className="font-mono"> http://&lt;domain&gt;/.well-known/acme-challenge/</span> must be publicly reachable on port 80.
-                    For a host serving HTTPS on 443, add <span className="font-mono">&quot;acme&quot;: {'{'} &quot;http01Port&quot;: 80 {'}'}</span> to
-                    <span className="font-mono"> backend/wordjs-config.json</span> (binds a redirect + challenge listener — restart the gateway to apply),
+                    For a host serving HTTPS on 443, set <span className="font-semibold">Port 80 listener</span> above to 80 (WordJS binds a challenge + redirect listener there),
                     or front the site with a reverse proxy. Otherwise use the manual <span className="font-semibold">DNS</span> or <span className="font-semibold">custom upload</span> flows above.
                 </p>
             </div>

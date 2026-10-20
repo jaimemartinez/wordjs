@@ -199,25 +199,51 @@ async function ensureSSLCerts(config) {
 }
 
 // Optional: bind a plain-HTTP listener (default OFF) that answers ACME HTTP-01 challenges and
-// 301-redirects everything else to HTTPS. Enable by setting acme.http01Port (e.g. 80) in
-// gateway-config.json. Needed because Let's Encrypt validates HTTP-01 on port 80, which the HTTPS
+// 301-redirects everything else to HTTPS. Enable it in the admin panel (Security → Auto-renewal →
+// port 80 listener), or set acme.http01Port (e.g. 80) in gateway-config.json. Needed because Let's Encrypt validates HTTP-01 on port 80, which the HTTPS
 // gateway does not otherwise bind. Reads challenge tokens straight from the backend webroot (where
 // cert-manager writes them). Started in the primary only, so there is exactly one :80 listener.
-function maybeStartAcmeHttpListener() {
-    // The admin UI persists the acme block to the BACKEND config (backend/wordjs-config.json), not
-    // gateway-config.json — so consult it as the source of truth (matching monolith.js). Read once at
-    // boot; setting http01Port via the UI therefore needs a gateway restart to take effect.
+const BACKEND_CONFIG_PATH = path.resolve(__dirname, '../../backend/wordjs-config.json');
+
+/** The acme block in force: gateway-config.json's when it names a port, else the backend config's. */
+function readAcmeConfig() {
     let acme = config.acme || {};
     if (!acme.http01Port) {
         try {
-            const beCfgPath = path.resolve(__dirname, '../../backend/wordjs-config.json');
-            if (fs.existsSync(beCfgPath)) {
-                const beCfg = JSON.parse(fs.readFileSync(beCfgPath, 'utf8'));
+            if (fs.existsSync(BACKEND_CONFIG_PATH)) {
+                const beCfg = JSON.parse(fs.readFileSync(BACKEND_CONFIG_PATH, 'utf8'));
                 if (beCfg.acme && beCfg.acme.http01Port) acme = beCfg.acme;
             }
         } catch (e) { /* ignore — listener stays off */ }
     }
+    return acme;
+}
+
+let acmeListener = { port: 0, srv: null };
+
+/**
+ * Bind (or re-bind, or stop) the ACME listener to the port the config names now. The admin UI
+ * (Security → Auto-renewal) writes the acme block to the BACKEND config (backend/wordjs-config.json),
+ * not gateway-config.json, so that file is watched: a port set, changed or cleared in the panel applies
+ * within seconds, without restarting the gateway (zero config). Same host only: a gateway on another
+ * machine (separate mode) reads its own gateway-config.json `acme` block, at boot.
+ */
+function maybeStartAcmeHttpListener() {
+    applyAcmeHttpListener();
+    try {
+        fs.watchFile(BACKEND_CONFIG_PATH, { interval: 3000 }, () => applyAcmeHttpListener());
+    } catch (e) { /* no backend config on this host */ }
+}
+
+function applyAcmeHttpListener() {
+    const acme = readAcmeConfig();
     const port = Number(acme.http01Port || 0);
+    if (port === acmeListener.port) return;
+    if (acmeListener.srv) {
+        try { acmeListener.srv.close(); } catch (e) { /* already closed */ }
+        logger.info(`[Gateway] ACME HTTP-01 listener on :${acmeListener.port} stopped`);
+    }
+    acmeListener = { port, srv: null };
     if (!port) return;
     const http = require('http');
     // Default webroot = the backend's public dir (../../backend/public relative to gateway/src).
@@ -257,6 +283,7 @@ function maybeStartAcmeHttpListener() {
     });
     srv.on('error', (e) => logger.error(`[Gateway] ACME HTTP-01 listener on :${port} failed: ${e.message}`));
     srv.listen(port, () => logger.info(`[Gateway] ACME HTTP-01 + HTTPS-redirect listener on :${port}`));
+    acmeListener.srv = srv;
 }
 
 if (cluster.isPrimary) {

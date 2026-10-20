@@ -48,6 +48,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // A network administrator added or removed from the panel: {login}. Also in the network's own log.
     NETWORK_ADMIN_ADD: 'network.admin.add',
     NETWORK_ADMIN_REMOVE: 'network.admin.remove',
+    // Security → Server (routes/server-settings.ts): {fields, trustProxy?, logLevel?} — the reverse-proxy
+    // trust and the log level, written to wordjs-config.json and applied by a restart.
+    SERVER_SETTINGS_UPDATE: 'system.server.update',
     // A new password stored through a profile write (routes/users.ts PUT /users/me and PUT /users/:id).
     // Kept under `auth.` rather than as a `user.update` field, so "who changed whose password" is one query.
     PASSWORD_CHANGE: 'auth.password.change',

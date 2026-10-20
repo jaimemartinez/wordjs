@@ -658,8 +658,8 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 | `WORDJS_MEDIA_KEEP_LOCAL_COPY` | `mediaStorage.keepLocalCopy` | — | env | Keep new uploads on disk as well as in the bucket. |
 | — | `multisite.enabled` | `false` | — | A network of sites. Turn it on in **Settings → Network** (which restarts every node by itself), or with `npm run network -- enable --admin <login>` and a restart; never by hand. Needs the `sqlite-native`, `postgres` or `mysql` driver ([multisite.md](multisite.md)). |
 | `METRICS_TOKEN` | `metrics.token` | empty (`/metrics` answers 404) | file | Scrape token for `GET /metrics` ([observability.md](observability.md)). |
-| `LOG_LEVEL` | `logging.level` | `info` | env | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`; an unknown value is skipped. |
-| `WORDJS_TRUST_PROXY` | `trustProxy` | unset (by mode) | file | Which peers are your proxies — see [site-address.md](site-address.md). |
+| `LOG_LEVEL` | `logging.level` | `info` | env | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`; an unknown value is skipped. Also in **Admin → Security → Server** (the environment wins). |
+| `WORDJS_TRUST_PROXY` | `trustProxy` | unset (by mode) | file | Which peers are your proxies — see [site-address.md](site-address.md). Also in **Admin → Security → Server** (restarts by itself). |
 | `WORDJS_READINESS_TIMEOUT_MS` | — | `3000` | env only | Deadline for the `/readyz` database check (100–60000 ms); past it the probe answers 503 `db: "timeout"`. |
 | `WORDJS_DB_STRICT` | `dbStrictDriver` | `false` | env | Refuse to boot instead of falling back to `sqlite-legacy` (above). |
 | `WORDJS_INSTALL_TOKEN` | — | random | env only | Your own one-time install token (≥ 16 characters). `WORDJS_PRINT_INSTALL_TOKEN=1` prints it in the banner. |
@@ -761,7 +761,9 @@ When migrating WordJS to a new domain, keep these important considerations in mi
 
 If you are using **self-signed certificates** (`ssl-auto.crt` and `ssl-auto.key`), you **must regenerate** them for the new domain. Self-signed certificates are bound to the domain they were created for, and the browser will reject connections if there's a mismatch.
 
-To regenerate a self-signed certificate:
+The easiest way is to replace it: **Admin → Security → SSL Certificate Manager** provisions a Let's Encrypt certificate for the new domain (or installs one you upload).
+
+To regenerate a self-signed certificate from a terminal instead:
 ```bash
 # Generate new self-signed certificate for new domain
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -769,8 +771,6 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -out ssl-auto.crt \
   -subj "/CN=your-new-domain.com"
 ```
-
-Alternatively, use the **Admin Panel → Security → SSL Certificate Manager** to provision a new Let's Encrypt certificate for the new domain.
 
 ### Media URLs (Important!)
 

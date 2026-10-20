@@ -30,8 +30,9 @@ scp root@your-server:/srv/wordjs/backend/backups/backup-*.zip ./site-backups/
 WordJS can also send every backup to an S3-compatible bucket automatically. See
 [database.md §1.5](../database.md#15-backups--retention).
 
-**Automatic backups:** under **Automatic Schedule**, choose how often and at what time. The newest 7
-backups are kept and older ones are deleted. The `backup_retention` option changes that number.
+**Automatic backups:** under **Automatic Schedule**, choose how often and at what time, and how many
+backups to keep (**Backups to keep**, 7 by default; older ones are deleted after each new backup; 0 keeps
+every one).
 
 ## 2. Upgrade
 
@@ -84,13 +85,14 @@ Say a post was deleted by mistake. It was moved to the trash, and then the trash
 
 1. In **Admin → Settings → Backups**, click **Restore** on a backup taken before the deletion.
 2. Confirm. The dialog warns that this **overwrites all current data and files** with the backup's.
-   When it finishes, the screen says *Backup restored* and asks you to restart the service.
-3. Restart, so the restored plugins, themes and settings are loaded and the database is brought up to the
-   current version's schema:
+   When it finishes, the screen says *Backup restored*, and WordJS **restarts itself** so the restored
+   plugins, themes and settings are loaded and the database is brought up to the current version's
+   schema. The page reloads on its own after a few seconds (you may have to sign in again with the
+   accounts from the backup).
 
-   ```bash
-   sudo systemctl restart wordjs
-   ```
+   Only if WordJS was started by something that does not restart it (see
+   [Restarting by itself](../multisite.md#restarting-by-itself)) the screen asks you to restart it once,
+   for example `sudo systemctl restart wordjs`.
 
 The post is back, with its image. The first visit to the page can still show the cached "not found"
 for a moment; reload.

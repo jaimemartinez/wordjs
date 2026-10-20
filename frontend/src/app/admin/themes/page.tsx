@@ -6,12 +6,15 @@ import ThemePermissionsDialog from "./ThemePermissionsDialog";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
+import CreateThemeDialog from "./CreateThemeDialog";
 
 export default function ThemesPage() {
     const { t, language } = useI18n();
     const [themes, setThemes] = useState<Theme[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
+    // Themes → New theme: four seed colours, compiled by the server (the CLI's `create theme`, from the panel).
+    const [creatingTheme, setCreatingTheme] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [restoring, setRestoring] = useState(false);
     const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -316,6 +319,9 @@ export default function ThemesPage() {
                             >
                                 {restoring ? t('themes.restoring') : t('themes.restoreDefault')}
                             </Button>
+                            <Button variant="secondary" onClick={() => setCreatingTheme(true)} icon="fa-swatchbook" data-testid="create-theme">
+                                {t('themes.create.open')}
+                            </Button>
                             <Button
                                 onClick={() => fileInputRef.current?.click()}
                                 disabled={uploading}
@@ -334,6 +340,17 @@ export default function ThemesPage() {
                         </>
                     }
                 />
+
+                {creatingTheme && (
+                    <CreateThemeDialog
+                        onClose={() => setCreatingTheme(false)}
+                        onCreated={async (slug) => {
+                            setCreatingTheme(false);
+                            setMessage({ type: "success", text: t('themes.create.done').replace('{slug}', slug) });
+                            await loadThemes();
+                        }}
+                    />
+                )}
 
                 {/* Tabs: Instalados | Marketplace */}
                 <div className="max-w-7xl mx-auto mb-8 flex gap-2">

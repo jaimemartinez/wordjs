@@ -558,7 +558,10 @@ Four details worth knowing:
 - **A failed compile leaves nothing behind.** The compile runs in `dryRun` mode first; if it reports
   any error the CLI removes the half-written directory and exits 1.
 
-Restart the backend once so the theme is discovered, then activate it in **Admin → Themes**.
+The theme appears in **Admin → Themes** within a minute (the theme list is re-read every 60 seconds; no restart), where you activate it.
+
+**From the panel instead:** **Admin → Themes → New theme** asks for a name and the same four colours,
+shows them together, and creates the same declarative `theme.json` (`POST /api/v1/themes`).
 
 ### 2. Edit `theme.json`, then rebuild
 

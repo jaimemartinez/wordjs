@@ -151,7 +151,11 @@ router.get('/:filename/download', authenticate, isAdmin, credentialExportSession
  *           type: string
  *     responses:
  *       200:
- *         description: Restore results
+ *         description: >-
+ *           { success, results, restart }. On a single site or the main site of a network the backend then
+ *           restarts itself so the restored plugins, themes and settings load; restart says how (supervisor,
+ *           watch or service), or manual when nothing here would start it again. null on another site of a
+ *           network, which restores only its own data.
  *       403:
  *         description: >-
  *           Not an administrator, rest_token_management_forbidden (an API token), or
@@ -169,7 +173,14 @@ router.post('/:filename/restore', authenticate, isAdmin, accountAuthorityOnly, a
     const results = await restoreBackup(req.params.filename);
     // AFTER the swap — see the note next to the recordAudit import.
     await recordAudit(req.user && req.user.id, 'backup.restore', 'backup', req.params.filename, {});
-    res.json({ success: true, results });
+    // Zero config: the restored plugins, themes and settings load at boot, so the backend restarts itself
+    // (core/restart) instead of telling the administrator to restart the service. Only for the main site
+    // (or a single site): one site of a network restores its own data, and its administrators must not
+    // be able to restart the whole network.
+    const restart = require('../core/multisite-guards').onSecondarySite()
+        ? null
+        : require('../core/restart').scheduleRestart('a backup was restored', { delayMs: 1500 });
+    res.json({ success: true, results, restart });
 }));
 
 module.exports = router;

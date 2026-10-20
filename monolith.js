@@ -487,19 +487,36 @@ async function main() {
         console.log(`   ↳ internal SSR API: http://127.0.0.1:${LOOPBACK_PORT} (loopback only)`);
     });
 
-    // 6) Optional ACME HTTP-01 + HTTPS-redirect listener (opt-in via acme.http01Port in
-    //    wordjs-config.json). Let's Encrypt validates HTTP-01 on port 80, which the HTTPS public
-    //    listener does not bind. Serves challenge tokens from backend/public, redirects the rest.
-    const acmePort = Number((appConfig.acme && appConfig.acme.http01Port) || 0);
-    if (acmePort && ssl) {
+    // 6) Optional ACME HTTP-01 + HTTPS-redirect listener (opt-in: Security → Auto-renewal in the admin
+    //    panel, stored as acme.http01Port in wordjs-config.json). Let's Encrypt validates HTTP-01 on port
+    //    80, which the HTTPS public listener does not bind. Serves challenge tokens from backend/public,
+    //    redirects the rest. The panel re-binds it through __WORDJS_SET_ACME_HTTP01_PORT__ (backend
+    //    routes/certs.ts), so a port set, changed or cleared there applies without a restart.
+    if (ssl) {
         const challengeBase = path.resolve(BACKEND, 'public', '.well-known', 'acme-challenge');
         const provider = backendApp.hostPolicy;
-        http.createServer(createAcmeHandler({
-            challengeBase,
-            port: PUBLIC_PORT,
-            getPolicy: provider && typeof provider.get === 'function' ? () => provider.get() : () => null,
-            isInstalled,
-        })).listen(acmePort, () => console.log(`   ↳ ACME HTTP-01 + HTTPS-redirect on :${acmePort}`));
+        let acmeListener = { port: 0, srv: null };
+        const setAcmePort = (raw) => {
+            const port = Number(raw || 0);
+            if (port === acmeListener.port) return;
+            if (acmeListener.srv) {
+                try { acmeListener.srv.close(); } catch { /* already closed */ }
+                console.log(`[monolith] ACME HTTP-01 listener on :${acmeListener.port} stopped.`);
+            }
+            acmeListener = { port, srv: null };
+            if (!port) return;
+            const srv = http.createServer(createAcmeHandler({
+                challengeBase,
+                port: PUBLIC_PORT,
+                getPolicy: provider && typeof provider.get === 'function' ? () => provider.get() : () => null,
+                isInstalled,
+            }));
+            srv.on('error', (e) => console.warn(`[monolith] ACME HTTP-01 listener on :${port} failed: ${e.message}`));
+            srv.listen(port, () => console.log(`   ↳ ACME HTTP-01 + HTTPS-redirect on :${port}`));
+            acmeListener.srv = srv;
+        };
+        global.__WORDJS_SET_ACME_HTTP01_PORT__ = setAcmePort;
+        setAcmePort(appConfig.acme && appConfig.acme.http01Port);
     }
 }
 

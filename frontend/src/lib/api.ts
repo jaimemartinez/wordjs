@@ -1063,6 +1063,9 @@ export interface ThemePermissions {
 }
 
 export const themesApi = {
+    /** Create a theme from four seed colours (a declarative theme.json the server compiles). */
+    create: (data: { slug: string; metadata: { name: string; description?: string }; seeds: { primary: string; secondary: string; bg: string; text: string } }) =>
+        apiPost<{ slug: string; diagnostics: unknown[] }>("/themes", data),
     list: () => apiGet<Theme[]>("/themes"),
     /**
      * Switch the active theme. `grant` is what the administrator left on in the activation dialog: the
@@ -1381,7 +1384,8 @@ export interface BackupFile {
 export const backupsApi = {
     list: () => apiGet<BackupFile[]>("/backups"),
     create: () => apiPost<{ filename: string; size: number; date: string }>("/backups", {}),
-    restore: (filename: string) => apiPost<{ success: boolean; results: any }>(`/backups/${filename}/restore`, {}),
+    /** restart: how the backend restarts itself to load what was restored (manual: restart it by hand; null: nothing to restart). */
+    restore: (filename: string) => apiPost<{ success: boolean; results: any; restart?: "supervisor" | "watch" | "service" | "manual" | null }>(`/backups/${filename}/restore`, {}),
     delete: (filename: string) => apiDelete<{ success: boolean }>(`/backups/${filename}`),
     download: (filename: string) => {
         const baseUrl = getBaseUrl();

@@ -51,6 +51,8 @@ stdout and the supervisor (systemd, Docker, Kubernetes, PM2) owns rotation and s
 
 Resolved once, at boot, in this order:
 
+The level can be chosen in **Admin → Security → Server → Log level** (error, warn, info, debug): it is written to `logging.level` and WordJS restarts itself to apply it. The panel greys the field out when `LOG_LEVEL` is set, because the environment wins:
+
 1. the `LOG_LEVEL` environment variable;
 2. `logging.level` in `wordjs-config.json`;
 3. `info`.

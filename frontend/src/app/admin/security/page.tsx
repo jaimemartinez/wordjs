@@ -4,12 +4,13 @@ import { useI18n } from "@/contexts/I18nContext";
 import Link from "next/link";
 import SSLCertManager from "./SSLCertManager";
 import AutoRenewalPanel from "./AutoRenewalPanel";
+import ServerSettingsPanel from "./ServerSettingsPanel";
 import { useEffect, useState } from "react";
 import { settingsApi } from "@/lib/api";
 import { useOptionalAuth } from "@/contexts/AuthContext";
 
 export default function SecurityPage() {
-    useI18n();
+    const { t } = useI18n();
     const [adminEmail, setAdminEmail] = useState("");
     const viewerNetwork = useOptionalAuth()?.user?.network;
     const certsOffered = !viewerNetwork || (viewerNetwork.mainSite && viewerNetwork.networkAdmin);
@@ -100,6 +101,19 @@ export default function SecurityPage() {
                         </div>
                         <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
                             <GatewayConfigForm />
+                        </div>
+                    </div>
+
+                    {/* Server: reverse-proxy trust and log level, from the panel instead of the config file */}
+                    <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-sky-500 transition-all hover:shadow-sky-900/10">
+                        <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
+                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                                <i className="fa-solid fa-network-wired text-sky-500 text-xl"></i>
+                                {t('server.title')}
+                            </h2>
+                        </div>
+                        <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
+                            <ServerSettingsPanel />
                         </div>
                     </div>
 
