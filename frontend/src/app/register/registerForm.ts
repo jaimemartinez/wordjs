@@ -9,7 +9,7 @@
  * `backend/src/routes/auth.ts` en POST /auth/register:
  *
  *   · contraseña de 8 a 72 caracteres  (rest_invalid_param en ambos extremos)
- *   · correo con la MISMA forma que `EMAIL_FORMAT_RE` de backend/src/core/mailbox.ts, con el mismo
+ *   · correo con la MISMA forma que `EMAIL_FORMAT_RE` de backend/src/core/email-address.ts, con el mismo
  *     tope de 254 caracteres (RFC 5321) que allí existe para acotar el coste del regex.
  *
  * REGLA DURA: esto NUNCA relaja la política, solo la adelanta. El servidor sigue siendo la
@@ -24,7 +24,7 @@
 export const PASSWORD_MIN = 8;
 export const PASSWORD_MAX = 72;
 
-/** Espejo de `EMAIL_FORMAT_RE` (backend/src/core/mailbox.ts): exactamente una arroba y dominio con punto. */
+/** Espejo de `EMAIL_FORMAT_RE` (backend/src/core/email-address.ts): exactamente una arroba y dominio con punto. */
 const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Espejo de `MAX_EMAIL_LEN`: 254 = máximo de RFC 5321. Acota además el coste del regex anterior. */
 const MAX_EMAIL_LEN = 254;

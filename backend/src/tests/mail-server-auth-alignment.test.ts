@@ -74,9 +74,9 @@ function signed(headers: string[], signedBody: string, { domain, l, appended = '
 // --- the plugin --------------------------------------------------------------------------------------
 
 const DOMAIN = 'acme.example';
-const BOSS = { id: 1, role: 'administrator', userEmail: `boss@${DOMAIN}`, userLogin: 'boss', displayName: 'Boss', hasProfessionalMailbox: true };
-const ALICE = { id: 2, role: 'editor', userEmail: `alice@${DOMAIN}`, userLogin: 'alice', displayName: 'Alice', hasProfessionalMailbox: true };
-const BOB = { id: 3, role: 'author', userEmail: `bob@${DOMAIN}`, userLogin: 'bob', displayName: 'Bob', hasProfessionalMailbox: true };
+const BOSS = { id: 1, role: 'administrator', userEmail: `boss@${DOMAIN}`, userLogin: 'boss', displayName: 'Boss', accountCapabilities: ['mail_server_mailbox'] };
+const ALICE = { id: 2, role: 'editor', userEmail: `alice@${DOMAIN}`, userLogin: 'alice', displayName: 'Alice', accountCapabilities: ['mail_server_mailbox'] };
+const BOB = { id: 3, role: 'author', userEmail: `bob@${DOMAIN}`, userLogin: 'bob', displayName: 'Bob', accountCapabilities: ['mail_server_mailbox'] };
 const USERS = [BOSS, ALICE, BOB];
 
 const smtpInstances: any[] = [];

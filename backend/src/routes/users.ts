@@ -17,8 +17,12 @@ const { authenticate, sessionOnly, refuseBoundSession } = require('../middleware
 const { can, isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
-// ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
-const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
+// The one self-service email-write rule (core/email-address) and the plugin-declared per-account grants
+// only an `edit_users` caller may change (core/account-capabilities).
+const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/email-address');
+const accountCapabilities = require('../core/account-capabilities');
+// DEPRECATED: an outdated mail plugin's toggle field, folded into the same plan (core/legacy-account-flags.ts).
+const { withLegacyBodyField, LEGACY_BODY_FIELD } = require('../core/legacy-account-flags');
 const { recordAudit } = require('../core/audit');
 const { protectsNetworkAdmin, refuseNetworkAdminTarget } = require('../core/network-auth');
 const networkHandoff = require('../core/network-handoff');
@@ -70,13 +74,13 @@ const USER_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
 // supplied" — while two of the six sinks condition on mere PRESENCE:
 //
 //     users.ts (PUT /:id)  `if (personalEmail !== undefined) updateData.meta = { personal_email: … }`
-//     users.ts (PUT /:id)  `req.body.professionalMailbox !== undefined && mailboxFlagValue(…) !== …`
-//                          (core/mailbox mailboxFlagValue maps '' and null to '0' — a REVOCATION)
+//     users.ts (PUT /:id)  `req.body.accountCapabilities !== undefined` → planAccountCapabilityWrite
+//                          (core/account-capabilities flagValue maps '' and null to '0' — a REVOCATION)
 //
-// So `{personalEmail: ''}` and `{professionalMailbox: null}` read as "not supplied" to the gate and as
+// So `{personalEmail: ''}` and `{accountCapabilities: {x: null}}` read as "not supplied" to the gate and as
 // "write this" to the sink: an administrator's `wjt_` token could blank ANY account's recovery address
 // (moving the reset link to the primary mailbox, which on this product may be hosted here) and revoke
-// mailbox grants — the exact operation the doctrine at the top of this file says a token cannot drive.
+// per-account grants — the exact operation the doctrine at the top of this file says a token cannot drive.
 //
 // The repair is not "make the guard stricter"; it is to make the guard read the field the way its own
 // sink reads it, and to keep the two statements NEXT TO EACH OTHER so they cannot drift apart again:
@@ -93,7 +97,8 @@ const ACCOUNT_SECURITY_FIELDS: Record<string, SuppliedCriterion> = {
     email: 'nonblank',               // recovery-bearing (recoveryTarget falls back to it); sink = suppliedText()
     personalEmail: 'presence',       // recovery-bearing (recoveryTarget PREFERS it); sink = `!== undefined`
     role: 'nonblank',                // privilege — the role guards below ignore a blank role
-    professionalMailbox: 'presence', // the admin-owned mailbox grant; blank/null = mailboxFlagValue '0' = revoke
+    accountCapabilities: 'presence', // the admin-owned per-account grants; blank/null = flagValue '0' = revoke
+    [LEGACY_BODY_FIELD]: 'presence', // DEPRECATED alias of one of them, written by an outdated plugin's toggle
 };
 
 /**
@@ -351,6 +356,57 @@ router.get('/me', (req: Request, res: Response) => {
 });
 
 /**
+ * @swagger
+ * /users/account-capabilities:
+ *   get:
+ *     summary: The per-account capabilities active plugins declare
+ *     description: >-
+ *       What the user screen renders as one toggle each. A plugin declares them in its manifest
+ *       (`accountCapabilities`); an administrator grants them per account through POST /users and
+ *       PUT /users/{id} (`accountCapabilities`, a map of slug → true/false), which requires edit_users.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The declarations of the active plugins.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   slug:
+ *                     type: string
+ *                   plugin:
+ *                     type: string
+ *                   name:
+ *                     type: string
+ *                   description:
+ *                     type: string
+ *                   locksEmail:
+ *                     type: boolean
+ *                   defaultForNewAccounts:
+ *                     type: boolean
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "rest_forbidden — the edit_users capability is missing."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
+router.get('/account-capabilities', can('edit_users'), asyncHandler(async (_req: Request, res: Response) => {
+    res.json(await accountCapabilities.activeDeclarations());
+}));
+
+/**
  * GET /users/:id
  * Get single user
  */
@@ -457,11 +513,13 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *               personalEmail:
  *                 type: string
  *                 description: Optional recovery address, preferred over the primary one when a reset link is sent.
- *               professionalMailbox:
- *                 type: boolean
+ *               accountCapabilities:
+ *                 type: object
+ *                 additionalProperties:
+ *                   type: boolean
  *                 description: >-
- *                   The admin-owned "Professional Mail Account" grant. Only settable here and on
- *                   PUT /users/{id} by a caller holding edit_users; it is never self-service.
+ *                   Plugin-declared per-account grants (GET /users/account-capabilities), slug → on/off.
+ *                   Only settable here and on PUT /users/{id} by a caller holding edit_users; never self-service.
  *     parameters:
  *       - in: header
  *         name: X-CSRF-Token
@@ -481,8 +539,8 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *       400:
  *         description: >-
  *           rest_missing_param (username/email/password absent), rest_invalid_param (malformed primary
- *           email, or a username outside letters/digits/. _ - or longer than 60 characters),
- *           rest_invalid_personal_email, or rest_user_exists.
+ *           email, or a username outside letters/digits/. _ - or longer than 60 characters, or an
+ *           account capability no active plugin declares), rest_invalid_personal_email, or rest_user_exists.
  *         content:
  *           application/json:
  *             schema:
@@ -523,7 +581,7 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
 
     // The PRIMARY email must be a real address. User.create enforces the same rule (it is the model-level
     // backstop for the importers and self-registration), but reaching it here would surface as a raw 500;
-    // answer the API's own 400 shape instead. One rule, expressed once — EMAIL_FORMAT_RE from core/mailbox.
+    // answer the API's own 400 shape instead. One rule, expressed once — EMAIL_FORMAT_RE from core/email-address.
     if (!isValidAddress(email)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid email format.', data: { status: 400 } });
     }
@@ -533,6 +591,10 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
         return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
     }
 
+    // Plugin-declared per-account grants (core/account-capabilities). Safe to apply: this route is `isAdmin`.
+    const capPlan = await accountCapabilities.planAccountCapabilityWrite(null, withLegacyBodyField(req.body));
+    if (capPlan.error) return res.status(400).json(capPlan.error);
+
     try {
         const user = await User.create({
             username,
@@ -541,10 +603,9 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
             displayName,
             role,
             personalEmail,
-            // ACTIVE CORPORATE MAILBOX — the "Professional Mail Account" toggle on the admin user form.
-            // Safe to forward unconditionally: this route is `isAdmin`, so the caller is by definition
-            // allowed to provision mailboxes. Self-registration (POST /auth/register) never reaches here.
-            professionalMailbox: req.body.professionalMailbox
+            // The user form's plugin toggles. Safe to forward: this route is `isAdmin`, so the caller is by
+            // definition allowed to grant them. Self-registration (POST /auth/register) never reaches here.
+            accountCapabilityChanges: capPlan.changes
         });
 
         // AUDIT: admin created a user. No secret material — just the login and assigned role.
@@ -612,9 +673,13 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *               personalEmail:
  *                 type: string
  *                 description: Recovery address. Supplying it blank CLEARS it — presence, not blankness, is the write.
- *               professionalMailbox:
- *                 type: boolean
- *                 description: The admin-owned mailbox grant; changing it requires edit_users whoever the target is.
+ *               accountCapabilities:
+ *                 type: object
+ *                 additionalProperties:
+ *                   type: boolean
+ *                 description: >-
+ *                   Plugin-declared per-account grants, slug → on/off. Changing one requires edit_users whoever
+ *                   the target is; resending the current state is a no-op.
  *     responses:
  *       200:
  *         description: User updated
@@ -626,7 +691,8 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *         description: >-
  *           rest_weak_password (self edit, under 8 characters), rest_invalid_email (malformed or already
  *           taken — one uniform message, so this is never an account-existence oracle),
- *           rest_invalid_personal_email, or rest_invalid_role.
+ *           rest_invalid_personal_email, rest_invalid_role, or rest_invalid_param (an account capability
+ *           change no active plugin declares).
  *         content:
  *           application/json:
  *             schema:
@@ -640,12 +706,13 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *       403:
  *         description: >-
  *           rest_forbidden (not you and no edit_users; a non-administrator editing a privileged account;
- *           changing the mailbox grant without edit_users; assigning a role you may not grant),
+ *           changing an account capability without edit_users; assigning a role you may not grant),
  *           rest_cannot_edit_own_role, rest_bad_current_password (the sudo re-auth failed),
  *           rest_reserved_mail_domain / rest_mailbox_address_locked (a self-service caller claiming an
- *           address on the site's mail domain), rest_csrf_token / rest_csrf_invalid,
+ *           address on the site's own email domain, or moving an address a granted capability binds),
+ *           rest_csrf_token / rest_csrf_invalid,
  *           mfa_enrollment_required, the headless refusal when the body carries an account-security
- *           field (password, currentPassword, email, personalEmail, role, professionalMailbox) — a
+ *           field (password, currentPassword, email, personalEmail, role, accountCapabilities) — a
  *           cosmetic-only PUT is still allowed on an API token — or rest_account_bound_session (another
  *           user's account, from a session started at an address other than the main one).
  *         content:
@@ -671,7 +738,7 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
 *   put:
  *     summary: Update current user profile
  *     description: >-
- *       Self-service only. The role and the professional-mailbox grant are deliberately NOT read here —
+ *       Self-service only. The role and the account-capability grants are deliberately NOT read here —
  *       they are admin-owned and can only be written through PUT /users/{id} by a caller with the right
  *       capability.
  *     tags: [Users]
@@ -732,8 +799,9 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *       403:
  *         description: >-
  *           rest_bad_current_password (the sudo re-auth failed), rest_reserved_mail_domain /
- *           rest_mailbox_address_locked (the requested primary address belongs to the site's own mail
- *           domain), rest_csrf_token / rest_csrf_invalid, mfa_enrollment_required, or the headless
+ *           rest_mailbox_address_locked (the requested primary address is on the site's own email
+ *           domain, or a granted capability binds the current one), rest_csrf_token / rest_csrf_invalid,
+ *           mfa_enrollment_required, or the headless
  *           refusal when the body carries an account-security field.
  *         content:
  *           application/json:
@@ -775,7 +843,7 @@ function rejectWeakSelfPassword(res: Response, password: any): boolean {
  * other sudo trigger, decided at the two call sites: it is a change by mere presence.)
  *
  * Compares the VALUE, never mere presence: every profile form re-sends the whole object on every save, so
- * a presence check would 403 "rename my display name" — the same no-op-resend trap professionalMailbox,
+ * a presence check would 403 "rename my display name" — the same no-op-resend trap accountCapabilities,
  * `role` and refuseSelfServiceEmailChange each had to be taught separately. Case/whitespace-insensitive,
  * matching how those addresses are normalized before they are stored.
  */
@@ -1106,10 +1174,10 @@ router.put('/me', networkHandoff.refuseHandoffSession, asyncHandler(async (req: 
         return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
     }
 
-    // SECURITY (self-grant of a corporate mailbox): this route is guarded by `authenticate` ONLY, and it
-    // writes the PRIMARY email. Before this, any subscriber could set theirs to me@<mailDomain> — which
-    // is the address an inbound message is matched against, and which used to imply the whole
-    // professional-mailbox grant. A caller here never holds `edit_users` by construction (it is the
+    // SECURITY (self-assigned organisation address): this route is guarded by `authenticate` ONLY, and it
+    // writes the PRIMARY email. Any subscriber could otherwise set theirs to me@<site email domain> — the
+    // address a plugin delivering the site's mail matches inbound messages against — or move an address a
+    // granted capability binds. A caller here never holds `edit_users` by construction (it is the
     // self-service profile route), so the self-service rule applies unconditionally. Same helper as
     // PUT /:id and /auth/register.
     const emailRefusal = await refuseSelfServiceEmailChange(req.user, email);
@@ -1130,10 +1198,10 @@ router.put('/me', networkHandoff.refuseHandoffSession, asyncHandler(async (req: 
     // and a blank one is how the address is CLEARED. The VALUE goes through the one normalizer, so what
     // is stored for null/'' is '' and never the string "null".
     if (personalEmail !== undefined) updateData.meta = { personal_email: personalEmailValue(personalEmail) };
-    // NOTE: `professionalMailbox` is deliberately NOT read from the body here. It is the admin-owned
-    // grant; a self-service route must never be able to set it. User.update() only acts on the explicit
-    // field, and MAILBOX_META_KEY is in its PROTECTED_META list, so the `meta` bag above cannot reach it
-    // either.
+    // NOTE: `accountCapabilities` is deliberately NOT read from the body here. Those are admin-owned
+    // grants; a self-service route must never be able to set one. User.update() only acts on an explicit
+    // plan, and their meta prefix is in its PROTECTED_META_PREFIXES, so the `meta` bag above cannot reach
+    // them either.
 
     // SUDO — password OR either recovery address. After the refusals that depend on the request alone
     // (format, mail domain), so a request that was going to be rejected anyway never spends an attempt in
@@ -1314,37 +1382,37 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // lookup used to run before the current-password check exactly as PUT /me's did.
     if (primaryEmailMalformed(email)) return unusableEmail(res);
 
-    // SECURITY (ACTIVE CORPORATE MAILBOX). This route also serves SELF-edits — `isOwn` skips the
-    // `edit_users` check above — so both the grant and the address it names must be re-gated on the
-    // capability, not on ownership.
+    // SECURITY (PLUGIN-DECLARED ACCOUNT CAPABILITIES). This route also serves SELF-edits — `isOwn` skips
+    // the `edit_users` check above — so both the grants and the address they may bind must be re-gated on
+    // the capability, not on ownership.
     //
-    //  - The grant itself is admin-owned state: writing it requires `edit_users`, whoever the target is.
-    //    Without this, a user editing their OWN record would set their own mailbox flag, which is the
-    //    self-grant this whole change removes, just through a different door.
+    //  - A grant is admin-owned state: changing one requires `edit_users`, whoever the target is.
+    //    Without this, a user editing their OWN record would grant themselves a plugin capability (for
+    //    whatever that capability unlocks in its plugin).
     //  - A caller WITHOUT `edit_users` (i.e. a self-edit) is held to the same email rule as
     //    PUT /me — one helper, so the two self-service doors cannot drift apart. An `edit_users`
     //    delegate is unaffected: assigning corporate addresses is precisely their job.
     const canEditUsers = typeof req.user.can === 'function' && req.user.can('edit_users');
-    // NO-OP RESEND IS NOT A WRITE. The admin user editor loads `professionalMailbox` into its form state
+    // NO-OP RESEND IS NOT A WRITE. The admin user editor loads `accountCapabilities` into its form state
     // and PUTs the whole object back, so a plain "save my display name" from a non-`edit_users` user
     // carries the field unchanged — rejecting on PRESENCE 403'd every one of those legitimate saves. The
     // `role` field a few lines below is stripped for exactly this reason, and refuseSelfServiceEmailChange
     // does the same for `email`; this one was missed. Compare the VALUE and only treat a real change as a
     // privileged write. (Fail-closed either way, so this was availability, not a hole.)
-    // SINK CRITERION: 'presence' (see ACCOUNT_SECURITY_FIELDS). `mailboxFlagValue` maps '' and null to
-    // '0', so a blank value here is a REVOCATION of the grant, not "left alone" — which is why the
-    // headless gate judges this field by presence and not by blankness.
-    const mailboxRequested = req.body.professionalMailbox !== undefined
-        && mailboxFlagValue(req.body.professionalMailbox) !== mailboxFlagValue(hasProfessionalMailbox(user));
-    if (mailboxRequested) {
+    // SINK CRITERION: 'presence' (see ACCOUNT_SECURITY_FIELDS). `flagValue` maps '' and null to '0', so a
+    // blank value here is a REVOCATION of the grant, not "left alone" — which is why the headless gate
+    // judges this field by presence and not by blankness. The plan holds the CHANGES only.
+    const capPlan = await accountCapabilities.planAccountCapabilityWrite(user, withLegacyBodyField(req.body));
+    if (Object.keys(capPlan.changes).length || capPlan.error) {
         if (!canEditUsers) {
             return res.status(403).json({
                 code: 'rest_forbidden',
-                message: 'Only a user manager can enable or disable a professional mail account.',
+                message: 'Only a user manager can grant or revoke an account capability.',
                 data: { status: 403 }
             });
         }
-        updateData.professionalMailbox = req.body.professionalMailbox;
+        if (capPlan.error) return res.status(400).json(capPlan.error);
+        updateData.accountCapabilityChanges = capPlan.changes;
     }
     if (!canEditUsers) {
         const emailRefusal = await refuseSelfServiceEmailChange(user, email);

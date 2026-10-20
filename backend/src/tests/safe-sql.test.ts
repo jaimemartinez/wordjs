@@ -135,7 +135,7 @@ describe('safe-sql: identifiers', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('safe-sql: column definitions', () => {
-    it('accepts every definition the product ships (models/Email.ts, the mail-server fixtures)', () => {
+    it('accepts every definition the product ships (the mail-server fixtures)', () => {
         const real = [
             'id INT_PK',
             'message_id TEXT',

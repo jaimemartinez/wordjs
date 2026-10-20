@@ -1982,6 +1982,8 @@ class Plugin {
     deactivate: any;
     permissions: any;
     roles: any;
+    /** The manifest's raw `accountCapabilities` block (core/account-capabilities.ts validates it on read). */
+    accountCapabilities: any;
 
     constructor(data: any) {
         this.name = data.name;
@@ -1998,6 +2000,8 @@ class Plugin {
         // The roles the manifest DECLARES (shown on the grant screens next to `roles:declare`). Display
         // data only: registration re-reads and re-validates the manifest (core/roles.registerPluginRoles).
         this.roles = Array.isArray(data.roles) ? data.roles : [];
+        // The per-account capabilities it declares — display data too (core/account-capabilities.ts reads them).
+        this.accountCapabilities = Array.isArray(data.accountCapabilities) ? data.accountCapabilities : [];
     }
 }
 
@@ -2038,7 +2042,8 @@ function scanPlugins() {
                     description: manifest.description,
                     author: manifest.author,
                     permissions: manifest.permissions || [],
-                    roles: Array.isArray(manifest.roles) ? manifest.roles : []
+                    roles: Array.isArray(manifest.roles) ? manifest.roles : [],
+                    accountCapabilities: Array.isArray(manifest.accountCapabilities) ? manifest.accountCapabilities : []
                 };
                 // We don't load init/deactivate here to avoid requiring the file before deps match
             } catch (e) {
@@ -2066,6 +2071,7 @@ function scanPlugins() {
             path: pluginDir,
             permissions: metadata.permissions || [],
             roles: metadata.roles || [],
+            accountCapabilities: metadata.accountCapabilities || [],
             // We defer loading 'init' and 'deactivate' hooks until activation/load time
             // However, existing code expects them in the object.
             // If we didn't require the module, these will be undefined.
@@ -2478,6 +2484,10 @@ async function _activatePluginUnlocked(slug: string) {
             // again at registration below.
             const roleProblems = validateManifestRoles(slug, manifest);
             if (roleProblems.length) throw new Error(`Invalid roles in manifest.json:\n- ${roleProblems.join('\n- ')}`);
+            // 0b'. The account-capabilities block (core/account-capabilities.ts) — the same namespace rules,
+            // against the plugins installed now. (Read time re-checks too, so a hand-edited block is inert.)
+            const accountCapProblems = require('./account-capabilities').validateManifestAccountCapabilities(slug, manifest, listInstalledPluginIds());
+            if (accountCapProblems.length) throw new Error(`Invalid accountCapabilities in manifest.json:\n- ${accountCapProblems.join('\n- ')}`);
 
             // 0c. Its admin page is its own: no other installed plugin answers to the same
             // /admin/plugin/<slug> (core/adminMenu.ts adminPageConflict) — checked again here because the

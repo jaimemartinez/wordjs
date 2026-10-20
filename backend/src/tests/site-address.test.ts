@@ -902,7 +902,7 @@ describe('link bases', () => {
         const api = require('../core/plugin-api').createPluginApi('test-plugin');
         assert.strictEqual(await api.site.url(), 'https://example.com');
         assert.strictEqual(await api.site.domain(), 'example.com');
-        assert.strictEqual(await require('../core/mailbox').getMailDomain(), 'example.com');
+        assert.strictEqual(await require('../core/email-address').getReservedEmailDomain(), 'example.com');
     });
 });
 

@@ -468,6 +468,8 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 >
 > **Migration `0018`.** `0018_account_mail_provider_allowance` keeps password recovery working across the upgrade that moved account email (reset and verification links) to the built-in transport (`core/account-mail`): on a site that has no `account_mail_provider_allowed` option yet, the plugins holding the `email:provider` grant at that moment are recorded in it, so they keep carrying those links until an administrator changes it in Settings → Account email. A new site has no grants then and records nothing. Never fatal.
 
+> **Migration `0019`.** `0019_account_capabilities_from_mailbox_flag` moves the per-account mailbox grant out of the core: every `user_meta.professional_mailbox` value is copied unchanged to `account_capability:mail_server_mailbox` (the mail plugin's declared account capability — `core/account-capabilities.ts`). The legacy rows are kept and every later write of the capability is mirrored onto them, and a legacy row that says "not granted" vetoes the copy, so a node still running the previous release (or a rollback) reads the same answer and the two can only disagree in the deny direction (`core/legacy-account-flags.ts`). Idempotent; a failure aborts boot like any other migration.
+
 ### Batched Meta Loading (N+1 avoidance)
 
 Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the whole result set in a single query rather than issuing one query per post, eliminating the previous N+1 pattern on listing pages.
