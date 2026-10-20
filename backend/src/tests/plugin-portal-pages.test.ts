@@ -9,7 +9,10 @@
  *     among ACTIVE plugins, so a folder that shares a portal's name cannot answer for it;
  *   · GET /plugins/<slug>/portal and the portal bundle routes apply the gate every plugin bundle has
  *     (active + browser:script), and every refusal is the SAME anonymous answer, so they are no inventory
- *     of what is installed.
+ *     of what is installed;
+ *   · a portal's sub-pages, service worker and file route (what lets a portal such as the conference one live in
+ *     its plugin) are validated the same way, and GET /plugins/<slug>/portal/sw serves only the declared worker,
+ *     inside the plugin's client/ tree, behind the same gate.
  *
  * Same harness as plugin-public-footprint.test.ts: the real app from ../index with a throwaway SQLite
  * file (the gate reads the real `active_plugins` option), probe plugins as real folders under the real
@@ -51,6 +54,7 @@ const portalOf = (folder: string) => `portal-${folder.replace('wjs-pp-', '')}`;
 const adminOf = (folder: string) => `${folder}-admin`;
 
 let options: any;
+let memberId = 0;
 
 function writeProbe(folder: string) {
     const dir = path.join(PLUGINS_ROOT, folder);
@@ -63,12 +67,15 @@ function writeProbe(folder: string) {
                 portalPage: {
                     entry: 'client/portal/page.tsx', slug: portalOf(folder),
                     title: 'Probe portal', themeColor: '#2563eb', viewportFit: 'cover',
+                    serviceWorker: 'client/portal/sw.js', file: '/public/file',
+                    pages: { me: { title: 'My page', private: true, app: { name: 'My page', backgroundColor: '#ffffff' } } },
                 },
             },
         }),
         'index.js': "'use strict';\nmodule.exports = { init() {} };\n",
         'client/admin/page.tsx': 'export default function A() { return null; }\n',
         'client/portal/page.tsx': 'export default function P() { return null; }\n',
+        'client/portal/sw.js': "self.addEventListener('push', () => {});\n",
         'dist/admin.bundle.js': 'export default function A() { return null; }\n',
         'dist/portal.bundle.js': 'export default function P() { return null; }\n',
         'dist/portal.bundle.css': '.portal-probe{}',
@@ -97,6 +104,12 @@ before(async () => {
     perms._setGrantsInMemory(OFF, ['browser:script']);
     perms._setGrantsInMemory(NG, []);
     await options.updateOption('active_plugins', [ON, NG]);
+    // A signed-in user who is no administrator (GET /plugins/portals needs only a session).
+    const r = await database.getDbAsync().run(
+        `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
+        [`pp-member-${PID}`, 'x', `pp-member-${PID}@example.com`, 'Member']);
+    memberId = r.lastID;
+    await database.getDbAsync().run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'role', 'subscriber')`, [memberId]);
 });
 
 after(async () => {
@@ -137,6 +150,27 @@ describe('frontend.portalPage: the declaration', () => {
         }
     });
 
+    it('validates sub-pages, the service worker and the file route', () => {
+        const base = { entry: 'client/portal/page.tsx', slug: 'ok' };
+        assert.deepStrictEqual(portalPages.validatePortalPage(withPage({
+            ...base, serviceWorker: './client/portal/sw.js', file: '/public/badge/file',
+            pages: { yo: { title: 'Mi inscripción', private: true, app: { name: 'Mi inscripción', shortName: 'Yo', description: 'Tu página.', backgroundColor: '#f3f4f6', themeColor: '#111827' } }, badge: { private: false } },
+        })), []);
+        for (const extra of [
+            { serviceWorker: 'client/../sw.js' }, { serviceWorker: 'server/sw.js' }, { serviceWorker: 'client/sw.ts' }, { serviceWorker: '/abs/client/sw.js' },
+            { file: 'public/x' }, { file: '/admin/x' }, { file: '/public/../x' }, { file: '/public/x?y=1' }, { file: 'https://evil.example/public/x' },
+            { pages: [] }, { pages: { file: {} } }, { pages: { 'Up': {} } }, { pages: { 'a/b': {} } },
+            { pages: { yo: { title: '<script>' } } }, { pages: { yo: { private: 'yes' } } }, { pages: { yo: { extra: 1 } } },
+            { pages: { yo: { app: { name: '' } } } }, { pages: { yo: { app: { name: 'x', themeColor: 'red' } } } }, { pages: { yo: { app: { name: 'x', icons: [] } } } },
+            { pages: Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`p${i}`, {}])) },
+        ]) {
+            assert.ok(portalPages.validatePortalPage(withPage({ ...base, ...extra })).length > 0, JSON.stringify(extra).slice(0, 120));
+        }
+        // The head says WHETHER a worker or a file route exists, never their paths.
+        const head = portalPages.portalPageHead(withPage({ ...base, serviceWorker: 'client/sw.js', file: '/public/f', pages: { me: { title: 'T', private: true, app: { name: 'N' } } } }));
+        assert.deepStrictEqual(head, { serviceWorker: true, file: true, pages: { me: { title: 'T', private: true, app: { name: 'N' } } } });
+    });
+
     it('a portal slug belongs to one installed plugin', () => {
         const installed = new Map<string, string | null>([['plugin-a', 'shared'], ['plugin-b', null]]);
         const manifest = withPage({ entry: 'client/portal/page.tsx', slug: 'shared' });
@@ -165,7 +199,13 @@ describe('GET /plugins/:slug/portal', () => {
     it('describes the portal of an active, granted plugin — only its head details', async () => {
         const res = await request(app).get(`${API}/plugins/${portalOf(ON)}/portal`);
         assert.strictEqual(res.status, 200);
-        assert.deepStrictEqual(res.body, { slug: portalOf(ON), title: 'Probe portal', themeColor: '#2563eb', viewportFit: 'cover' });
+        assert.deepStrictEqual(res.body, {
+            slug: portalOf(ON), title: 'Probe portal', themeColor: '#2563eb', viewportFit: 'cover',
+            serviceWorker: true,
+            pages: { me: { title: 'My page', private: true, app: { name: 'My page', backgroundColor: '#ffffff' } } },
+            // The plugin's own public route, under its FOLDER (plugin routes are mounted there).
+            fileEndpoint: `/plugin/${ON}/public/file`,
+        });
         assert.match(String(res.headers['cache-control']), /no-store/);
     });
 
@@ -175,6 +215,46 @@ describe('GET /plugins/:slug/portal', () => {
         for (const slug of [portalOf(OFF), portalOf(NG), ON, adminOf(ON), 'Bad_Slug']) {
             assertSameAnswer(await request(app).get(`${API}/plugins/${slug}/portal`), unknown, slug);
         }
+    });
+});
+
+describe('GET /plugins/portals', () => {
+    it('lists, to a signed-in user, exactly the portals that are served, with their titles', async () => {
+        const anonymous = await request(app).get(`${API}/plugins/portals`);
+        assert.strictEqual(anonymous.status, 401, 'no inventory for anonymous callers');
+        const { generateToken } = require('../middleware/auth');
+        const token = generateToken({ id: memberId, userLogin: `pp-member-${PID}` });
+        const res = await request(app).get(`${API}/plugins/portals`).set('Authorization', `Bearer ${token}`);
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const mine = res.body.filter((p: any) => String(p.slug).startsWith('portal-') && String(p.slug).endsWith(String(PID)));
+        // The inactive plugin and the one not granted browser:script are not served, so not listed.
+        assert.deepStrictEqual(mine, [{ slug: portalOf(ON), title: 'Probe portal' }]);
+        assert.match(String(res.headers['cache-control']), /no-store/);
+    });
+});
+
+describe('GET /plugins/:slug/portal/sw', () => {
+    it('serves the declared service worker as-is, as JavaScript, revalidated and never sniffed', async () => {
+        const res = await request(app).get(`${API}/plugins/${portalOf(ON)}/portal/sw`);
+        assert.strictEqual(res.status, 200);
+        assert.match(String(res.headers['content-type']), /^text\/javascript/);
+        assert.strictEqual(res.headers['cache-control'], 'no-cache');
+        assert.strictEqual(res.headers['x-content-type-options'], 'nosniff');
+        assert.strictEqual(res.text, "self.addEventListener('push', () => {});\n");
+    });
+
+    it('answers the same 404 for every other slug, and for a declared worker that is missing', async () => {
+        const unknown = await request(app).get(`${API}/plugins/never-installed-portal/portal/sw`);
+        assert.strictEqual(unknown.status, 404);
+        for (const slug of [portalOf(OFF), portalOf(NG), ON, adminOf(ON), 'Bad_Slug']) {
+            assertSameAnswer(await request(app).get(`${API}/plugins/${slug}/portal/sw`), unknown, slug);
+        }
+        const sw = path.join(PLUGINS_ROOT, ON, 'client/portal/sw.js');
+        const body = fs.readFileSync(sw);
+        fs.rmSync(sw);
+        try {
+            assertSameAnswer(await request(app).get(`${API}/plugins/${portalOf(ON)}/portal/sw`), unknown, 'missing worker');
+        } finally { fs.writeFileSync(sw, body); }
     });
 });
 

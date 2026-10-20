@@ -29,6 +29,14 @@
  * into view at once — on common desktop sizes it opened below the fold — and the card is capped to the
  * visible band, so its meal, name and buttons are on screen together; the counter tiles share a row only
  * where their words fit (Counters.tsx).
+ *
+ * 2.17.0 («en últimas entregas no muestra qué se le entregó»): «Últimas entregas» names WHAT was delivered on
+ * every row and in its header (RecentDeliveries.tsx), and reloads — with the counters beside it — as soon as
+ * the phone scanner records or undoes a delivery and when it closes, not at the next 15 s poll; an older
+ * poll answering late can no longer put back a list without the newest delivery, and in a rush every newer
+ * answer is applied (the list never freezes until scanning pauses). While the scanner covers the page its
+ * totals reload at most every 2 s (createThrottle) and «Entrega» skips its poll: the scanner's deliveries
+ * and its closing reload them.
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
@@ -38,13 +46,14 @@ import { conferenceApi } from "../lib/conference";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { exportFilename, withoutColumn } from "../lib/exports";
 import {
-    MEALS, DEFAULT_WINDOWS, buildMealReportWorkbook, chunk, columnState, dateRange, filterReportRows, groupByDay,
+    MEALS, DEFAULT_WINDOWS, buildMealReportWorkbook, chunk, columnState, createLatestLoader, createThrottle, dateRange, filterReportRows, groupByDay,
     normalizeCode, pickCurrentService, planKey, planSet, rowState, serviceWindow, sortServices, stampDayTime, stampTime,
 } from "../lib/meals";
 import {
-    MealScanner, PersonSearch, VerdictCard, MEAL_ICON, dayLabel, mealName, serviceName, servedLine, isOffline, useMealDelivery, useTx, makeTxn, createFeedback, primeScannerAudio,
+    MealScanner, PersonSearch, VerdictCard, MEAL_ICON, dayLabel, mealLine, mealName, methodLabel, serviceName, servedLine, isOffline, useMealDelivery, useTx, makeTxn, createFeedback, primeScannerAudio,
     CheckingCard, ConfirmCard, ConfirmToggle, displayLabelsOf, useConfirmFlow, useConfirmPref,
 } from "./MealScanner";
+import { RecentDeliveries } from "./RecentDeliveries";
 import {
     DEFAULT_DISPLAY_KEYS, REVEAL_FIT_VAR, REVEAL_MARGIN_PX, VERDICT_TAP_ARM_MS, canMoveDisplayKey, cardKeyAction, decisionSlotKey, displayLabel, displayOptions, displaySaveKeys,
     moveDisplayKey, previewDisplayFields, revealSlot, toggleDisplayKey, withName,
@@ -120,6 +129,18 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
         try { const d = await conferenceApi.getMeals(conferenceId); setData(d); setLoadFailed(false); return d; }
         catch (e: any) { setLoadFailed(true); addToast(e?.message || 'Error', 'error'); return null; }
     }, [conferenceId, addToast]);
+    // A delivery or an undo made in the phone scanner (and the scanner closing): the page's totals AND
+    // «Entrega» underneath — its counters and «Últimas entregas» reload at once (`changed`), not at its 15 s
+    // poll; the list used to show the scanner's deliveries only after it. The page's totals (GET /meals: the
+    // stats of EVERY service) reload at most every 2 s while the scanner reports a rush — they are hidden under
+    // it — and at once for a lone event and when it closes (lib/meals createThrottle).
+    const [deliveriesRev, setDeliveriesRev] = useState(0);
+    const reloadRef = useRef(reload);
+    reloadRef.current = reload;
+    const totalsReload = useMemo(() => createThrottle(() => { reloadRef.current(); }, 2000), []);
+    useEffect(() => () => totalsReload.cancel(), [totalsReload]);
+    const deliveriesChanged = useCallback(() => { setDeliveriesRev((n) => n + 1); totalsReload.run(); }, [totalsReload]);
+    const scannerClosed = useCallback(() => { setScanner(false); setDeliveriesRev((n) => n + 1); totalsReload.now(); }, [totalsReload]);
     // Set when the selected service disappeared under us (deleted by another admin): from then on nothing
     // is picked automatically — every following scan would otherwise land on whatever service happens to be
     // «current» (lunch scans recorded as dinner). The user must choose; choosing clears the flag.
@@ -155,7 +176,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
     const tabMeta: Record<Tab, [string, string]> = {
         plan: [tx('meals.tab.plan', 'Plan'), 'fa-table-cells'],
         people: [tx('meals.tab.people', 'Por persona'), 'fa-user'],
-        delivery: [tx('meals.tab.delivery', 'Entrega'), 'fa-barcode'],
+        delivery: [tx('meals.tab.delivery', 'Entrega'), 'fa-qrcode'],
         report: [tx('meals.tab.report', 'Reporte'), 'fa-clipboard-list'],
     };
 
@@ -201,12 +222,12 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
 
             {shownTab === 'plan' && canPlan && <PlanTab conferenceId={conferenceId} conference={conference} data={data} services={services} reload={reload} />}
             {shownTab === 'people' && canPlan && <PeopleTab conferenceId={conferenceId} data={data} services={services} reload={reload} />}
-            {shownTab === 'delivery' && canDeliver && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={openScanner} />}
+            {shownTab === 'delivery' && canDeliver && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={openScanner} changed={deliveriesRev} />}
             {shownTab === 'report' && canPlan && <ReportTab services={services} serviceId={serviceId} setServiceId={chooseService} slug={slug} />}
 
             {scanner && canDeliver && (
                 <MealScanner conferenceId={conferenceId} services={services} serviceId={serviceId} language={language}
-                    onServiceChange={chooseService} onChanged={reload} onClose={() => { setScanner(false); reload(); }} />
+                    onServiceChange={chooseService} onChanged={deliveriesChanged} onClose={scannerClosed} />
             )}
         </div>
     );
@@ -570,8 +591,6 @@ const SOURCE_CHIP = {
 };
 const sourceLabel = (tx, s) =>
     s === 'location' ? tx('meals.source.location', 'Por localidad') : s === 'include' ? tx('meals.source.include', 'Añadido') : s === 'exclude' ? tx('meals.source.exclude', 'Quitado') : tx('meals.source.none', 'Sin derecho');
-const methodLabel = (tx, m) =>
-    m === 'scan' ? tx('meals.method.scan', 'Escaneo') : m === 'manual' ? tx('meals.method.manual', 'Manual') : m === 'override' ? tx('meals.method.override', 'Sin derecho (autorizado)') : (m || '');
 
 function PeopleTab({ conferenceId, data, services, reload }: any) {
     const tx = useTx();
@@ -711,8 +730,10 @@ function PersonMealsDialog({ inscriptionId, onClose, onChanged }: any) {
         setBusy(`deliver:${s.id}`);
         try {
             const o = await deliver({ service_id: s.id, inscription_id: inscriptionId, force: !s.entitled, note: !s.entitled ? tx('meals.force.note.admin', 'Autorizado desde «Por persona»') : undefined });
-            if (o.result === 'delivered') addToast(tx('meals.verdict.delivered', 'Entregado'), 'success');
-            else if (o.result === 'already') addToast(tx('meals.verdict.already', 'Ya recibió'), 'error');
+            // The toast names the meal, like the «Entregado» card and «Últimas entregas».
+            const meal = mealLine(tx, o.verdict?.service || s, language);
+            if (o.result === 'delivered') addToast(tx('meals.delivered.what', 'Entregado: {meal}', { meal }), 'success');
+            else if (o.result === 'already') addToast(tx('meals.already.what', 'Ya recibió: {meal}', { meal }), 'error');
             else addToast(o.message || tx('meals.verdict.error', 'No se pudo registrar'), 'error');
             await load(); onChanged?.();
         } finally { setBusy(null); }
@@ -771,7 +792,7 @@ function PersonMealsDialog({ inscriptionId, onClose, onChanged }: any) {
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════
 // 3. ENTREGA (kitchen screen; USB / Bluetooth scanners type the code + Enter)
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════
-function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceId, reload, paused, onScanner }: any) {
+function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceId, reload, paused, onScanner, changed = 0 }: any) {
     const tx = useTx();
     const canPlanEdit = usePerms().can('meals', 'manage');
     const txn = makeTxn(tx);
@@ -785,6 +806,8 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     const [busy, setBusy] = useState(false);
     const [stats, setStats] = useState<any>(null);
     const [recent, setRecent] = useState<any[]>([]);
+    /** The service the server answered «Últimas entregas» for: what every row delivered. */
+    const [recentService, setRecentService] = useState<any>(null);
     const [searching, setSearching] = useState(false);
     /** The «Últimas entregas» row whose undo is asking for confirmation (inline: no dialog takes the focus). */
     const [undoAsk, setUndoAsk] = useState<number | null>(null);
@@ -804,25 +827,38 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     const displayOpenRef = useRef(displayOpen);
     displayOpenRef.current = displayOpen;
 
+    // The counters and «Últimas entregas», loaded every 15 s and after every delivery / undo: an answer is
+    // applied unless a load that left later is already shown (lib/meals createLatestLoader) — a poll that
+    // left before a delivery must not put back the list without it, and in a rush every newer answer still
+    // lands — and only while its service is still selected.
+    const loadRecent = useMemo(() => createLatestLoader({
+        load: (sid: number) => Promise.all([conferenceApi.getMealServiceStats(sid), conferenceApi.getMealServiceDeliveries(sid, 20)]),
+        current: () => (alive.current ? sidRef.current : null),
+        apply: (_sid: number, [s, r]: any) => { setStats(s); setRecent(r.deliveries || []); setRecentService(r.service || null); },
+    }), []);
     const refresh = useCallback(async () => {
-        const sid = serviceId;
-        if (!sid) { setStats(null); setRecent([]); return; }
-        try {
-            const [s, r] = await Promise.all([conferenceApi.getMealServiceStats(sid), conferenceApi.getMealServiceDeliveries(sid, 20)]);
-            if (!alive.current || sid !== sidRef.current) return;   // another service is selected now
-            setStats(s); setRecent(r.deliveries || []);
-        } catch { /* keep the last numbers */ }
-    }, [serviceId]);
+        if (!serviceId) { setStats(null); setRecent([]); setRecentService(null); return; }
+        await loadRecent(serviceId);   // a failure keeps the last numbers
+    }, [serviceId, loadRecent]);
     const refreshRef = useRef(refresh);
     refreshRef.current = refresh;
-    // A new service: fresh numbers. The «Servicio no encontrado» card stays while nothing is selected.
+    // A new service: fresh numbers. The «Servicio no encontrado» card stays while nothing is selected. No poll
+    // while the phone scanner covers this screen: its deliveries / undos and its closing reload (`changed`).
     useEffect(() => {
         setOutcome((o) => (!serviceId && o?.result === 'no_service' ? o : null));
-        setStats(null); setRecent([]); setUndoAsk(null);
+        setStats(null); setRecent([]); setRecentService(null); setUndoAsk(null);
         refresh();
-        const h = setInterval(refresh, 15000);
+        const h = setInterval(() => { if (!pausedRef.current) refresh(); }, 15000);
         return () => clearInterval(h);
     }, [refresh]);
+    // A delivery or an undo made in the phone scanner over this screen, or the scanner closing (MealsPage
+    // `changed`): reload now instead of at the next poll.
+    const seenChange = useRef(changed);
+    useEffect(() => {
+        if (seenChange.current === changed) return;
+        seenChange.current = changed;
+        refreshRef.current();
+    }, [changed]);
 
     // The scan input keeps the focus (a USB / Bluetooth scanner types into whatever is focused) — except
     // while the name search is open, the phone scanner covers this screen or a dialog is open. While the slot
@@ -851,6 +887,8 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
         if (o.result === 'delivered') scheduleReload();
         refreshRef.current();
     };
+    // Its result is capped and brought into view like every result in the slot (decisionSlotKey), the
+    // confirmation ON or OFF.
     const run = (body: any) => {
         if (!serviceId) return;
         const sid = serviceId;
@@ -889,18 +927,21 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     // Another service, or the confirmation switched off: the open card and the queue belong to the old state.
     useEffect(() => { flow.reset(); }, [serviceId, confirmOn, flow]);
     // The decision is always in view (lib/mealConfirm revealSlot): whatever newly appears in the slot — the
-    // check on its way, a card, a delivery's result — is capped to the visible band and scrolled into view
-    // before it is painted; again when the window is resized. A layout effect: it runs (and its resize
-    // listener is registered) before the card's own measuring effect, which then sees the capped height.
+    // check on its way, a card, a delivery's result (the confirmation ON or OFF) — is capped to the visible band
+    // and scrolled into view before it is painted; once more on the next frame, when the card has settled (a
+    // result that replaces another one re-measures its details after this effect and may grow: «Ya recibió»
+    // after «Entregado» ended 50 px under the fold at 320×460); again when the window is resized.
     const slotRef = useRef<HTMLDivElement>(null);
     const slotKey = decisionSlotKey({ confirmOn, card: confirm.card, checking: confirm.checking, outcome, held: confirm.held });
     slotKeyRef.current = slotKey;
     useLayoutEffect(() => {
-        if (!slotKey) return;
+        // Nothing to bring into view (an empty slot): no cap either — never a stale one.
+        if (!slotKey) { slotRef.current?.style.removeProperty(REVEAL_FIT_VAR); return; }
         const reveal = () => { revealSlot(slotRef.current, window); };
         reveal();
+        const frame = typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame(reveal) : null;
         window.addEventListener('resize', reveal);
-        return () => window.removeEventListener('resize', reveal);
+        return () => { if (frame != null) window.cancelAnimationFrame(frame); window.removeEventListener('resize', reveal); };
     }, [slotKey]);
     /** What a key answers: the open card, or the delivery result that holds the queue. */
     const keyTarget = (st: any) => (st.card ? st.card.result : st.held ? 'held' : null);
@@ -974,8 +1015,6 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
         } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
         finally { if (alive.current) { setBusy(false); setTimeout(focusInput, 0); } }
     };
-    /** Buttons here must not take the focus from the scan input (the scanner's Enter would press them). */
-    const keepFocus = (e: any) => e.preventDefault();
 
     if (!services.length) return <div className={`${card} p-8 text-center text-sm font-bold text-gray-500`}>{canPlanEdit ? tx('meals.delivery.no.services', 'Crea los servicios en «Plan» para empezar a registrar entregas.') : tx('meals.delivery.no.services.ask', 'Todavía no hay servicios de comida. Pide a quien gestiona Alimentación que los cree.')}</div>;
 
@@ -1008,9 +1047,13 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                             </div>
                             : confirm.checking ? <CheckingCard />
                                 : outcome
-                                    ? <VerdictCard outcome={outcome} service={service} busy={busy || confirm.delivering} language={language} armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
-                                        onForce={outcome.result === 'not_entitled' ? force : undefined} onUndo={undo} onDismiss={() => { setOutcome(null); flow.close(); focusInput(); }} />
-                                    : <div className="h-full rounded-3xl border-2 border-dashed border-gray-100 flex items-center justify-center text-sm font-bold text-gray-400 py-8"><i className="fa-solid fa-barcode mr-2" aria-hidden="true"></i>{tx('meals.delivery.waiting', 'Esperando un código…')}</div>}
+                                    // Capped the same way (2.17.0, live round at 320×460: 888 px tall, «Deshacer» far below the
+                                    // fold): the status, the meal, the name and «Deshacer» on screen at once.
+                                    ? <div data-verdict-fit="" style={{ display: 'flex', flexDirection: 'column', maxHeight: `var(${REVEAL_FIT_VAR}, none)` }}>
+                                        <VerdictCard outcome={outcome} service={service} busy={busy || confirm.delivering} language={language} armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
+                                            onForce={outcome.result === 'not_entitled' ? force : undefined} onUndo={undo} onDismiss={() => { setOutcome(null); flow.close(); focusInput(); }} />
+                                    </div>
+                                    : <div className="h-full rounded-3xl border-2 border-dashed border-gray-100 flex items-center justify-center text-sm font-bold text-gray-400 py-8"><i className="fa-solid fa-qrcode mr-2" aria-hidden="true"></i>{tx('meals.delivery.waiting', 'Esperando un código…')}</div>}
                         {/* The queue waits behind a delivery's result: say so, and how to go on. */}
                         {confirmOn && !confirm.card && !confirm.checking && (confirm.held || confirm.waiting > 0) && (
                             <div data-confirm-queue={confirm.held ? 'held' : 'waiting'} className="mt-2 text-xs font-black text-gray-600" role="status">
@@ -1064,34 +1107,9 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                         </ul>
                     )}
                 </div>
-                <div className={`${card} p-5 space-y-2`}>
-                    <h4 className={labelCls}>{tx('meals.recent', 'Últimas entregas')}</h4>
-                    {!recent.length && <p className="text-xs font-semibold text-gray-400">{tx('meals.recent.none', 'Aún no hay entregas en este servicio.')}</p>}
-                    <ul className="divide-y divide-gray-50">
-                        {recent.map((r) => (
-                            <li key={r.delivery_id} className="py-2">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[11px] font-black text-gray-400 tabular-nums w-11">{stampTime(r.delivered_at)}</span>
-                                    <span className="min-w-0 flex-1">
-                                        <span className="block text-sm font-bold text-gray-900 truncate">{r.name}</span>
-                                        <span className="block text-[11px] text-gray-500 truncate">{[r.location_id == null ? tx('meals.no.location', 'Sin localidad') : r.location, methodLabel(tx, r.method), r.delivered_by].filter(Boolean).join(' · ')}</span>
-                                    </span>
-                                    {undoAsk !== r.delivery_id && (
-                                        <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={() => setUndoAsk(r.delivery_id)}
-                                            className="p-2 text-gray-400 hover:text-rose-600 disabled:opacity-40" aria-label={tx('meals.undo.person', 'Deshacer la entrega a {name}', { name: r.name })}><i className="fa-solid fa-rotate-left" aria-hidden="true"></i></button>
-                                    )}
-                                </div>
-                                {undoAsk === r.delivery_id && (
-                                    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-rose-50 px-3 py-2" role="alertdialog" aria-label={tx('meals.undo.confirm.person', '¿Deshacer la entrega a {name}?', { name: r.name })}>
-                                        <span className="text-xs font-bold text-rose-800 flex-1">{tx('meals.undo.confirm.person', '¿Deshacer la entrega a {name}?', { name: r.name })}</span>
-                                        <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={() => undo(r.delivery_id)} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-black text-[10px] uppercase tracking-widest disabled:opacity-50">{tx('meals.undo', 'Deshacer')}</button>
-                                        <button type="button" onMouseDown={keepFocus} onClick={() => setUndoAsk(null)} className="px-3 py-1.5 rounded-lg bg-white text-gray-600 font-black text-[10px] uppercase tracking-widest">{tx('cancel', 'Cancelar')}</button>
-                                    </div>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
+                {/* WHAT was delivered, to whom (RecentDeliveries.tsx): the service the server answered the rows
+                    for — the selected one until it answers. */}
+                <RecentDeliveries service={recentService || service} rows={recent} busy={busy} undoAsk={undoAsk} onAskUndo={setUndoAsk} onUndo={undo} />
             </div>
         </div>
     );

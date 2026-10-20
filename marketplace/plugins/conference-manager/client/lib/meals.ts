@@ -43,9 +43,18 @@ export type PlanRow = { location_id: number; service_id: number };
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const CODE_LENGTH = 10;
 
-/** Exactly the server's normalization: scanners add prefixes, suffixes, CR, dashes, lowercase. */
+/**
+ * The code inside a badge's «Mi inscripción» link (2.23.0: `…/portal/conference/yo#c=<code>`), or null — what the
+ * server's findByScanCode reads first.
+ */
+export const codeFromLink = (raw: unknown): string | null => {
+    const m = /[#?&]c=([A-Za-z0-9]{10})(?=$|[&#\s])/.exec(String(raw ?? '').trim());
+    return m ? m[1].toUpperCase() : null;
+};
+
+/** Exactly the server's normalization: a badge link's code, else the text without what scanners add (prefixes, suffixes, CR, dashes, lowercase). */
 export const normalizeCode = (raw: unknown): string =>
-    String(raw ?? '').trim().toUpperCase().replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, '');
+    codeFromLink(raw) ?? String(raw ?? '').trim().toUpperCase().replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, '');
 
 /** A full registration code (what a printed barcode carries). */
 export const isRegCode = (s: unknown): boolean => {
@@ -219,6 +228,9 @@ export function classifyRead(raw: unknown, format = ''): ScanRead | null {
     // Control characters (a GS1 FNC1 separator, a trailing CR) are not shown and never part of a code.
     const value = String(raw ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
     if (!value) return null;
+    // The badge's QR carries the «Mi inscripción» link with the code (2.23.0).
+    const linked = codeFromLink(value);
+    if (linked && isRegCode(linked)) return { kind: 'reg', code: linked, format };
     const compact = value.toUpperCase().replace(/[\s-]/g, '');
     if (isRegCode(compact)) return { kind: 'reg', code: compact, format };
     return { kind: 'other', value, format };
@@ -417,3 +429,61 @@ export function filterReportRows(rows: ReportRow[] | null | undefined, filter: '
 /** Case- and accent-insensitive comparison text (client-side filtering of already-loaded rows only). */
 export const foldText = (v: unknown): string =>
     String(v ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+// ── «Entrega»: counters + «Últimas entregas» ─────────────────────────────────────────────────────────
+/**
+ * «Entrega» reloads its counters and «Últimas entregas» from several places: every 15 s, after each delivery
+ * or undo made there, and after one made in the phone scanner over it. An answer is applied unless the answer
+ * of a load that LEFT LATER is already on screen, and only while its service is still the selected one: the
+ * poll may leave before a delivery and answer after the reload that already shows it — the older list must
+ * not come back and hide that delivery until the next poll. Every answer newer than what is on screen IS
+ * applied, even when another load has left since: in a rush (a USB scanner reading a family back to back,
+ * one scan a second) each load starts before the previous one answers, and applying only the answer of the
+ * very last load to leave froze the counters and the list until scanning paused. `load(serviceId)` fetches;
+ * `apply(serviceId, data)` runs for every answer newer than the one shown; `current()` names the selected
+ * service (null when none, or the screen is gone). A failure keeps what is shown — and does not stop an
+ * older answer that is still newer than it from being applied.
+ */
+export function createLatestLoader<T>({ load, current, apply }: {
+    load: (serviceId: number) => Promise<T>;
+    current: () => number | null;
+    apply: (serviceId: number, data: T) => void;
+}) {
+    let seq = 0;
+    /** The load whose answer is on screen (0: none yet). */
+    let shown = 0;
+    return async (serviceId: number): Promise<'applied' | 'stale' | 'failed'> => {
+        const my = ++seq;
+        let data: T;
+        try { data = await load(serviceId); } catch { return 'failed'; }
+        if (my < shown || serviceId !== current()) return 'stale';
+        shown = my;
+        apply(serviceId, data);
+        return 'applied';
+    };
+}
+
+/**
+ * At most one run every `ms`, and none lost: the first call runs at once; the calls of the next `ms` fold
+ * into ONE run at its end (which opens a new window). `now()` runs at once (the folded run is dropped: this
+ * one covers it) and opens a window; `cancel()` drops the folded run (unmount). The phone scanner reports
+ * every delivery and undo: the page's totals (GET /meals — a stats query per service) reload at most every
+ * 2 s during a rush instead of after every scan, while a lone event still reloads at once (a deleted service
+ * must leave the scanner's service list now) and so does closing the scanner.
+ */
+export function createThrottle(fn: () => void, ms: number) {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let folded = false;
+    const open = () => {
+        timer = setTimeout(() => {
+            timer = null;
+            if (folded) { folded = false; fn(); open(); }
+        }, ms);
+    };
+    const stop = () => { if (timer) clearTimeout(timer); timer = null; folded = false; };
+    return {
+        run() { if (timer) { folded = true; return; } fn(); open(); },
+        now() { stop(); fn(); open(); },
+        cancel: stop,
+    };
+}

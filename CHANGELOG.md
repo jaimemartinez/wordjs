@@ -8,6 +8,434 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **conference-manager 2.30.0: everything since 2.17.2, in one release.** Versions 2.18.0 to 2.29.0 were built
+  and tried on a test site but never released; they ship together now, and the entries below keep the version
+  each change was made in: «Pagos de cuotas», split fee payments in the admin and the portal (2.18.0); rooms
+  shared by several locations (2.18.0); «Escarapelas», each registrant's badge and its PDF (2.19.0); the
+  fewest rooms and «Sugerir reparto» (2.20.0–2.21.0); lodging dates, held rooms and fixed people (2.21.0); the
+  registration code as a QR Code (2.22.0); «Mi inscripción», the registrant's own page behind that QR
+  (2.23.0); hotels on a map (2.24.0); «Verificar abordaje» (2.25.0); transport sold as packages of buses
+  (2.26.0); boarding notices on the passengers' phones by Web Push (2.27.0); badge links that lead to «Mi
+  inscripción» (2.28.0); and a free-form badge designer (2.29.0). They carry every security fix of 2.17.1 and
+  2.17.2: the new portal routes use the opaque portal sessions and the per-location seat lock, and roles
+  without «Inscripciones» never see an ID document. «Mi inscripción» signs in under the portal's rule: only
+  the caller's own attempts can refuse it — other people's wrong documents make a sign-in wait, never fail.
+  **Upgrading from 2.17.x:** update the core and the plugin together (the portal moved into the plugin, see
+  *Changed*). The plugin now also asks for the `network` permission, used only to send the bus notices to
+  the browsers' push services; until an administrator grants it in **Plugins**, the notices still show on
+  the passengers' open page.
+- **Plugin portal pages: sub-pages, a service worker and file downloads.** A plugin's `frontend.portalPage`
+  can now describe its sub-pages (`pages`: a title; `private` — never indexed, never stored, no `Referer`;
+  `app` — installable to a phone's home screen, with a web app manifest at
+  `/portal/<slug>/app.webmanifest?page=<page>`), ship a service worker (`serviceWorker`, served as-is at
+  `/portal/<slug>/sw.js`) and name a public route that turns a short-lived ticket into a file (`file`; the
+  core answers the bytes at `/portal/<slug>/file?d=<ticket>`, PDF and images only). The menu editor's
+  «System pages» offers every portal that is served (`GET /api/v1/plugins/portals`) instead of a fixed
+  conference link. See [plugins.md §10.6](documentation/plugins.md).
+- **conference-manager 2.29.0: a free-form badge designer, in the manner of Canva.** The site owner: the badge
+  design should work like Canva, professional. «Escarapelas › Diseño» is now a canvas: start from one of six
+  templates (horizontal and vertical); add texts in 14 typefaces (Montserrat, Poppins, Lato, Raleway, Open Sans,
+  Roboto, Nunito, Oswald, Bebas Neue, Playfair Display, Merriweather, Lora, Dancing Script, Helvetica) whose content
+  may carry the registrant's data as tokens (name, code, location, room, dates, conference, any form field — a
+  text whose data is empty is not drawn), shapes (rectangles with rounded corners, circles, tags, bands, frames),
+  lines, images (uploaded once to the conference's gallery; JPEG, or PNG keeping its transparency; any one can be
+  the background) and the QR. Every element can be dragged, resized and rotated on the card with magnetic guides
+  (the card's edges and centre, the other elements), aligned, ordered in layers, locked, duplicated, made
+  translucent; undo / redo and keyboard shortcuts. Texts shrink to fit their box. The canvas draws the display list
+  of the same layout code the server runs, measured with the same font files, so the designer, the badge on
+  «Mi inscripción», the person sheet and the PDF match; the PDF embeds the typefaces it uses (TrueType, once
+  each), the images (PNG transparency as a soft mask), rotation and opacity. A pre-2.29 design opens converted
+  (its background and logo join the gallery) and keeps printing as it was until it is saved. The policy and
+  «Mi inscripción» settings move to an «Ajustes» tab. The typefaces ship with the plugin (SIL Open Font License,
+  `fonts/OFL.txt`) as modules, so the plugin reads no file and needs no new permission; they are served at
+  `GET /public/badge/font`.
+- **conference-manager 2.28.0: a badge link no longer shows the badge.** The site owner: the link the
+  administration or a coordinator shares must not show the badge at once (it carried no check of any kind), but
+  lead to «Mi inscripción». Opening a badge link (`/portal/conference/badge#t=…`, including every link sent
+  before this version) now only goes to `/portal/conference/yo#c=<code>`, where the person confirms their
+  identity document before seeing the badge; the plugin answers such a link with that address alone (no badge,
+  no name), and the link's PDF route is gone (410). With «Mi inscripción» off, or no document field to ask, a
+  link shows nothing. The badge stays available to staff (preview, PDFs) and, after the document, on «Mi
+  inscripción». What the admin's person sheet and «Escarapelas › Personas», and the coordinators' portal, open,
+  copy, export and send by WhatsApp is now that page's own address (each link carries `self`), not the old link.
+- **conference-manager 2.27.0: boarding notices on the passengers' phones.** The site owner: tell a bus's
+  passengers that it is boarding, by browser notification, from a boarding section in Transporte. Each bus card
+  now shows its state (Programado / Embarcando / Salió) and how many of its passengers have the notices on, with
+  «Iniciar embarque», «Marcar salida», «Mensaje» (free text, up to 240 characters, with the bus's notice history)
+  and a reset. On «Mi inscripción» a new «Mi transporte» section lists the person's buses with that state and the
+  team's messages (refreshed every 30 s while the page is open), and offers «Activar avisos del bus»: the page
+  registers its own service worker (`/portal/conference/yo-sw.js`, scoped to the page) and the plugin sends real
+  Web Push notifications, which arrive with the page closed. The payload is encrypted per RFC 8291 (checked
+  against the RFC's own test vector) and signed per RFC 8292 (VAPID; the site's key pair is generated once), with
+  no new dependency. A subscription belongs to the page's session and goes when the person leaves, when the
+  session expires, or when the push service reports it gone; only push services' hosts are accepted as endpoints.
+  Sending needs the new optional «network» permission; without it the notices still show on the open page and
+  the admin is told. On iPhone, Safari delivers web notifications only to a page added to the home screen (iOS
+  16.4+); the page is installable for that (web app manifest) and explains the steps there.
+- **conference-manager 2.26.0: transport is sold as packages of buses.** The site owner: create packages of buses
+  and sell the packages. A package (Transporte › Paquetes) is a fixed list of buses (e.g. «Ida y regreso» = Bus 1
+  + Bus 4) with one price; selling it to a person creates the sale (its own price, payments and status) and a
+  seat on every bus of the list — all-or-nothing, never beyond a bus's free seats, never for someone who already
+  sits on one of those buses. The list of a sold package is locked; its price changes for new sales, and with
+  «aplicar a los ya vendidos» for the sold ones, never below what a sale has been paid. Payments are recorded per
+  sale (never beyond its balance) and are the transport income of Contabilidad; a sale or a package with
+  payments, or a bus in a sold package, cannot be removed until those payments are. Single bus tickets are no
+  longer sold (`POST /buses/:id/passengers` and ticket payments answer 410); the bus keeps its seats, its
+  passenger list (now showing each person's package and its payment status), the Excel manifests and the
+  boarding check. On upgrade every ticket sold the old way becomes a sale of a one-bus package named after its
+  bus, with its price and its payments moved over (once; nothing counted twice). The transport workbook gains a
+  «Paquetes» sheet with the money, the per-bus sheets show the package, and the custom roster's transport columns
+  count each package once. Server in `server/transport-packages.js`; routes under `/transport/packages` and
+  `/transport/package-sales`.
+- **conference-manager 2.25.0: «Verificar abordaje» — scan a badge to know whether the person travels on the bus
+  being boarded.** The site owner: in Transporte, choose the bus, scan each person's QR and see whether they belong
+  to that bus. A full-screen scanner (from the page header, or the QR button of a bus card, which opens on that
+  bus) reuses the meal scanner's camera, readers (BarcodeDetector where it reads QR, else jsQR and the built-in
+  barcode reader), aiming frame and beeps; a USB / Bluetooth reader or a typed code works too (keys typed while
+  nothing has the focus go to the code box). New read-only `POST /transport/check { bus_id, code }` (transport
+  view or manage) reads the code, the «Mi inscripción» link of the QR or an older Code 128 badge
+  (findByScanCode) and answers `ok` (with what the ticket still owes, shown as information), `other_bus` (naming
+  the person's bus), `no_ticket`, `cancelled` or `unknown` (also for a code of another conference). Nothing is
+  recorded.
+- **conference-manager 2.24.0: the hotel form finds the hotel and pins it on a map; «Mi inscripción» no longer
+  shows the payment.** The site owner wanted to search the place and see it on a map instead of pasting a link.
+  The hotel form now has a search box (OpenStreetMap's Nominatim, called from the admin's browser on an explicit
+  «Buscar» only and at most once per second, as its usage policy asks; results in Spanish, limited to the
+  browser's country) whose results put the pin on the map, and a map of OpenStreetMap tiles drawn as images
+  (drag to move, buttons or a double click to zoom, a click to put or move the pin, «Centrar» / «Quitar punto»).
+  Picking a result fills an empty address. Pasting a Google Maps link or coordinates is still there, as an
+  option. No map library and no CSP change. The participant page and its server answer drop «Mi pago» (the
+  owner: not to be shown there).
+- **conference-manager 2.23.0: «Mi inscripción», the registrant's own page behind their badge's QR.** The site
+  owner: scanning their own QR, each person confirms their document type and number and sees all their
+  registration — the virtual badge (and its PDF), their answers, their payment, the meals already delivered and
+  when, those still to come, and their hotel, room and a map of the hotel. The badge QR (PDF, previews, the code
+  viewer and the Excel column) now carries `<site>/portal/conference/yo#c=<code>`; the meal scanner, the camera
+  readers and the server's scan lookup take the code out of that link, so the kitchen scans the same QR as
+  before. The page lives in the core portal (`/portal/conference/yo`, noindex, no Referer, the code in the
+  fragment) and talks to new public plugin routes (`/public/me/start | verify | view | ticket | logout`,
+  `server/selfpage.js`): the document must match the registration's (punctuation and accents ignored; the type
+  only when one is recorded), then a session token — stored only as its SHA-256, 30 days or the badges' expiry —
+  lets that phone reopen the page without asking again until the person leaves. Failures are throttled per code
+  (5 in 15 minutes lock only that code), per client and globally; an unknown code and a wrong document answer the
+  same 401; nothing about another person (no roommates) is ever shown. «Escarapelas › Uso» turns the page on or
+  off (on by default) and chooses the document fields (detected by their labels otherwise). Hotels can now be
+  edited and get a position: a full Google Maps or OpenStreetMap link, or coordinates (`server/geo.js`, the
+  place's pin preferred over the map's centre; a short `maps.app.goo.gl` link is refused with instructions, as
+  it does not carry the position), stored as TEXT `hotels.geo`. The map is OpenStreetMap tiles drawn as images
+  with the hotel's pin and the OSM credit (no script or frame, so the site's CSP is unchanged), plus «Cómo
+  llegar» / «Google Maps» links. The plugin now requests `settings:read` to read the site's address for the
+  link; without the grant the QR keeps the bare code. The portrait badge's QR strip grows (the six field rows
+  keep their places) since a link is a denser symbol, drawn at error correction M.
+- **conference-manager 2.18.0: «Pagos de cuotas», split fee payments in the admin and the coordinators'
+  portal.** A payment is now one receipt (a bank transfer or a cash handover) split among the people it
+  covers, and the parts must add up to its amount to the cent. The split is «Iguales» (the default; the
+  leftover cents go to the first people, 100.00 / 3 = 33.34 + 33.33 + 33.33) or «Manual»; the server, the
+  admin and the portal run one set of split vectors. Nobody can be paid more than they still owe, counting
+  money awaiting validation, in the admin and the portal alike (`409 over_cap`); validating checks it again
+  after a re-price, and refuses a payment that still holds a person cancelled since — a cancelled
+  inscription owes nothing (`409 cancelled_people` until the split is corrected, the person reactivated or
+  the payment rejected). On a multi-node install the rule holds across nodes too: every write that adds money
+  checks it again after writing, and the one that would overpay is undone and answers `409 over_cap`; each
+  correction of a payment works on a split generation of its own, so two corrections at once (or a node
+  restarting meanwhile) never delete each other's split, and a correction that backs off never undoes a
+  validation another node made in the meantime, nor does a validation whose last write lands late undo another
+  node's void; a correction undone that way puts the previous split back even when a node restarting meanwhile
+  had already cleared it, so the payment and its receipt never vanish. Deleting a person is safe across nodes
+  too: a payment another node records with that person at the same moment either makes the delete answer
+  `409 shared` or backs off itself (`400 unknown_people` / `cancelled_people`) — a receipt is never left with
+  a part missing; a 1-person payment of theirs that another node re-splits at that moment is never deleted
+  with them: moved to someone else, it stays (now theirs) while the person goes; made shared, the delete
+  answers `409 stale` and leaves the person as they were — every payment is read again before anything is
+  deleted, validated ones (whose split never changes) go last, and in the instant between two deletes the
+  answer names any payment already deleted — and a correction or a
+  validation whose payment another node deleted meanwhile answers `409 stale`, never success — and while the payment tables are unavailable a person with payments cannot be deleted
+  (`503 unavailable`; cancel the inscription instead). A correction never changes which voided payment a
+  payment records again: a `PUT` naming another `duplicate_of` / `copy_proof_from` answers `400 source_fixed`,
+  so a copy can never leave its receipt's payment free to count a second time. A payment interrupted halfway through being written never counts as income, not even while the
+  payment tables are unavailable or after a downgrade — a correction interrupted halfway does not either,
+  also after a healthy restart in between — and deleting a
+  location waits for a payment its coordinator is recording at that moment (which then names no location
+  instead of the deleted one — also when the two happen on different nodes, and «Devolver» checks that the
+  recording location still exists). The receipt is required for a transfer and
+  optional for cash, is shrunk in the browser to at most 1,000,000 characters (a file over 15 MB is
+  refused), is stored once per payment and is loaded only when someone opens it; the server refuses
+  (`400`) an image whose header declares more than 8192 px on a side or 24 megapixels, which a browser
+  showing it could not decode, and a receipt stored before 2.18.0 that fails the same check is never shown
+  (`422 invalid_proof`), copied by «Duplicar» or kept by a correction. A payment is «Por validar», «Validado», «Devuelto» (sent back with a note,
+  then corrected and resent by whoever recorded it: the administration or the recording location's
+  portal — a payment from before 2.18.0, or one of a deleted location, has nobody to correct it and is
+  edited, validated or rejected instead, `409 no_recorder`) or «Rechazado» (a reason is required). A shared payment
+  is validated all or nothing, exactly as the reviewer saw it (`expected: { status, alloc_gen }`,
+  `409 stale` otherwise). A validated payment is never edited: it is voided with a reason, and then
+  «Duplicar» records it again with the same receipt, date and reference. «Duplicar» is offered only on a
+  voided payment, and the server refuses to copy the receipt of one that still counts or can still count
+  (`409 proof_source_live`): one receipt never stands behind two live payments. A voided payment is recorded
+  again only once: while its copy counts, a second «Duplicar» of it and validating it again are refused
+  (`409 source_used`, also between nodes and for cash without a photo), and the two say so — the voided one
+  «Registrado de nuevo en el pago #N», the copy which payment it records again; voiding or deleting the copy
+  frees it. A payment back in «Por validar» after a correction or a resend shows no «Revisado por» (it
+  awaits a new review; its history keeps who returned it). A payment the admin registers is validated at
+  once unless «Dejar por validar» is ticked, and may cover several locations; a portal payment is always
+  pending and holds only that location's people, also when the administration corrects it (`400
+  unknown_people` for anyone added from elsewhere; a person who moved away since may stay). A retried
+  request never records twice (`client_key`) and repairs the balances of a first attempt that failed after
+  writing — but only the same request: one sent again under its key with other data (a send whose answer
+  was lost, corrected on screen and sent again) answers `409 client_key_changed` naming the payment that was
+  recorded, never «registered» for a payment that is not the one on screen, and the admin and the portal say
+  so and reload; a transfer reference already used by another live payment asks for confirmation — also when
+  any payment is validated, pending, returned or voided (`409 duplicate_reference` unless the admin confirms it
+  is another transfer: the same bank transfer recorded again by hand as a new payment — or confirmed by a
+  coordinator with «Registrar de todas formas», or sent by an older portal — never counts twice unseen; a
+  confirmed one says so in its history, «Referencia repetida confirmada: también cuenta en el pago #N»), and of
+  two payments recorded with one reference at the same moment on two nodes, one backs off. Old payments
+  become one-person payments at boot, with their amounts, statuses and receipts. If the boot migration of
+  the payments fails, the plugin keeps working on the old payment rows (coordinators still sign in and see
+  their people and balances; the roster and the reports work), but no payment can be recorded until the
+  migration completes: the «Pagos de cuotas» routes answer `503 unavailable` until a later attempt completes
+  it — to an account with the payments permission; any other gets its `403` first and starts no migration
+  attempt — and the portal's payment form, the older one included, says «Los pagos no están disponibles en
+  este momento; inténtalo más tarde.» instead of a message meant for the administrator. Deleting a person who is part of a shared payment answers `409 shared`
+  saying what to do for that payment's status (take them out of a pending or returned split, void a
+  validated payment and record it again, delete a rejected one — or cancel the inscription); a role without
+  Pagos › gestionar gets only «La inscripción tiene pagos registrados…», never the payments' numbers,
+  statuses or sizes; and a role with Inscripciones but without Pagos › ver reads a person's payments as each
+  part's amount, date, method and status only — never the payment behind it (its number, size, people), its
+  reference, its receipt or its review (`GET /inscriptions/:id/payments`; the person sheet shows the same).
+  - **Admin.** A «Pagos de cuotas» tab next to «Contabilidad» (`payments:view` to look, `payments:manage` to
+    register and review) has four parts: «Resumen» (fees, validated, awaiting validation, returned, still
+    to collect, one bar that adds up to the fees, one line per location — the same figures the coordinator
+    sees — with an «A favor» column whenever any money is held in credit); «Por validar», oldest first, with
+    the payment beside the list on a wide screen (the list narrows on a 1280 px window so the
+    «Devolver… / Rechazar… / Validar y siguiente» bar keeps to one row), the list and that bar kept in view —
+    the bar is the payment card's last row — while the receipt scrolls (no bulk validation; «Editar
+    reparto · Eliminar» come first, above the receipt, so a short payment never hides them under the bar);
+    the receipt shown is always the payment's current one, also right after the coordinator resent it with a
+    new photo; «Pagos», every payment with filters — on a desktop its columns follow the room the card has
+    (at 1280 px beside the sidebar the people's names got no room at all and two headers were drawn over
+    each other): «#», the people, the total, the status and «⋮» always, the date and the method, then the
+    location and the reference as they fit, and what does not fit is written under the names; and «Saldos»,
+    one row per person, where up to 200 people are selected for «Registrar pago (n)»; its filters wrap
+    instead of scrolling sideways and carry their counts, which follow the search. A returned payment's
+    note shows on two lines in the phone list, and a reference («Ref. KEEP-77») is never split across two
+    lines. The «Por validar» count beside the section's tabs is legible (AA contrast). Escape typed in a
+    field belongs to the field (it clears a search box) and no longer closes the sheet around it;
+    «Registrar pago» and the inscription form ask before Escape throws changes away, and in a payment Escape
+    closes an empty «Devolver… / Rechazar…» reason box and keeps a typed reason («Cancelar» discards it) —
+    never the payment with the reason in it. In
+    «Registrar pago» each person reads «debe $X», or «$Y por validar · falta $X» while some of their money
+    awaits validation; a part says «Queda pagado al validarse lo pendiente» when it is that other money
+    that still has to be validated, and «Supera lo que falta: máximo $X» past what the person may receive
+    — the portal's words, as are «Forma de pago» for the one method of a payment, «Referencia de la
+    transferencia» / «Referencia (opcional)» and the sum line «Asignado $X de $Y · ✓ Cuadra / Faltan /
+    Sobran» (the payment sheet says it the same way); an amount typed «250» reads «250,00» once its field is
+    left; an empty sheet's button reads «Registrar pago» without «$0,00»; the person search's placeholder is
+    «Buscar persona», whole on any phone; the footer says how much is missing or left over in the split. The
+    dashboard gains «Pagos por validar · N · $X», and its «Sin pagar» card becomes «Con saldo» (people with
+    something no payment covers yet — the «Saldos» filter of that name); «Pagados» no longer counts
+    cancelled inscriptions. «Contabilidad» shows one line
+    per payment («Pago de cuotas · 3 personas», «· 1 persona», in the admin's language; expandable; its lock
+    opens the payment; its origin line says «Pago de cuotas», like the Excel), a location filter
+    that keeps each payment's share of that location's people (the locations add up to the whole), and a
+    «Detalle de cuotas» Excel sheet. Its layout follows the room the panel really has, not the window: at
+    1280 px beside the sidebar the movements no longer overflow their card (the amount was cut to «+$50…»),
+    «Por categoría» moves beside them only on a wide page, Categoría and Forma de pago fold into each line's
+    description when the columns do not fit, on a phone each movement is a block with its date and amount
+    on top, and the filters wrap with whole dates (16 px on a phone). Fee amounts read like the portal's («$1.550,00»); the payment history
+    names the coordinator's location («Portal de Bogotá»); on phones every control of the payment sheets is
+    at least 44 px tall (the manual entries' edit / delete in «Contabilidad» too, now always visible), the
+    sections wrap instead of scrolling sideways, and a sheet's pinned buttons stay above the iPhone home
+    indicator. Every in-app confirmation is announced with its question. «Reportes» computes its figures
+    like «Resumen»: a cancelled inscription owes nothing, «Recaudado» is the validated money up to each fee,
+    «Saldo pendiente» (awaiting validation plus still to collect) is never negative, «A favor» shows apart,
+    and the Pagado / Abono / Sin pagar counts are of active people, with the cancelled ones counted apart.
+    «Reportes» and the CSV export gain a «Por validar» column, the
+    roster Excel «Por validar» and «Devuelto», and a «Pagos de cuotas» workbook lists the payments, their
+    split and each person's balance. Phones and real amounts: a sheet's footer keeps «Cancelar» and its main
+    button on one row and the sheet scrolls a focused field clear of the footer's real height (on an iPhone SE
+    the wrapped footer of «Registrar pago» covered «Monto total»); totals of $1.000.000,00 and more stay on
+    one line in their tiles, shrinking to fit, and «Saldos» writes «debe» / «falta» over a whole amount;
+    every field is 16 px on a touch screen held sideways too; an e-mail in the person sheet wraps at «@» and
+    «.». «Validar» on a voided payment whose transfer reference another live payment uses asks «Esa
+    referencia ya cuenta en el pago #N. ¿Validar de todas formas?». A part's «Supera lo que falta: máximo $X»
+    comes into view with its field — also the moment it turns red while the amount is typed — instead of
+    under the pinned footer, and so does «Usar lo que falta» with «Monto total». On a phone held sideways the
+    sheets pin their header (title, ✕) and their footer (the main button and why it is disabled) as they do
+    upright. The receipt pickers' «Tomar foto o elegir archivo» / «Cambiar» are buttons a keyboard reaches
+    with a visible ring, and the method, split and section strips are one Tab stop moved with the arrow keys,
+    as their radio / tab roles promise — and going «Manual» → «Iguales» → «Manual» gives back the amounts typed
+    (they used to be replaced by a new split). «Contabilidad» never splits «1 persona» / «3 personas» from its
+    count, nor leaves its «·» alone («Pago de cuotas» / «· 3 personas»; its origin, people and «Categoría ·
+    Forma de pago» lines too, and «Carlos G.» stays whole), a location card says «1 pagado», and a payment's
+    facts never leave a «·» alone at a line's end — the payment's header, recorder and history lines, the
+    review queue's cards, the phone «Pagos» rows and the person sheet's payments («$200,00 · de $550,00 ·
+    compartido con 2») alike; a coordinator reads «Portal de Bogotá», one fact, on screen and in the Excel.
+    The clickable «Por validar» tile lines up with the others. On a phone, what «Eliminar», «Cancelar
+    inscripción» and «Reactivar» did comes into view above the person sheet's pinned buttons (a refused
+    «Eliminar» showed nothing until the sheet was scrolled to its end), and «Usar lo que falta» comes into view
+    with «Monto total» also when it appears while the amount is typed on a phone held sideways. Sideways, the
+    payment and person sheets pin only their title row (the payment's facts, recorder and reviewer, the
+    person's chips scroll with the body: pinned, they left the receipt a 176 px slit), and the person picker of
+    «Registrar pago» is capped by the room it has. On a phone «Pagos» keeps its status chips and search in
+    the page and folds location, method, «Registrado por» and the dates into «Filtros (n)» (an iPhone SE
+    showed no payment on its first screen). Choosing or removing a receipt keeps the keyboard focus in the
+    picker («Cambiar», or the empty picker's button) instead of dropping it outside the dialog. «Asignado $X de
+    $Y» is green «✓ Cuadra» only when the split can go — beside a part over what someone owes it says «Una
+    parte supera lo que falta». The «Contabilidad» Excel and its date filter use the browser's day of a server
+    stamp, as its screen does (a transport payment recorded at 21:52 in Bogotá was dated the next day in the
+    Excel). The «Pagos de cuotas» workbook writes
+    «Revisado el» in the browser's time zone (a review at 18:40 in Bogotá read «23:40», after 19:00 the next
+    day) and «Registrado por» as «Portal de Bogotá», not «portal:1». What a person still owes reads «debe $X», or «falta $X» beside «$Y por validar», in the picker,
+    «Saldos» and the sheet alike; the «Pagos» status chips always show their count («Devuelto (0)»); a queue
+    card never splits «1 persona». In the desktop review queue the list and the payment are two columns as
+    tall as the panel's room, each scrolling on its own: the payment opens whole, only its body (receipt,
+    split, history) scrolls, and its «Devolver… / Rechazar… / Validar y siguiente» bar is its last row —
+    never over the payment (at 1280 × 800 the pinned bar covered a short payment's «Historial»). What an
+    action did is said above the list, and in a payment sheet in its header, instead of a toast over
+    «Rechazar… / Validar y siguiente». In «Contabilidad» a
+    transport line (or a fee line one may not open) says «Se gestiona en Transporte» / «… en Pagos de
+    cuotas» in words instead of a faint hover-only lock, and on a phone a line's actions sit beside its
+    description. A focused field of a sheet comes whole into view — above the pinned footer and the keyboard,
+    on a phone held sideways too (only the caret line used to be revealed: the field's border, or the second
+    row of «Nota», stayed under the footer) — and dialogs are compact on a short screen. What fits follows the
+    room a block has, not the window, wherever the admin sidebar narrows the panel (an iPhone held sideways, an
+    iPad in portrait): the «Pagos de cuotas» tabs wrap inside it («Saldos» stuck out of the strip), «Por
+    localidad» is a table only in a wide card, the «Pagos» filters lay out as many columns as fit (the dates
+    ran under each other and the selects were cut mid-word), and the «Contabilidad» totals sit side by side
+    only while each fits, on one line («Ingresos» ran into «Egresos»). In «Inscripciones» a form column keeps a
+    domain whole («iglesiaevangelica» broke mid-word at 1366 px: there the second column now folds under the
+    name). In the review queue the keyboard focus moves to the next payment after «Validar y siguiente»,
+    «Devolver» or «Rechazar» (it fell outside the dialog), the reason form takes the focus and «Cancelar» gives
+    it back to its button; a disabled «Validar» says why right above it, in words; a quick reason is added to
+    the typed text instead of replacing it; a tap beside the payment sheet keeps a typed reason; and a voided
+    payment that another one records again no longer says «Supera lo que debe». «Registrar pago» says a failed
+    send in its footer (a toast covered the button and was never announced), a part's «Supera lo que falta:
+    máximo $X» is read with its field, and money fields group thousands once left («1.250.000,00», as every
+    other amount reads). «Columnas» opens to the side that keeps it inside the panel; «Saldos» says when the
+    200-person cap is reached instead of ignoring the tick, and a 15-figure amount stays inside its row; the
+    «Por localidad» location is a 44 px target and its phone line breaks between facts, never before a lone
+    «· $580,00 por validar»; «Contabilidad» opens a fee payment with «Ver pago #N» (the padlock means
+    read-only) and keeps «· Bogotá» with its name; the person search's name starts with its visible words.
+  - **Portal.** A «Pagos de cuotas» tab with a badge («2 devueltos», «3 por validar») has the same
+    «Resumen», «Saldos» (chips for family groups of two or more people who can be paid, filtered by the
+    search, at most eight with «Ver más grupos»; a page or up to 200 people; a sticky «Registrar pago (n)» bar)
+    and «Pagos», where returned payments come first with the administration's note, to be corrected and
+    resent or deleted (the note stays at the top of the correction). «Registrar pago» says why «Enviar» is
+    still disabled right above it, offers «Repartir según lo que debe cada uno» when «Iguales» would
+    overpay someone, waits while a photo is being shrunk (no second photo can be picked meanwhile; the
+    latest one wins), shows the live reason again as soon as a refused draft is changed, and keeps the
+    receipt, reference and date when it is reopened for other people — saying so, with «Empezar de cero».
+    Each part reads like the admin's («Queda pagado al validarse», «… lo pendiente», «Faltará $X»), a
+    «Manual» amount typed «250» reads «250,00» once its field is left, and the receipt is «obligatorio para
+    una transferencia», as the admin says. «Ver comprobante» on a payment just corrected and resent shows the
+    new photo, never the one seen before. The «Saldos» chips count the people the search finds, and the
+    administration's note on a «Pagos» row shows on two lines.
+    «Registrar pago de esta persona» loads the payments once more for someone registered after they were
+    loaded, and says why when the person cannot be paid instead of opening an empty sheet. Empty states and
+    the loading label are legible outdoors (AA contrast). Payments the administration recorded for the location's people show as «Registrado
+    por la administración» with only their part, without receipt or reference. Only the location's people
+    and its enabled forms of payment are offered. The tab loads with one request; receipts load on demand.
+    A correction («Editar», «Corregir y reenviar», «Registrar de nuevo») closed without sending — Escape,
+    ✕ or «Cancelar» — comes back as it was left when that payment is opened again, saying so, with
+    «Empezar de cero», and Escape typed in a filled field (the person search) clears the field instead of
+    closing the sheet. A rejected payment already registered again offers no second «Duplicar» and says
+    so. The «Manual» split fits a six-digit peso part («250.000,00»), a part over what someone owes keeps
+    its «Supera lo que falta: máximo $X» in view above the footer, totals stay on one line in their tiles,
+    every field is 16 px on a phone held sideways, the picker says «falta $X» and «$Y por validar» when some
+    of the person's money awaits validation, and the pager's size select is named «Mostrar pagos por
+    página» / «Mostrar participantes por página». On a phone held sideways a sheet keeps room for its form
+    (its header and footer are compact below 500 px of height: the body had about one field). While a sheet is
+    open, what the payments have to say is said in it — who was left out when «Registrar pago» opened for
+    several people, a delete that failed, a payment sent from a participant's sheet — instead of a toast over
+    its buttons. A part's «máximo» is read with its field, money fields group thousands once left, the
+    «Participantes» caption counts active people with «· 1 cancelada» apart (as the hero does), its facts
+    never leave a «•» alone at a line's end, the «Pagos de cuotas» badge stays on one line, and the search
+    fields' names start with their visible words («Buscar participante…», «Buscar persona en los saldos»).
+    A payment's «Revisado» and a participant's registration date are the local day, as in the admin: a
+    payment returned at 19:05 in Bogotá no longer reads «Revisado 09/10» beside «Fecha del pago 08/10».
+    «29 inscritos · 1 cancelada» keeps each count with its noun and its «·» with the next count, a payment
+    row's facts and a person's money line («$250,00 por validar · falta $250,00») never leave a «·» alone, the
+    «Por validar» tile lines up with the others, the method and split strips move with the arrow keys (and
+    «Manual» gives back the amounts typed before a look at «Iguales»; «Repartir según lo que debe cada uno»
+    still splits by what each one owes), the receipt picker is a button a keyboard reaches and keeps the focus
+    once a photo is chosen or removed, «✓ Cuadra» shows only when the split can go, and on a phone held
+    sideways the person picker's list is capped by the room and hands the scroll on to the sheet («Pago»,
+    «Reparto» and «Comprobante» stayed out of reach). What a sheet has to say (a delete that failed, people
+    left out) is scrolled into view when it changes. A payment sent again with other data after its answer was
+    lost says it was already recorded and reloads the payments, instead of «Ese pago ya estaba registrado». While the plugin's payment tables are unavailable, the older payment form says «Los
+    pagos no están disponibles en este momento; inténtalo más tarde.»
+  - **API.** `GET`/`POST /fee-payments`, `GET`/`PUT`/`DELETE /fee-payments/:id`,
+    `POST /fee-payments/:id/validate | return | reject`, `GET /fee-payments/:id/proof`;
+    `GET`/`POST /portal/fee-payments`, `PUT`/`DELETE /portal/fee-payments/:id`,
+    `GET /portal/fee-payments/:id/proof`. «Duplicar» sends `duplicate_of` (the voided payment, with or
+    without `copy_proof_from`); a payment carries `duplicate_of` and `reused_by` (the portal: `duplicate_of`,
+    `reused`, `reused_by` of its own payments), and a second copy answers `409 source_used`.
+    `/portal/me` and `/portal/login` report `features.fee_payments`
+    and the badge counters; the core portal shows the tab only when the plugin reports the flag and keeps
+    its previous payment form otherwise. An older core portal keeps working through
+    `POST /portal/payments/bulk`, which now records one pending payment of N equal parts and refuses the
+    whole request when any person is outside the location; it accepts a transfer reference already used
+    (that portal cannot ask for confirmation; the admin's queue flags it «Referencia repetida»). Documented in
+    `documentation/plugins-reference.md`.
+- **conference-manager 2.18.0: inscription lists with pages and a person sheet.** «Inscripciones» downloads
+  the roster once and searches, filters and pages it in the browser: one card per location with a header
+  that stays in view and its own pager, 20 people per page («Mostrar 10 / 20 / 50 / 100», remembered on
+  the device; a page change brings that location's card back to the top of the list — moving only the list's
+  own scroller, so the conference title and tabs never slide away), a search that ignores accents and case, and filters for location, payment, «Por validar»,
+  room and «Ocultar canceladas». On a phone each person is one compact row (name, payment with balance,
+  room, wrapping instead of cutting «Sin habitación» short); on a desktop a slim table with up to three form
+  columns chosen in «Columnas» — as many as the location card fits, and a chosen one that does not fit is
+  written under the name («Iglesia: Betel»): the name column never narrows below 12rem, so names no longer
+  break mid-word, and a card too narrow for the table shows the compact rows. Nothing in the table is cut
+  short behind a hover-only title: the room wraps («Hab 101 · Hotel Central»), the «Alojamiento» column
+  widens when the card has room to spare, a form value wraps (an e-mail at «@» and «.»), and the column
+  headers stay in view under the location's header while its rows scroll. The registration code is a 44 px
+  button, the location and «Columnas» menus close with Escape or a press anywhere else (the admin sidebar
+  too), and the room filter is «Alojamiento», like the column. Screen readers hear each row's state
+  («Ana Pérez: Abono, $200,00 de $250,00, Sin habitación, $50,00 por validar») and the desktop payment
+  button's («Abono: pagos de Ana Pérez»), in the admin and the portal.
+  The ⋮ (or a tap on
+  the row on a phone) opens the person's sheet with every field and every action, including the new
+  «Cancelar inscripción / Reactivar» (its confirmation reads «No, mantenerla» / «Sí, cancelar
+  inscripción»); cancelled people are struck through and labelled «Cancelada». What «Cancelar inscripción»,
+  «Reactivar» and «Eliminar» did is said in the sheet, right above its buttons — an error stays until the
+  next action and is announced — instead of a toast that covered those buttons on a phone and vanished
+  before a refusal's steps could be read; after «Eliminar» the keyboard focus goes to the neighbouring row
+  (it fell to the page's start); the sheet's details are a valid list for screen readers; and the roster
+  Excel's «Fecha de inscripción» is in the browser's time zone. The conference header's back
+  arrow is a 44 px button with a name. After
+  an action only the people it touched are read again (`GET /inscriptions/:id`, new). The coordinators'
+  «Participantes» gets the same pages, search, compact rows and person sheet, with «Registrar pago de esta
+  persona» and «Ver sus pagos»; its desktop table's values wrap instead of being cut, its headers are
+  legible (AA contrast) and wrap between words (a long form label ran over the next one), its two form
+  columns show only where the card has room for them and fold under the name otherwise (an iPad in
+  portrait), its search reads «Buscar participante», whole on any phone, and the sheet's subtitle reads
+  «Inscripción: 15/09/2026».
+
+- **conference-manager 2.18.0: beds per location — one hotel room shared by several locations.** The
+  administration could only give a location whole rooms, so giving it 5 beds in rooms of 4 left 3 beds
+  that no other location could use. A room can now be split: «Repartir camas» on a room (Hospedaje) gives
+  each location some of its beds and leaves the rest in the pool, and «Dar camas a una localidad» on a hotel
+  gives a location N free beds — empty rooms whole first, then the free beds of a room, shared. It never
+  moves anybody and is all or nothing (`409 not_enough_beds` with how many are free); the location's people
+  the administration had already put on pool beds of a room become part of its beds there. A person takes one
+  of their location's beds first, then a pool bed: the admin's manual assignment, the conference-wide
+  run and the coordinators' portal all hold to it. The admin's conference-wide run fills each location's
+  beds with its own people and the pool beds with the people of no location (or of a location without
+  beds), and then — last, so it never takes a bed from them — places the people a location's own beds
+  could not hold in the pool beds still free («2 en camas del pool» on that location's line of the run
+  report). That last step is the administration's: it applies the administration's rules only and fills
+  pool beds only, never a bed of the location's own. A submitted or validated location is still left as
+  it is; the coordinator's own run never uses a pool bed, and the coordinator can neither empty nor move
+  the people the administration put on pool beds of a room the location shares. A location's own rules
+  only ever judge its own people (in a shared room they never read another location's attendees), and the
+  run reports each unmet companion rule once, on the final rooms. The portal shows a shared room as
+  «Compartida · tuyas 2 de 4 camas», with only its
+  own beds and people, and never fills a pool bed. Hotel cards, room tiles and the lodging explorer show
+  each location's beds (taken / given) and the pool's; the explorer refuses a drop that has no bed for the
+  person's location. Every bed to one location is its whole room; allotting a shared room whole, resizing
+  it (never below the beds given), deleting it, its hotel or a sharing location keep the split consistent,
+  and a split that changes a submitted or validated arrangement is recorded as an administration adjustment.
 - **Per-site media storage quotas (multisite).** **Admin → Network** shows how much media each site stores
   and takes a quota per site and a network default (`GET /network/quotas`, `PUT /network/quotas/default`,
   `PUT /network/sites/:id/quota`). An upload or a WXR import download over a site's quota answers
@@ -60,6 +488,235 @@ the boot error links there too.
 
 ### Changed
 
+- **conference-manager 2.30.0: the conference portal is the plugin's own page.** The coordinators' portal
+  (`/portal/conference`), «Mi inscripción» (`/portal/conference/yo`) and the badge links
+  (`/portal/conference/badge`) were pages of the core (`frontend/src/app/portal/conference`); they are now the
+  plugin's portal page (`client/portal`, declared in `frontend.portalPage`), so they follow the plugin's
+  version and leave with it. The addresses people were given do not change. A badge PDF now opens at
+  `/portal/conference/file?d=…` (its tickets last two minutes, so no link in use breaks), and «Mi inscripción»'s
+  service worker is `/portal/conference/sw.js`: a phone that turned the bus notices on moves to it on its next
+  visit and keeps them on. A core from this release with a conference-manager older than 2.30.0 has no
+  conference portal until the plugin is updated.
+- **conference-manager 2.22.0: the registration code is a QR Code instead of a Code 128 barcode.** The site owner
+  asked for a QR. The badge (its PDF, the designer's preview and the credential page), the code viewer of a
+  person, its print and SVG download, and the optional image column of the custom Excel now carry a QR
+  (version 1, error correction H — it still holds the 10-character code) drawn by the plugin's own encoder,
+  one copy on the server (`server/badge-qr.js`) and one in the browser (`client/lib/qr.ts`), kept equal by a
+  test that also decodes what they draw. The landscape badge gives the QR a column on the right (about
+  19 mm) and the name and the fields the rest; the portrait one puts it at the left of the bottom strip with
+  the code beside it. «Mostrar para escanear» on the credential page shows the QR large. The meal scanner
+  reads QR everywhere: on Android through `BarcodeDetector` (it is now used only when it reads QR), and on an
+  iPhone, whose Safari has none, through jsQR 1.4.0 (Apache-2.0, vendored unchanged in
+  `client/lib/vendor/`, see THIRD-PARTY-NOTICES.md) on a square around the aiming frame, before the built-in
+  barcode reader — so the Code 128 badges printed before keep working. The server's Code 128 encoder is
+  removed.
+- **conference-manager 2.21.0: «Sugerir reparto» when the beds do not reach everyone, and from every lodging page.** The
+  site owner, with 1000 registrants and 40 beds, saw 0 rooms for every location: a hard «mantener juntos» rule by
+  gender made every gender one group bigger than any room, and the plan gave nothing; once that was fixed, it gave
+  every bed to the biggest location. When the free beds do not reach everyone they now go **location by location, in
+  order** («en orden por localidad»): the Localidades order, or the one set with the arrows in the sheet (POST
+  `/assignment/location-order`, Hospedaje › gestionar). First each location in turn takes only the rooms it fills,
+  then whatever is still free goes in order again, so no bed stays empty while someone could use it; the score
+  puts the earlier locations' people before rooms and empty beds. A hard «mantener juntos» group bigger than every
+  room is split into the fewest pieces a room holds (a family of 5 and rooms of 4: 4 + 1), and the sheet explains a
+  rule misused on a whole gender apart from a family that simply does not fit. «Sugerir reparto»
+  also opens from Asignación and Localidades. And it can be used again: **«Rehacer todo el reparto»** thinks the draft
+  locations' whole arrangement again, as if nobody had a bed (e.g. after a rule changed); applying it says how many
+  people change rooms and moves them; submitted or validated locations are not touched (before, a second suggestion
+  had nothing to do: nobody with a bed is ever moved). Every location is listed — one with everyone in a bed as
+  such, with the hard rules its arrangement breaks today and a one-click «Rehacer todo» — and the order keeps every
+  location's place (it used to drop one that had nothing left to wait for).
+- **conference-manager 2.21.0: a preferred mixed family gives way when beds are short; plans show what they can
+  prove.** With a mixed family's room its own, families of 2 or 3 in rooms of 4 to 6 left beds empty while people had
+  none. When someone would otherwise be left without a bed, a family under a preferred «mantener juntos» is divided by
+  the «separar por» values (its men together, its women together) — first only the families no room fits exactly,
+  then the rest — and only when that beds more people; with beds enough, families stay together. «Sugerir reparto»
+  says how many families it divided, and the bounds no allotment can beat (no more people with a bed than beds; no
+  fewer rooms than the biggest rooms holding them): «Demostrado» when the suggestion reaches them, the gap otherwise.
+- **conference-manager 2.21.0: a room «Sugerir reparto» shares keeps the gender the plan gave it.** The site owner:
+  when the engine shares a room between two locations, the gender it gave that room must stay. «Aplicar» now writes on
+  each shared room the value its people have for every hard «separar por» field (`rooms.share_lock`), and every bed of
+  it keeps that value from then on — even while the room is empty: the automatic assignment (each location's, the
+  pool's and the overflow), the planner, a coordinator's placement and the admin's never put anyone with another value
+  there (`409` by hand, with the reason). The admin sees «Solo hombres» / «Solo mujeres» on the room and in the plan,
+  the coordinator on the shared-room badge; the pickers and drag & drop leave such people out. The class goes with the
+  share, binds only while a hard «separar por» on that field is enabled, and the admin frees it in «Repartir camas»
+  («Liberarla»).
+- **conference-manager 2.21.0: the administration can block a room or fix a person in their room.** The site
+  owner: the admin must be able to block someone in a room, or a whole room, so that the next suggestion leaves
+  them out; only the admin changes them by hand. «Bloquear habitación» (in the room's view) and «Fijar en esta
+  habitación» (on each occupant) hold until lifted: no «Sugerir reparto» (not even «Rehacer todo»), automatic
+  assignment (the admin's, a coordinator's, the overflow), «Dar camas» or reset places anyone in a blocked room or
+  takes anyone out of it, nor moves a fixed person. Coordinators see «Bloqueada por la administración» / «Fijada por
+  la administración» and can change neither (409), nor can an edit by someone without «Hospedaje» free such a bed;
+  the admin still can, by hand. A fix holds only in its room: whatever takes the person out of it (the admin by
+  hand, a cancellation, a change of location, the room, hotel or location deleted) ends it, so no later placement
+  inherits it; deleting a location leaves its blocked rooms and fixed people where they are. The suggestion says how
+  many rooms and people it leaves as they are (within the hotel chosen).
+- **conference-manager 2.21.0: «Sugerir reparto» never suggests something worse than today.** The site owner, on a
+  suggestion for one hotel that used 180 rooms and left 5 beds empty where the arrangement already applied used 179
+  with none: review it. Today's arrangement (everything left as it is, the automatic assignment for whoever waits)
+  is now scored like every arrangement the plan tries and replaces an answer it beats — families together or
+  divided, each on its own terms — or ties with one that would move someone who has a bed or change nothing (an
+  answer that moves nobody and only gives empty rooms back keeps its tie; fewer preferences broken still counts).
+  When nothing beats it the sheet says «Lo mejor es dejarlo como está» — or, with people waiting, that no room needs
+  to change and applying beds them through the automatic assignment, with a confirmation of its own — and an answer
+  that is today's says so on its card. Only as an allotment at least as good as the answer it replaces: of the
+  people whose beds the plan decides, no more outside their location's rooms (not before the rooms are given out).
+  On the testbed data: thought again for each hotel, the divided answer is now today's arrangement (179 rooms, none
+  empty; it was 180 with 5 empty for one hotel), two hotels with nothing to gain no longer move anyone, and an
+  answer applied and thought again moves nobody (it moved 62).
+- **conference-manager 2.21.0: «Sugerir reparto» answers both ways, families together and families divided.** The
+  site owner: dividing the families must be an option; calculate both, tell the admin how many rooms each uses and,
+  when the families are divided, how many were. With beds enough, every suggestion now computes two answers, each
+  the best of every arrangement the plan tries: «Familias juntas» (the fewest families divided without leaving
+  anyone without a bed, then the fewest rooms) and «Dividiendo familias» (the fewest rooms, preferred mixed families
+  going as their men and their women, then the fewest families divided). Both search how many families can stay
+  whole, those a free room fits exactly first; the search is shorter for big events (by size, so «Aplicar» re-plans
+  the same answer). The sheet shows both side by side (rooms used, rooms left free and their beds, empty beds in the
+  rooms used, people without a bed, families divided, rooms saved) and the admin picks the one planned and applied
+  (`divide_families`). The room numbers count the rooms the plan may fill (the hotel chosen; not a blocked room nor
+  one of a location with nobody waiting), free or used, and as used any other room holding the people it places; two
+  answers that bed the same people leave the same number of beds over — the owner: shouldn't the same beds be left
+  empty, with only the number of empty rooms changing? — so the sheet says so when the two answers place them
+  differently: how many stay empty inside the rooms used and how many in whole free rooms. The comparison with today
+  counts the same way. A family (one per location, of a rule whose groups can be divided) counts as divided
+  when its people sleep in more than one room. With beds short there is no second answer: every free room is used
+  and families already give way only to bed more people. On the testbed data: together 190 rooms, 46 empty beds, 37 families divided (the most families
+  whole possible, 52); divided 179 rooms and 11 free (the same 46 beds), 66 families divided (the fewest rooms
+  possible, and the fewest families for them).
+- **conference-manager 2.21.0: Alojamiento lists the hotels; their rooms show once a hotel is entered.** The site
+  owner: the rooms should not fill the lodging page. Each hotel shows its summary (rooms, beds, taken, free, how full,
+  the locations with rooms there) and «Ver habitaciones»; inside, its rooms and the tools that act on them (allot to a
+  location, give beds, select rooms), with «Todos los hoteles» back.
+- **conference-manager 2.21.0: a family's mixed room is the family's alone.** The site owner: when a family is
+  placed in a mixed room, nobody outside the family may be added to it. A hard «separar por» used to judge a room
+  without the members an outranking «mantener juntos» explained, comparing only the others among themselves — a
+  woman from outside could join a room with a family's men, a man a women-only family's room. Now two people with
+  different values share a room only when they are of the same family, everywhere the rule is judged (the automatic
+  assignment, «Sugerir reparto», the reviews and the portal); a single-gender family's room may still be completed
+  by people of that gender. A mixed family no room takes whole is divided along the «separar por» values instead of
+  in arbitrary pieces.
+- **conference-manager 2.21.0: assignment rule priorities explained, and never shared.** The site owner could not
+  tell whether a higher or a lower number goes first: the rule form and the coordinator's portal now say the
+  HIGHEST number applies first (a rule of 90 prevails over one of 10), and each rule shows its place (1.ª, 2.ª…), the
+  administrator's and the location's together. Two rules that apply together may not share a number (409 naming the
+  rule that has it; the forms say so as it is typed): a conference rule's number is no other rule's of the
+  conference, a location's rule's no conference rule's and no other of that location's — a rule saved again with
+  its own number is never refused for an older tie. A new rule takes a free number below the others. Number boxes
+  that snapped an emptied value back to 1 or 0 (a group's minimum size, «al menos», priorities, a room's or hotel's
+  capacity, the bulk room range, the base fee) stay empty while typing.
+- **conference-manager 2.21.0: lodging dates — a general opening and closing, and a location's own dates.** The
+  site owner: the coordinators may not arrange their lodging right away («hay una fecha para todos donde se les
+  habilita»), and the closing should be one for everyone «a menos que se configure una específica para una
+  localidad». Localidades › «Fechas para acomodar hospedajes» now has an **opening** beside the **closing**:
+  before the opening and after the closing every portal lodging write answers 403 and the coordinator's
+  Hospedaje tab is read-only with «Los hospedajes se habilitan el …» / the closing it had; the administration
+  arranges whenever it likes. Each location card shows its window («Se habilita el …», «Abierto hasta el …»,
+  «Cerrado») and may take **dates of its own** that replace the general ones — its own opening (a date, or no
+  wait) and its own closing (a date, earlier or later, or none) — or go back to the general ones. The former
+  «Permiso fuera de plazo» became such a closing (moved once, on upgrade: the later of the general deadline and
+  its date; without a date, no closing), and the old `lodging_permission` fields still set it. A bare date is
+  a whole day in the zone of the admin who saved the dates (`lodging_tz`; UTC until they are saved again), so a
+  closing day ends at midnight there, not at 19:00. A window that could never open is refused. GET
+  /portal/lodging adds `opens` and `not_yet_open`; `deadline` / `deadline_passed` are the closing that applies
+  to that location.
+- **conference-manager 2.20.0: the automatic assignment uses the fewest rooms, and «Sugerir reparto».** The
+  site owner: allotting rooms to locations by head count left arrangements the automatic assignment could not
+  fill without breaking a rule, and the engine had to use «la menor cantidad de habitaciones» and leave «la
+  menor cantidad de camas vacías». The engine now packs: the hard «separar por» rules split people into classes
+  that never share a room, and each class takes the fewest rooms, then the fewest spare beds (an exact choice of
+  rooms, then Best Fit Decreasing, then an exact search for a few groups), filling rooms that already hold people
+  first; a child travels with the adult a companion rule asks for; a preference (a soft rule) is kept when that
+  costs nothing and gives way when keeping it would cost a room or beds, and the run reports it. Each run tries
+  that packing and the 2.19 placement — per location and for the whole conference — and keeps the best: fewer
+  hard rules broken, then fewer people without a bed, then fewer rooms, then fewer empty beds. Hospedajes gets **«Sugerir
+  reparto»**: which free rooms — or beds of a shared room, or free beds next to people already placed, only where
+  that saves a room — to give each location, and who sleeps where; it is shown next to what the current
+  allotment and the automatic assignment would give today, and «Aplicar» gives the rooms, places the people
+  exactly so (nobody who has a bed is moved) and runs the automatic assignment for whoever is left — only while it
+  is still the same plan and never when it would be worse than today. Options: redo the empty allotments of locations with people waiting, share rooms, one hotel.
+  Submitted or validated locations are never touched. `/assignment/simulate` shows what a run would do (every
+  bed it would change) without writing anything.
+- **conference-manager 2.19.0: «Escarapelas», each registrant's digital badge, with a PDF to print.** A new
+  «Escarapelas» tab designs one badge per conference: landscape or portrait ID-card size (CR80, 85.6 × 54 mm),
+  a title, colours, a background image, a logo, a legibility panel behind the text and the fields to show (with
+  their own labels, in their order; contact fields carry a warning). The name and the registration code — the
+  very Code 128 bars the meal scanner reads — are always on it. Each registrant gets a private link (a 128-bit
+  token in the URL fragment) to a credential page that shows the badge, a «Mostrar para escanear» mode with the
+  bars large and the screen kept on, the PDF and sharing; the link stops working while the inscription is
+  cancelled (and comes back when it is reactivated), after the expiry date the administration picks, or with
+  badges turned off, and «Regenerar enlace» / «Anular enlace» replace or remove it. The admin's person sheet
+  gets «Escarapela» (open, copy, share, WhatsApp to the person's phone, PDF); the tab has two views, «Personas»
+  (every active registrant, found by name, code or location, each with view / copy / WhatsApp) and «Diseño»,
+  and bulk tools per location (copy every link with its name, the links in Excel, a PDF to print on Letter
+  sheets with cut guides, or one per page); the coordinators' portal offers the same for its own location's
+  people (and re-reads the conference's switches when the coordinator comes back to it) while the
+  conference lets coordinators share badges. The PDF is generated by the plugin with no dependency (standard
+  fonts, vector bars, the background embedded once), and the page, the admin and the PDF draw one display list
+  the server computes, so they match. A new team permission «Escarapelas» (view: see and share, with
+  Inscripciones › ver since a badge carries the meal code; manage: the design and revoking links); existing
+  roles get none.
+
+- **conference-manager 2.18.0: «Inscripciones» no longer opens with the payments section alone.** A team
+  role needs Inscripciones › ver to see the roster; a role with Pagos and without Inscripciones gets the
+  «Pagos de cuotas» tab instead (Pagos › ver to look, Pagos › gestionar to register and review). The server
+  enforces it too: `GET /inscriptions` and `GET /inscriptions/:id` answer `403` to a payments-only role (it
+  could read every attendee's contacts and form answers through the API), and «Pagos de cuotas» learns who
+  each person is from its own `GET /fee-payments` (`people[]`: name, location, family group, status; the
+  registration code only with Inscripciones › ver) — for such a role its person sheet shows the payment and
+  nothing of the form, and the conference cards count the people of «Pagos de cuotas». The payment screens moved there: the
+  admin's per-person «Pagos de …» modal, its receipt lightbox and the roster's hover-only row actions are
+  gone (every action is in the person sheet), and the portal's three totals cards, its «Registrar Pago
+  (N)» button, the row checkboxes and the «Registrar Pago Grupal» dialog are replaced by its «Pagos de
+  cuotas» tab. The payment state reads Pagado / Abono / Sin pagar everywhere in the admin (the roster, the
+  Excel export filter and file, «Reportes»), as in the portal («Parcial» and «Pendiente» before).
+  `GET /inscriptions/:id/payments` no longer carries the receipt images (`has_proof`; `?with_proof=1` or
+  `GET /fee-payments/:id/proof` return them). The pre-2.18 payment routes still work on one-person
+  payments: `POST /inscriptions/:id/payments` records a pending payment, now with the same cap and with the
+  receipt optional for cash, and `POST /payments/:id/validate | reject` and `DELETE /payments/:id` answer
+  `409 shared` for a payment of several people, and `409 stale` when the payment changed between their
+  check and their action. After a downgrade below 2.18.0 the balances stay right, but
+  receipts of new payments are not visible in the old screens, and reviews made while downgraded are
+  overwritten by the payment on the next upgrade.
+- **conference-manager 2.17.0: the administration can change a lodging arrangement that a location submitted,
+  or that it validated, without reopening it.** Until now a submitted or validated arrangement was read-only for
+  everyone, and every admin change answered 409 «reábrelo antes de …». The coordinator's portal still cannot
+  change it (409, as before). The admin side now can: placing, moving and freeing its attendees in
+  Asignación (drag and drop and both pickers) and in Inscripciones (the room dialog), allotting rooms to it or
+  taking them away, resizing or deleting its rooms, and deleting a hotel that holds them. Attendees follow
+  one rule in both directions: only someone who holds a bed is part of an arrangement. Moving one of its
+  attendees who holds a bed to another location, or moving an attendee into it with the bed they keep (a
+  pool bed), also needs Hospedaje › gestionar; a role that may only manage inscriptions gets 409, while its
+  cancellations and deletions still free the bed as before. That refusal, and the form's hint before it, say
+  when it becomes possible through that door: once a validated location is reopened, or once a submitted one
+  is returned to its coordinator (a submitted one cannot be reopened). An attendee without a bed enters and leaves
+  alike, with Inscripciones › gestionar alone, and that is never an adjustment (nor is cancelling, deleting
+  or registering them). The status does not change (a validated arrangement stays validated) and the review stamps
+  stay. Each change to who sleeps where, or to the location's rooms and beds, is recorded on the location:
+  when, who and how many changes since the coordinator's last submission. That includes deleting a pool
+  room or a hotel where one of its attendees sleeps. The record is written under the same lock as every status
+  transition and only while the location is still submitted or validated, so a coordinator submitting or
+  withdrawing at the same time never leaves a record that disagrees with the change. The inscription and
+  room edits decide on the rows as they are under that lock. Inscription edits and deletions that touch no bed
+  no longer wait for it, so a long automatic assignment does not hold them up. Validating keeps the record and
+  the coordinator's next submission clears it. «Validar» and «Devolver» send what the admin was looking at:
+  if the arrangement changed after the review was opened (an adjustment by someone else, or a new
+  submission), they answer 409 `lodging_changed` and the review reloads. The admin sees the record on the
+  location card (below its row, in two lines: «Ajustado · N cambios» and when / by whom, the whole sentence in
+  its tooltip) and in the lodging review, which also offers
+  «Ajustar en Asignación». The explorer, the pickers and the room dialog mark such a location instead of
+  locking it, once per location, saying its actual state («ya está validado» / «está enviado a
+  validación»); so do the hotels when the location filter points at it. «Sin asignar» shows the state as a
+  visible label. Confirmations name the reviewed arrangements a deletion or re-allotment changes, including
+  those of the rooms' occupants, and the change's own toast says when it was recorded (`lodging_adjusted` in
+  the responses). The coordinator's portal shows «Ajustado por la administración el …» without naming the
+  admin, and its «Enviar a validación» confirmation says the administration may adjust the arrangement.
+  «Reabrir» is unchanged. The conference-wide automatic assignment and reset still skip these locations, and
+  their report now points to «Acomodación». The run's report also counts the attendees it left without a bed
+  in those locations (`skipped_unassigned`), so its «Pendientes» match the explorer's «sin asignar» and say
+  how many were not touched. Three columns are added on boot (`lodging_admin_changed_at`,
+  `lodging_admin_changed_by`, `lodging_admin_changes`), and every path keeps working while they are missing.
 - **Certificates no longer depend on node-forge or acme-client.** The cluster CA, the service identities
   made by `npm run setup` and the installer, and enrolment CSR signing now use a small X.509 toolkit on
   Node's own `crypto` (`gateway/src/x509.js`, `setup/x509.js`, `backend/src/core/x509.js`), and Let's
@@ -99,6 +756,122 @@ the boot error links there too.
 
 ### Fixed
 
+- **conference-manager 2.18.0: a hotel holds each room number once.** Creating a range of rooms sent one
+  request per room with no sign of progress, and each extra tap started the whole batch again — the test
+  hotel ended with every room seven times. The server now refuses a number the hotel already has (trimmed,
+  inner spaces collapsed, any case) with `409 duplicate_room`, on create and on rename; the form shows
+  «Creando n/N», ignores a second tap, and skips the numbers that already exist instead of failing.
+
+- **conference-manager: the location card's lodging line and the lodging explorer read cleanly on a laptop
+  and a phone.** The card's counts («4 hab. · 9 camas · …») wrap between items only, never leaving a «·» alone
+  at the start or end of a line. In «Asignación», a room's or a hotel's header lays out by its own width, so
+  at 1280 px with the admin sidebar open «Habitación 103» is no longer cut as «Habitaci/ón», and the
+  explorer's breadcrumb pins flush with the top of the panel instead of 24 px below it, where the scrolled
+  content showed through. The automatic assignment's report now writes «Sur: 3 asignados» without a space
+  before the colon.
+
+- **conference-manager: dragging a placed attendee to another room no longer stops as soon as it starts.**
+  With no location filter and the «Sin asignar» list scrolled near the top of the panel, starting the drag
+  inserted «Suelta aquí para quitar la habitación» above that list; the browser's scroll anchoring scrolled the
+  panel to compensate, the attendee slid out from under the pointer and the drag was cancelled. The hint now
+  covers the search box while the drag lasts, so nothing moves. The coordinators' portal shows its «Suelta
+  aquí para liberar la cama» the same way.
+
+- **Toasts no longer cover a sheet's buttons on a phone.** Below 640 px, and on a phone held sideways, the
+  toast stack sits at the top, below the safe area and clear of a sheet's ✕, instead of at the bottom over
+  the pinned action row of whatever sheet or dialog is open (a person sheet's «Eliminar», a payment's
+  «Validar»); a desktop keeps it at the bottom right. Toasts are now announced to screen readers, and a
+  toast's ✕ has a name («Cerrar», or the admin's language) and a 44 px target.
+- **conference-manager 2.18.0: the coordinators' portal totals add up.** «Saldo Pendiente» was the sum of
+  every inscription's fee minus what it had paid: a cancelled inscription still counted as owing its fee,
+  and one person's overpayment was subtracted from what the others owed. The «Resumen» of «Pagos de
+  cuotas» works per person in integer cents: a cancelled inscription owes nothing, money paid beyond a fee
+  is shown apart («A favor»), money awaiting validation counts only up to what each person still owes, and
+  Validado + Por validar + Por cobrar add up to the fees exactly — the same figures as the admin's
+  «Resumen». Cancelled inscriptions were also listed unmarked and could be paid: they are now labelled
+  «Cancelada», owe nothing and cannot be selected or paid. The admin dashboard's «Sin pagar» no longer counts
+  cancelled people or people whose payment only awaits validation.
+- **conference-manager 2.18.0: four-digit amounts are grouped in the admin.** In a Spanish browser the admin
+  printed «$1550,00» next to «$13.550,00» (the browser's Spanish leaves a four-digit number ungrouped); every
+  amount now groups its thousands. In the coordinators' portal the labels and captions of the payment
+  screens meet WCAG AA contrast, a page change brings the list back to its top, and the page is laid out
+  under `viewport-fit=cover`, so its sheets and the selection bar keep clear of the iPhone home indicator.
+- **conference-manager 2.17.0: «Últimas entregas» says what was delivered.** In «Alimentación» › «Entrega»
+  each row of the delivery history named the person, the location, the method and who recorded it, but not
+  the meal. A row now shows the person, the meal («Desayuno · Vie 11/12», with the service's own label), a
+  chip for the method («Escaneo», «Manual», «Sin derecho (autorizado)» in amber), the time, the location and
+  who recorded it, and the card's header names the service. On a phone nothing is cut (lines wrap instead
+  of ending in «…»), and «Deshacer» is a 44 px target whose inline confirmation names the meal and the
+  person. `GET /meals/services/:id/deliveries` returns the `service` and each row's `service_id`. The
+  «Entregado» and «Ya recibió» cards, in «Entrega» and in the phone scanner, name the meal under their title,
+  and a delivery from «Por persona» names it in its notice. The list and the counters beside it reload as
+  soon as the phone scanner records or undoes a delivery, and when it closes; they waited for the next
+  15-second poll, and a poll that answered after a newer reload could put back a list without the latest
+  delivery. During a rush every newer answer is applied, so the list and the counters keep moving instead
+  of freezing until scanning pauses. While the scanner is open, the page totals reload at most every
+  2 seconds and «Entrega» skips its own poll underneath; closing the scanner reloads everything at once. In
+  the phone scanner the verdict card stays inside the camera area and, on every phone from 320×460 up,
+  shows its status, the meal, the person's name and all its buttons without scrolling inside the card. On a
+  tall card the top used to be cut off, the meal included; on short phones the name and the location
+  scrolled away, a not-entitled card cut its title («Sin derecho a Jue 08/10 · Almuerzo — …») mid-phrase,
+  and «Sí, entregar» / «Cancelar» were hidden on a first-generation iPhone SE. The status is now short
+  («Entregado», «Ya recibió», «Sin derecho»), with the meal under it: on a short phone the meal line keeps
+  to one line where only the service's label gives way with an ellipsis, and a tap shows it whole. The name
+  has its own line and gives way last; the location and the other details give way first and scroll, ending
+  on a whole line with «Más abajo ↓» under the cut — never on a lone label or the top half of a value, as the
+  fade they had showed them. After «Entregar de todas formas», «Sí, entregar» and «Cancelar» sit side by side
+  under a short question that drops whole sentences when room is short (the full question, with the person
+  and the service, stays the dialog's accessible name). Short phones get a more compact card, and the
+  shortest fold the counters while it is shown. The card's buttons («Deshacer», «Entregar de todas formas»,
+  «Sí, entregar», «Cancelar») are 44 px targets, in «Entrega» too. In «Entrega», the inline «¿Deshacer…?»
+  of «Últimas entregas» and the verdict card's inline «¿Entregar de todas formas?» scroll themselves into
+  view when they open; on an iPhone SE their buttons landed at, or below, the bottom edge. On a 320×460 phone
+  that «¿Entregar de todas formas?» was a 16-line column indented under the icon, taller than the screen, and
+  its buttons stayed below the edge: it now spans the card, asks the short question (the whole sentence, with
+  the person and the service, stays its accessible name), and brings its buttons into view first when it is
+  still taller than the screen. The phone scanner's confirmation card (2.16.0) keeps the status and the
+  person's name on screen from 320×460 up: they sat in a header inside the part that scrolls, and on a
+  320×460 phone with a long service label that part was shorter than the header, so the name was cut — or,
+  on a not-entitled card, hidden, and staff could authorise without seeing who. The status and the name are
+  now the card's own header and give way last (the name never below one line); the meal takes at most three
+  lines, and one on a short phone where only the service's label gives way (a tap shows it whole);
+  «Entregar sin derecho (autorizar)» reads «Autorizar» wherever the whole label would take more than two
+  lines, which is every phone width, on both confirmation cards. It wrapped to four lines in a narrow button
+  from 320 px to 412 px wide. «Cancelar» stays the big button and the accessible name stays whole. On the
+  narrowest phones the hand icon gives way so «Autorizar» fits on one line. The reason a not-entitled person
+  has no right to the meal («No está en el plan de su localidad», «Se la quitaron a esta persona») is now a
+  line under the status that never gives way. On a 320×460 phone it disappeared with the details. The person's
+  other details end on a whole line as on the verdict card.
+  «Entrega»'s confirmation card does the same with its meal and «Autorizar» on a narrow and short phone: on
+  a 320×460 phone its buttons stayed below the edge. Desktop and taller phones keep its layout. On a 320 px
+  phone its «Cancelar» and «Entregar» (or «Autorizar») now fit side by side inside the card, with tighter
+  paddings and 14 px labels; «Entregar» ran 28 px past the card's edge and was cut («Entrega»). The row wraps
+  rather than cut a button, and «Registrando…» shortens with «…» instead of pushing «Cancelar» to a second
+  row. A tap on the meal, on either card, shows it whole: on a 320×460 phone it showed two lines cut
+  mid-phrase with no cue, and the day that was on screen before the tap disappeared. The person's other
+  details give way to it; only when the card cannot hold it without cutting the status, the name or the
+  buttons does it keep the whole lines that fit, with «Más abajo ↓», and scroll to the rest. «Entrega»'s
+  «Entregado» / «Ya recibió» card is now capped to the visible part of the screen like its confirmation card:
+  on a 320×460 phone it was 888 px tall, the name broke inside a word («Villavicen/cio») in a 124 px column
+  under the icon, and «Deshacer» was far below the fold. On a phone its meal and the person's data take the
+  card's whole width, the name breaks only between words, the meal keeps to one line (only the label gives
+  way; a tap shows it whole), and the other details give way and scroll with «Más abajo ↓», so the status,
+  the meal, the name and «Deshacer» are on screen together. With the confirmation off (a USB scanner
+  delivers at once), every verdict is now capped and brought into view the same way, whether it came from a
+  scan, a name picked or «Sí, entregar»: «Sin derecho», «Entregado» and «Ya recibió» opened uncapped below
+  the fold — on a 320×460 phone «Entregar de todas formas» sat 570 px under it, and on a 1280×800 desktop the
+  card started at the bottom edge. «Entrega»'s «Sin derecho» card has the short status too, with the meal
+  under it: «Sin derecho a Jue 08/10 · Almuerzo — …» took eight lines beside the icon on a 320 px phone. Its
+  «¿Entregar de todas formas?» drops whole sentences when the card is short, puts «Sí, entregar» and
+  «Cancelar» side by side on a phone, and brings the whole card into view, so the status and the name stay on
+  screen while staff decide; they had scrolled above the top edge. Otherwise desktop keeps the card's layout.
+  The camera's aiming hint, the «En pausa» heartbeat and the focus hint under the aiming frame hide while a
+  card reaches them instead of showing letters cut in half. When «¿Deshacer…?» opens in «Últimas entregas», the
+  whole row now comes into view below the admin header, with the person's name, the question and its buttons.
+  On a 320×460 phone only the question was brought in, and the header's edge cut the row's name. «Deshacer» and
+  «Cancelar» share one row, and where the row with the full question would still be taller than the screen,
+  the question is the short one («¿Deshacer la entrega de Almuerzo?»). The row above already names the person
+  and the meal, and the full question stays the dialog's accessible name.
 - **WordPress import stores attachments like uploads.** An imported image now gets the same size ladder
   and WebP/AVIF derivatives as an uploaded one, an imported SVG is stored sanitized instead of being refused,
   and with an S3 media store the imported files go to the bucket like uploads do.
