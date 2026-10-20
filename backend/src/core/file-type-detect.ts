@@ -7,9 +7,9 @@
  * dynamic `import()` instead. That import is built with `new Function` purely so TypeScript leaves it
  * alone; the specifier is a constant file URL resolved here, never input.
  *
- * The `file-type/core` entry is used: it is exported with a `default` condition (so `require.resolve`
- * finds it on every supported Node), it carries `fileTypeFromBuffer`, and buffer detection needs none
- * of the Node stream helpers of the main entry.
+ * file-type 22 publishes ONE entry (the `./core` subpath of 21.x is gone), exported with a `default`
+ * condition, so `require.resolve('file-type')` finds it on every supported Node and it carries
+ * `fileTypeFromBuffer`.
  */
 import { pathToFileURL } from 'url';
 
@@ -28,7 +28,7 @@ let loading: Promise<FileTypeCore> | null = null;
 
 function loadFileType(): Promise<FileTypeCore> {
     if (!loading) {
-        loading = importEsm(pathToFileURL(require.resolve('file-type/core')).href);
+        loading = importEsm(pathToFileURL(require.resolve('file-type')).href);
         // A failed load is not cached, so a transient error does not disable detection for good.
         loading.catch(() => { loading = null; });
     }
