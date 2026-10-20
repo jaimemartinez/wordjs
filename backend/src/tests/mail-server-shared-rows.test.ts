@@ -53,9 +53,9 @@ const MAIL_DOMAIN = 'acme.example';
 // belongs to NO account here, so "the site sent it" is never confusable with "a user sent it".
 const SITE_FROM = `postmaster@${MAIL_DOMAIN}`;
 
-const ANA = { id: 101, role: 'editor', userEmail: `ana@${MAIL_DOMAIN}`, userLogin: 'ana', displayName: 'Ana', hasProfessionalMailbox: true };
-const MARIA = { id: 102, role: 'editor', userEmail: `mariana@${MAIL_DOMAIN}`, userLogin: 'mariana', displayName: 'Mariana', hasProfessionalMailbox: true };
-const JEFE = { id: 103, role: 'administrator', userEmail: `jefe@${MAIL_DOMAIN}`, userLogin: 'jefe', displayName: 'Jefe', hasProfessionalMailbox: true };
+const ANA = { id: 101, role: 'editor', userEmail: `ana@${MAIL_DOMAIN}`, userLogin: 'ana', displayName: 'Ana', accountCapabilities: ['mail_server_mailbox'] };
+const MARIA = { id: 102, role: 'editor', userEmail: `mariana@${MAIL_DOMAIN}`, userLogin: 'mariana', displayName: 'Mariana', accountCapabilities: ['mail_server_mailbox'] };
+const JEFE = { id: 103, role: 'administrator', userEmail: `jefe@${MAIL_DOMAIN}`, userLogin: 'jefe', displayName: 'Jefe', accountCapabilities: ['mail_server_mailbox'] };
 const PEOPLE = [ANA, MARIA, JEFE];
 const DIRECTORY: Record<string, number> = { [ANA.userEmail]: ANA.id, [MARIA.userEmail]: MARIA.id, [JEFE.userEmail]: JEFE.id };
 

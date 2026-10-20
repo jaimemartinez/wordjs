@@ -90,9 +90,9 @@ granted to the principal afterwards.
 A plugin **cannot** (and should not) query the core `users` table directly — `assertSqlAllowed` rejects
 it. For user lookups, use the safe `wordjs.users` bridge (`findByEmail` / `findByLogin` / `findById` /
 `search`), which returns **only a projection** (`id`, `userLogin`/`username`, `userEmail`,
-`displayName`, `role`, plus the `hasProfessionalMailbox` boolean, derived from the
-`user_meta.professional_mailbox` grant and fail-closed to `false`, and `pluginCapabilities`, the
-account's capabilities in your own plugin namespace — [plugins.md §12a](./plugins.md#12a-declaring-user-roles-rolesdeclare-)) and **never** `user_pass`, tokens or
+`displayName`, `role`, plus `pluginCapabilities`, the account's capabilities in your own plugin
+namespace — [plugins.md §12a](./plugins.md#12a-declaring-user-roles-rolesdeclare-) — and `accountCapabilities`, its admin-owned
+grants among the capabilities you declare, fail-closed to `[]` — [plugins.md §12b](./plugins.md#12b-declaring-per-account-capabilities-accountcapabilities-)) and **never** `user_pass`, tokens or
 the rest of the meta. It requires the `users:read` grant. This is the sanctioned path that replaced a
 plugin running `SELECT * FROM users` (which leaked password hashes).
 

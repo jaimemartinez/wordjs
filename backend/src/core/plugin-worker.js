@@ -477,9 +477,10 @@ const wordjs = {
     },
 
     // SAFE user lookups (gated host-side on users:read). Return a SAFE projection
-    // {id,userLogin,username,userEmail,displayName,role,hasProfessionalMailbox} — never user_pass.
-    // `hasProfessionalMailbox` is the ADMIN-OWNED corporate-mailbox grant (core/mailbox.ts): a plugin
-    // must read that boolean, never re-derive it from userEmail, which the account itself can write.
+    // {id,userLogin,username,userEmail,displayName,role,pluginCapabilities,accountCapabilities} — never
+    // user_pass. `accountCapabilities` lists the ADMIN-OWNED per-account grants this plugin declared in its
+    // manifest (core/account-capabilities.ts): a plugin must read those, never re-derive a grant from
+    // userEmail, which the account itself can write.
     users: {
         findByEmail: (e) => callHost('users.findByEmail', [e]),
         findByLogin: (l) => callHost('users.findByLogin', [l]),

@@ -963,12 +963,12 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.slug` | — | Your plugin's slug (its folder name). |
 | `wordjs.paths.data` / `.logs` / `.tmp` | — (raw `fs` on them needs `filesystem:read` / `write`) | Frozen absolute paths of your plugin's private storage directories (`backend/data/plugins/<key>`, `backend/logs/plugins/<key>`, `backend/os-tmp/plugins/<key>`, `<key>` derived from the slug) — a directory of your own under each shared root, never the root itself. They are created when the plugin holds a `filesystem` grant. |
 | `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'`, or `'mariadb'`) — branch your DDL on the `isPostgres`/`isMySQL` booleans rather than the raw `driver` string (`isMySQL` is `true` for both `'mysql'` and `'mariadb'`). Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
-| `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox, pluginCapabilities }` — never `user_pass` or other credential fields. `pluginCapabilities` is the account's capabilities in your own namespace (§12a), the same list a route gets as `req.user.pluginCapabilities`. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
+| `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, pluginCapabilities, accountCapabilities }` — never `user_pass` or other credential fields. `pluginCapabilities` is the account's capabilities in your own namespace (§12a), the same list a route gets as `req.user.pluginCapabilities`; `accountCapabilities` is the account's admin-owned grants among the capabilities you declare (§12b) — read them, never re-derive a grant from `userEmail`, which the account itself can write. The sanctioned way to read users without core-table access. |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.media.getPrivate(id)` · `res.sendPrivateMedia(id, { filename })` | `media:private_read` | PRIVATE media (`documentation/security.md` §1.5). `getPrivate` returns `{ id, title, mimeType, filesize, filename }` (never a path) or `null`; replying with `res.sendPrivateMedia` from one of your routes makes the HOST stream that file as a download (`no-store`, attachment). Your route decides who may download (e.g. a paid, unexpired token); the file never gets a public URL. Without the grant the call throws and the reply is `403`. |
 | `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. The name being resolved must be inside the plugin's egress allowlist when one is set, and a name containing a control character (a NUL, which the resolver would stop at) is always refused. |
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Core hooks that carry other parties' data need the matching grant — `comments:read` (`comments:pii` for commenter email/IP/agent), `posts:read`, `notifications:read`, `settings:read` — and arrive minimized (see §10.5); reserved core-namespace names are refused. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` and `dynamic_sidebar` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
-| `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `access: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. `req` carries `method`, `path`, `query`, `params`, `body`, plus `clientKey` (a stable HMAC of the caller's IP — rate-limit or dedup by caller without seeing the IP), `cookies` (the host's auth/session cookies always stripped), `headers` (only `x-portal-token` is forwarded) and, for a `multipart` route, `file` (`{ path, originalname, mimetype, size, filename }` of the saved upload, removed when the response finishes). With `auth`, `req.user` is `{ id, role, hasProfessionalMailbox, pluginCapabilities }`, plus `userEmail` and `userLogin` only when the plugin holds the **`users:read` grant** (they are personal data) — `pluginCapabilities` being the caller's capabilities in your own namespace (§12a); `null` for an anonymous request. `res` offers `status`, `set` (headers — `Set-Cookie`, CSP, HSTS, `Location`, `Content-Type`, `Refresh` and `Access-Control-*` are dropped by the host), `cookie` / `clearCookie` (renamed into your `wjp_<slug>_` namespace, path-confined to your routes, lifetime capped at 7 days, at most 20 per reply), `json`, `send`, `end`, and `sendPrivateMedia` (row above). |
+| `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `access: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. `req` carries `method`, `path`, `query`, `params`, `body`, plus `clientKey` (a stable HMAC of the caller's IP — rate-limit or dedup by caller without seeing the IP), `cookies` (the host's auth/session cookies always stripped), `headers` (only `x-portal-token` is forwarded) and, for a `multipart` route, `file` (`{ path, originalname, mimetype, size, filename }` of the saved upload, removed when the response finishes). With `auth`, `req.user` is `{ id, role, pluginCapabilities, accountCapabilities }`, plus `userEmail` and `userLogin` only when the plugin holds the **`users:read` grant** (they are personal data) — `pluginCapabilities` being the caller's capabilities in your own namespace (§12a); `null` for an anonymous request. `res` offers `status`, `set` (headers — `Set-Cookie`, CSP, HSTS, `Location`, `Content-Type`, `Refresh` and `Access-Control-*` are dropped by the host), `cookie` / `clearCookie` (renamed into your `wjp_<slug>_` namespace, path-confined to your routes, lifetime capped at 7 days, at most 20 per reply), `json`, `send`, `end`, and `sendPrivateMedia` (row above). |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.widgets.register(id, { name, description, fields, render })` | — | A sidebar widget; `render(settings)` may be async, capped at 2 s ([§10.2](#102-widgets-api)). |
 | `wordjs.graphql.extend({ typeDefs, fields })` | — (its routes need `express:register_route`) | Adds GraphQL types and `Query` fields, each resolved by one of your own GET routes called as the GraphQL caller ([graphql.md](graphql.md#extending-the-schema)). |
@@ -1233,6 +1233,54 @@ conference-manager team accepts any account whose role holds `conference_manager
 admin menu item with your capability (`cap: 'conference_manager_access'`) so the item — and through it
 your page (§10.1) — is offered exactly to the users who hold it.
 
+## 12b. Declaring per-account capabilities (`accountCapabilities`) 🎫
+
+A role says what a whole class of accounts may do. Some features are instead a per-**account** decision
+an administrator makes on the user screen, whatever the account's role: "this editor gets a mailbox",
+"this author may sell tickets". Declare such a capability in your manifest and the core does the rest —
+without knowing what it means:
+
+```json
+"accountCapabilities": [
+    {
+        "slug": "my_plugin_seller",
+        "name": "Ticket seller",
+        "description": "Can create and sell tickets from this site.",
+        "locksEmail": false,
+        "defaultForNewAccounts": false
+    }
+]
+```
+
+* **Namespace.** `slug` follows the role rules of §12a: it starts with your prefix (`my_plugin_` for
+  `my-plugin`), is not a core capability name, and is not inside another installed plugin's namespace.
+  Upload and activation refuse an invalid block; a hand-edited one is ignored (read time re-checks it).
+  At most 10 entries; keys other than the five above are refused.
+* **The grant.** Users → edit user shows one toggle per capability of every **active** plugin, to callers
+  holding `edit_users` only (`GET /api/v1/users/account-capabilities`). `POST /users` and `PUT /users/:id`
+  take `accountCapabilities: { "<slug>": true|false }`; changing one needs `edit_users` whoever the target
+  is, a resend of the current state is a no-op, and a change naming a capability no active plugin declares
+  is refused (`400`). `PUT /users/me` ignores the field, the generic `meta` bag cannot reach the stored
+  keys (`user_meta account_capability:<slug>`), and **no role implies a grant — not even administrator**.
+  Nothing is ever derived from the account's email address. An API token cannot change a grant.
+* **What you are told.** `req.user.accountCapabilities` on an `auth` route and `accountCapabilities` on every
+  `wordjs.users.*` result: the account's grants **among your own declared capabilities** — never another
+  plugin's. Gate on it: `req.user.accountCapabilities.includes('my_plugin_seller')`. Rebuilt per request, so
+  a revocation denies the very next one.
+* **`requiresAccountCapability`** on an admin menu item (`wordjs.adminMenu.add`) hides the item from every
+  non-administrator without the grant — the same grant your route gate reads, so the menu never offers a
+  page that only 403s. A capability outside your namespace hides the item from all non-administrators.
+* **`locksEmail: true`** — while an account holds the capability, it cannot change its own primary
+  address (`403 rest_mailbox_address_locked`); an `edit_users` administrator still can. Use it when your
+  service lives at that address. It keeps applying while your plugin is deactivated.
+* **`defaultForNewAccounts: true`** — the toggle starts on in the "new user" form (an explicit,
+  visible choice the administrator can turn off before saving).
+
+Declaring capabilities needs no permission: by itself a declaration confers nothing, and its two effects
+on the core (`locksEmail`, `requiresAccountCapability`) only ever restrict. Deactivating your plugin keeps
+the stored grants (they reappear when it is reactivated); its toggles disappear from the user screen.
+The mail-server plugin's "Professional mail account" is declared this way ([mail-server.md](./mail-server.md)).
+
 ## 13. Verso Blocks (Visual Editor Components) 🧩
 
 Plugins can add blocks to the visual page builder (**Verso**). This is how it actually works, end to end.
@@ -1382,6 +1430,7 @@ generators and the marketplace scripts). The manifest may be at most 64 KB.
 | `bundled` | `true` = the plugin ships its own `node_modules/`; the host skips shared install/garbage-collection. |
 | `roles` | User roles the plugin declares (§12a); requires `roles:declare`. |
 | `shortcodes` | `[{ "tag": "…" }]` — the `[tag]` / `[tag key="value"]` embeds a static HTML front page renders with your site component (`frontend.components`), its attributes passed as props. Served to the front end by `GET /api/v1/plugins/shortcodes` for active plugins; a tag is an identifier and the first plugin (by slug) to declare it owns it. Server-side expansion is still your code's `wordjs.shortcodes.add`. |
+| `accountCapabilities` | Per-account capabilities an administrator grants on the user screen (§12b). |
 | `claimPorts` | Array of port numbers the plugin needs (`[25]` for a mail server). Only these ports are eligible for the admin's port-conflict screen (`/api/v1/plugins/:slug/port-conflicts`), and they are the ports `wordjs.smtp.listen` may ask the host for. |
 
 **Frontend (`frontend.*`)** — any of these needs `browser:script` (§2).

@@ -32,7 +32,7 @@ import { makeDb } from './fixtures/mail-server-db';
 const PLUGIN_DIR = path.resolve(__dirname, '../../../marketplace/plugins/mail-server');
 const PLUGIN_SRC = path.join(PLUGIN_DIR, 'index.js');
 const SOURCE = fs.readFileSync(PLUGIN_SRC, 'utf8');
-const ADMIN = { id: 1, role: 'administrator', userEmail: 'boss@acme.example', userLogin: 'boss', hasProfessionalMailbox: false };
+const ADMIN = { id: 1, role: 'administrator', userEmail: 'boss@acme.example', userLogin: 'boss', accountCapabilities: [] };
 
 /** `smtp-server` double: records the port it was asked for and "binds" it, so a fallback shows as bound. */
 class FakeSMTPServer {

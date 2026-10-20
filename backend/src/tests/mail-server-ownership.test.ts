@@ -479,7 +479,7 @@ test('#5 REGRESSION: the injected backfill hook asks WHO an address is, not who 
     const hook = INDEX_CODE.match(/resolveUserIdByAddress:\s*async \(address\) => \{([\s\S]*?)\n {8}\}/);
     assert.ok(hook, 'the store is constructed with a resolveUserIdByAddress hook');
     assert.match(hook![1], /User\.findByEmail\(/, 'identity comes from the user directory');
-    for (const permission of ['mailboxAddressOf', 'hasCorporateMailbox', 'hasProfessionalMailbox', 'getMailDomain']) {
+    for (const permission of ['mailboxAddressOf', 'hasCorporateMailbox', 'accountCapabilities', 'getMailDomain']) {
         assert.ok(
             !hook![1].includes(permission),
             `the backfill must not resolve identity through ${permission}(): that is DELIVERY PERMISSION, ` +

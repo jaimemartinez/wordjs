@@ -313,6 +313,19 @@ export async function apiGetPaged<T>(endpoint: string): Promise<{ data: T; total
     };
 }
 
+/** A per-account capability an active plugin declares (GET /users/account-capabilities). */
+export interface AccountCapabilityDeclaration {
+    slug: string;
+    plugin: string;
+    name: string;
+    description: string;
+    locksEmail: boolean;
+    defaultForNewAccounts: boolean;
+}
+
+/** The body of POST /users and PUT /users/:id: grants are written as a map of slug → on/off. */
+export type UserWrite = Omit<Partial<User>, 'accountCapabilities'> & { accountCapabilities?: Record<string, boolean> };
+
 export interface Category {
     id: number;
     name: string;
@@ -329,11 +342,11 @@ export interface User {
     capabilities: string[];
     personalEmail?: string | null;
     /**
-     * ACTIVE CORPORATE MAILBOX — the admin-owned grant (backend: user_meta.professional_mailbox).
-     * Only POST /users and PUT /users/:id accept it, and only from a caller holding `edit_users`; the
-     * self-service PUT /users/me ignores it entirely. A mail plugin gates its whole surface on this.
+     * The plugin-declared account capabilities an administrator granted this account (slugs). Written as
+     * a map `{slug: on/off}` through POST /users and PUT /users/:id, and only by a caller holding
+     * `edit_users`; the self-service PUT /users/me ignores it entirely.
      */
-    professionalMailbox?: boolean;
+    accountCapabilities?: string[];
     mfa?: {
         required: boolean;
         enabled: boolean;
@@ -723,8 +736,10 @@ export function isBadCurrentPassword(error: unknown): boolean {
 export const usersApi = {
     list: () => apiGet<User[]>("/users"),
     get: (id: number) => apiGet<User>(`/users/${id}`),
-    create: (data: Partial<User> & { password: string }) => apiPost<User>("/users", data),
-    update: (id: number, data: Partial<User> & { currentPassword?: string }) => apiPut<User>(`/users/${id}`, data),
+    create: (data: UserWrite & { password: string }) => apiPost<User>("/users", data),
+    update: (id: number, data: UserWrite & { currentPassword?: string }) => apiPut<User>(`/users/${id}`, data),
+    /** What the user screen renders as plugin toggles (edit_users only). */
+    accountCapabilities: () => apiGet<AccountCapabilityDeclaration[]>("/users/account-capabilities"),
     // Self-service update for the logged-in user (any role). Changing the password OR either recovery
     // address requires currentPassword — ask selfEditNeedsCurrentPassword, do not re-derive the rule.
     updateMe: (data: { displayName?: string; email?: string; personalEmail?: string; password?: string; currentPassword?: string }) =>

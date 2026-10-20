@@ -20,21 +20,6 @@ async function listUsers() {
         console.log('Users found:', users.length);
         console.table(users);
 
-        console.log('\nChecking for received emails table...');
-        const tables = await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table' AND name='received_emails'");
-        if (tables.length > 0) {
-            const count = await dbAsync.get('SELECT COUNT(*) as count FROM received_emails');
-            console.log(`Table "received_emails" exists with ${count.count} rows.`);
-
-            if (count.count > 0) {
-                const lastEmails = await dbAsync.all('SELECT id, to_address, subject, date_received FROM received_emails ORDER BY id DESC LIMIT 3');
-                console.log('Last 3 emails:');
-                console.table(lastEmails);
-            }
-        } else {
-            console.log('Table "received_emails" does NOT exist!');
-        }
-
     } catch (e) {
         console.error('Error:', e.message);
         console.error(e.stack);
