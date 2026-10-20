@@ -43,7 +43,7 @@ const { DEFAULT_PROXY_TARGET, rewriteSources } = require('../frontend/backend-pr
 
 /**
  * The site name the root layout falls back to when settings are unavailable — `settings?.blogname ||
- * "WordJS"` in frontend/src/app/layout.tsx. A test pins the two together.
+ * "WordJS"` in frontend/src/app/_root/RootDocument.tsx. A test pins the two together.
  */
 const DEFAULT_SITE_NAME = 'WordJS';
 

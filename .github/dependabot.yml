@@ -90,6 +90,14 @@ updates:
       # rate-limit-redis 5+ requires the express-rate-limit v7 store contract — paired migration.
       - dependency-name: "rate-limit-redis"
         update-types: ["version-update:semver-major"]
+      # better-sqlite3 13 ships prebuilt N-API binaries and marks itself `"gypfile": false`, but
+      # `npm ci` in npm 10 and 11 (the npm of Node 22 and 24 LTS) ignores that flag when installing
+      # from a lockfile. It runs node-gyp instead, and on a machine without a C++ toolchain the
+      # install of the DEFAULT SQLite driver fails; `npm install` and npm 12 are fine. Until the npm
+      # that Node LTS ships installs it from a lockfile without compiling, it stays on 12.x (patches
+      # still flow through the minor/patch group).
+      - dependency-name: "better-sqlite3"
+        update-types: ["version-update:semver-major"]
       # TypeScript 7 is outside the peer range of @typescript-eslint 8, so `npm ci` cannot resolve the
       # tree. It waits for a typescript-eslint release that accepts it.
       - dependency-name: "typescript"
