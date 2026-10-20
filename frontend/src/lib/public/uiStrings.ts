@@ -46,3 +46,23 @@ export function publicUiStringsFor(lang: Language): PublicUiStrings {
 export function publicUiStrings(settings: Record<string, unknown> | null | undefined): PublicUiStrings {
     return publicUiStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
 }
+
+/** The members-only notice (core/content-access): shown where a gated entry's teaser ends. */
+export interface MembersGateStrings {
+    title: string;
+    body: string;
+    login: string;
+    signup: string;
+    checking: string;
+}
+
+export function membersGateStrings(settings: Record<string, unknown> | null | undefined): MembersGateStrings {
+    const lang = catalogueLanguage(resolveDocumentLanguage(settings).lang);
+    return {
+        title: t("public.members.title", lang),
+        body: t("public.members.body", lang),
+        login: t("public.members.login", lang),
+        signup: t("public.members.signup", lang),
+        checking: t("public.members.checking", lang),
+    };
+}

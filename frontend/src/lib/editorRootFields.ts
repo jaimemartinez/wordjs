@@ -413,6 +413,13 @@ export function withRecordRootFields(
         tags?: readonly Tag[];
         /** Las etiquetas del registro abierto, para que ninguna se quede sin opción en el select. */
         recordTags?: readonly PostTermRef[];
+        /**
+         * Niveles de acceso que ofrece el proveedor activo (GET /content-access/levels). Sin niveles y
+         * sin nivel guardado no se compone el campo: sin proveedor no hay nada que elegir.
+         */
+        accessLevels?: readonly AccessLevelOption[];
+        /** El nivel guardado del registro abierto (meta `_wjs_access`). */
+        currentAccess?: unknown;
     } = {},
 ): Record<string, VersoField> {
     const out: Record<string, VersoField> = {};
@@ -435,6 +442,11 @@ export function withRecordRootFields(
     if (!inserted) insert();
     // Un registro base sin `category` (hoy ninguno pide etiquetas) igualmente las recibe al final.
     if (opts.tags && !("tags" in out)) out.tags = tagsField(opts.tags, opts.recordTags);
+    // Acceso (contenido para miembros) antes del SEO: decide QUIÉN lee el cuerpo, no cómo se indexa.
+    const currentAccess = String(opts.currentAccess ?? "").trim();
+    if ((opts.accessLevels && opts.accessLevels.length) || currentAccess) {
+        out[ACCESS_META_KEY] = accessField(opts.accessLevels || [], currentAccess);
+    }
     // SEO al final, y solo si el registro base no lo trae ya (entradas SÍ lo traen, páginas no).
     if (opts.seo) {
         for (const [key, field] of Object.entries(seoFields)) {
@@ -583,3 +595,56 @@ const seoFields: Record<string, VersoField> = {
         ],
     },
 };
+
+/* ------------------------------------------------------------------ */
+/* Acceso: contenido para miembros (backend core/content-access).      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * La meta que guarda el nivel que exige un registro ('' = público). Mismo criterio que `_wjs_template`
+ * y el SEO: la META MANDA sobre `_puck_data`, se siembra en root.props al cargar y se manda al guardar.
+ */
+export const ACCESS_META_KEY = "_wjs_access";
+
+export interface AccessLevelOption {
+    value: string;
+    label: string;
+}
+
+/**
+ * Select «Acceso». Un nivel guardado que el proveedor ya no ofrece (plugin desactivado, nivel borrado)
+ * se sintetiza como opción visible en vez de desaparecer: el backend lo sigue aplicando (falla
+ * CERRADO) y el autor tiene que poder verlo para quitarlo.
+ */
+export function accessField(levels: readonly AccessLevelOption[], currentValue?: unknown): VersoField {
+    const options: Array<{ label: string; value: string }> = [
+        { label: "Público (cualquiera)", value: "" },
+        ...levels.map((l) => ({ label: l.label || l.value, value: l.value })),
+    ];
+    const current = String(currentValue ?? "").trim();
+    if (current && !options.some((o) => o.value === current)) {
+        options.push({ label: `${current} (no disponible)`, value: current });
+    }
+    return { type: "select", label: "Acceso", options };
+}
+
+/** El nivel guardado, para sembrar root.props (siempre string: '' = público). */
+export function seedAccessRootProps(post: Post | undefined | null): { [ACCESS_META_KEY]: string } {
+    const raw = post?.meta ? (post.meta as Record<string, unknown>)[ACCESS_META_KEY] : undefined;
+    return { [ACCESS_META_KEY]: typeof raw === "string" ? raw.trim() : raw == null ? "" : String(raw) };
+}
+
+/**
+ * La meta a guardar: solo si el autor la CAMBIÓ respecto a lo sembrado (mismo criterio fail-safe que el
+ * extracto). Un guardado que no la tocó no manda la clave, así que no crea una fila vacía en cada
+ * entrada ni pisa un nivel que la API haya puesto mientras el editor estaba abierto.
+ */
+export function accessMetaForSave(
+    rootProps: Record<string, unknown> | undefined | null,
+    seeded: unknown,
+): { [ACCESS_META_KEY]?: string } {
+    const value = rootProps ? rootProps[ACCESS_META_KEY] : undefined;
+    if (typeof value !== "string") return {};
+    const next = value.trim();
+    return next === String(seeded ?? "").trim() ? {} : { [ACCESS_META_KEY]: next };
+}

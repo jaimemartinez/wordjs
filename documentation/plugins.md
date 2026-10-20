@@ -1069,6 +1069,8 @@ provider) / `email:provider` (*become* the provider), `notifications:send` / `no
 `media:private_read` (describe a private media item and have the host stream it from one of your
 routes), `smtp:inbound` (the host listens on the SMTP port for you — exclusive, one plugin at a time),
 `ai:use` (text completions through the site's AI provider — the key never reaches the plugin),
+`content_access:provider` (answer the members-only content filters — which access levels an account holds
+and which the editor offers; never implied, see [memberships.md](memberships.md)),
 `express:register_route`, `admin_menu:register`, `browser:script` (serve and run the plugin's compiled
 frontend bundles in the browser — **not sandboxed**, see `security.md` §1.3b), `roles:declare` (register the user roles of
 the manifest's `roles` block — §12a), and **`network`** (outbound access to **public IPs only**

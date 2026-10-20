@@ -227,6 +227,21 @@ describe('hook-access policy', () => {
         perms._setGrantsInMemory('policy-probe', []);
     });
 
+    test('the members-only content filters take the explicit content_access:provider grant', () => {
+        const ok = (h: string) => hookAccess.checkHookSubscription('access-probe', h).ok;
+        perms._setGrantsInMemory('access-probe', ['users:read']);
+        assert.strictEqual(ok('content_access_grants'), false, 'users:read alone must not make a plugin a level provider');
+        assert.strictEqual(ok('content_access_levels'), false);
+        perms._setGrantsInMemory('access-probe', ['users:admin', 'settings:admin', 'posts:read']);
+        assert.strictEqual(ok('content_access_grants'), false, 'no other grant implies it');
+        perms._setGrantsInMemory('access-probe', ['content_access:provider']);
+        assert.strictEqual(ok('content_access_levels'), true);
+        assert.strictEqual(ok('content_access_grants'), false, 'the grants filter also names the reader: users:read');
+        perms._setGrantsInMemory('access-probe', ['content_access:provider', 'users:read']);
+        assert.strictEqual(ok('content_access_grants'), true);
+        perms._setGrantsInMemory('access-probe', []);
+    });
+
     test('the in-process bridge refuses ungranted data hooks too', () => {
         const { createPluginApi } = require('../core/plugin-api');
         perms._setGrantsInMemory('bridge-probe', []);
