@@ -17,7 +17,7 @@
  * The main site, and every single-site install, never carries the header and is served exactly as before.
  * A client's own `x-wordjs-site-route` is always removed. The main site's own requests for `/wjs-site/...`
  * are answered 404: that tree is only ever reached through the rewrite. The sign-in screens (`/login`,
- * `/register`, `/reset-password`, `/verify-email`) are routed too: they speak to the backend from the
+ * `/login/handoff`, `/register`, `/reset-password`, `/verify-email`) are routed too: they speak to the backend from the
  * browser, on the site's own address, but the document around them (its lang, its fonts, its title) is
  * the root layout's, and only the site tree's root layout is that site's. Admin, install and portal pages
  * are never rewritten (the admin declares its site from this same header; install and portals are
@@ -34,7 +34,7 @@ const SITE_ROUTE_HEADER = "x-wordjs-site-route";
 const SITE_HOST = /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/;
 const NOT_PUBLIC_PAGES = /^\/(?:api|_next|admin|login|register|reset-password|verify-email|install|migration|portal|health|public|uploads|themes|plugins|fonts)(?:\/|$)/;
 /** The sign-in screens the site tree has a copy of (wjs-site/[siteHost]/login, …): exactly these paths. */
-const SIGN_IN_PAGES = /^\/(?:login|register|reset-password|verify-email)\/?$/;
+const SIGN_IN_PAGES = /^\/(?:login(?:\/handoff)?|register|reset-password|verify-email)\/?$/;
 const PUBLIC_DOCUMENTS = /(?:^|\/)(?:feed\.xml|feed\.atom|feed\.json|robots\.txt|sitemap\.xml)$|^\/sitemap\/[^/]+$/;
 
 /** Whether another site's request for `pathname` is answered by its `wjs-site` tree. */

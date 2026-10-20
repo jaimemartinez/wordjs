@@ -21,6 +21,7 @@ const { getRoles } = require('../core/roles');
 const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
 const { recordAudit } = require('../core/audit');
 const { protectsNetworkAdmin, refuseNetworkAdminTarget } = require('../core/network-auth');
+const networkHandoff = require('../core/network-handoff');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId, routeIdOrNull } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
@@ -1094,7 +1095,7 @@ function unusableEmail(res: Response) {
     return res.status(400).json({ code: 'rest_invalid_email', message: "This email address can't be used.", data: { status: 400 } });
 }
 
-router.put('/me', asyncHandler(async (req: Request, res: Response) => {
+router.put('/me', networkHandoff.refuseHandoffSession, asyncHandler(async (req: Request, res: Response) => {
     const { email, displayName, password, url, personalEmail, currentPassword } = req.body;
 
     if (rejectWeakSelfPassword(res, password)) return;
@@ -1268,6 +1269,8 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 
     // MULTISITE: a network administrator is changed only by a network administrator (core/network-auth).
     if (!isOwn && protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
+    // ...and a network administrator's handoff account by nobody: the handoff manages it (core/network-handoff).
+    if (networkHandoff.isHandoffAccount(user)) return networkHandoff.refuseHandoffAccountTarget(res);
 
     // SECURITY (privilege hierarchy / account takeover): editing ANOTHER user mutates their email +
     // password below. `edit_users` is a delegable capability, so without this a non-administrator could
@@ -1568,6 +1571,7 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
         });
     }
     if (protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
+    if (networkHandoff.isHandoffAccount(user)) return networkHandoff.refuseHandoffAccountTarget(res);
     if (isPrivilegedTarget(user) && req.user.getRole() !== 'administrator') {
         return res.status(403).json({
             code: 'rest_forbidden',

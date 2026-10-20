@@ -172,14 +172,14 @@ describe("proxy: a secondary site's sign-in screens are its tree's", () => {
         new NextRequest(new URL(path, "http://example.com"), { headers });
     const routedTo = (res: Response) => res.headers.get("x-middleware-request-x-wordjs-site-route");
 
-    it("routes /login, /register, /reset-password and /verify-email of another site", () => {
-        for (const p of ["/login", "/register", "/reset-password", "/verify-email", "/login/"]) {
+    it("routes /login, /login/handoff, /register, /reset-password and /verify-email of another site", () => {
+        for (const p of ["/login", "/login/handoff", "/register", "/reset-password", "/verify-email", "/login/"]) {
             expect(routedTo(proxy(req(p, { "x-wordjs-site-host": TWO }))), p).toBe(TWO);
         }
     });
 
     it("leaves the main site's sign-in screens alone", () => {
-        for (const p of ["/login", "/register", "/reset-password", "/verify-email"]) {
+        for (const p of ["/login", "/login/handoff", "/register", "/reset-password", "/verify-email"]) {
             const res = proxy(req(p));
             expect(routedTo(res), p).toBeNull();
             expect(res.headers.get("x-middleware-next"), p).toBeTruthy();
@@ -187,7 +187,7 @@ describe("proxy: a secondary site's sign-in screens are its tree's", () => {
     });
 
     it("routes only those exact screens, not paths under them", () => {
-        for (const p of ["/login/x", "/register/2", "/admin/login"]) {
+        for (const p of ["/login/x", "/login/handoff/x", "/register/2", "/admin/login"]) {
             expect(routedTo(proxy(req(p, { "x-wordjs-site-host": TWO }))), p).toBeNull();
         }
     });

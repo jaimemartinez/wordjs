@@ -3,15 +3,15 @@
   "snapshot": {
     "restSource": {
       "routeFiles": 48,
-      "endpointDeclarations": 298,
+      "endpointDeclarations": 300,
       "mountDeclarations": 114,
-      "semanticSha256": "c7cfb7ce111b8bd62502864a3da65105734e46451d48b1a3d6200189015b3aec"
+      "semanticSha256": "476ea502ea31fcaf0b660dee3d553922da05ae3fe1c07f61b80d8599fe8a4c5d"
     },
     "openapi": {
-      "paths": 233,
-      "operations": 295,
-      "coverage": 0.9899,
-      "semanticSha256": "8fe64462b596fd0a95b5c55ddcd505429e58ce602aec081672e981a13ace36dd"
+      "paths": 235,
+      "operations": 297,
+      "coverage": 0.99,
+      "semanticSha256": "5cd11fbc0dac063fdc3b4c2e5197f5c4e3f4c57003cc51e28101a4c80a432862"
     },
     "typingDebt": {
       "requestAny": {
