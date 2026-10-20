@@ -42,7 +42,7 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 
 ## Requirements
 
-- Node.js **>= 20.9** (Node 20 or 22 LTS recommended) with npm on your PATH.
+- Node.js **>= 22** (Node 22 or 24 LTS recommended) with npm on your PATH.
 
 ## Options
 

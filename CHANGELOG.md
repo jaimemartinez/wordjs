@@ -16,6 +16,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **`npm run media` takes `--site <id>` and `--all-sites`** on a network of sites, and **Settings → Media
   storage** lists each site's library state.
 
+### ⚠️ Upgrade note — Node.js 22 or newer is required
+
+WordJS now requires **Node.js 22 or newer** (Node 22 LTS or 24 LTS recommended). Node 20 reached end of
+life in April 2026, and graphql 17 (the GraphQL endpoint) and several native modules declare Node 22.
+Every `package.json` declares `engines.node >= 22.0.0`, and `npm start`, the monolith, the gateway, the
+backend, `npm run setup` and `create-wordjs` all stop with a clear message on an older Node. **Before
+upgrading** a site that runs Node 20, install Node 22 (`node --version` must print v22 or later), then
+reinstall dependencies (`npm run install:all`, or the release bundle's `npm run release:install`) so the
+native modules are rebuilt for it. The Docker image and Helm chart already run Node 22, so nothing
+changes there.
+
 ### ⚠️ Upgrade note — database TLS is now verified
 
 Sites with `dbSsl: true` on a **managed database whose CA is not in Node.js's trust store** — Amazon RDS /

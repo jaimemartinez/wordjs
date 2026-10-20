@@ -161,7 +161,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 
 ## 📋 Prerequisites
 
-- **Node.js:** v20.9 or higher (the `engines` field requires `>=20.9.0`; CI builds and tests on Node 22).
+- **Node.js:** v22 or higher (the `engines` field requires `>=22.0.0`; CI builds and tests on Node 22).
 - **PM2:** (Recommended) A process manager for Node.js to keep your app alive.
   ```bash
   npm install -g pm2

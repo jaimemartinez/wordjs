@@ -211,8 +211,9 @@ authorization applies — is planned for a later phase.
 
 ## Choice of library
 
-- [`graphql`](https://github.com/graphql/graphql-js) 16.x (MIT) — the reference implementation, no
-  dependencies. 16.x rather than 17.x because 17 requires Node 22+ and the backend supports Node ≥ 20.9.
+- [`graphql`](https://github.com/graphql/graphql-js) 17.x (MIT) — the reference implementation, no
+  dependencies. Its experimental fragment arguments stay disabled (`parseWithLimits`): the cost walk
+  measures each fragment once and reuses the figure at every spread.
 - [`graphql-http`](https://github.com/graphql/graphql-http) 1.x (MIT) — the GraphQL-over-HTTP reference
   server, no runtime dependencies, with an Express adapter.
 

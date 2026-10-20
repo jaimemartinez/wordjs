@@ -252,6 +252,12 @@ class WordJSSetup {
 
 // CLI Entry Point
 if (require.main === module) {
+    // Preflight: WordJS needs Node >= 22 (graphql 17 and the native modules declare it).
+    if (Number(process.versions.node.split('.')[0]) < 22) {
+        console.error(`\n✖ WordJS requires Node.js >= 22 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 22 LTS or 24 LTS (https://nodejs.org) and try again.\n');
+        process.exit(1);
+    }
     const orchestrator = new WordJSSetup(process.cwd());
     const args = process.argv.slice(2);
 

@@ -37,7 +37,7 @@ is mTLS.
 
 ## Prerequisites
 
-* Node.js ≥ 20.9 on every machine; `openssl` on the PATH of the machines that **join** (backend/frontend).
+* Node.js ≥ 22 on every machine; `openssl` on the PATH of the machines that **join** (backend/frontend).
 * Network reachability (open only to the app-tier subnet / VPN, **not** the public internet):
   * backend & frontend → gateway `:3100` (register) and `:3101` (enroll)
   * gateway → backend `:4000` and frontend `:3001` (proxy + health checks)

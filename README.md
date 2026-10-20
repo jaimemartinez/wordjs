@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/create-wordjs?label=create-wordjs&color=cb3837)](https://www.npmjs.com/package/create-wordjs)
 [![CI](https://github.com/jaimemartinez/wordjs/actions/workflows/ci.yml/badge.svg)](https://github.com/jaimemartinez/wordjs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/jaimemartinez/wordjs?color=blue)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.9-brightgreen)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Security Policy](https://img.shields.io/badge/security-policy-brightgreen)](SECURITY.md)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jaimemartinez/wordjs)
 
@@ -283,7 +283,7 @@ Before exposing WordJS to the internet: have it **independently audited**, **rot
 
 <br/>
 
-- **Runtime:** Node.js (≥ 20.9; Node 20/22 LTS recommended)
+- **Runtime:** Node.js (≥ 22; Node 22/24 LTS recommended)
 - **Backend:** TypeScript — compiled with `tsc` for production, `ts-node` for dev
 - **Frontend:** Next.js (React 19)
 - **Editor:** Verso — in-house; its editor state, drag-and-drop resolver and rich-text engine carry no third-party dependency · **Styling:** vanilla CSS + Tailwind
