@@ -728,6 +728,10 @@ jobs:
           done
       - name: Coverage ratchet (c8 report over all four shards)
         working-directory: backend
+        # c8 holds every shard's V8 profiles (~700) in memory at once; the default heap (~4 GB) is at its
+        # edge with today's suite, so the merge gets room instead of an out-of-memory abort.
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: npm run test:coverage:report
       - name: Upload backend coverage (lcov)
         if: always()
