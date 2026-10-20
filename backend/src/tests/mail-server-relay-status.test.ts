@@ -29,7 +29,7 @@ import { makeDb } from './fixtures/mail-server-db';
 const PLUGIN_DIR = path.resolve(__dirname, '../../../marketplace/plugins/mail-server');
 const PLUGIN_SRC = path.join(PLUGIN_DIR, 'index.js');
 const SOURCE = fs.readFileSync(PLUGIN_SRC, 'utf8');
-const ADMIN = { id: 1, role: 'administrator', userEmail: 'boss@acme.example', userLogin: 'boss', displayName: 'Boss', hasProfessionalMailbox: false };
+const ADMIN = { id: 1, role: 'administrator', userEmail: 'boss@acme.example', userLogin: 'boss', displayName: 'Boss', accountCapabilities: [] };
 const SANDBOX_REFUSAL = '[sandbox] network egress to 192.168.182.56 is blocked — only public destinations are allowed for plugins';
 
 class FakeSMTPServer {

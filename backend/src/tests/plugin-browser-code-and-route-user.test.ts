@@ -125,7 +125,7 @@ describe('a plugin route sees the caller\'s email and login only with users:read
             const u = project();
             assert.strictEqual(u.id, 7);
             assert.strictEqual(u.role, 'subscriber');
-            assert.strictEqual(typeof u.hasProfessionalMailbox, 'boolean');
+            assert.ok(Array.isArray(u.accountCapabilities));
             assert.ok(Array.isArray(u.pluginCapabilities));
             assert.strictEqual('userEmail' in u, false, 'email handed to a plugin without users:read');
             assert.strictEqual('userLogin' in u, false, 'login handed to a plugin without users:read');

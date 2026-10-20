@@ -113,6 +113,26 @@ function adminPageConflict(pluginSlug: string, manifest: any): string | null {
     return null;
 }
 
+/** A capability no account can hold (not an identifier): what an item naming a foreign capability requires. */
+const UNHOLDABLE_CAPABILITY = '#refused';
+
+/**
+ * The account capability a menu item asks GET /plugins/menus to require (core/account-capabilities.ts), or
+ * null. A plugin may only name a capability in its own namespace: anything else is replaced by one nobody
+ * holds, so the item is hidden from every non-administrator rather than shown to the holders of some other
+ * plugin's grant.
+ */
+function menuAccountCapability(pluginSlug: string, item: any): string | null {
+    const cap = item && item.requiresAccountCapability;
+    if (cap === undefined || cap === null || cap === false) {
+        // DEPRECATED — an outdated mail plugin's flag (core/legacy-account-flags.ts).
+        return require('./legacy-account-flags').legacyMenuRequirement(item);
+    }
+    if (typeof cap === 'string' && require('./plugin-roles').isInPluginNamespace(cap, pluginSlug)) return cap;
+    log.warn({ pluginSlug }, `[Security] admin-menu item from plugin '${pluginSlug}' requires ${JSON.stringify(String(cap).slice(0, 100))}, which is not one of its own account capabilities — hidden from non-administrators.`);
+    return UNHOLDABLE_CAPABILITY;
+}
+
 function registerAdminMenu(pluginSlug: string, item: any) {
     item = item || {};
     // SECURITY: validate the plugin-controlled href BEFORE it can enter the registry. Drop the item on a
@@ -159,13 +179,12 @@ function registerAdminMenu(pluginSlug: string, item: any) {
             order: item.order || 100,
             cap: item.cap || item.capability || null,
             section: item.section || 'core',
-            // Generic visibility flag: mark an item that is only meaningful to a user for whom an
-            // ADMINISTRATOR has enabled a professional mailbox (e.g. a per-user webmail inbox). Core's
-            // GET /plugins/menus hides it from everyone else, reading the same admin-owned grant the
-            // plugin's own route gate reads (user_meta.professional_mailbox — see core/mailbox.ts; it
-            // is deliberately NOT derived from the account's email domain, which the account itself can
-            // write). Slug-agnostic — ANY plugin can set it, so it is not tied to the bundled mail-server.
-            requiresProfessionalMailbox: !!item.requiresProfessionalMailbox,
+            // Generic visibility gate: an item only meaningful to an account an ADMINISTRATOR granted one of
+            // the plugin's own account capabilities (core/account-capabilities.ts). GET /plugins/menus hides
+            // it from every other non-administrator, reading the same grant the plugin's route gate reads.
+            // Only a capability in the registering plugin's own namespace is accepted; anything else hides
+            // the item from non-administrators (fail closed).
+            requiresAccountCapability: menuAccountCapability(pluginSlug, item),
             // Multisite: an entry only a NETWORK administrator sees (GET /plugins/menus). Core only.
             networkAdmin: pluginSlug === 'core' && item.networkAdmin === true,
         });

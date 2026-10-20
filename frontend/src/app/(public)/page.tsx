@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import HomeContent from "@/components/public/HomeContent";
 import JsonLd from "@/components/public/JsonLd";
-import { getSettings, getPostById, getPosts, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getSettings, getPostById, getPosts, getPluginShortcodes, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { postCardExcerpt } from "@/lib/postExcerpt";
@@ -67,11 +67,13 @@ export default async function HomePage() {
             // injected HERE, at the route seam, so HomeContent stays a pure renderer. Without it the
             // most-visited URL served raw _puck_data and those blocks rendered empty at '/'.
             const withBlocks = await withResolvedBlocks(page);
+            // The [tag] embeds an HTML front page may carry — declared by the active plugins, not listed here.
+            const shortcodes = await getPluginShortcodes().catch(() => []);
             return (
                 <div className="space-y-4">
                     {siteJsonLd}
                     <ThemeTemplate kind="home">
-                        <HomeContent post={withBlocks} settings={settings} />
+                        <HomeContent post={withBlocks} settings={settings} shortcodes={shortcodes} />
                     </ThemeTemplate>
                 </div>
             );
