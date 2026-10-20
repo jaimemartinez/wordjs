@@ -101,6 +101,13 @@ export default function NetworkPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // The example of a local address keeps the main site's port: a .localhost site is served by the same listener.
+    // Read after mount: the server render has no window, and both renders must agree.
+    const [localExample, setLocalExample] = useState("http://blog.localhost");
+    useEffect(() => {
+        setLocalExample(`${window.location.protocol}//blog.localhost${window.location.port ? `:${window.location.port}` : ""}`);
+    }, []);
+
     const set = (key: keyof typeof EMPTY_FORM) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
     const handleCreate = async (e: React.FormEvent) => {
@@ -310,14 +317,14 @@ export default function NetworkPage() {
                 </h2>
                 <form onSubmit={handleCreate} className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <Input label={t("network.address")} icon="fa-globe" value={form.url} onChange={set("url")} placeholder={localAddresses ? "http://blog.localhost:3000" : "https://blog.example.com"} type="url" required />
+                        <Input label={t("network.address")} icon="fa-globe" value={form.url} onChange={set("url")} placeholder={localAddresses ? localExample : "https://blog.example.com"} type="url" required />
                         <Input label={t("network.slug")} icon="fa-tag" value={form.slug} onChange={set("slug")} placeholder="blog" required />
                         <Input label={t("network.siteTitle")} icon="fa-heading" value={form.title} onChange={set("title")} required />
                     </div>
                     <p className="text-xs text-gray-500">{t("network.addressHint")}</p>
                     {localAddresses && (
                         <p className="text-xs text-blue-700 rounded-xl bg-blue-50 border border-blue-100 px-3 py-2" data-testid="network-local-address-hint">
-                            <i className="fa-solid fa-laptop mr-2" aria-hidden="true"></i>{t("network.addressHintLocal")}
+                            <i className="fa-solid fa-laptop mr-2" aria-hidden="true"></i>{t("network.addressHintLocal").replace("{example}", localExample)}
                         </p>
                     )}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

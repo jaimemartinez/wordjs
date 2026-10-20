@@ -267,7 +267,7 @@ export default function NetworkSettingsPage() {
                 <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-2 flex items-center gap-2"><i className="fa-solid fa-user-shield text-blue-500" aria-hidden="true"></i>{t("networkSetup.adminsTitle")}</h2>
                 <p className="text-sm text-gray-500 mb-6">{t("networkSetup.adminsManageHelp")}</p>
                 <div className="mb-6 md:w-80">
-                    <Input label={t("network.actionPassword")} icon="fa-lock" type="password" autoComplete="current-password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
+                    <Input label={t("network.currentPassword")} icon="fa-lock" type="password" autoComplete="current-password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
                 </div>
                 <ul className="divide-y divide-gray-100">
                     {admins.map((a) => (

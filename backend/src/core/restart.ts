@@ -76,7 +76,8 @@ function flushDatabase(): void {
         const db = require('../config/database');
         if (typeof db.saveDatabase === 'function') db.saveDatabase();
     } catch (e: any) {
-        log.warn(`could not flush the database before the restart: ${e && e.message}`);
+        // After a migration the source driver may already be closed: nothing of it is needed any more.
+        log.warn(`could not flush the database before the restart: ${(e && e.message) || String(e)}`);
     }
 }
 
