@@ -16,6 +16,10 @@ import {
     CHROME_DOCUMENT_SCOPED_BLOCKS,
 } from '../chromeData';
 import type { ChromeMenuItem } from '../chromeData';
+import { CHROME_CONTRACT } from '@/generated/visual-contract.generated';
+
+// Chrome blocks that read document-level data but own none of it (see the anti-drift audit below).
+const READ_ONLY_ISLANDS = ['ChromeLanguageSwitcher'];
 
 // A representative valid composition with a nested Row (depth 3 at the deepest leaf).
 const VALID = {
@@ -245,6 +249,12 @@ describe('parseChromeData — the template-part position', () => {
             { type: 'ChromeButton', props: { label: 'Go', href: '/x', variant: 'primary' } },
             { type: 'ChromeSpacer', props: { size: 'sm' } },
             { type: 'ChromeRow', props: { align: 'center', gap: 'md', items: [] } },
+            { type: 'ChromeColumns', props: { columns: '3', gap: 'lg', items: [] } },
+            { type: 'ChromeHeading', props: { text: 'Links', level: 'h3' } },
+            { type: 'ChromeRichText', props: { html: '<b>hi</b>' } },
+            { type: 'ChromeCopyright', props: { text: '© {year} {site}' } },
+            { type: 'ChromeLanguageSwitcher', props: { style: 'dropdown' } },
+            { type: 'ChromeWidgets', props: { area: 'footer-1' } },
         ];
         expect(parseChromeData(wrap(legal), { position: 'part' }).ok).toBe(true);
         expect(CHROME_DOCUMENT_SCOPED_BLOCKS).toEqual(['ChromeNav']);
@@ -272,6 +282,18 @@ describe('parseChromeData — the template-part position', () => {
         }
         // ChromeNavMobile is not itself a block type — it is reachable only through ChromeNav.
         offenders.delete('ChromeNavMobile');
+        // ChromeHeaderScroll is not a block either: the public LAYOUT mounts it inside a composed
+        // header, once per document, so no composition can name it (asserted below).
+        offenders.delete('ChromeHeaderScroll');
+        // READ-ONLY islands: they touch `document`/`window` only to READ (the page's hreflang links),
+        // with their own per-instance observer. They are exempt ONLY while they stay that way — the
+        // owning APIs that make two instances fight are asserted absent from their source.
+        const OWNS_GLOBAL_STATE = /createPortal|document\.body|document\.addEventListener|window\.addEventListener|\.style\.overflow/;
+        for (const name of READ_ONLY_ISLANDS) {
+            expect(OWNS_GLOBAL_STATE.test(readFileSync(join(dir, `${name}.tsx`), 'utf8')), name).toBe(false);
+            offenders.delete(name);
+        }
+        expect(Object.keys(CHROME_CONTRACT.blocks)).not.toContain('ChromeHeaderScroll');
         expect([...offenders].sort()).toEqual([...CHROME_DOCUMENT_SCOPED_BLOCKS].sort());
     });
 });
