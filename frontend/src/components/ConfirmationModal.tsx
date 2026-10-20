@@ -56,7 +56,7 @@ export default function ConfirmationModal({
     if (!isOpen) return null;
 
     // Default labels in the stored admin language: this dialog also renders outside any I18nProvider
-    // (useModal()'s, mounted in app/layout.tsx), so it reads what I18nProvider reads ('wordjs-lang').
+    // (useModal()'s, mounted in app/_root/RootDocument.tsx), so it reads what I18nProvider reads ('wordjs-lang').
     const lang = getStoredLanguage();
 
     // dialogOver: a confirmation opens over whatever asked for it — a page dialog, the media lightbox, a
