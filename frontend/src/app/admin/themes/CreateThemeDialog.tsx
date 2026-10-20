@@ -4,7 +4,7 @@ import { useState } from "react";
 import DialogLayer from "@/components/DialogLayer";
 import { themesApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
-import { contrastRatio, onColor, readableColor } from "@/lib/colorContrast";
+import { contrastRatio, onColor, readableColor, surfaceOf } from "@/lib/colorContrast";
 
 /**
  * Themes → New theme: the panel path for `node backend/cli/wordjs.js create theme <slug> --primary
@@ -39,7 +39,8 @@ export function themeSlugFrom(name: string): string {
 /** The pairs a visitor reads, as the generated theme will paint them. */
 export function contrastPairs(seeds: Record<string, string>) {
     return [
-        { id: "text", ratio: contrastRatio(seeds.text, seeds.bg), min: 4.5 },
+        // The background AND the surface derived from it (cards, navigation): the lower of the two.
+        { id: "text", ratio: Math.min(contrastRatio(seeds.text, seeds.bg), contrastRatio(seeds.text, surfaceOf(seeds.bg))), min: 4.5 },
         { id: "button", ratio: contrastRatio(onColor(seeds.primary), seeds.primary), min: 4.5 },
         { id: "accent", ratio: contrastRatio(onColor(seeds.secondary), seeds.secondary), min: 4.5 },
     ];
@@ -62,7 +63,9 @@ export default function CreateThemeDialog({ onClose, onCreated }: { onClose: () 
     /** Make the text readable on the background; a fill whose label cannot reach AA is darkened or lightened. */
     const fixContrast = () => {
         setSeeds((s) => {
-            const next: Record<string, string> = { ...s, text: readableColor(s.text, s.bg) };
+            // Readable on the surface is readable on the background too: the surface is the background
+            // moved toward the text's side, so it is the harder of the two.
+            const next: Record<string, string> = { ...s, text: readableColor(readableColor(s.text, s.bg), surfaceOf(s.bg)) };
             for (const k of ["primary", "secondary"]) {
                 if (contrastRatio(onColor(next[k]), next[k]) < 4.5) {
                     // Move the fill away from its label until the label reads on it.

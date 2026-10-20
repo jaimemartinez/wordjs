@@ -45,6 +45,23 @@ export function readableColor(fg: string, bg: string, min = 4.5): string {
     return toHex(target);
 }
 
+/** a mixed toward b by t (0..1), per sRGB channel: backend core/theme-derive's `mix`. */
+export function mixColor(a: string, b: string, t: number): string {
+    const A = channels(a); const B = channels(b);
+    return toHex(A.map((v, i) => v + (B[i] - v) * t));
+}
+
+/**
+ * The surface (cards, the navigation) a generated theme paints from its background: the background
+ * shaded 3% toward black (6% toward white on a dark one), exactly as core/theme-derive derives
+ * --wjs-bg-surface. Text must read on it too, and the theme doctor judges it.
+ */
+export function surfaceOf(bg: string): string {
+    const [r, g, b] = channels(bg);
+    const dark = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.35;
+    return mixColor(bg, dark ? "#ffffff" : "#000000", dark ? 0.06 : 0.03);
+}
+
 /** The label colour WordJS puts on a filled button: white or near-black, whichever reads better. */
 export function onColor(bg: string): string {
     return contrastRatio("#ffffff", bg) >= contrastRatio("#111111", bg) ? "#ffffff" : "#111111";
