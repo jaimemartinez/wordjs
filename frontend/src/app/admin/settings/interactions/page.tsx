@@ -34,7 +34,10 @@ import { PageHeader, Card, Button, EmptyState, DataTable } from "@/components/ui
 import { postsApi, settingsApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
+import { t as translate, type Language } from "@/lib/i18n";
 import { defaultIxSpec, IX_TARGET_LABELS, IX_TRIGGER_LABELS } from "@/components/verso/editor/ixPanelModel";
+import { trStr } from "@/lib/editorI18n";
 import {
     ixPresetDelete,
     ixPresetDuplicate,
@@ -61,23 +64,29 @@ type Editing = { id: string | null; name: string; draft: IxSpec } | null;
 
 /** La clave del ajuste del sitio y las etiquetas de autor de sus tres valores. */
 const VT_SETTING = "wjs_view_transitions";
-const VT_OPTIONS: ReadonlyArray<{ value: IxVtStyle; label: string }> = [
-    { value: "off", label: "Sin transición" },
-    { value: "fade", label: "Fundido" },
-    { value: "slide", label: "Deslizar" },
+const VT_OPTIONS: ReadonlyArray<{ value: IxVtStyle; labelKey: string }> = [
+    { value: "off", labelKey: "interactions.vt.off" },
+    { value: "fade", labelKey: "interactions.vt.fade" },
+    { value: "slide", labelKey: "interactions.vt.slide" },
 ];
 
 /** La política de movimiento del sitio (C5) y las etiquetas de sus tres valores. */
 const MOTION_SETTING = "wjs_motion";
-const MOTION_OPTIONS: ReadonlyArray<{ value: IxMotionPolicy; label: string; hint: string }> = [
-    { value: "full", label: "Completo", hint: "La página emite lo que cada autor puso." },
-    { value: "calm", label: "Tranquilo", hint: "Nada se mueve en bucle: cada animación se reproduce una vez y se queda quieta." },
-    { value: "off", label: "Apagado", hint: "Ni una regla de interacción ni un byte de motor: los bloques se ven en su estado natural." },
+const MOTION_OPTIONS: ReadonlyArray<{ value: IxMotionPolicy; labelKey: string; hintKey: string }> = [
+    { value: "full", labelKey: "interactions.motion.full", hintKey: "interactions.motion.fullHint" },
+    { value: "calm", labelKey: "interactions.motion.calm", hintKey: "interactions.motion.calmHint" },
+    { value: "off", labelKey: "interactions.motion.off", hintKey: "interactions.motion.offHint" },
 ];
+
+/** Pinta `texto **fuerte** texto` con `<strong>` en los tramos marcados (el catálogo no lleva HTML). */
+function rich(text: string): React.ReactNode {
+    return text.split("**").map((part, i) => (i % 2 === 1 ? <strong key={i}>{part}</strong> : part));
+}
 
 export default function InteractionPresetsPage() {
     const { confirm, alert } = useModal();
     const { addToast } = useToast();
+    const { t, language } = useI18n();
 
     const [catalog, setCatalog] = useState<IxCatalog>({});
     const [loading, setLoading] = useState(true);
@@ -106,11 +115,12 @@ export default function InteractionPresetsPage() {
             setMotion(normalizeIxMotion((data as Record<string, unknown> | null)?.[MOTION_SETTING]));
         } catch (e) {
             console.error("No se pudieron leer los preajustes de interacción:", e);
-            addToast("No se pudieron leer los preajustes.", "error");
+            // `t` del contexto cambia de identidad en cada render; el idioma no.
+            addToast(translate("interactions.toast.loadError", language), "error");
         } finally {
             setLoading(false);
         }
-    }, [addToast]);
+    }, [addToast, language]);
 
     useEffect(() => {
         void load();
@@ -128,11 +138,11 @@ export default function InteractionPresetsPage() {
         setVtSaving(true);
         try {
             await settingsApi.update({ [VT_SETTING]: next });
-            addToast(next === "off" ? "Transiciones desactivadas." : "Transición guardada.", "success");
+            addToast(next === "off" ? t("interactions.toast.vtOff") : t("interactions.toast.vtSaved"), "success");
         } catch (e) {
             setVt(prev);
             const message = e instanceof Error ? e.message : String(e);
-            await alert(`No se pudo guardar: ${message}`);
+            await alert(t("interactions.error.saveFailed").replace("{message}", message));
         } finally {
             setVtSaving(false);
         }
@@ -149,11 +159,11 @@ export default function InteractionPresetsPage() {
         setMotionSaving(true);
         try {
             await settingsApi.update({ [MOTION_SETTING]: next });
-            addToast("Política de movimiento guardada.", "success");
+            addToast(t("interactions.toast.motionSaved"), "success");
         } catch (e) {
             setMotion(prev);
             const message = e instanceof Error ? e.message : String(e);
-            await alert(`No se pudo guardar: ${message}`);
+            await alert(t("interactions.error.saveFailed").replace("{message}", message));
         } finally {
             setMotionSaving(false);
         }
@@ -181,7 +191,7 @@ export default function InteractionPresetsPage() {
             return true;
         } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
-            await alert(`No se pudo guardar: ${message}`);
+            await alert(t("interactions.error.saveFailed").replace("{message}", message));
             return false;
         } finally {
             setSaving(false);
@@ -204,7 +214,7 @@ export default function InteractionPresetsPage() {
         if (!editing) return;
         const body = ixSpecToBody(editing.draft);
         if (!body) {
-            setError("Este preajuste no anima nada: añade alguna propiedad a sus pasos.");
+            setError(t("interactions.error.noAnimation"));
             return;
         }
         const result = ixPresetSave(catalog, {
@@ -222,8 +232,8 @@ export default function InteractionPresetsPage() {
             setError(null);
             addToast(
                 editing.id
-                    ? "Preajuste guardado. Las páginas que lo usan lo mostrarán actualizado."
-                    : "Preajuste creado. Ya está en el desplegable del editor.",
+                    ? t("interactions.toast.saved")
+                    : t("interactions.toast.created"),
                 "success",
             );
         }
@@ -335,19 +345,21 @@ export default function InteractionPresetsPage() {
         const uses = counts ? (counts.get(preset.id) ?? 0) : null;
         const detail =
             uses === null
-                ? "Los bloques que lo usen se seguirán viendo, pero dejarán de moverse."
+                ? t("interactions.delete.usesUnknown")
                 : uses === 0
-                    ? "Ningún bloque lo usa ahora mismo."
-                    : `Lo usan ${uses} ${uses === 1 ? "bloque" : "bloques"}: se seguirán viendo, pero dejarán de moverse.`;
+                    ? t("interactions.delete.usesNone")
+                    : uses === 1
+                        ? t("interactions.delete.usesOne")
+                        : t("interactions.delete.usesMany").replace("{count}", String(uses));
         const ok = await confirm(
-            `Vas a borrar «${preset.name}». ${detail}`,
-            "Borrar preajuste",
+            t("interactions.delete.message").replace("{name}", preset.name).replace("{detail}", detail),
+            t("interactions.delete.title"),
             true,
         );
         if (!ok) return;
         if (await persist(ixPresetDelete(catalog, preset.id))) {
             if (editing?.id === preset.id) setEditing(null);
-            addToast("Preajuste borrado.", "success");
+            addToast(t("interactions.toast.deleted"), "success");
         }
     };
 
@@ -357,7 +369,7 @@ export default function InteractionPresetsPage() {
             await alert(result.error);
             return;
         }
-        if (await persist(result.catalog)) addToast("Preajuste duplicado.", "success");
+        if (await persist(result.catalog)) addToast(t("interactions.toast.duplicated"), "success");
     };
 
     const full = Object.keys(catalog).length >= IX_MAX_SITE_PRESETS;
@@ -366,38 +378,32 @@ export default function InteractionPresetsPage() {
         <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
             <div className="max-w-4xl mx-auto">
                 <PageHeader
-                    title="Interacciones"
-                    subtitle="Preajustes de movimiento del sitio"
+                    title={t("interactions.title")}
+                    subtitle={t("interactions.subtitle")}
                     actions={
                         <Button icon="fa-plus" disabled={full || editing !== null} onClick={startNew}>
-                            Nuevo preajuste
+                            {t("interactions.newPreset")}
                         </Button>
                     }
                 />
 
                 <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">Qué es un preajuste</h2>
+                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.about.title")}</h2>
                     <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        Un movimiento con nombre que puedes aplicar a cualquier bloque desde el editor.
-                        El bloque guarda solo su <strong>nombre interno</strong>, no una copia: cuando
-                        editas el preajuste aquí, <strong>todos los bloques que lo usan cambian a la
-                        vez</strong>, en todas las páginas, sin tocar el contenido de ninguna.
+                        {rich(t("interactions.about.body"))}
                     </p>
                     <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        Los preajustes que trae WordJS (los del sistema) no se editan ni se borran, y su
-                        nombre está reservado: aquí solo viven los tuyos.
+                        {t("interactions.about.system")}
                     </p>
                 </Card>
 
                 {/* ── Movimiento del sitio (C5) — la política que manda sobre TODAS las páginas ── */}
                 <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">Movimiento del sitio</h2>
+                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.motion.title")}</h2>
                     <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        Una decisión de sitio, por encima de lo que ponga cada bloque. Sirve para
-                        campañas, para accesibilidad y para apagarlo todo el día que haga falta —
-                        <strong> sin tocar ni una página</strong>.
+                        {rich(t("interactions.motion.body"))}
                     </p>
-                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Movimiento del sitio">
+                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label={t("interactions.motion.title")}>
                         {MOTION_OPTIONS.map((opt) => {
                             const active = motion === opt.value;
                             return (
@@ -413,55 +419,58 @@ export default function InteractionPresetsPage() {
                                             : "border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900"
                                     }`}
                                 >
-                                    {opt.label}
+                                    {t(opt.labelKey)}
                                 </button>
                             );
                         })}
-                        {motionSaving && <span className="text-xs text-gray-500">Guardando…</span>}
+                        {motionSaving && <span className="text-xs text-gray-500">{t("interactions.saving")}</span>}
                     </div>
                     <p className="mt-3 text-sm leading-relaxed text-gray-500">
-                        {MOTION_OPTIONS.find((o) => o.value === motion)?.hint}
+                        {(() => {
+                            const hintKey = MOTION_OPTIONS.find((o) => o.value === motion)?.hintKey;
+                            return hintKey ? t(hintKey) : null;
+                        })()}
                     </p>
                 </Card>
 
                 {/* ── Dónde se mueve mi sitio (C5) — el inventario, con el compilador de verdad ── */}
                 <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">Dónde se mueve mi sitio</h2>
+                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.inventory.title")}</h2>
                     <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        Lo que las páginas <strong>emiten de verdad</strong>, no lo que alguien quiso
-                        poner: se compila cada página con el mismo motor que sirve el sitio. Primero
-                        lo que se mueve en bucle y lo que obliga a descargar JavaScript, que es lo
-                        que conviene revisar.
+                        {rich(t("interactions.inventory.body"))}
                     </p>
                     {inventory === null ? (
-                        <p className="mt-4 text-sm text-gray-500">Calculando…</p>
+                        <p className="mt-4 text-sm text-gray-500">{t("interactions.inventory.computing")}</p>
                     ) : inventory.rows.length === 0 ? (
                         <p className="mt-4 text-sm text-gray-500">
                             {motion === "off"
-                                ? "El movimiento del sitio está apagado: ninguna página emite interacciones."
-                                : `Ninguna de las ${inventory.totals.pages} entradas tiene movimiento.`}
+                                ? t("interactions.inventory.motionOff")
+                                : t("interactions.inventory.noneMoving").replace("{count}", String(inventory.totals.pages))}
                         </p>
                     ) : (
                         <>
                             <p className="mt-4 text-xs text-gray-500">
-                                {inventory.totals.moving} de {inventory.totals.pages} con movimiento ·{" "}
-                                {inventory.totals.blocks} bloques · {inventory.totals.infinite} en bucle ·{" "}
-                                {inventory.totals.runtime} necesitan el motor ·{" "}
-                                {inventory.totals.entrances} entradas clásicas ·{" "}
-                                {(inventory.totals.cssBytes / 1024).toFixed(1)} KB de CSS
+                                {t("interactions.inventory.totals")
+                                    .replace("{moving}", String(inventory.totals.moving))
+                                    .replace("{pages}", String(inventory.totals.pages))
+                                    .replace("{blocks}", String(inventory.totals.blocks))
+                                    .replace("{infinite}", String(inventory.totals.infinite))
+                                    .replace("{runtime}", String(inventory.totals.runtime))
+                                    .replace("{entrances}", String(inventory.totals.entrances))
+                                    .replace("{kb}", (inventory.totals.cssBytes / 1024).toFixed(1))}
                             </p>
                             <DataTable
                                 className="mt-3 -mx-1"
                                 rows={inventory.rows}
                                 rowKey={(row) => `${row.type}-${row.id}`}
-                                caption="Inventario de movimiento"
+                                caption={t("interactions.inventory.caption")}
                                 rowLabel={(row) => row.title}
                                 density="compact"
                                 stackBelow="lg"
                                 columns={[
                                     {
                                         key: "page",
-                                        header: "Página",
+                                        header: t("interactions.inventory.colPage"),
                                         primary: true,
                                         cell: (row) => (
                                             <span className="text-sm">
@@ -474,20 +483,20 @@ export default function InteractionPresetsPage() {
                                     },
                                     {
                                         key: "blocks",
-                                        header: "Bloques",
+                                        header: t("interactions.inventory.colBlocks"),
                                         cell: (row) => (
                                             <span className="text-xs text-gray-700">
                                                 {row.blocks}
-                                                {row.units !== row.blocks && <span className="text-gray-500"> ({row.units} distintas)</span>}
+                                                {row.units !== row.blocks && <span className="text-gray-500"> {t("interactions.inventory.distinct").replace("{count}", String(row.units))}</span>}
                                             </span>
                                         ),
                                     },
-                                    { key: "infinite", header: "En bucle", cell: (row) => <span className={`text-xs ${row.infinite > 0 ? "font-semibold text-gray-900" : "text-gray-400"}`}>{row.infinite || "—"}</span> },
-                                    { key: "runtime", header: "Con motor", cell: (row) => <span className={`text-xs ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.runtime || "—"}</span> },
+                                    { key: "infinite", header: t("interactions.inventory.colInfinite"), cell: (row) => <span className={`text-xs ${row.infinite > 0 ? "font-semibold text-gray-900" : "text-gray-400"}`}>{row.infinite || "—"}</span> },
+                                    { key: "runtime", header: t("interactions.inventory.colRuntime"), cell: (row) => <span className={`text-xs ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.runtime || "—"}</span> },
                                     // La entrada CLÁSICA (`anim`) es lo que llevan casi todas las páginas
                                     // ya publicadas: sin esta columna el inventario diría que están quietas.
-                                    { key: "entrances", header: "Entradas", cell: (row) => <span className={`text-xs ${row.entrances > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.entrances || "—"}</span> },
-                                    { key: "presets", header: "Preajustes", cell: (row) => <span className="text-xs text-gray-500 break-words">{row.presets.length > 0 ? row.presets.join(", ") : "—"}</span> },
+                                    { key: "entrances", header: t("interactions.inventory.colEntrances"), cell: (row) => <span className={`text-xs ${row.entrances > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.entrances || "—"}</span> },
+                                    { key: "presets", header: t("interactions.inventory.colPresets"), cell: (row) => <span className="text-xs text-gray-500 break-words">{row.presets.length > 0 ? row.presets.join(", ") : "—"}</span> },
                                     { key: "css", header: "CSS", cell: (row) => <span className="text-xs text-gray-500 whitespace-nowrap">{(row.cssBytes / 1024).toFixed(1)} KB</span> },
                                 ]}
                             />
@@ -497,16 +506,14 @@ export default function InteractionPresetsPage() {
 
                 {/* ── Transiciones entre páginas (C1) — ajuste del SITIO, no de un bloque ── */}
                 <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">Transiciones entre páginas</h2>
+                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.vt.title")}</h2>
                     <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        Al navegar de una página a otra, el sitio puede fundirse o deslizarse en vez de
-                        parpadear en blanco. Son <strong>dos reglas de CSS</strong>: cero JavaScript, y
-                        el visitante con «reducir movimiento» ve el cambio instantáneo, sin animación.
+                        {rich(t("interactions.vt.body"))}
                     </p>
                     <p className="mt-2 text-sm leading-relaxed text-gray-500">
-                        En los navegadores que aún no lo implementan, la navegación es la de siempre.
+                        {t("interactions.vt.fallback")}
                     </p>
-                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Transición entre páginas">
+                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label={t("interactions.vt.groupLabel")}>
                         {VT_OPTIONS.map((opt) => {
                             const active = vt === opt.value;
                             return (
@@ -522,11 +529,11 @@ export default function InteractionPresetsPage() {
                                             : "border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900"
                                     }`}
                                 >
-                                    {opt.label}
+                                    {t(opt.labelKey)}
                                 </button>
                             );
                         })}
-                        {vtSaving && <span className="text-xs text-gray-500">Guardando…</span>}
+                        {vtSaving && <span className="text-xs text-gray-500">{t("interactions.saving")}</span>}
                     </div>
                 </Card>
 
@@ -551,23 +558,23 @@ export default function InteractionPresetsPage() {
 
                 {loading ? (
                     <Card>
-                        <p className="text-sm text-gray-500">Cargando preajustes…</p>
+                        <p className="text-sm text-gray-500">{t("interactions.loading")}</p>
                     </Card>
                 ) : list.length === 0 ? (
                     <EmptyState
                         icon="fa-wand-magic-sparkles"
-                        title="Todavía no hay preajustes del sitio"
-                        description="Crea uno y aparecerá en el desplegable «Preajuste» de cualquier bloque del editor."
+                        title={t("interactions.empty.title")}
+                        description={t("interactions.empty.description")}
                         action={
                             editing ? undefined : (
                                 <Button icon="fa-plus" onClick={startNew}>
-                                    Nuevo preajuste
+                                    {t("interactions.newPreset")}
                                 </Button>
                             )
                         }
                     />
                 ) : (
-                    <ul className="space-y-4" aria-label="Preajustes de interacción del sitio">
+                    <ul className="space-y-4" aria-label={t("interactions.listLabel")}>
                         {list.map((preset) => (
                             <li key={preset.id}>
                                 <Card>
@@ -576,12 +583,14 @@ export default function InteractionPresetsPage() {
                                             <h3 className="text-base font-bold text-gray-900">{preset.name}</h3>
                                             <p className="mt-1 font-mono text-xs text-gray-400">{preset.id}</p>
                                             <p className="mt-2 text-sm text-gray-600">
-                                                {IX_TRIGGER_LABELS[preset.trigger.on]} ·{" "}
-                                                {summaryOfTarget(preset)} ·{" "}
-                                                {preset.tracks[0].steps.length} pasos · revisión {preset.rev}
+                                                {trStr(IX_TRIGGER_LABELS[preset.trigger.on], language)} ·{" "}
+                                                {summaryOfTarget(preset, t, language)} ·{" "}
+                                                {t("interactions.card.stepsRev")
+                                                    .replace("{count}", String(preset.tracks[0].steps.length))
+                                                    .replace("{rev}", String(preset.rev))}
                                             </p>
                                             <p className="mt-1 text-xs text-gray-500">
-                                                {usageLabel(usage, preset.id)}
+                                                {usageLabel(usage, preset.id, t)}
                                             </p>
                                         </div>
                                         <div className="flex shrink-0 gap-2">
@@ -591,7 +600,7 @@ export default function InteractionPresetsPage() {
                                                 disabled={saving}
                                                 onClick={() => startEdit(preset)}
                                             >
-                                                Editar
+                                                {t("interactions.card.edit")}
                                             </Button>
                                             <Button
                                                 size="sm"
@@ -599,7 +608,7 @@ export default function InteractionPresetsPage() {
                                                 disabled={saving || full}
                                                 onClick={() => void duplicate(preset)}
                                             >
-                                                Duplicar
+                                                {t("interactions.card.duplicate")}
                                             </Button>
                                             <Button
                                                 size="sm"
@@ -607,7 +616,7 @@ export default function InteractionPresetsPage() {
                                                 disabled={saving}
                                                 onClick={() => void remove(preset)}
                                             >
-                                                Borrar
+                                                {t("interactions.card.delete")}
                                             </Button>
                                         </div>
                                     </div>
@@ -619,8 +628,7 @@ export default function InteractionPresetsPage() {
 
                 {full && (
                     <p className="mt-6 text-sm text-gray-500">
-                        Has llegado al máximo de {IX_MAX_SITE_PRESETS} preajustes del sitio. Cada uno
-                        emite reglas en las páginas que lo usan, y ese presupuesto se mide por página.
+                        {t("interactions.limitReached").replace("{max}", String(IX_MAX_SITE_PRESETS))}
                     </p>
                 )}
             </div>
@@ -629,16 +637,16 @@ export default function InteractionPresetsPage() {
 }
 
 /** «Lo usan N bloques» — referencias por id del escaneo de arriba; «—» mientras no se sabe. */
-function usageLabel(usage: Map<string, number> | null, id: string): string {
+function usageLabel(usage: Map<string, number> | null, id: string, t: (key: string) => string): string {
     if (!usage) return "—";
     const n = usage.get(id) ?? 0;
-    if (n === 0) return "Sin usos";
-    return n === 1 ? "Lo usa 1 bloque" : `Lo usan ${n} bloques`;
+    if (n === 0) return t("interactions.usage.none");
+    return n === 1 ? t("interactions.usage.one") : t("interactions.usage.many").replace("{count}", String(n));
 }
 
 /** «Este bloque» / «Sus hijos» / «Las palabras» — el objetivo de la primera pista, en cristiano. */
-function summaryOfTarget(preset: IxPreset): string {
+function summaryOfTarget(preset: IxPreset, t: (key: string) => string, language: Language): string {
     const kind = preset.tracks[0].target.kind;
-    if (kind === "block") return "otro bloque";
-    return IX_TARGET_LABELS[kind].toLowerCase();
+    if (kind === "block") return t("interactions.card.otherBlock");
+    return trStr(IX_TARGET_LABELS[kind], language).toLowerCase();
 }

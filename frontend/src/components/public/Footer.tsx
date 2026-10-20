@@ -8,6 +8,7 @@ import { usePathname } from "next/navigation";
 import { safeChromeHref, menuAriaCurrent } from "@/lib/chromeData";
 import PublicSidebar from "./PublicSidebar";
 import type { FooterColumns, FooterVariant } from "@/lib/themeLayout";
+import type { FooterStrings } from "@/lib/public/uiStrings";
 
 // Static literal maps so Tailwind can see every class (no interpolation).
 const GRID_COLS: Record<FooterColumns, string> = {
@@ -37,9 +38,14 @@ interface FooterProps {
     // defaults reproduce today's markup exactly, so a theme without `layout` renders unchanged.
     variant?: FooterVariant;
     columns?: FooterColumns;
+    // Column headings already resolved in the SITE language (lib/public/uiStrings, on the server).
+    // Without them (Verso canvas preview) the English defaults below are used.
+    strings?: FooterStrings;
 }
 
-export default function Footer({ previewSettings, previewMenu, previewSocials, variant = "columns", columns = 4 }: FooterProps = {}) {
+const DEFAULT_STRINGS: FooterStrings = { quickLinks: "Quick Links", connect: "Connect" };
+
+export default function Footer({ previewSettings, previewMenu, previewSocials, variant = "columns", columns = 4, strings = DEFAULT_STRINGS }: FooterProps = {}) {
     const [settings, setSettings] = useState<any>(previewSettings || {});
     const [footerMenu, setFooterMenu] = useState<any[]>(previewMenu || []);
     const [socialLinks, setSocialLinks] = useState<any[]>(previewSocials || []);
@@ -163,7 +169,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials, v
                             <div>
                                 {footerMenu.length > 0 && (
                                     <>
-                                        <h4 className="font-bold mb-4">Quick Links</h4>
+                                        <h4 className="font-bold mb-4">{strings.quickLinks}</h4>
                                         <ul className="space-y-2 text-[var(--wjs-color-text-footer-dim,gray)]">
                                             {footerMenu.map((item) => (
                                                 <li key={item.id}>
@@ -181,7 +187,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials, v
                             <div>
                                 {socialLinks.length > 0 && (
                                     <>
-                                        <h4 className="font-bold mb-4">Connect</h4>
+                                        <h4 className="font-bold mb-4">{strings.connect}</h4>
                                         <div className="wjs-footer-social flex gap-4 flex-wrap">
                                             {socialIcons}
                                         </div>

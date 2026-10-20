@@ -854,6 +854,12 @@ the boot error links there too.
 
 ### Fixed
 
+- **Admin screens that ignored the admin language now follow it.** The database migration, interactions
+  (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
+  certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes
+  from the catalogue in English, Spanish and Portuguese. The built-in public footer's *Quick Links* and *Connect*
+  headings follow the site language, like the other visitor-facing strings.
+
 - **Multisite on Windows: a plugin's or a site's AppContainer profiles go with it.** Each (site, plugin)
   worker of a network runs under its own AppContainer profile. Deleting a plugin removed only the main
   site's; it now removes the profile (and the folder permissions given to it) of the plugin's worker on

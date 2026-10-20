@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import ModernSelect from "@/components/ModernSelect";
 import Footer from "@/components/public/Footer";
+import { footerStrings, type FooterStrings } from "@/lib/public/uiStrings";
 
 interface SocialLink {
     platform: string;
@@ -31,6 +32,8 @@ const PLATFORMS = [
 export default function FooterSettingsPage() {
     const { addToast } = useToast();
     const { t } = useI18n();
+    // The preview's headings follow the SITE language, exactly as the public footer paints them.
+    const [previewStrings, setPreviewStrings] = useState<FooterStrings | undefined>(undefined);
     const [settings, setSettings] = useState({
         footer_text: "",
         footer_copyright: "",
@@ -77,6 +80,7 @@ export default function FooterSettingsPage() {
     const loadSettings = async () => {
         try {
             const data = await settingsApi.get();
+            setPreviewStrings(footerStrings(data));
             setSettings({
                 footer_text: data.footer_text || "",
                 footer_copyright: data.footer_copyright || "",
@@ -368,6 +372,7 @@ export default function FooterSettingsPage() {
                                     previewSettings={settings}
                                     previewMenu={previewMenu}
                                     previewSocials={socialLinks}
+                                    strings={previewStrings}
                                 />
                             </div>
                         </div>

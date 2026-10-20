@@ -9,6 +9,7 @@ import ViewTransitions from "@/components/public/ViewTransitions";
 import ChromeRenderer from "@/components/chrome/ChromeRenderer";
 import { buildChromeBindings, resolveEffectiveChrome } from "@/lib/chromeData";
 import { parseThemeLayout } from "@/lib/themeLayout";
+import { footerStrings } from "@/lib/public/uiStrings";
 import { getSettings, getPublicAssets, getMenuByLocation, getThemeChrome, checkSetupRequired, assertBackendAnswered } from "@/lib/server-api";
 
 export default async function PublicLayout({
@@ -132,6 +133,7 @@ export default async function PublicLayout({
             headerMenu={headerMenu?.items}
             footerMenu={footerMenu?.items}
             footerSocials={footerSocials}
+            footerStrings={footerStrings(settings)}
         >
             {/* Feed auto-discovery — React hoists these to <head> on every public page.
                 The hrefs are the PUBLIC feed URLs, the ones a reader guesses and a validator expects:

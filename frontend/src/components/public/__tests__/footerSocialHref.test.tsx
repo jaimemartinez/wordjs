@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import Footer from '../Footer';
+import { footerStrings } from '@/lib/public/uiStrings';
 
 /**
  * The footer's social icons, at RENDER time.
@@ -51,5 +52,31 @@ describe('Footer — social link hrefs', () => {
             expect(html, url).toContain('fa-x-twitter');
             expect(html, url).toContain('aria-label="X"');
         }
+    });
+});
+
+/**
+ * The built-in footer's column headings follow the SITE language (WPLANG), resolved on the server by
+ * lib/public/uiStrings — they were hard-coded English, so a Spanish site showed «Quick Links».
+ */
+describe('Footer — column headings', () => {
+    const menu = [{ id: 1, title: 'Home', url: '/' }];
+    const socials = [{ platform: 'Web', url: '/contact', icon: 'fa-solid fa-globe' }];
+    const renderIn = (wplang?: string) => renderToStaticMarkup(
+        <Footer previewSettings={{ blogname: 'Site' }} previewMenu={menu} previewSocials={socials}
+            strings={wplang === undefined ? undefined : footerStrings({ WPLANG: wplang })} />,
+    );
+
+    it('renders them in the site language', () => {
+        expect(renderIn('es_ES')).toContain('>Enlaces rápidos<');
+        expect(renderIn('es_ES')).toContain('>Síguenos<');
+        expect(renderIn('pt_BR')).toContain('>Links rápidos<');
+        expect(renderIn('en_US')).toContain('>Quick Links<');
+        expect(renderIn('en_US')).toContain('>Connect<');
+    });
+
+    it('keeps the English headings when no strings are passed (editor canvas)', () => {
+        expect(renderIn()).toContain('>Quick Links<');
+        expect(renderIn()).toContain('>Connect<');
     });
 });

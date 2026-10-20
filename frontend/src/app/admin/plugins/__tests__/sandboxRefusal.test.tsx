@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SandboxRefusalPanel, sandboxRefusalFrom, runtimeSandboxRefusal } from "../page";
+import { t as translate } from "@/lib/i18n";
+
+// Rendered outside the admin's I18nProvider, the copy is the default admin language's.
+const FALLBACK_MESSAGE = translate("plugins.sandbox.fallbackMessage");
 
 /**
  * THE SANDBOX REFUSAL ON THE PLUGINS SCREEN.
@@ -67,7 +71,7 @@ describe("sandboxRefusalFrom", () => {
     it("a refusal without details still renders as a refusal, with safe fallbacks", () => {
         const r = sandboxRefusalFrom(apiError({ code: "sandbox_unavailable", message: "" }, 409));
         expect(r).toEqual({
-            message: "The plugin sandbox could not confine this plugin, so it was not started.",
+            message: FALLBACK_MESSAGE,
             mechanism: "unknown",
             state: "unknown",
             failure: null,
@@ -85,16 +89,16 @@ describe("SandboxRefusalPanel", () => {
         expect(html).toContain("Linux — Landlock + seccomp");
         expect(html).toContain("degraded");
         expect(html).toContain(INCIDENT_LINE);
-        expect(html).toContain("What to do (server operator)");
+        expect(html).toContain(translate("plugins.sandbox.action"));
         expect(html).toContain("AmbientCapabilities=");
         expect(html).toContain("GET /api/v1/health/details");
-        expect(html).toContain("not a problem with this plugin");
+        expect(html).toContain(translate("plugins.sandbox.serverHint"));
     });
 
     it("has no 'reported' block when the sandbox gave no line, and says so differently for a refused launch on an ACTIVE sandbox", () => {
         const html = render(<SandboxRefusalPanel refusal={{ message: "m", mechanism: "landlock", state: "active", failure: null, action: "a" }} />);
-        expect(html).not.toContain("What the sandbox reported");
-        expect(html).toContain("The sandbox is working on this server but refused this launch");
+        expect(html).not.toContain(translate("plugins.sandbox.reported"));
+        expect(html).toContain(translate("plugins.sandbox.activeHint"));
     });
 });
 
@@ -122,7 +126,7 @@ describe("runtimeSandboxRefusal", () => {
         });
         const html = renderToStaticMarkup(<SandboxRefusalPanel refusal={r!} />);
         expect(html).toContain(INCIDENT_LINE);
-        expect(html).toContain("What to do (server operator)");
+        expect(html).toContain(translate("plugins.sandbox.action"));
     });
 
     it("is null for every other runtime state, and for no runtime at all", () => {
@@ -135,7 +139,7 @@ describe("runtimeSandboxRefusal", () => {
 
     it("a refused runtime without details still renders as a refusal, with safe fallbacks", () => {
         expect(runtimeSandboxRefusal({ state: "refused" })).toEqual({
-            message: "The plugin sandbox could not confine this plugin, so it was not started.",
+            message: FALLBACK_MESSAGE,
             mechanism: "unknown",
             state: "unknown",
             failure: null,

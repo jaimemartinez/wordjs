@@ -32,6 +32,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Input } from "@/components/ui";
+import { useI18n } from "@/contexts/I18nContext";
 import {
     addStep,
     addTrack,
@@ -84,10 +85,13 @@ import {
     IX_STAGGER_FROM_LABELS,
     IX_TARGET_LABELS,
     IX_TRIGGER_LABELS,
+    ixSummary,
     type IxPanelTargetKind,
     type IxPanelTriggerKind,
     type IxScrubSrc,
 } from "@/components/verso/editor/ixPanelModel";
+import { trStr } from "@/lib/editorI18n";
+import { localizeIxWarning } from "@/lib/verso/interactions/warningsI18n";
 // El editor de curvas es agnóstico de tokens (currentColor + opacidades): se monta aquí y en el
 // panel del bloque sin arrastrar los `--ed-*` del editor, que es justo la frontera de esta pantalla.
 import IxCurveEditor, { ixBezSeed, IX_BEZ_SENTINEL } from "@/components/verso/fields/IxCurveEditor";
@@ -241,6 +245,7 @@ export default function PresetEditor({
     onSave,
     onCancel,
 }: PresetEditorProps) {
+    const { t, language } = useI18n();
     // El estado del panel se deriva del borrador con la MISMA función que usa el editor de bloques,
     // así que el resumen, los avisos y los topes son idénticos en las dos pantallas.
     const state = ixPanelState(draft);
@@ -363,10 +368,10 @@ export default function PresetEditor({
         return (
             <Card>
                 <p className="text-sm text-gray-500">
-                    Este preajuste se ha quedado sin pistas. Cancela y empieza de nuevo.
+                    {t("interactions.editor.noTracks")}
                 </p>
                 <Button variant="ghost" onClick={onCancel} className="mt-4">
-                    Cancelar
+                    {t("interactions.editor.cancel")}
                 </Button>
             </Card>
         );
@@ -379,21 +384,20 @@ export default function PresetEditor({
                     e.preventDefault();
                     onSave();
                 }}
-                aria-label={id ? `Editar el preajuste ${name}` : "Nuevo preajuste"}
+                aria-label={id ? t("interactions.editor.editAria").replace("{name}", name) : t("interactions.editor.newAria")}
             >
                 <div className="flex items-start justify-between gap-4 mb-6">
                     <div className="min-w-0 flex-1">
                         <Input
-                            label="Nombre del preajuste"
+                            label={t("interactions.editor.nameLabel")}
                             value={name}
                             maxLength={IX_PRESET_NAME_MAX}
-                            placeholder="Aparecer tarjetas"
+                            placeholder={t("interactions.editor.namePlaceholder")}
                             onChange={(e) => onName(e.target.value)}
                         />
                         {id && (
                             <p className="mt-1 text-xs text-gray-400">
-                                Identificador: <code className="font-mono">{id}</code> — no cambia
-                                aunque cambies el nombre, porque es lo que guardan los bloques.
+                                {t("interactions.editor.idLabel")} <code className="font-mono">{id}</code> {t("interactions.editor.idNote")}
                             </p>
                         )}
                     </div>
@@ -409,13 +413,13 @@ export default function PresetEditor({
                     scrub o pointer no hay nada que reproducir —el progreso lo marca la posición—
                     y el deslizador POSICIONA una animación pausada, la técnica del scrubber. */}
                 <fieldset className="mb-6 rounded-2xl border-2 border-gray-100 p-4">
-                    <legend className="px-1 text-sm font-bold text-gray-900">Vista previa</legend>
+                    <legend className="px-1 text-sm font-bold text-gray-900">{t("interactions.editor.preview")}</legend>
                     <div className="mt-2 overflow-hidden rounded-xl bg-gray-50/50 p-6">
                         <div
                             ref={previewRef}
                             className="flex h-24 w-full items-center justify-center rounded-xl border-2 border-gray-200 bg-white text-sm font-medium text-gray-600"
                         >
-                            Vista previa
+                            {t("interactions.editor.preview")}
                         </div>
                     </div>
                     {timed ? (
@@ -425,15 +429,15 @@ export default function PresetEditor({
                             size="sm"
                             className="mt-4"
                             disabled={!previewUnit}
-                            aria-label="Probar el preajuste sobre la caja de muestra"
+                            aria-label={t("interactions.editor.playAria")}
                             onClick={playPreview}
                         >
-                            Probar
+                            {t("interactions.editor.play")}
                         </Button>
                     ) : (
                         <div className="mt-4">
                             <label className={LABEL} htmlFor="ixp-preview-pct">
-                                Recorrido de la vista previa ({previewPct} %)
+                                {t("interactions.editor.previewProgress").replace("{pct}", String(previewPct))}
                             </label>
                             <input
                                 id="ixp-preview-pct"
@@ -450,14 +454,14 @@ export default function PresetEditor({
                             />
                             <p className="mt-1 text-xs text-gray-500">
                                 {trigger.on === "pointer"
-                                    ? "El cursor posiciona este preajuste: recórrelo a mano para ver los pasos intermedios."
-                                    : "Este preajuste avanza con el scroll: recórrelo a mano para ver los pasos intermedios."}
+                                    ? t("interactions.editor.previewPointerHint")
+                                    : t("interactions.editor.previewScrubHint")}
                             </p>
                         </div>
                     )}
                     {!previewUnit && (
                         <p className="mt-2 text-xs text-gray-500">
-                            Aún no anima nada: añade alguna propiedad a sus pasos.
+                            {t("interactions.editor.previewEmpty")}
                         </p>
                     )}
                 </fieldset>
@@ -466,12 +470,12 @@ export default function PresetEditor({
                     disparador. Todo lo de abajo (objetivo, escalonado, tiempos, reproducción,
                     opciones y pasos) lee y escribe SOLO la pista activa. */}
                 <fieldset className="mb-6">
-                    <legend className={LABEL}>Pistas</legend>
+                    <legend className={LABEL}>{t("interactions.editor.tracks")}</legend>
                     <div className="flex flex-wrap items-center gap-3">
                         {state.tracks.length > 1 && (
                             <div
                                 role="radiogroup"
-                                aria-label="Pista activa"
+                                aria-label={t("interactions.editor.activeTrack")}
                                 className="flex rounded-xl border-2 border-gray-100 p-0.5"
                             >
                                 {state.tracks.map((_, i) => (
@@ -490,7 +494,7 @@ export default function PresetEditor({
                                             checked={active === i}
                                             onChange={() => setTrackSel(i)}
                                         />
-                                        Pista {i + 1}
+                                        {t("interactions.editor.trackN").replace("{n}", String(i + 1))}
                                     </label>
                                 ))}
                             </div>
@@ -500,14 +504,14 @@ export default function PresetEditor({
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                title="Añadir una pista nueva (nace neutra: no mueve nada hasta que la edites)"
+                                title={t("interactions.editor.addTrackTitle")}
                                 onClick={() => {
                                     write(addTrack(draft));
                                     // La nueva queda seleccionada: su índice es el recuento ANTES de añadir.
                                     setTrackSel(state.tracks.length);
                                 }}
                             >
-                                + Añadir pista
+                                {t("interactions.editor.addTrack")}
                             </Button>
                         )}
                         {state.tracks.length > 1 && (
@@ -515,13 +519,13 @@ export default function PresetEditor({
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                aria-label={`Quitar la pista ${active + 1}`}
+                                aria-label={t("interactions.editor.removeTrackAria").replace("{n}", String(active + 1))}
                                 onClick={() => {
                                     write(removeTrack(draft, active));
                                     setTrackSel(0);
                                 }}
                             >
-                                Quitar pista
+                                {t("interactions.editor.removeTrack")}
                             </Button>
                         )}
                     </div>
@@ -531,28 +535,28 @@ export default function PresetEditor({
                 <div className="grid gap-4 md:grid-cols-2">
                     <FieldSelect
                         id="ixp-trigger"
-                        label="Cuándo"
+                        label={t("interactions.editor.when")}
                         value={trigger.on}
                         onChange={(v) => write(setTriggerKind(draft, v as IxPanelTriggerKind))}
-                        options={TRIGGERS.map((on) => ({ value: on, label: IX_TRIGGER_LABELS[on] }))}
+                        options={TRIGGERS.map((on) => ({ value: on, label: trStr(IX_TRIGGER_LABELS[on], language) }))}
                     />
                     <FieldSelect
                         id="ixp-target"
-                        label="Qué se mueve"
+                        label={t("interactions.editor.what")}
                         value={track.target.kind}
                         onChange={(v) => write(setTargetKind(draft, v as IxPanelTargetKind, undefined, active))}
-                        options={TARGETS.map((k) => ({ value: k, label: IX_TARGET_LABELS[k] }))}
+                        options={TARGETS.map((k) => ({ value: k, label: trStr(IX_TARGET_LABELS[k], language) }))}
                     />
 
                     {trigger.on === "view" && (
                         <FieldSelect
                             id="ixp-once"
-                            label="Repetición"
+                            label={t("interactions.editor.repetition")}
                             value={trigger.once === false ? "each" : "once"}
                             onChange={(v) => write(setViewOnce(draft, v === "once"))}
                             options={[
-                                { value: "once", label: "Una vez (necesita el runtime mínimo)" },
-                                { value: "each", label: "Cada vez (CSS puro, va y viene)" },
+                                { value: "once", label: t("interactions.editor.viewOnce") },
+                                { value: "each", label: t("interactions.editor.viewEach") },
                             ]}
                         />
                     )}
@@ -560,12 +564,12 @@ export default function PresetEditor({
                     {trigger.on === "click" && (
                         <FieldSelect
                             id="ixp-click-toggle"
-                            label="Al segundo clic"
+                            label={t("interactions.editor.secondClick")}
                             value={trigger.toggle === true ? "undo" : "stay"}
                             onChange={(v) => write(setClickToggle(draft, v === "undo"))}
                             options={[
-                                { value: "stay", label: "Se queda" },
-                                { value: "undo", label: "Se deshace" },
+                                { value: "stay", label: t("interactions.editor.clickStay") },
+                                { value: "undo", label: t("interactions.editor.clickUndo") },
                             ]}
                         />
                     )}
@@ -573,7 +577,7 @@ export default function PresetEditor({
                     {trigger.on === "load" && (
                         <div>
                             <label className={LABEL} htmlFor="ixp-load-delay">
-                                Retardo del disparador (ms)
+                                {t("interactions.editor.loadDelay")}
                             </label>
                             <input
                                 id="ixp-load-delay"
@@ -592,19 +596,19 @@ export default function PresetEditor({
                         <>
                             <FieldSelect
                                 id="ixp-scrub-src"
-                                label="Qué scroll manda"
+                                label={t("interactions.editor.scrubSrc")}
                                 value={scrubSrcOf(trigger)}
                                 onChange={(v) => write(setScrubSrc(draft, v as IxScrubSrc))}
                                 options={[
-                                    { value: "self", label: "El recorrido del bloque" },
-                                    { value: "page", label: "El scroll de la página" },
-                                    { value: "scene", label: "La escena fija que lo contiene" },
+                                    { value: "self", label: t("interactions.editor.scrubSrcSelf") },
+                                    { value: "page", label: t("interactions.editor.scrubSrcPage") },
+                                    { value: "scene", label: t("interactions.editor.scrubSrcScene") },
                                 ]}
                             />
                             {/* Suavizado del scroll (P10) — opt-in: sin él, exactitud nativa 1:1. */}
                             <div>
                                 <label className={LABEL} htmlFor="ixp-scrub-smooth">
-                                    Suavizado (ms)
+                                    {t("interactions.editor.smoothMs")}
                                 </label>
                                 <input
                                     id="ixp-scrub-smooth"
@@ -617,9 +621,7 @@ export default function PresetEditor({
                                     onChange={(e) => write(setScrubSmooth(draft, Number(e.target.value)))}
                                 />
                                 <p className="mt-1 text-xs text-gray-500">
-                                    0 = sin suavizado (exactitud nativa 1:1). Con suavizado el
-                                    progreso lo persigue el runtime mínimo en JavaScript: se
-                                    renuncia al camino puro de CSS en el compositor.
+                                    {t("interactions.editor.scrubSmoothHint")}
                                 </p>
                             </div>
                         </>
@@ -631,7 +633,7 @@ export default function PresetEditor({
                         <>
                             <div>
                                 <label className={LABEL} htmlFor="ixp-event-name">
-                                    Nombre del evento
+                                    {t("interactions.editor.eventName")}
                                 </label>
                                 <input
                                     id="ixp-event-name"
@@ -641,9 +643,8 @@ export default function PresetEditor({
                                     onChange={(e) => write(setEventName(draft, e.target.value))}
                                 />
                                 <p className="mt-1 text-xs text-gray-500">
-                                    El evento real del DOM es <code>{IX_EVENT_PREFIX}&lt;nombre&gt;</code>.
-                                    El nombre es un slug: minúsculas, números y guiones — con uno
-                                    inválido se conserva el último válido.
+                                    {t("interactions.editor.eventHelp").split("{code}")[0]}<code>{IX_EVENT_PREFIX}&lt;{t("interactions.editor.eventNameToken")}&gt;</code>
+                                    {t("interactions.editor.eventHelp").split("{code}")[1] ?? ""}
                                 </p>
                             </div>
                             <label className="flex cursor-pointer select-none items-center gap-2 self-center text-sm text-gray-700">
@@ -652,7 +653,7 @@ export default function PresetEditor({
                                     checked={trigger.toggle === true}
                                     onChange={(e) => write(setEventToggle(draft, e.target.checked))}
                                 />
-                                Cada evento alterna (entra/sale)
+                                {t("interactions.editor.eventToggle")}
                             </label>
                         </>
                     )}
@@ -664,19 +665,19 @@ export default function PresetEditor({
                         <>
                             <FieldSelect
                                 id="ixp-pointer-area"
-                                label="Qué área sigue el cursor"
+                                label={t("interactions.editor.pointerArea")}
                                 value={trigger.area === "page" ? "page" : "self"}
                                 onChange={(v) =>
                                     write(setPointerArea(draft, v === "page" ? "page" : "self"))
                                 }
                                 options={[
-                                    { value: "self", label: "El propio bloque" },
-                                    { value: "page", label: "Toda la página" },
+                                    { value: "self", label: t("interactions.editor.pointerAreaSelf") },
+                                    { value: "page", label: t("interactions.editor.pointerAreaPage") },
                                 ]}
                             />
                             <div>
                                 <label className={LABEL} htmlFor="ixp-pointer-smooth">
-                                    Suavizado (ms)
+                                    {t("interactions.editor.smoothMs")}
                                 </label>
                                 <input
                                     id="ixp-pointer-smooth"
@@ -691,24 +692,24 @@ export default function PresetEditor({
                                     }
                                 />
                                 <p className="mt-1 text-xs text-gray-500">
-                                    0 = sigue al cursor sin retraso.
+                                    {t("interactions.editor.pointerSmoothHint")}
                                 </p>
                             </div>
                             <div>
                                 <FieldSelect
                                     id="ixp-axis"
-                                    label="Eje del cursor"
+                                    label={t("interactions.editor.pointerAxis")}
                                     value={track.axis ?? "x"}
                                     onChange={(v) =>
                                         write(setTrackAxis(draft, v === "y" ? "y" : "x", undefined, active))
                                     }
                                     options={AXES.map((a) => ({
                                         value: a,
-                                        label: IX_AXIS_LABELS[a],
+                                        label: trStr(IX_AXIS_LABELS[a], language),
                                     }))}
                                 />
                                 <p className="mt-1 text-xs text-gray-500">
-                                    Dos pistas, una por eje, componen el efecto 2D (tilt/parallax).
+                                    {t("interactions.editor.pointerAxisHint")}
                                 </p>
                             </div>
                         </>
@@ -723,8 +724,8 @@ export default function PresetEditor({
                                 {/* Con `total` los ms dejan de ser "entre hermanos" y pasan a ser el
                                     tiempo del primero al último: la etiqueta dice lo que significa. */}
                                 {track.stagger?.total === true
-                                    ? "Tiempo total (ms)"
-                                    : "Escalonado entre hermanos (ms)"}
+                                    ? t("interactions.editor.staggerTotalMs")
+                                    : t("interactions.editor.staggerEachMs")}
                             </label>
                             <input
                                 id="ixp-stagger"
@@ -745,7 +746,7 @@ export default function PresetEditor({
                         <>
                             <div>
                                 <label className={LABEL} htmlFor="ixp-dur">
-                                    Duración (ms)
+                                    {t("interactions.editor.duration")}
                                 </label>
                                 <input
                                     id="ixp-dur"
@@ -762,7 +763,7 @@ export default function PresetEditor({
                             </div>
                             <div>
                                 <label className={LABEL} htmlFor="ixp-delay">
-                                    Retardo (ms)
+                                    {t("interactions.editor.delay")}
                                 </label>
                                 <input
                                     id="ixp-delay"
@@ -783,26 +784,20 @@ export default function PresetEditor({
 
                 {track.target.kind === "words" && (
                     <p className="mt-3 text-xs text-gray-500">
-                        «Las palabras» solo mueve algo en los bloques que saben partir su texto
-                        (Título y Cita). No se parte si el texto lleva formato o si pasa de{" "}
-                        {IX_MAX_WORDS} palabras: entonces se ve igual que siempre, sin movimiento.
-                        En cualquier otro bloque este objetivo no mueve nada.
+                        {t("interactions.editor.wordsNote").replace("{max}", String(IX_MAX_WORDS))}
                     </p>
                 )}
 
                 {/* Honestidad (P12): el trazo SVG exige el contrato del MARKUP del bloque. */}
                 {track.target.kind === "svg" && (
                     <p className="mt-3 text-xs text-gray-500">
-                        «El trazo SVG» mueve el trazo de los SVG del bloque marcados con la clase
-                        wjs-ixd y pathLength=&quot;1&quot; (bloques propios o de plugins). Si el
-                        bloque no tiene ninguno, no se anima nada.
+                        {t("interactions.editor.svgNote")}
                     </p>
                 )}
 
                 {trigger.on === "pointer" && (
                     <p role="note" className="mt-3 text-xs text-gray-500">
-                        El puntero posiciona la animación (el paso 50 es el reposo). Inerte con
-                        reduced-motion y en pantallas táctiles.
+                        {t("interactions.editor.pointerNote")}
                     </p>
                 )}
 
@@ -815,21 +810,21 @@ export default function PresetEditor({
                     track.stagger && (
                         <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
                             <legend className="px-1 text-sm font-bold text-gray-900">
-                                Escalonado
+                                {t("interactions.editor.stagger")}
                             </legend>
                             <div className="mt-2 flex flex-wrap items-end gap-4">
                                 {track.stagger.cols == null && (
                                     <div className="w-56">
                                         <FieldSelect
                                             id="ixp-stagger-from"
-                                            label="Orden"
+                                            label={t("interactions.editor.staggerOrder")}
                                             value={track.stagger.from ?? "start"}
                                             onChange={(v) =>
                                                 write(setStaggerFrom(draft, v as IxStaggerFrom, undefined, active))
                                             }
                                             options={STAGGER_FROMS.map((f) => ({
                                                 value: f,
-                                                label: IX_STAGGER_FROM_LABELS[f],
+                                                label: trStr(IX_STAGGER_FROM_LABELS[f], language),
                                             }))}
                                         />
                                     </div>
@@ -842,7 +837,7 @@ export default function PresetEditor({
                                             write(setStaggerTotal(draft, e.target.checked, undefined, active))
                                         }
                                     />
-                                    Repartir como tiempo total
+                                    {t("interactions.editor.staggerAsTotal")}
                                 </label>
                                 <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
                                     <input
@@ -859,12 +854,12 @@ export default function PresetEditor({
                                             )
                                         }
                                     />
-                                    En rejilla
+                                    {t("interactions.editor.staggerGrid")}
                                 </label>
                                 {track.stagger.cols != null && (
                                     <div className="w-36">
                                         <label className={LABEL} htmlFor="ixp-stagger-cols">
-                                            Columnas
+                                            {t("interactions.editor.staggerCols")}
                                         </label>
                                         <input
                                             id="ixp-stagger-cols"
@@ -890,7 +885,7 @@ export default function PresetEditor({
                 {range && (
                     <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
                         <legend className="px-1 text-sm font-bold text-gray-900">
-                            Tramo del recorrido
+                            {t("interactions.editor.range")}
                         </legend>
                         <div className="mt-2 grid gap-4 md:grid-cols-2">
                             {(["from", "to"] as const).map((which) => (
@@ -899,21 +894,21 @@ export default function PresetEditor({
                                         <div className="min-w-0 flex-1">
                                             <FieldSelect
                                                 id={`ixp-range-${which}-at`}
-                                                label={which === "from" ? "Desde" : "Hasta"}
+                                                label={which === "from" ? t("interactions.editor.rangeFrom") : t("interactions.editor.rangeTo")}
                                                 value={range[which].at}
                                                 onChange={(v) =>
                                                     write(setRangeEdge(draft, which, { at: v as IxEdgeName }))
                                                 }
                                                 options={EDGES.map((e) => ({
                                                     value: e,
-                                                    label: IX_EDGE_LABELS[e],
+                                                    label: trStr(IX_EDGE_LABELS[e], language),
                                                 }))}
                                             />
                                         </div>
                                     )}
                                     <div className="min-w-0 flex-1">
                                         <label className={LABEL} htmlFor={`ixp-range-${which}-pct`}>
-                                            {which === "from" ? "Desde (%)" : "Hasta (%)"}
+                                            {which === "from" ? t("interactions.editor.rangeFromPct") : t("interactions.editor.rangeToPct")}
                                         </label>
                                         <input
                                             id={`ixp-range-${which}-pct`}
@@ -939,7 +934,7 @@ export default function PresetEditor({
                                 className="mt-4"
                                 onClick={() => write(resetRange(draft))}
                             >
-                                Restablecer tramo
+                                {t("interactions.editor.rangeReset")}
                             </Button>
                         )}
                     </fieldset>
@@ -951,11 +946,11 @@ export default function PresetEditor({
                     la clave). */}
                 {timed && (
                     <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
-                        <legend className="px-1 text-sm font-bold text-gray-900">Reproducción</legend>
+                        <legend className="px-1 text-sm font-bold text-gray-900">{t("interactions.editor.playback")}</legend>
                         <div className="mt-2 flex flex-wrap items-end gap-4">
                             <div className="w-36">
                                 <label className={LABEL} htmlFor="ixp-repeat">
-                                    Repetición
+                                    {t("interactions.editor.repetition")}
                                 </label>
                                 <input
                                     id="ixp-repeat"
@@ -979,7 +974,7 @@ export default function PresetEditor({
                                         write(setRepeat(draft, e.target.checked ? "inf" : 1, undefined, active))
                                     }
                                 />
-                                Infinita
+                                {t("interactions.editor.infinite")}
                             </label>
                             <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
                                 <input
@@ -989,7 +984,7 @@ export default function PresetEditor({
                                         write(setAlternate(draft, e.target.checked, undefined, active))
                                     }
                                 />
-                                Ida y vuelta
+                                {t("interactions.editor.alternate")}
                             </label>
                         </div>
                     </fieldset>
@@ -1003,31 +998,31 @@ export default function PresetEditor({
                         {showClipDir && (
                             <FieldSelect
                                 id="ixp-clip-dir"
-                                label="Revelado"
+                                label={t("interactions.editor.clipDir")}
                                 value={track.clipDir ?? "right"}
                                 onChange={(v) => write(setClipDir(draft, v as IxClipDir, undefined, active))}
                                 options={IX_CLIP_DIRS.map((d) => ({
                                     value: d,
-                                    label: IX_CLIP_DIR_LABELS[d],
+                                    label: trStr(IX_CLIP_DIR_LABELS[d], language),
                                 }))}
                             />
                         )}
                         {showOrigin && (
                             <FieldSelect
                                 id="ixp-origin"
-                                label="Origen del giro y la escala"
+                                label={t("interactions.editor.origin")}
                                 value={track.origin ?? "center"}
                                 onChange={(v) => write(setOrigin(draft, v as IxOrigin, undefined, active))}
                                 options={IX_ORIGINS.map((o) => ({
                                     value: o,
-                                    label: IX_ORIGIN_LABELS[o],
+                                    label: trStr(IX_ORIGIN_LABELS[o], language),
                                 }))}
                             />
                         )}
                         {showPersp && (
                             <div>
                                 <label className={LABEL} htmlFor="ixp-persp">
-                                    Perspectiva 3D (px)
+                                    {t("interactions.editor.perspective")}
                                 </label>
                                 <input
                                     id="ixp-persp"
@@ -1049,8 +1044,8 @@ export default function PresetEditor({
                 {/* Pasos */}
                 <fieldset className="mt-8 border-t border-gray-100 pt-6">
                     <legend className="text-sm font-bold text-gray-900">
-                        Pasos ({track.steps.length})
-                        {state.tracks.length > 1 ? ` — pista ${active + 1}` : ""}
+                        {t("interactions.editor.steps").replace("{count}", String(track.steps.length))}
+                        {state.tracks.length > 1 ? t("interactions.editor.stepsTrackSuffix").replace("{n}", String(active + 1)) : ""}
                     </legend>
                     {/* La LÍNEA DE TIEMPO (P9): un carril por pista sobre una escala compartida
                         (ms con reloj; 0–100 % con scrub/pointer). En la pista activa, marcadores
@@ -1087,17 +1082,17 @@ export default function PresetEditor({
                                 >
                                     <div className="mb-3 flex items-center justify-between gap-3">
                                         <span className="text-sm font-bold text-gray-900">
-                                            {isFirst ? "Inicio (0 %)" : isLast ? "Final (100 %)" : `Paso ${i + 1}`}
+                                            {isFirst ? t("interactions.editor.stepStart") : isLast ? t("interactions.editor.stepEnd") : t("interactions.editor.stepN").replace("{n}", String(i + 1))}
                                         </span>
                                         {!isFirst && !isLast && (
                                             <Button
                                                 type="button"
                                                 variant="ghost"
                                                 size="sm"
-                                                aria-label={`Quitar el paso ${i + 1}`}
+                                                aria-label={t("interactions.editor.removeStepAria").replace("{n}", String(i + 1))}
                                                 onClick={() => write(removeStep(draft, i, undefined, active))}
                                             >
-                                                Quitar paso
+                                                {t("interactions.editor.removeStep")}
                                             </Button>
                                         )}
                                     </div>
@@ -1108,7 +1103,7 @@ export default function PresetEditor({
                                         {!isFirst && !isLast && (
                                             <div>
                                                 <label className={LABEL} htmlFor={`ixp-at-${i}`}>
-                                                    Momento (%)
+                                                    {t("interactions.editor.stepAt")}
                                                 </label>
                                                 <input
                                                     id={`ixp-at-${i}`}
@@ -1130,7 +1125,7 @@ export default function PresetEditor({
                                         {!isLast && (
                                             <FieldSelect
                                                 id={`ixp-ease-${i}`}
-                                                label="Curva hasta el siguiente"
+                                                label={t("interactions.editor.easeToNext")}
                                                 value={step.bez ? IX_BEZ_SENTINEL : (step.ease ?? "out")}
                                                 onChange={(v) =>
                                                     v === IX_BEZ_SENTINEL
@@ -1138,8 +1133,8 @@ export default function PresetEditor({
                                                         : write(setStepEase(draft, i, v as IxEase, undefined, active))
                                                 }
                                                 options={[
-                                                    ...EASES.map((e) => ({ value: e as string, label: IX_EASE_LABELS[e] })),
-                                                    { value: IX_BEZ_SENTINEL, label: "Curva propia…" },
+                                                    ...EASES.map((e) => ({ value: e as string, label: trStr(IX_EASE_LABELS[e], language) })),
+                                                    { value: IX_BEZ_SENTINEL, label: t("interactions.editor.customCurve") },
                                                 ]}
                                             />
                                         )}
@@ -1164,7 +1159,7 @@ export default function PresetEditor({
                                             <div key={key} className="flex items-end gap-2">
                                                 <div className="min-w-0 flex-1">
                                                     <label className={LABEL} htmlFor={`ixp-${i}-${key}`}>
-                                                        {IX_PROP_LABELS[key]}
+                                                        {trStr(IX_PROP_LABELS[key], language)}
                                                         {IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}
                                                     </label>
                                                     {IX_COLOR_PROPS.has(key) ? (
@@ -1203,7 +1198,7 @@ export default function PresetEditor({
                                                     variant="ghost"
                                                     size="sm"
                                                     className="mb-1"
-                                                    aria-label={`Quitar ${IX_PROP_LABELS[key]} del paso ${i + 1}`}
+                                                    aria-label={t("interactions.editor.removePropAria").replace("{prop}", trStr(IX_PROP_LABELS[key], language)).replace("{n}", String(i + 1))}
                                                     onClick={() =>
                                                         write(setStepProp(draft, i, key, undefined, undefined, active))
                                                     }
@@ -1215,7 +1210,7 @@ export default function PresetEditor({
                                         {free.length > 0 && (
                                             <FieldSelect
                                                 id={`ixp-add-${i}`}
-                                                label="Añadir propiedad"
+                                                label={t("interactions.editor.addProp")}
                                                 value=""
                                                 onChange={(v) =>
                                                     v &&
@@ -1231,8 +1226,8 @@ export default function PresetEditor({
                                                     )
                                                 }
                                                 options={[
-                                                    { value: "", label: "Elegir…" },
-                                                    ...free.map((k) => ({ value: k, label: IX_PROP_LABELS[k] })),
+                                                    { value: "", label: t("interactions.editor.choose") },
+                                                    ...free.map((k) => ({ value: k, label: trStr(IX_PROP_LABELS[k], language) })),
                                                 ]}
                                             />
                                         )}
@@ -1250,36 +1245,35 @@ export default function PresetEditor({
                         disabled={track.steps.length >= IX_MAX_STEPS}
                         onClick={() => write(addStep(draft, undefined, active))}
                     >
-                        + Añadir paso
+                        {t("interactions.editor.addStep")}
                     </Button>
                     {track.steps.length >= IX_MAX_STEPS && (
                         <p className="mt-2 text-xs text-gray-500">
-                            Máximo {IX_MAX_STEPS} pasos: una animación con siete puntos de control ya no
-                            es una animación, es un programa.
+                            {t("interactions.editor.maxSteps").replace("{max}", String(IX_MAX_STEPS))}
                         </p>
                     )}
                 </fieldset>
 
                 {state.warnings.length > 0 && (
-                    <ul role="note" aria-label="Avisos del preajuste" className="mt-4 space-y-1">
+                    <ul role="note" aria-label={t("interactions.editor.warnings")} className="mt-4 space-y-1">
                         {state.warnings.map((w, i) => (
                             <li key={i} className="text-xs text-amber-700">
-                                {w}
+                                {localizeIxWarning(w, language)}
                             </li>
                         ))}
                     </ul>
                 )}
 
                 <p role="status" className="mt-6 text-xs text-gray-500">
-                    {state.summary}
+                    {ixSummary(state.presetId, state.presetOk, state.trigger, state.tracks, undefined, language)}
                 </p>
 
                 <div className="mt-4 flex gap-3">
                     <Button type="submit" loading={saving}>
-                        {id ? "Guardar cambios" : "Crear preajuste"}
+                        {id ? t("interactions.editor.saveChanges") : t("interactions.editor.create")}
                     </Button>
                     <Button type="button" variant="ghost" onClick={onCancel}>
-                        Cancelar
+                        {t("interactions.editor.cancel")}
                     </Button>
                 </div>
             </form>
