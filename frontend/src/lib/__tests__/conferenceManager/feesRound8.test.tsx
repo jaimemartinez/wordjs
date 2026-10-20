@@ -317,7 +317,7 @@ describe('a clickable KPI tile («Por validar») lines up with its siblings', ()
     it('button and div tiles share one box: a column stacked from the top', () => {
         expect(KPI_TILE_BOX).toMatchObject({ display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' });
         const style = 'style="container-type:inline-size;display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch"';
-        expect(render(<KpiTile label="Por validar" value="$250,00" icon="fa-clock" onClick={() => {}} kpi="pending" />)).toMatch(new RegExp(`^<button type="button" class="[^"]*" ${style.replace(/[()]/g, '\\$&')} data-kpi="pending">`));
+        expect(render(<KpiTile label="Por validar" value="$250,00" icon="fa-clock" onClick={() => {}} kpi="pending" />)).toMatch(new RegExp(`^<button type="button" class="[^"]*" ${style.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} data-kpi="pending">`));
         expect(render(<KpiTile label="Cuotas" value="$250,00" icon="fa-file" kpi="due" />)).toContain(`${style} data-kpi="due"`);
     });
 });

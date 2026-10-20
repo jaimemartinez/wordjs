@@ -594,12 +594,17 @@ router.get('/:slug/portal/sw', asyncHandler(async (req: Request, res: Response) 
     const file = rel ? safeJoin(PLUGINS_DIR, folder, ...rel.split('/')) : null;
     const clientRoot = safeJoin(PLUGINS_DIR, folder, 'client');
     if (!file || !clientRoot || !file.startsWith(clientRoot + path.sep)) return res.status(404).json(PORTAL_NOT_FOUND);
+    // One descriptor for the check and the read: what is measured is what is served.
     let body: Buffer;
+    let fd: number | null = null;
     try {
-        const st = fs.statSync(file);
+        fd = fs.openSync(file, 'r');
+        const st = fs.fstatSync(fd);
         if (!st.isFile() || st.size > PORTAL_SW_MAX_BYTES) return res.status(404).json(PORTAL_NOT_FOUND);
-        body = fs.readFileSync(file);
-    } catch { return res.status(404).json(PORTAL_NOT_FOUND); }
+        body = fs.readFileSync(fd);
+    } catch { return res.status(404).json(PORTAL_NOT_FOUND); } finally {
+        if (fd !== null) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+    }
     // Revalidated on every update check (the browser compares it byte for byte); never sniffed.
     res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');

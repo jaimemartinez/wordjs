@@ -1649,7 +1649,7 @@ describe('2.17.0 live round at 320×460: «Entrega»\'s buttons fit its card; th
         expect(tab).toMatch(/if \(!confirmRef\.current\) \{ run\(body\); return; \}/);
         expect(tab).toMatch(/const slotKey = decisionSlotKey\(\{ confirmOn, card: confirm\.card, checking: confirm\.checking, outcome, held: confirm\.held \}\);/);
         // The verdict sits in the capped wrapper whichever way it was recorded.
-        expect(tab).toMatch(/: outcome\s+(\/\/[^\n]*\s+)*\? <div data-verdict-fit="" style=\{\{ display: 'flex', flexDirection: 'column', maxHeight: `var\(\$\{REVEAL_FIT_VAR\}, none\)` \}\}>/);
+        expect(tab).toMatch(/: outcome\s+(\/\/[^\n]*\n\s*)*\? <div data-verdict-fit="" style=\{\{ display: 'flex', flexDirection: 'column', maxHeight: `var\(\$\{REVEAL_FIT_VAR\}, none\)` \}\}>/);
         // Taking the focus back (the wedge keeps typing) never scrolls the revealed result away.
         expect(tab).toMatch(/inputRef\.current\?\.focus\(slotKeyRef\.current \? \{ preventScroll: true \} : undefined\)/);
         // Nothing to reveal: no cap either — never one left from an earlier card.

@@ -13,7 +13,7 @@
  *   - the participant sheet offers «Escarapela» only while badges are on and the inscription is active;
  *   - every new admin text exists in es / en / pt.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRequire } from "node:module";

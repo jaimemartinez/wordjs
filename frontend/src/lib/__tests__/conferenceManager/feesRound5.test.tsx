@@ -35,7 +35,7 @@ import {
     ROSTER_CSS, ROSTER_COLUMNS_REM, ROSTER_LODGING_WIDE_REM, formIsDirty, groupByLocation, rosterLayoutFor, rosterLodgingWideRem, rosterTableMinRem, softBreaks,
 } from '../../../../../marketplace/plugins/conference-manager/client/lib/roster';
 import { FEE_ERROR_TEXT, RELOAD_CODES, draftIsDirty, transferActions } from '../../../../../marketplace/plugins/conference-manager/client/lib/feePayments';
-import { dismissOnOutside, fieldKeepsEscape, handleEscape, isFilledField, pushEscape, SECOND_ESCAPE_MS } from '../../../../../marketplace/plugins/conference-manager/client/lib/overlay';
+import { dismissOnOutside, fieldKeepsEscape, isFilledField, pushEscape, SECOND_ESCAPE_MS } from '../../../../../marketplace/plugins/conference-manager/client/lib/overlay';
 import { feeLineTitle, locationShare } from '../../../../../marketplace/plugins/conference-manager/client/lib/accounting';
 import { translations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
 import { makeTx } from '../../../../../marketplace/plugins/conference-manager/client/admin/MealScanner';

@@ -529,7 +529,7 @@ test('reports: «Por validar» and «Devuelto» per location and in total; the C
     assert.strictEqual(s.totals.returned, 20);
     assert.deepStrictEqual(s.byLocation.map((x: any) => [x.location, x.pending, x.returned]).sort(), [['Bogotá', 30, 0], ['Cali', 0, 20]]);
     const csv = ok(await p.call('get', `/inscriptions/export?conference_id=${w.cid}`)).csv as string;
-    const lines = csv.replace(/^﻿/, '').split('\r\n');
+    const lines = csv.replace(/^\uFEFF/, '').split('\r\n');
     const head = lines[0].split(',');
     const col = head.indexOf('Por validar');
     assert.ok(col > head.indexOf('Pagado'), lines[0]);

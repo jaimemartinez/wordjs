@@ -441,7 +441,8 @@ describe('the coordinator\'s portal: «Ajustado por la administración el …»,
 describe('round 3: the card stamp and counts read cleanly; the explorer\'s heading, breadcrumb and run summary', () => {
     const locations = PAGE.slice(PAGE.indexOf('function LocationsPage('));
     const assignment = PAGE.slice(PAGE.indexOf('function AssignmentPage('), PAGE.indexOf('export default function ConferenceManagerAdmin('));
-    const textOf = (html: string) => html.replace(/<[^>]+>/g, '');
+    // Tags out until none is left (a tag split by another one would otherwise survive one pass).
+    const textOf = (html: string) => { let out = html, prev; do { prev = out; out = out.replace(/<[^>]*>/g, ''); } while (out !== prev); return out; };
     const SEP = (cls: string) => `<span aria-hidden="true" class="-ml-3 inline-block w-3 text-center ${cls}">·</span>`;
     const ITEM = '<span class="ml-3 min-w-0 break-words">';
 
