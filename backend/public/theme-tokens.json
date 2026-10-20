@@ -3,7 +3,7 @@
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
     "tokens": 778,
-    "varUses": 1779,
+    "varUses": 1780,
     "elements": 51
   },
   "tokens": {
@@ -4372,6 +4372,10 @@
         {
           "selector": ".wjs-toc__link--active",
           "property": "color"
+        },
+        {
+          "selector": ".wjs-snap-strip:focus-visible",
+          "property": "outline"
         }
       ]
     },
