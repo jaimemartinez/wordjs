@@ -207,7 +207,7 @@ router.all('/', (req: Request, res: Response, next: NextFunction) => {
     if (req.method === 'POST' && isMultipart(req)) {
         return multipart.any()(req, res, (err: any) => {
             if (err) {
-                const tooBig = err && err.code === 'LIMIT_FILE_SIZE';
+                const tooBig = err.code === 'LIMIT_FILE_SIZE';
                 return res.status(tooBig ? 413 : 400).json({ errors: [{ message: tooBig ? 'The file is larger than the upload limit.' : 'Malformed multipart GraphQL request.', extensions: { code: tooBig ? 'rest_upload_too_large' : 'BAD_REQUEST' } }] });
             }
             const problem = applyMultipart(req);
