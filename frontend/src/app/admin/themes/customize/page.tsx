@@ -331,7 +331,7 @@ export default function ThemeCustomizerPage() {
     const hasOverrides = Object.keys(sanitizeMods(overrides)).length > 0;
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
             <div className="max-w-7xl mx-auto">
                 <PageHeader
                     icon="fa-paintbrush"
@@ -420,7 +420,7 @@ export default function ThemeCustomizerPage() {
                                             <div key={tok.key} className="flex flex-col gap-2">
                                                 <label
                                                     htmlFor={tok.key}
-                                                    className="block text-[10px] font-black uppercase tracking-widest text-gray-400"
+                                                    className="block text-[11px] font-black uppercase tracking-widest text-gray-400"
                                                 >
                                                     {t(tok.label)}
                                                     <span className="ml-2 normal-case font-mono font-medium text-gray-300 tracking-normal">
@@ -484,7 +484,7 @@ export default function ThemeCustomizerPage() {
                                     <span className="flex h-2.5 w-2.5 rounded-full bg-amber-300"></span>
                                     <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-300"></span>
                                 </div>
-                                <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                                <span className="text-[11px] font-black uppercase tracking-widest text-gray-400">
                                     <i className="fa-solid fa-eye mr-2"></i>
                                     {t("customizer.livePreview")}
                                 </span>

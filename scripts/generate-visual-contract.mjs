@@ -57,8 +57,24 @@ function validateContract(contract) {
 
   const propKinds = new Set([
     "string", "number", "boolean", "enum", "classlist", "partname",
-    "wrapper-tag", "template-part-area", "href", "slot",
+    "wrapper-tag", "template-part-area", "href", "slot", "slug",
   ]);
+  // Chrome root props (header/footer wrapper behaviour) and the props EVERY chrome block accepts
+  // (per-breakpoint visibility). Both validators merge commonProps into each block's spec at load.
+  new RegExp(chrome.slugPattern);
+  for (const [label, specs] of [["rootProps", chrome.rootProps], ["commonProps", chrome.commonProps]]) {
+    assert(specs && !Array.isArray(specs), `chrome.${label} must be an object`);
+    for (const [prop, spec] of Object.entries(specs)) {
+      assert(/^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(prop), `chrome.${label} prop ${JSON.stringify(prop)} is not a safe identifier`);
+      assert(["boolean", "enum"].includes(spec.kind) && !spec.required, `chrome.${label}.${prop} must be an optional boolean or enum`);
+      if (spec.kind === "enum") unique(spec.values, `chrome.${label}.${prop}.values`);
+    }
+  }
+  for (const [type, block] of Object.entries(chrome.blocks)) {
+    for (const prop of Object.keys(chrome.commonProps)) {
+      assert(!Object.prototype.hasOwnProperty.call(block.props, prop), `chrome.${type} redeclares common prop ${prop}`);
+    }
+  }
   for (const [surface, blocks] of [["template", template.blocks], ["chrome", chrome.blocks]]) {
     assert(blocks && Object.keys(blocks).length > 0, `${surface}.blocks must not be empty`);
     for (const [type, block] of Object.entries(blocks)) {
@@ -213,8 +229,11 @@ function typesSource() {
     "GeneratedTemplateBlock",
     (block) => block.required || [],
   );
+  const chromeBlocksWithCommon = Object.fromEntries(
+    Object.entries(contract.formats.chrome.blocks).map(([type, block]) => [type, { ...block, props: { ...block.props, ...contract.formats.chrome.commonProps } }]),
+  );
   const chromeProps = propsMapSource(
-    contract.formats.chrome.blocks,
+    chromeBlocksWithCommon,
     "GeneratedChromeBlock",
     (block) => Object.entries(block.props).filter(([, spec]) => spec.required).map(([name]) => name),
   );

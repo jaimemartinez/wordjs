@@ -1738,6 +1738,30 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     });
 }
 
+/**
+ * Is this request same-origin, by the SAME rule csrfProtection applies to a write? For the long-lived GET
+ * streams the global CSRF middleware does not cover (GET is a safe method): the collaboration stream
+ * (routes/collab.ts) and the GraphQL subscription stream (routes/graphql.ts). A non-browser client that
+ * sends neither Origin nor Referer is same-origin only with a Bearer credential — it has no ambient
+ * credential a third party could make travel. No Host of its own fails closed (hostlessAmbientRequest).
+ */
+function sameOriginRequest(req: Request): boolean {
+    const origin = req.get('Origin');
+    const referer = req.get('Referer');
+    let requestOrigin: string | null = origin || null;
+    if (!requestOrigin && referer) {
+        try { requestOrigin = new URL(referer).origin; } catch { requestOrigin = null; }
+    }
+    if (!origin && !referer) return hasBearerCredential(req);
+    if (!requestOrigin) return false;
+    const host = trustedHost(req);
+    if (hostlessAmbientRequest(req, host)) return false;
+    const scheme = trustedScheme(req);
+    if (originMatchesHost(requestOrigin, host, scheme)) return true;
+    const allowed: string[] = sameOriginAllowList(host, scheme);
+    return allowed.some((x: string) => { try { return new URL(x).origin === requestOrigin; } catch { return false; } });
+}
+
 module.exports = {
     authenticate,
     authenticateAllowQuery,
@@ -1756,6 +1780,7 @@ module.exports = {
     originMatchesHost,
     sameOriginAllowList,
     hostlessAmbientRequest,
+    sameOriginRequest,
     mfaComplianceGate,
     // The site's address policy (one provider per process; index.ts mounts the host gate with it and
     // publishes it as app.hostPolicy) and what the gate attached to a request.

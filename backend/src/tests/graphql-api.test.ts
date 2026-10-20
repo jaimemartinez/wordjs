@@ -1,5 +1,5 @@
 /**
- * GRAPHQL API (phase 1, read-only) — parity with REST, and the server-protection limits.
+ * GRAPHQL API (queries) — parity with REST, and the server-protection limits.
  *
  * The GraphQL endpoint resolves every field through the REST read it mirrors (core/graphql/dispatch),
  * so the promise under test is PARITY: for the same caller, the same question asked over GraphQL and over
@@ -10,7 +10,8 @@
  *
  * The limits are tested where they bite: a too-deep or too-costly document is refused at validation,
  * before a single REST sub-request runs; `first` above the REST page cap is refused; introspection is
- * off in production unless the setting turns it on; the schema has no mutation root.
+ * off in production unless the setting turns it on; an unknown mutation is refused at validation. The
+ * mutations themselves are covered on the real app by graphql-mutations.test.ts.
  */
 
 const { test, describe, before, after } = require('node:test');
@@ -428,7 +429,7 @@ describe('server protection', () => {
         assert.deepStrictEqual(dev.body.data, { __schema: { queryType: { name: 'Query' } } });
     });
 
-    test('the schema is read-only: a mutation is refused by validation', async () => {
+    test('a mutation the schema does not define is refused by validation, and nothing runs', async () => {
         const r = await gqlRaw('editor', `mutation { deletePost(id: ${P.pub}) }`);
         assert.ok(r.body.errors && r.body.errors.length > 0);
         assert.ok(!r.body.data, 'nothing executed');

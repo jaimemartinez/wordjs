@@ -225,14 +225,14 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
                     onClick={() => onReinstall(plugin)}
                     className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-sm flex items-center gap-2"
                 >
-                    <FaStore className="text-[10px]" /> {t('plugins.broken.reinstall')}
+                    <FaStore className="text-[11px]" /> {t('plugins.broken.reinstall')}
                 </button>
                 <button
                     onClick={() => onCleanup(plugin)}
                     disabled={busy}
                     className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 active:scale-95 transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
                 >
-                    <FaTrash className="text-[10px]" /> {t('plugins.broken.cleanup')}
+                    <FaTrash className="text-[11px]" /> {t('plugins.broken.cleanup')}
                 </button>
             </div>
         </div>
@@ -489,7 +489,7 @@ export default function PluginsPage() {
             refreshMenus();
             // Load the just-activated plugin's frontend hooks NOW: this page never reloads the document,
             // so without it the loader replays an active-plugin list captured before the activation and
-            // the plugin's UI extensions (e.g. mail-server's mailbox toggle in the user form) stay
+            // the plugin's UI extensions (e.g. mail-server's address auto-fill in the user form) stay
             // invisible until the admin reloads the tab by hand.
             reloadActivePlugins();
             addToast(t('plugins.activated'), "success");
@@ -772,7 +772,7 @@ export default function PluginsPage() {
                             </p>
                             <p className="p-4 rounded-2xl border border-amber-200 bg-amber-50/50 text-amber-800 shadow-sm">
                                 {t('plugins.freeport.permanent.pre')} <strong className="font-extrabold">{portConflictPrompt.conflict.occupant?.label || '—'}</strong>
-                                {' '}(<code className="text-[10px] font-mono bg-amber-100 px-1 py-0.5 rounded">systemctl disable --now {portConflictPrompt.conflict.occupant?.service}</code>){' '}
+                                {' '}(<code className="text-[11px] font-mono bg-amber-100 px-1 py-0.5 rounded">systemctl disable --now {portConflictPrompt.conflict.occupant?.service}</code>){' '}
                                 {t('plugins.freeport.permanent.post')}
                             </p>
                         </div>
@@ -810,7 +810,7 @@ export default function PluginsPage() {
                         <div className="mb-6 text-slate-500 leading-relaxed space-y-3.5 text-xs font-semibold">
                             <p>
                                 <strong className="text-slate-900 font-extrabold">{themeSwitchPrompt.pluginName}</strong>&apos;s theme is now installed as{' '}
-                                <code className="text-[10px] font-mono bg-violet-50 px-1 py-0.5 rounded">{themeSwitchPrompt.themeSlug}</code>.
+                                <code className="text-[11px] font-mono bg-violet-50 px-1 py-0.5 rounded">{themeSwitchPrompt.themeSlug}</code>.
                             </p>
                             <p>Switch the site to this theme now? You can also do it later in Appearance → Themes.</p>
                         </div>
@@ -854,10 +854,10 @@ export default function PluginsPage() {
                         </p>
 
                         <div className="mb-6 space-y-2">
-                            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                            <label htmlFor="plugins-field-1" className="block text-[11px] font-black text-slate-400 uppercase tracking-widest">
                                 {t('users.password')}
                             </label>
-                            <input
+                            <input id="plugins-field-1"
                                 type="password"
                                 className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white focus:ring-4 focus:ring-rose-500/10 focus:border-rose-500 outline-none transition-all text-xs font-semibold placeholder-slate-400 shadow-sm"
                                 value={password}
@@ -867,7 +867,7 @@ export default function PluginsPage() {
                             />
                             {deleteError && (
                                 <p className="text-rose-500 text-xs font-bold flex items-center gap-2 mt-1">
-                                    <FaExclamationTriangle className="text-[10px]" /> {deleteError}
+                                    <FaExclamationTriangle className="text-[11px]" /> {deleteError}
                                 </p>
                             )}
                         </div>
@@ -882,7 +882,7 @@ export default function PluginsPage() {
                             />
                             <span className="text-xs text-slate-700 leading-normal font-semibold">
                                 <span className="font-extrabold text-rose-700 block mb-0.5">Also delete this plugin&apos;s data / tables</span>
-                                <span className="block text-[10px] text-slate-400/90 font-medium">This drops the plugin&apos;s database tables AND its data folder (keys, attachments). Cannot be undone. Leave off to keep both for a future reinstall.</span>
+                                <span className="block text-[11px] text-slate-400/90 font-medium">This drops the plugin&apos;s database tables AND its data folder (keys, attachments). Cannot be undone. Leave off to keep both for a future reinstall.</span>
                             </span>
                         </label>
 
@@ -978,7 +978,7 @@ export default function PluginsPage() {
                                 </div>
                                 <div className="min-w-0">
                                     <h3 className="text-base font-extrabold text-slate-900 truncate" title={detailPlugin.name}>{detailPlugin.name}</h3>
-                                    <p className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">{detailPlugin.slug} · v{detailPlugin.version}</p>
+                                    <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">{detailPlugin.slug} · v{detailPlugin.version}</p>
                                 </div>
                             </div>
                             <button onClick={() => setDetailPlugin(null)} className="p-2 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all">
@@ -1005,7 +1005,7 @@ export default function PluginsPage() {
                             {/* Runtime health */}
                             {detailPlugin.active && (
                                 <div>
-                                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2.5">Runtime health</h4>
+                                    <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2.5">Runtime health</h4>
                                     {detailPlugin.runtime ? (
                                         <div className="rounded-2xl border border-slate-200/60 bg-slate-50/50 p-4 space-y-3 shadow-inner">
                                             {(() => {
@@ -1027,7 +1027,7 @@ export default function PluginsPage() {
                                                                 <span className={`relative inline-flex rounded-full h-2 w-2 ${rm.dot.split(' ')[0]}`} />
                                                             </span>
                                                             <span className={`text-xs font-extrabold uppercase tracking-wide ${rm.text}`}>{rm.label}</span>
-                                                            {detailPlugin.runtime.pid != null && <span className="text-[10px] text-slate-400 font-mono ml-auto">pid {detailPlugin.runtime.pid}</span>}
+                                                            {detailPlugin.runtime.pid != null && <span className="text-[11px] text-slate-400 font-mono ml-auto">pid {detailPlugin.runtime.pid}</span>}
                                                         </div>
                                                         <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-slate-500 font-semibold">
                                                             {rss && <span>RSS: <span className="text-slate-700">{rss}</span></span>}
@@ -1040,7 +1040,7 @@ export default function PluginsPage() {
                                                             const refusal = runtimeSandboxRefusal(detailPlugin.runtime);
                                                             if (refusal) return <SandboxRefusalPanel refusal={refusal} />;
                                                             return detailPlugin.runtime.lastError ? (
-                                                                <p className="text-[10px] font-mono text-rose-600 bg-rose-50/50 border border-rose-100 rounded-xl p-2.5 break-words font-semibold">{detailPlugin.runtime.lastError}</p>
+                                                                <p className="text-[11px] font-mono text-rose-600 bg-rose-50/50 border border-rose-100 rounded-xl p-2.5 break-words font-semibold">{detailPlugin.runtime.lastError}</p>
                                                             ) : null;
                                                         })()}
                                                     </>
@@ -1062,7 +1062,7 @@ export default function PluginsPage() {
 
                             {/* Requested vs granted permission diff */}
                             <div>
-                                <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2.5">{t('plugins.permissions.manage')}</h4>
+                                <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2.5">{t('plugins.permissions.manage')}</h4>
                                 {declaredTokens(detailPlugin).length === 0 ? (
                                     <p className="text-[11px] font-semibold text-slate-600 bg-slate-50 border border-slate-100 rounded-xl p-3.5">{t('plugins.permissions.none')}</p>
                                 ) : (
@@ -1078,7 +1078,7 @@ export default function PluginsPage() {
                                                             <span className="text-xs font-extrabold text-slate-800">{meta.label}</span>
                                                             <RiskBadge risk={meta.risk} adminEquivalent={meta.adminEquivalent} />
                                                         </div>
-                                                        <span className={`text-[9px] font-mono text-slate-600 font-bold mt-0.5 ${TOKEN_WRAP_CLASS}`}><BreakableToken text={token} /></span>
+                                                        <span className={`text-[11px] font-mono text-slate-600 font-bold mt-0.5 ${TOKEN_WRAP_CLASS}`}><BreakableToken text={token} /></span>
                                                     </div>
                                                     <span className={`text-[8px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full shadow-sm ${granted ? 'bg-emerald-600 text-white shadow-emerald-500/10' : 'bg-slate-200 text-slate-600'}`}>
                                                         {granted ? t('plugins.permission.granted') : t('plugins.permission.denied')}
@@ -1134,14 +1134,14 @@ export default function PluginsPage() {
                                             <FaCheck className="text-sm" />
                                         </div>
                                         <p className="text-emerald-800 font-extrabold text-sm">{t('plugins.safe.to.activate')}</p>
-                                        <p className="text-emerald-600 text-[10px] font-semibold mt-1">{t('plugins.no.permissions')}</p>
+                                        <p className="text-emerald-600 text-[11px] font-semibold mt-1">{t('plugins.no.permissions')}</p>
                                     </div>
                                 )}
                             </div>
 
                             {/* What confirming grants (grantState.ts): when some requested permission stays off, the
                                 footer no longer says activating grants "these capabilities". slate-600 (was slate-400, 2.2:1). */}
-                            <p className="text-[10px] text-slate-600 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold" data-activation-footer={activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate)) ? 'partial' : 'all'}>
+                            <p className="text-[11px] text-slate-600 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold" data-activation-footer={activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate)) ? 'partial' : 'all'}>
                                 {activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate)) ? t('plugins.activation.footer.partial') : t('plugins.activation.footer')}
                             </p>
                         </div>
@@ -1331,7 +1331,7 @@ export default function PluginsPage() {
             {/* Plugin Grid */}
             <div className="relative z-10">
                 {tab === 'marketplace' ? null : loading ? (
-                    <div className="glass-panel rounded-[40px] p-12 text-center text-gray-400">
+                    <div className="glass-panel rounded-3xl md:rounded-[40px] p-12 text-center text-gray-400">
                         <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
                         <p className="font-medium">{t('plugins.loading')}</p>
                     </div>
@@ -1434,7 +1434,7 @@ export default function PluginsPage() {
                                                     <span className={`relative inline-flex rounded-full h-2 w-2 ${rm.dot.split(' ')[0]}`} />
                                                 </span>
                                                 <span className={`text-[11px] font-extrabold tracking-wide uppercase ${rm.text}`}>{rm.label}</span>
-                                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-medium">
+                                                <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium">
                                                     {rss && (
                                                         <>
                                                             <span>•</span>
@@ -1455,16 +1455,16 @@ export default function PluginsPage() {
                                                 title="Restart plugin"
                                                 className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-200/60 hover:text-slate-700 disabled:opacity-50 transition-all hover:scale-105 active:scale-95 border border-transparent hover:border-slate-200/50 shadow-sm"
                                             >
-                                                <FaSyncAlt className={`text-[10px] ${restarting[plugin.slug] ? 'animate-spin' : ''}`} />
+                                                <FaSyncAlt className={`text-[11px] ${restarting[plugin.slug] ? 'animate-spin' : ''}`} />
                                             </button>
                                         </div>
                                         {(isCrashLooping || isRefused) && plugin.runtime?.lastError && (
-                                            <p className="text-[10px] text-red-600 bg-red-50/50 border border-red-100 rounded-lg p-2 mt-2 font-mono break-words line-clamp-2" title={plugin.runtime.lastError}>{plugin.runtime.lastError}</p>
+                                            <p className="text-[11px] text-red-600 bg-red-50/50 border border-red-100 rounded-lg p-2 mt-2 font-mono break-words line-clamp-2" title={plugin.runtime.lastError}>{plugin.runtime.lastError}</p>
                                         )}
                                         {isRefused && (
                                             <button
                                                 onClick={() => setDetailPlugin(plugin)}
-                                                className="mt-2 text-[10px] font-extrabold uppercase tracking-wider text-rose-700 hover:underline"
+                                                className="mt-2 text-[11px] font-extrabold uppercase tracking-wider text-rose-700 hover:underline"
                                             >
                                                 Why, and what to do
                                             </button>
@@ -1483,7 +1483,7 @@ export default function PluginsPage() {
                                                     <span
                                                         key={idx}
                                                         title={`${meta.label} — ${t(`plugins.risk.${meta.risk}`)}${p.reason ? ` · ${p.reason}` : ''}`}
-                                                        className={`text-[9px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full border ${RISK_CLASSES[meta.risk]}`}
+                                                        className={`text-[11px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full border ${RISK_CLASSES[meta.risk]}`}
                                                     >
                                                         {p.scope === 'network' ? 'network' : `${p.scope}:${p.access}`}
                                                     </span>
@@ -1493,17 +1493,17 @@ export default function PluginsPage() {
                                     </div>
                                 )}
 
-                                <div className="flex items-center justify-between pt-4 border-t border-slate-100/80">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">
+                                <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-100/80">
+                                    <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                        <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">
                                             v{plugin.version}
                                         </span>
                                         {!(siteScoped && !plugin.offered) && <button
                                             onClick={() => openPermissions(plugin)}
                                             title="Manage what this plugin can access (per-permission grants)"
-                                            className="text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-blue-50 hover:text-blue-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95"
+                                            className="text-[11px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-blue-50 hover:text-blue-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95"
                                         >
-                                            <FaSlidersH className="text-[10px]" /> {t('plugins.permissions.manage')}
+                                            <FaSlidersH className="text-[11px]" /> {t('plugins.permissions.manage')}
                                         </button>}
                                         {plugin.hasTheme && (
                                             <button
@@ -1512,20 +1512,20 @@ export default function PluginsPage() {
                                                 title={plugin.themeInstalled
                                                     ? "This plugin's theme is already installed (manage it in Appearance → Themes)"
                                                     : "Install this plugin's theme"}
-                                                className="text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-violet-50 hover:text-violet-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100 disabled:hover:bg-slate-50 disabled:hover:text-slate-500"
+                                                className="text-[11px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-violet-50 hover:text-violet-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100 disabled:hover:bg-slate-50 disabled:hover:text-slate-500"
                                             >
                                                 {installingTheme[plugin.slug]
-                                                    ? (<><FaSyncAlt className="text-[10px] animate-spin" /> Installing…</>)
+                                                    ? (<><FaSyncAlt className="text-[11px] animate-spin" /> Installing…</>)
                                                     : plugin.themeInstalled
-                                                        ? (<><FaCheck className="text-[10px]" /> Theme installed</>)
-                                                        : (<><FaPalette className="text-[10px]" /> Install theme</>)}
+                                                        ? (<><FaCheck className="text-[11px]" /> Theme installed</>)
+                                                        : (<><FaPalette className="text-[11px]" /> Install theme</>)}
                                             </button>
                                         )}
                                     </div>
 
                                     {siteScoped && !plugin.offered && !plugin.active ? (
                                         <span
-                                            className="px-3 py-2 rounded-xl text-[10px] font-extrabold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200/60"
+                                            className="px-3 py-2 rounded-xl text-[11px] font-extrabold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200/60"
                                             title={t('plugins.network.notOfferedHint')}
                                             data-plugin-not-offered={plugin.slug}
                                         >
@@ -1535,7 +1535,7 @@ export default function PluginsPage() {
                                     <button
                                         onClick={() => togglePlugin(plugin)}
                                         className={`
-                                            px-4 py-2 rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center gap-2 transition-all duration-300 shadow-sm hover:scale-105 active:scale-95
+                                            ml-auto shrink-0 px-4 py-2 rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 shadow-sm hover:scale-105 active:scale-95
                                             ${plugin.active
                                                 ? 'bg-rose-50 text-rose-600 border border-rose-200/40 hover:bg-rose-600 hover:text-white hover:shadow-lg hover:shadow-rose-500/20'
                                                 : 'bg-emerald-50 text-emerald-600 border border-emerald-200/40 hover:bg-emerald-600 hover:text-white hover:shadow-lg hover:shadow-emerald-500/20'}
@@ -1543,11 +1543,11 @@ export default function PluginsPage() {
                                     >
                                         {plugin.active ? (
                                             <>
-                                                <FaPowerOff className="text-[10px]" /> {t('plugins.deactivate')}
+                                                <FaPowerOff className="text-[11px]" /> {t('plugins.deactivate')}
                                             </>
                                         ) : (
                                             <>
-                                                <FaCheck className="text-[10px]" /> {t('plugins.activate')}
+                                                <FaCheck className="text-[11px]" /> {t('plugins.activate')}
                                             </>
                                         )}
                                     </button>

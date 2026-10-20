@@ -39,7 +39,7 @@ are in the [repository README](../README.md); security reports go through [SECUR
 - [multisite.md](multisite.md) — several sites, each with its own address, database, users and settings, from one install.
 - [ai-agents.md](ai-agents.md) — the MCP server: AI assistants read and draft content through capabilities an administrator grants.
 - [ai-provider.md](ai-provider.md) — the AI provider layer behind the editor's suggestions and plugins granted `ai:use`.
-- [graphql.md](graphql.md) — the read-only GraphQL endpoint, its schema, limits and extension seam.
+- [graphql.md](graphql.md) — the GraphQL endpoint: queries, mutations, uploads, SSE subscriptions, limits and extension seam.
 - [webhooks.md](webhooks.md) — outgoing webhooks: the event catalogue, payloads and signatures.
 - [media-storage.md](media-storage.md) — serving the media library from local disk or an S3-compatible bucket + CDN.
 - [notifications.md](notifications.md) — the real-time, multi-transport notification system.

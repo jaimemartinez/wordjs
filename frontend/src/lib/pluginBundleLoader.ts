@@ -908,7 +908,7 @@ async function fetchAndRegisterPluginHooks(pluginId: string, registry: PluginReg
  * Marketplace plugins are installed AFTER the frontend is built, so they cannot be in the build-time
  * registry: generate-plugin-registry.js reads backend/plugins at build time, a release ships zero plugins,
  * and in production nothing regenerates that file afterwards. Without this pass their hooks never register
- * and their UI extensions are invisible, e.g. mail-server's "Professional Mail Account" toggle in the user
+ * and their UI extensions are invisible, e.g. mail-server's mailbox-address auto-fill in the user
  * form. Re-runnable on purpose — reloadActivePlugins() calls it after an activate/deactivate — and cheap
  * when re-run, because every plugin already handled is memoized in hooksRegistration.
  *

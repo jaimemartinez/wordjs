@@ -204,7 +204,7 @@ const MIGRATIONS: Migration[] = [
     },
     {
         // ACTIVE CORPORATE MAILBOX becomes an EXPLICIT, ADMIN-OWNED grant (user_meta.professional_mailbox)
-        // instead of being derived from the account's own email domain. See core/mailbox.ts for why the
+        // instead of being derived from the account's own email domain. See core/email-address.ts for why the
         // derivation was not an authorization fact (PUT /users/me and POST /auth/register both write
         // user_email, so the grant was self-issuable, anonymously in the registration case).
         //
@@ -230,12 +230,12 @@ const MIGRATIONS: Migration[] = [
         // boot over a data derivation would be worse. Recorded as applied either way (like 0001).
         id: '0006_professional_mailbox_flag',
         up: async (ctx: MigrationCtx) => {
-            const { domainOfAddress } = require('./mailbox');
+            const { domainOfAddress } = require('./email-address');
             const MAILBOX_META_KEY = 'professional_mailbox';
             try {
                 // 1. The mail domain, read straight from the options table (the option store's own
                 //    accessor is not guaranteed to be wired this early in boot). SAME precedence as
-                //    core/mailbox.getMailDomain: the DKIM domain override wins over the site hostname.
+                //    core/email-address.getReservedEmailDomain: the published mail domain wins over the site hostname.
                 const optionOf = async (name: string): Promise<string> => {
                     const row = await ctx.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
                     return row ? String(row.option_value ?? '') : '';
@@ -980,6 +980,19 @@ const MIGRATIONS: Migration[] = [
             } catch (e: any) {
                 log.warn({ err: e }, '⚠️  [migration 0018] could not record the current mail provider for account email (non-fatal — account email then needs the built-in transport or an explicit allowance)');
             }
+        }
+    },
+    {
+        // THE MAILBOX GRANT LEAVES THE CORE. 0006 stored it as the core's own user_meta `professional_mailbox`;
+        // it is now a plugin-declared account capability (core/account-capabilities.ts), stored generically
+        // as `account_capability:<slug>`. Every legacy value is copied unchanged before any route serves, the
+        // legacy rows are kept and mirrored, and a legacy "not granted" vetoes the copy — so no grant is lost
+        // or widened, on this node or on one still running the previous release (core/legacy-account-flags.ts).
+        // A failure aborts boot like any other migration: serving with grants half-copied would lose some.
+        id: '0019_account_capabilities_from_mailbox_flag',
+        up: async (ctx: MigrationCtx) => {
+            const copied = await require('./legacy-account-flags').migrateLegacyFlags(ctx);
+            if (copied) log.info(`   ✓ [migration 0019] ${copied} legacy per-account grant(s) moved to account capabilities`);
         }
     }
 ];

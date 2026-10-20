@@ -40,7 +40,7 @@ const router = express.Router();
 // the cluster bus are kept per site (core/collab-rooms siteScoped), and each site's operation log is in
 // that site's own database, so the post 5 of one site and the post 5 of another are two rooms.
 
-const { authenticate: authenticateAny, isHeadless, trustedHost, trustedScheme, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
+const { authenticate: authenticateAny, isHeadless, sameOriginRequest, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 // An attachment's entry decides too (core/attachment-visibility) — the same gate every attachment write takes.
@@ -117,31 +117,8 @@ function parsePostId(raw: any): number | null {
  * Sin `Host` no hay same-origin que derivar ⇒ NO se aporta ninguna entrada. Fallar cerrado.
  */
 function sameOrigin(req: Request): boolean {
-    const origin = req.get('Origin');
-    const referer = req.get('Referer');
-    let requestOrigin: string | null = origin || null;
-    if (!requestOrigin && referer) {
-        try { requestOrigin = new URL(referer).origin; } catch { requestOrigin = null; }
-    }
-    // Un cliente NO-navegador (Bearer, sin Origin ni Referer) no puede ser víctima de CSRF: no hay
-    // credencial ambiental que un tercero pueda hacer viajar.
-    if (!origin && !referer) {
-        const auth = req.get('Authorization') || '';
-        return auth.startsWith('Bearer ') && auth !== 'Bearer null' && auth !== 'Bearer undefined';
-    }
-    if (!requestOrigin) return false;
-
-    // The host comes from core/host-policy requestAuthority (X-Forwarded-Host only from a trusted hop) and
-    // both sides go through the one parser, so this check and csrfProtection cannot answer differently.
-    const host = trustedHost(req);
-    // No host of its own: the configured origins below do not stand in for one (lab finding N2) — the
-    // same predicate csrfProtection applies.
-    if (hostlessAmbientRequest(req, host)) return false;
-    const scheme = trustedScheme(req);
-    if (originMatchesHost(requestOrigin, host, scheme)) return true;
-
-    const allowed: string[] = sameOriginAllowList(host, scheme);
-    return allowed.some((a: string) => { try { return new URL(a).origin === requestOrigin; } catch { return false; } });
+    // ONE rule, shared with the GraphQL subscription stream: middleware/auth sameOriginRequest.
+    return sameOriginRequest(req);
 }
 
 type Gate = { ok: true; post: any } | { ok: false; status: number; code: string; message: string };

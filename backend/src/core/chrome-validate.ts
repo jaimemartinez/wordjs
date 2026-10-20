@@ -7,7 +7,7 @@
  * consumes a separate generated copy and never imports backend code.
  *
  * A composition is Puck Data JSON: { root: { props: {} }, content: [ { type, props } ] }.
- * Nesting happens ONLY through ChromeRow's `items` slot, total depth <= 3. The allowlist is
+ * Nesting happens ONLY through the container blocks' `items` slot (ChromeRow, ChromeColumns), total depth <= 3. The allowlist is
  * CLOSED and validation is fail-closed: any unknown type, unsafe href or busted budget rejects
  * the WHOLE composition (never a partial render). Unknown top-level keys (e.g. an editor's
  * empty `zones`) are ignored — the renderer never reads them.
@@ -50,7 +50,7 @@ const MAX_BYTES = CHROME_CONTRACT.limits.maxBytes;
 const MAX_BLOCKS = CHROME_CONTRACT.limits.maxBlocks;
 const MAX_DEPTH = CHROME_CONTRACT.limits.maxDepth;
 
-type PropKind = 'string' | 'boolean' | 'enum' | 'href' | 'slot';
+type PropKind = 'string' | 'boolean' | 'enum' | 'href' | 'slot' | 'slug';
 
 interface PropSpec {
     kind: PropKind;
@@ -58,11 +58,26 @@ interface PropSpec {
     values?: readonly string[]; // enum only
 }
 
+// Props EVERY block accepts (per-breakpoint visibility: hideMobile / hideTablet / hideDesktop). They
+// live once in the contract and are merged into each block's spec here, so a new block can never
+// forget them and the renderer can apply them generically.
+const COMMON_PROPS = CHROME_CONTRACT.commonProps as Record<string, PropSpec>;
+
 // The CLOSED block allowlist. Props not listed here (except the editor's per-instance `id`)
 // are rejected — a new prop is a contract change, not a free-for-all.
 const BLOCKS = Object.fromEntries(
-    Object.entries(CHROME_CONTRACT.blocks).map(([type, block]: [string, any]) => [type, block.props]),
+    Object.entries(CHROME_CONTRACT.blocks).map(([type, block]: [string, any]) => [type, { ...block.props, ...COMMON_PROPS }]),
 ) as Record<string, Record<string, PropSpec>>;
+
+// Wrapper behaviour of the part itself (header: sticky / transparent-over-hero; any part: width).
+// KNOWN root props are type-checked; unknown root keys stay ignored, exactly as before root props
+// existed — a composition stored by an older editor (whose root carried whatever the editor put
+// there) must not start failing closed and silently fall back after an upgrade.
+const ROOT_PROPS = CHROME_CONTRACT.rootProps as Record<string, PropSpec>;
+
+// ChromeWidgets.area names a widget area (sidebar id) — a plugin may register its own, so it is
+// not an enum, but it becomes part of a request path and must stay a plain slug.
+const SLUG_PATTERN = new RegExp(CHROME_CONTRACT.slugPattern);
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
  * POSITION — the same composition format, two very different render positions.
@@ -78,10 +93,14 @@ const BLOCKS = Object.fromEntries(
  * DOCUMENT-LEVEL STATE — one global that two instances then fight over — is therefore refused in the
  * 'part' position and still allowed in 'chrome'.
  *
- * THE AUDIT (all nine blocks in frontend/src/components/chrome/, contract v1):
- *   ChromeLogo, ChromeSiteTitle, ChromeSearch, ChromeSocials, ChromeText, ChromeButton, ChromeSpacer
- *   and ChromeRow are presentational server components — no "use client", no hooks, no document or
- *   window access at all. Any number of instances is fine.
+ * THE AUDIT (every block in frontend/src/components/chrome/, contract v1):
+ *   ChromeLogo, ChromeSiteTitle, ChromeSearch, ChromeSocials, ChromeText, ChromeButton, ChromeSpacer,
+ *   ChromeRow, ChromeColumns, ChromeHeading, ChromeRichText and ChromeCopyright are presentational
+ *   server components — no "use client", no hooks, no document or window access at all. Any number
+ *   of instances is fine.
+ *   ChromeLanguageSwitcher and ChromeWidgets mount client islands, but each one only READS (the
+ *   page's <link rel="alternate" hreflang> set / one widget area's rendered HTML) and keeps its state
+ *   in its own subtree — no body scroll-lock, no document listener, no portal. Any number is fine.
  *   ChromeNav is the one exception. Its horizontal/header form mounts the ChromeNavMobile client
  *   island, which portals its overlay to document.body, writes document.body.style.overflow to lock
  *   the page scroll while open, and binds a document-level keydown listener. Two open drawers restore
@@ -170,6 +189,7 @@ function describeProp(spec: PropSpec): string {
         case 'boolean': return 'a boolean';
         case 'slot': return 'an array of blocks';
         case 'href': return `a site-relative path ('/…') or an http(s):// URL`;
+        case 'slug': return `a slug (lowercase letters, digits, '-' or '_')`;
         default: return 'a string';
     }
 }
@@ -274,6 +294,11 @@ function validateBlock(node: any, blockPath: string, depth: number, state: WalkS
                     errors.push({ code: 'CHROME_INVALID_PROP', path: propPath, message: `"${key}" must be ${describeProp(propSpec)} (got ${JSON.stringify(value)})` });
                 }
                 break;
+            case 'slug':
+                if (typeof value !== 'string' || !SLUG_PATTERN.test(value)) {
+                    errors.push({ code: 'CHROME_INVALID_PROP', path: propPath, message: `"${key}" must be ${describeProp(propSpec)} (got ${JSON.stringify(value)})` });
+                }
+                break;
             case 'href':
                 if (typeof value !== 'string' || !isSafeHref(value)) {
                     errors.push({ code: 'CHROME_UNSAFE_HREF', path: propPath, message: `"${key}" must be ${describeProp(propSpec)} — never javascript: or any other scheme` });
@@ -339,6 +364,17 @@ function validateChromeData(raw: any, opts: { part?: string } = {}): ChromeValid
         errors.push({ code: 'CHROME_INVALID_SHAPE', path: 'root', message: '"root" must be an object' });
     } else if (data.root.props !== undefined && !isPlainObject(data.root.props)) {
         errors.push({ code: 'CHROME_INVALID_SHAPE', path: 'root.props', message: '"root.props" must be an object' });
+    } else if (isPlainObject(data.root.props)) {
+        for (const [key, propSpec] of Object.entries(ROOT_PROPS)) {
+            const value = data.root.props[key];
+            if (value === undefined) continue;
+            const ok = propSpec.kind === 'boolean'
+                ? typeof value === 'boolean'
+                : typeof value === 'string' && (propSpec.values || []).includes(value);
+            if (!ok) {
+                errors.push({ code: 'CHROME_INVALID_PROP', path: `root.props.${key}`, message: `"${key}" must be ${describeProp(propSpec)} (got ${JSON.stringify(value)})` });
+            }
+        }
     }
     if (!Array.isArray(data.content)) {
         errors.push({ code: 'CHROME_INVALID_SHAPE', path: 'content', message: '"content" must be an array of blocks' });
@@ -446,6 +482,8 @@ module.exports = {
     CHROME_MAX_BLOCKS: MAX_BLOCKS,
     CHROME_MAX_DEPTH: MAX_DEPTH,
     CHROME_BLOCK_TYPES: Object.keys(BLOCKS),
+    CHROME_ROOT_PROPS: Object.keys(ROOT_PROPS),
+    CHROME_COMMON_PROPS: Object.keys(COMMON_PROPS),
     CHROME_SITE_PARTS: CHROME_SITE_PARTS.slice(),
     CHROME_DOCUMENT_SCOPED_BLOCKS: Object.keys(DOCUMENT_SCOPED_BLOCKS),
     CHROME_LAYOUT_SLOTS: CHROME_LAYOUT_SLOTS.slice(),

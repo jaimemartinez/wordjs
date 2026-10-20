@@ -19,7 +19,7 @@ import { auditApi, usersApi, AuditEntry } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState } from "@/components/ui";
+import { PageHeader, Card, EmptyState, DataTable, Pagination } from "@/components/ui";
 import {
     AuditTone,
     auditActionKey,
@@ -193,7 +193,7 @@ export default function AuditPage() {
 
     if (forbidden) {
         return (
-            <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+            <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
                 <PageHeader title={t("audit.title")} subtitle={t("audit.subtitle")} icon="fa-clipboard-list" />
                 <Card variant="default" padding="none">
                     <EmptyState icon="fa-lock" title={t("audit.forbiddenTitle")} description={t("audit.forbiddenDescription")} />
@@ -205,7 +205,7 @@ export default function AuditPage() {
     const range = auditPageRange(page, PER_PAGE, total);
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t("audit.title")}
                 subtitle={`${t("audit.subtitle")} · ${total} ${t("audit.entries")}`}
@@ -233,145 +233,119 @@ export default function AuditPage() {
                     <EmptyState icon="fa-clipboard-list" title={t("audit.emptyTitle")} description={t("audit.emptyDescription")} />
                 ) : (
                     <>
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-44">
-                                            {t("audit.column.date")}
-                                        </th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">
-                                            {t("audit.column.actor")}
-                                        </th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-56">
-                                            {t("audit.column.action")}
-                                        </th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48">
-                                            {t("audit.column.target")}
-                                        </th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                            {t("audit.column.detail")}
-                                        </th>
-                                        <th className="px-6 py-3 w-16"></th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {entries.map((entry) => {
+                        <DataTable
+                            rows={entries}
+                            rowKey={(entry) => entry.id}
+                            caption={t("audit.title")}
+                            rowLabel={(entry) => `${formatAuditDate(entry.createdAt)} ${entry.action}`}
+                            actionsLabel={t("audit.detail")}
+                            stackBelow="lg"
+                            density="compact"
+                            columns={[
+                                {
+                                    key: "date",
+                                    header: t("audit.column.date"),
+                                    className: "lg:whitespace-nowrap",
+                                    cell: (entry) => <span className="text-sm text-gray-500">{formatAuditDate(entry.createdAt)}</span>,
+                                },
+                                {
+                                    key: "actor",
+                                    header: t("audit.column.actor"),
+                                    cell: (entry) => {
                                         const actor = auditActorLabel(entry.actorId, actorNames);
-                                        const actionKey = auditActionKey(entry.action);
-                                        const tone = auditTone(entry.action);
-                                        const summary = auditDetailSummary(entry.detail);
-                                        const expanded = expandedId === entry.id;
-                                        const pairs = expanded ? auditDetailPairs(entry.detail) : [];
-                                        return (
-                                            <React.Fragment key={entry.id}>
-                                                <tr className="group hover:bg-blue-50/5 transition-colors align-top">
-                                                    <td className="px-6 py-4 text-sm text-gray-500 whitespace-nowrap">
-                                                        {formatAuditDate(entry.createdAt)}
-                                                    </td>
-                                                    <td className="px-6 py-4 text-sm">
-                                                        {actor.kind === "system" ? (
-                                                            <span className="text-[10px] font-black uppercase tracking-wider text-gray-500 bg-gray-100 px-2 py-1 rounded-md">
-                                                                {t("audit.actor.system")}
-                                                            </span>
-                                                        ) : (
-                                                            <span className={actor.kind === "named" ? "text-gray-700 font-medium break-words" : "text-gray-400 font-mono"}>
-                                                                {actor.text}
-                                                            </span>
-                                                        )}
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        {/* Acción conocida → etiqueta traducida; desconocida → identificador crudo COMO TEXTO. */}
-                                                        <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-md ${TONE_CLASS[tone]}`}>
-                                                            {actionKey ? t(actionKey) : entry.action}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-6 py-4 text-sm text-gray-600">
-                                                        <span className="inline-flex items-center gap-2 break-all">
-                                                            <i className={`fa-solid ${auditTargetIcon(entry.targetType)} text-gray-300`}></i>
-                                                            {auditTargetLabel(entry)}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-6 py-4 text-sm text-gray-700">
-                                                        {summary.pairs.length === 0 ? (
-                                                            <span className="text-gray-300">—</span>
-                                                        ) : (
-                                                            <div className="flex flex-wrap gap-x-4 gap-y-1">
-                                                                {summary.pairs.map((pair) => (
-                                                                    <span key={pair.key} className="break-all">
-                                                                        <span className="text-xs font-bold text-gray-400">{pair.key}:</span> {pair.value}
-                                                                    </span>
-                                                                ))}
-                                                                {summary.rest > 0 && (
-                                                                    <span className="text-xs text-gray-400 font-bold">+{summary.rest}</span>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                    <td className="px-6 py-4 text-right">
-                                                        <button
-                                                            onClick={() => setExpandedId(expanded ? null : entry.id)}
-                                                            title={expanded ? t("audit.detailHide") : t("audit.detailShow")}
-                                                            aria-label={expanded ? t("audit.detailHide") : t("audit.detailShow")}
-                                                            aria-expanded={expanded}
-                                                            className="w-9 h-9 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all"
-                                                        >
-                                                            <i className={`fa-solid ${expanded ? "fa-chevron-up" : "fa-chevron-down"} text-xs`}></i>
-                                                        </button>
-                                                    </td>
-                                                </tr>
-
-                                                {expanded && (
-                                                    <tr className="bg-gray-50/60">
-                                                        <td colSpan={6} className="px-6 md:px-8 py-6 border-t border-gray-100">
-                                                            {pairs.length === 0 ? (
-                                                                <p className="text-sm text-gray-400">{t("audit.detailEmpty")}</p>
-                                                            ) : (
-                                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-                                                                    {pairs.map((pair) => (
-                                                                        <div key={pair.key} className="bg-white rounded-xl px-4 py-3">
-                                                                            <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1 break-all">
-                                                                                {pair.key}
-                                                                            </div>
-                                                                            <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">{pair.value}</div>
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-                                                            )}
-                                                        </td>
-                                                    </tr>
-                                                )}
-                                            </React.Fragment>
+                                        return actor.kind === "system" ? (
+                                            <span className="text-[11px] font-black uppercase tracking-wider text-gray-500 bg-gray-100 px-2 py-1 rounded-md">
+                                                {t("audit.actor.system")}
+                                            </span>
+                                        ) : (
+                                            <span className={`text-sm ${actor.kind === "named" ? "text-gray-700 font-medium break-words" : "text-gray-500 font-mono"}`}>
+                                                {actor.text}
+                                            </span>
                                         );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
+                                    },
+                                },
+                                {
+                                    key: "action",
+                                    header: t("audit.column.action"),
+                                    primary: true,
+                                    cell: (entry) => {
+                                        const actionKey = auditActionKey(entry.action);
+                                        // Known action → translated label; unknown → the raw identifier AS TEXT.
+                                        return (
+                                            <span className={`inline-block text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-md break-all ${TONE_CLASS[auditTone(entry.action)]}`}>
+                                                {actionKey ? t(actionKey) : entry.action}
+                                            </span>
+                                        );
+                                    },
+                                },
+                                {
+                                    key: "target",
+                                    header: t("audit.column.target"),
+                                    cell: (entry) => (
+                                        <span className="inline-flex items-center gap-2 break-all text-sm text-gray-600">
+                                            <i className={`fa-solid ${auditTargetIcon(entry.targetType)} text-gray-300`} aria-hidden="true"></i>
+                                            {auditTargetLabel(entry)}
+                                        </span>
+                                    ),
+                                },
+                                {
+                                    key: "detail",
+                                    header: t("audit.column.detail"),
+                                    showFrom: "xl",
+                                    cell: (entry) => {
+                                        const summary = auditDetailSummary(entry.detail);
+                                        return summary.pairs.length === 0 ? (
+                                            <span className="text-gray-300">—</span>
+                                        ) : (
+                                            <div className="flex flex-wrap justify-end lg:justify-start gap-x-4 gap-y-1 text-sm text-gray-700">
+                                                {summary.pairs.map((pair) => (
+                                                    <span key={pair.key} className="break-all">
+                                                        <span className="text-xs font-bold text-gray-500">{pair.key}:</span> {pair.value}
+                                                    </span>
+                                                ))}
+                                                {summary.rest > 0 && (
+                                                    <span className="text-xs text-gray-500 font-bold">+{summary.rest}</span>
+                                                )}
+                                            </div>
+                                        );
+                                    },
+                                },
+                            ]}
+                            actions={(entry) => {
+                                const expanded = expandedId === entry.id;
+                                return [{
+                                    key: "toggle",
+                                    label: expanded ? t("audit.detailHide") : t("audit.detailShow"),
+                                    icon: expanded ? "fa-chevron-up" : "fa-chevron-down",
+                                    onClick: () => setExpandedId(expanded ? null : entry.id),
+                                }];
+                            }}
+                            expandedRow={(entry) => {
+                                if (expandedId !== entry.id) return null;
+                                const pairs = auditDetailPairs(entry.detail);
+                                return pairs.length === 0 ? (
+                                    <p className="text-sm text-gray-500">{t("audit.detailEmpty")}</p>
+                                ) : (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+                                        {pairs.map((pair) => (
+                                            <div key={pair.key} className="bg-white rounded-xl px-4 py-3">
+                                                <div className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-1 break-all">
+                                                    {pair.key}
+                                                </div>
+                                                <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">{pair.value}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                );
+                            }}
+                        />
 
-                        <div className="px-8 py-5 border-t border-gray-100/50 bg-gray-50/30 flex items-center justify-between gap-4">
-                            <button
-                                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                                disabled={page <= 1}
-                                className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                            >
-                                <i className="fa-solid fa-chevron-left mr-2"></i>
-                                {t("table.previous")}
-                            </button>
-                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">
-                                {t("audit.range")
-                                    .replace("{from}", String(range.from))
-                                    .replace("{to}", String(range.to))
-                                    .replace("{total}", String(total))}
-                            </span>
-                            <button
-                                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                                disabled={page >= totalPages}
-                                className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                            >
-                                {t("table.next")}
-                                <i className="fa-solid fa-chevron-right ml-2"></i>
-                            </button>
-                        </div>
+                        <Pagination
+                            page={page}
+                            totalPages={totalPages}
+                            onChange={setPage}
+                            label={t("audit.range").replace("{from}", String(range.from)).replace("{to}", String(range.to)).replace("{total}", String(total))}
+                        />
                     </>
                 )}
             </Card>

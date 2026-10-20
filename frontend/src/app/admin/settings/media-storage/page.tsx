@@ -23,8 +23,8 @@ import {
  * progress shown here; the database keeps relative /uploads paths throughout.
  */
 
-const card = "bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden";
-const cardHead = "px-8 py-6 border-b border-gray-50 bg-gray-50/30";
+const card = "bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden";
+const cardHead = "px-5 sm:px-8 py-5 sm:py-6 border-b border-gray-50 bg-gray-50/30";
 
 const TEXT_FIELDS = [
     { key: "bucket", placeholder: "my-site-media" },

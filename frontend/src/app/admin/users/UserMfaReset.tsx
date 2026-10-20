@@ -70,7 +70,7 @@ export default function UserMfaReset({ userId, username, targetRole, className =
 
     return (
         <div className={className}>
-            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Two-Factor Authentication</h3>
+            <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">Two-Factor Authentication</h3>
             {wasReset ? (
                 // The users API does not report whether an account has 2FA enabled, so the only state this
                 // screen can honestly assert is the one it just caused. Say exactly that, and no more.

@@ -132,6 +132,8 @@ install the new zip.
 
 - [themes.md](../themes.md): every `theme.json` key, page templates, header and footer composition
   (`chrome/*.json`), self-hosted web fonts, and the doctor's full list of checks.
+- [Tutorial 17](17-design-your-header-and-footer.md): how a site owner composes the header and footer
+  in the admin — what your `chrome/*.json` files are the starting point for.
 - [theming.md](../theming.md): the token system and the **Customize** screen, where an
   administrator can override tokens without editing the theme.
 

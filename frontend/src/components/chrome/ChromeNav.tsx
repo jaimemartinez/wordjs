@@ -16,13 +16,14 @@
 // as it did before submenus existed — the flat path below is byte-for-byte unchanged.
 import type { ChromeMenuItem } from "@/lib/chromeData";
 import { buildMenuTree } from "@/lib/chromeData";
-import ChromeNavMobile from "./ChromeNavMobile";
+import ChromeNavMobile, { type ChromeNavCollapse } from "./ChromeNavMobile";
 import { NavCurrentLink } from "./NavCurrentLink";
 
 // Static literal maps so Tailwind sees every class (no interpolation).
 const LINK_CLASS: Record<"header" | "footer", string> = {
-    header: "text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors",
-    footer: "text-[var(--wjs-color-text-footer-dim,gray)] hover:text-[var(--wjs-color-primary,white)] transition-colors",
+// pointer-coarse: a finger needs 44px; a mouse keeps the theme's own line height.
+    header: "text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors pointer-coarse:inline-flex pointer-coarse:items-center pointer-coarse:min-h-11",
+    footer: "text-[var(--wjs-color-text-footer-dim,gray)] hover:text-[var(--wjs-color-primary,white)] transition-colors pointer-coarse:inline-flex pointer-coarse:items-center pointer-coarse:min-h-11",
 };
 
 // The dropdown surface for a horizontal (header/footer) submenu. Hidden until its parent <li> (the
@@ -97,19 +98,47 @@ function NavItem({
     );
 }
 
+// Header horizontal nav: from which width the desktop row shows (below it, the hamburger island).
+// `never` keeps the row at every width (wrapping) and mounts no drawer at all.
+const DESKTOP_ROW: Record<ChromeNavCollapse | "never", string> = {
+    mobile: "hidden md:flex",
+    tablet: "hidden lg:flex",
+    always: "hidden",
+    never: "flex flex-wrap",
+};
+
+// Heading shown above the links when the block has a `title` (the legacy footer's "Quick Links"). An
+// <h4>, exactly what Footer.tsx used: themes colour footer headings through `footer h3, footer h4`
+// (their global h1–h6 rule paints the dark body ink), so any other level came out dark-on-dark.
+const TITLE_CLASS = "wjs-chrome-block-title font-bold mb-4";
+
 export interface ChromeNavViewProps {
     location: "header" | "footer";
     orientation: "horizontal" | "vertical";
+    // When the hamburger replaces the row (header + horizontal only). Default "mobile" = today's md.
+    collapse?: ChromeNavCollapse | "never";
+    // Optional heading above the links. Like the legacy footer column, it only shows with links to list.
+    title?: string;
     // Resolved bindings (flat; each item may carry a `parent` id — nesting is derived here).
     items: ChromeMenuItem[];
 }
 
-export default function ChromeNav({ location, orientation, items }: ChromeNavViewProps) {
+export default function ChromeNav({ location, orientation, items, collapse = "mobile", title }: ChromeNavViewProps) {
     // Nest the flat menu. For a menu with no parent links this is just the sorted top-level list, so
     // the flat render paths below are unaffected.
     const tree = buildMenuTree(items);
     const hasSubmenus = tree.some((item) => (item.children?.length ?? 0) > 0);
-    const label = location === "header" ? "Primary" : "Footer";
+    const heading = typeof title === "string" ? title.trim() : "";
+    // A titled nav with nothing to list renders nothing — never a lone heading over an empty column.
+    if (heading && tree.length === 0) return null;
+    const label = heading || (location === "header" ? "Primary" : "Footer");
+    const withTitle = (nav: React.ReactNode) =>
+        heading ? (
+            <div className="wjs-chrome-nav-group flex flex-col">
+                <h4 className={TITLE_CLASS}>{heading}</h4>
+                {nav}
+            </div>
+        ) : nav;
     // Most catalog themes style the header nav through .wjs-header-nav — the hook Header.tsx emits —
     // so a composed header nav emits it TOO, or activating a composition un-styles those themes. A
     // footer nav must not pick it up: those rules (order/width/justify !important) target the masthead.
@@ -129,7 +158,7 @@ export default function ChromeNav({ location, orientation, items }: ChromeNavVie
     ));
 
     if (orientation === "vertical") {
-        return (
+        return withTitle(
             <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-vertical${hook} flex flex-col gap-2`}>
                 {hasSubmenus ? <ul className="flex flex-col gap-2 list-none m-0 p-0">{treeList}</ul> : flatLinks}
             </nav>
@@ -140,20 +169,25 @@ export default function ChromeNav({ location, orientation, items }: ChromeNavVie
     // and a portaled full-height drawer opening from the page bottom is not what a footer nav means).
     // The row therefore has to stay visible at every width, so it wraps instead of hiding below md.
     if (location === "footer") {
-        return (
+        return withTitle(
             <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-horizontal${hook} flex flex-wrap items-center gap-8`}>
                 {hasSubmenus ? <ul className="flex flex-wrap items-center gap-8 list-none m-0 p-0">{treeList}</ul> : flatLinks}
             </nav>
         );
     }
 
-    // Horizontal in the HEADER: desktop row + mobile hamburger island (hidden ≥ md by the island itself).
+    // Horizontal in the HEADER: desktop row + mobile hamburger island (each hides itself on the other
+    // side of the `collapse` breakpoint). `never` = the row at every width and no drawer at all.
+    // With the default `mobile` collapse, a menu WITH submenus keeps the drawer up to lg on a touch
+    // screen: its dropdowns open on hover or focus, and a tap on the parent link navigates first.
+    const row = DESKTOP_ROW[collapse] ?? DESKTOP_ROW.mobile;
+    const touchSubmenus = hasSubmenus && collapse === "mobile";
     return (
         <>
-            <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-horizontal${hook} hidden md:flex items-center gap-8`}>
+            <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-horizontal${hook} ${row}${touchSubmenus ? " pointer-coarse:max-lg:hidden" : ""} items-center gap-8`}>
                 {hasSubmenus ? <ul className="flex items-center gap-8 list-none m-0 p-0">{treeList}</ul> : flatLinks}
             </nav>
-            <ChromeNavMobile items={tree} />
+            {collapse !== "never" && <ChromeNavMobile items={tree} collapse={collapse} />}
         </>
     );
 }

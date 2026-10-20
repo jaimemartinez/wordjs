@@ -134,10 +134,10 @@ export default function HooksPage() {
     const hookNames = Object.keys(filteredData).sort();
 
     return (
-        <div className="p-8 max-w-7xl mx-auto h-full overflow-y-auto">
+        <div className="px-4 py-6 sm:p-8 max-w-7xl mx-auto h-full w-full overflow-y-auto">
             <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
                 <div>
-                    <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
+                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 flex items-center gap-3">
                         <i className="fa-solid fa-microscope text-indigo-600"></i>
                         {t('hooks.admin.title')}
                     </h1>
@@ -153,7 +153,7 @@ export default function HooksPage() {
                     </button>
                     <button
                         onClick={loadHooks}
-                        className="w-10 h-10 shrink-0 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 flex items-center justify-center transition-all"
+                        className="w-11 h-11 shrink-0 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 flex items-center justify-center transition-all"
                         title={t('hooks.admin.refreshRegistry')}
                     >
                         <i className={`fa-solid fa-rotate-right ${loading ? 'fa-spin' : ''}`}></i>
@@ -176,7 +176,7 @@ export default function HooksPage() {
                                         {hookTitle(key) || key}
                                     </span>
                                     {hookTitle(key) && (
-                                        <code className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 select-all">
+                                        <code className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 select-all">
                                             {key}
                                         </code>
                                     )}
@@ -189,23 +189,29 @@ export default function HooksPage() {
             )}
 
             {/* Controls */}
-            <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 justify-between items-center sticky top-4 z-10 w-full">
-                <div className="flex p-1 bg-slate-100 rounded-xl max-w-full overflow-x-auto">
+            <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 justify-between items-stretch md:items-center sticky top-0 sm:top-4 z-10 w-full">
+                <div role="group" className="flex flex-wrap p-1 bg-slate-100 rounded-xl max-w-full">
                     <button
+                        type="button"
+                        aria-pressed={activeTab === 'actions'}
                         onClick={() => setActiveTab('actions')}
-                        className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'actions' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                        className={`flex-1 md:flex-none min-h-11 px-4 sm:px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'actions' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                         {t('hooks.admin.tabActions')}
                     </button>
                     <button
+                        type="button"
+                        aria-pressed={activeTab === 'filters'}
                         onClick={() => setActiveTab('filters')}
-                        className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'filters' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                        className={`flex-1 md:flex-none min-h-11 px-4 sm:px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'filters' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                         {t('hooks.admin.tabFilters')}
                     </button>
                     <button
+                        type="button"
+                        aria-pressed={activeTab === 'live'}
                         onClick={() => setActiveTab('live')}
-                        className={`px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'live' ? 'bg-slate-900 text-emerald-400 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                        className={`flex-1 md:flex-none min-h-11 px-4 sm:px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'live' ? 'bg-slate-900 text-emerald-400 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                         <i className={`fa-solid fa-satellite-dish ${activeTab === 'live' ? 'animate-pulse' : ''}`}></i>
                         {t('hooks.admin.tabLive')}
@@ -267,15 +273,15 @@ export default function HooksPage() {
                             hookNames.map(hookName => (
                                 <div key={hookName} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden group hover:shadow-md transition-all duration-300">
                                     {/* Header */}
-                                    <div className="px-6 py-4 bg-slate-50/50 border-b border-slate-100 flex justify-between items-center group/header hover:bg-slate-100 transition-colors cursor-default">
-                                        <div>
-                                            <div className="flex items-center gap-3">
-                                                <span className="font-bold text-slate-800 text-lg">
+                                    <div className="px-4 sm:px-6 py-4 bg-slate-50/50 border-b border-slate-100 flex flex-wrap justify-between items-start sm:items-center gap-3 group/header hover:bg-slate-100 transition-colors cursor-default">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                                <span className="font-bold text-slate-800 text-base sm:text-lg break-words">
                                                     {hookTitle(hookName) || hookName}
                                                 </span>
                                                 {/* Show technical key if we have a friendly title, otherwise it's redundant */}
                                                 {hookTitle(hookName) && (
-                                                    <code className="text-[10px] font-mono font-bold text-slate-500 bg-slate-200/60 px-2 py-0.5 rounded border border-slate-300/50 select-all">
+                                                    <code className="text-[11px] font-mono font-bold text-slate-500 bg-slate-200/60 px-2 py-0.5 rounded border border-slate-300/50 select-all break-all">
                                                         {hookName}
                                                     </code>
                                                 )}
@@ -289,7 +295,7 @@ export default function HooksPage() {
                                                 !hookTitle(hookName) && <span className="text-xs text-slate-400 italic mt-1 block">{t('hooks.admin.customHook')}</span>
                                             )}
                                         </div>
-                                        <span className={`text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider border ${activeTab === 'actions' ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-pink-50 text-pink-700 border-pink-100'}`}>
+                                        <span className={`shrink-0 text-[11px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider border ${activeTab === 'actions' ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-pink-50 text-pink-700 border-pink-100'}`}>
                                             {filteredData[hookName].length} {t('hooks.admin.handlers')}
                                         </span>
                                     </div>
@@ -297,13 +303,13 @@ export default function HooksPage() {
                                     {/* Handlers Table */}
                                     <div className="divide-y divide-slate-50">
                                         {filteredData[hookName].map((handler, idx) => (
-                                            <div key={idx} className="px-6 py-3 flex items-center gap-4 hover:bg-slate-50 transition-colors">
-                                                <div className="w-12 flex-shrink-0 flex flex-col items-center justify-center group/prio relative cursor-help">
-                                                    <span className="text-[10px] font-bold text-slate-400 uppercase">{t('hooks.admin.prio')}</span>
+                                            <div key={idx} className="px-4 sm:px-6 py-3 flex items-center gap-3 sm:gap-4 hover:bg-slate-50 transition-colors">
+                                                <div className="w-12 flex-shrink-0 flex flex-col items-center justify-center group/prio relative cursor-help" title={t('hooks.admin.prioTooltip')}>
+                                                    <span className="text-[11px] font-bold text-slate-400 uppercase">{t('hooks.admin.prio')}</span>
                                                     <span className="text-lg font-black text-slate-700 leading-none">{handler.priority}</span>
 
                                                     {/* Tooltip */}
-                                                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-32 p-2 bg-slate-800 text-white text-[10px] rounded-lg opacity-0 group-hover/prio:opacity-100 transition-opacity pointer-events-none z-10 text-center font-medium">
+                                                    <div aria-hidden="true" className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-32 p-2 bg-slate-800 text-white text-[11px] rounded-lg opacity-0 group-hover/prio:opacity-100 transition-opacity pointer-events-none z-10 text-center font-medium">
                                                         {t('hooks.admin.prioTooltip')}
                                                     </div>
                                                 </div>
@@ -311,27 +317,27 @@ export default function HooksPage() {
                                                 <div className="w-px h-8 bg-slate-100"></div>
 
                                                 <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2 mb-1">
-                                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${handler.pluginSlug === 'core' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                                                        <span className={`px-1.5 py-0.5 rounded text-[11px] font-bold uppercase ${handler.pluginSlug === 'core' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-600'}`}>
                                                             {handler.pluginSlug === 'core' ? t('hooks.admin.badgeCore') : t('hooks.admin.badgePlugin')}
                                                         </span>
                                                         <span className="text-xs font-bold text-slate-500 truncate lowercase opacity-75">
                                                             {handler.pluginSlug}
                                                         </span>
                                                     </div>
-                                                    <div className="flex items-center gap-2">
+                                                    <div className="flex items-center gap-2 min-w-0">
                                                         {handler.callback.startsWith('Anonymous:') ? (
-                                                            <div className="group/code relative">
-                                                                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wide cursor-help hover:bg-slate-200 hover:text-slate-700 transition-colors">
-                                                                    <i className="fa-solid fa-code"></i>
+                                                            <details className="group/code min-w-0 max-w-full">
+                                                                <summary className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wide cursor-pointer hover:bg-slate-200 hover:text-slate-700 transition-colors list-none [&::-webkit-details-marker]:hidden">
+                                                                    <i className="fa-solid fa-code" aria-hidden="true"></i>
                                                                     {t('hooks.admin.inlineLogic')}
-                                                                </span>
-                                                                {/* Code Tooltip */}
-                                                                <div className="absolute left-0 bottom-full mb-2 w-64 p-3 bg-slate-800 text-slate-300 text-[10px] font-mono rounded-xl shadow-xl opacity-0 group-hover/code:opacity-100 transition-opacity pointer-events-none z-20 break-all leading-relaxed whitespace-pre-wrap border border-slate-700">
+                                                                    <i className="fa-solid fa-chevron-down text-[10px] group-open/code:rotate-180 transition-transform" aria-hidden="true"></i>
+                                                                </summary>
+                                                                <div className="mt-2 p-3 bg-slate-800 text-slate-300 text-[11px] font-mono rounded-xl shadow-xl break-all leading-relaxed whitespace-pre-wrap border border-slate-700">
                                                                     <div className="text-white font-bold mb-1 border-b border-slate-700 pb-1">{t('hooks.admin.sourcePreview')}</div>
                                                                     {handler.callback.replace('Anonymous: ', '')}
                                                                 </div>
-                                                            </div>
+                                                            </details>
                                                         ) : (
                                                             <code className="text-xs font-mono text-indigo-600 font-bold bg-indigo-50 px-2 py-1 rounded truncate block hover:bg-indigo-100 transition-colors cursor-text select-all" title={t('hooks.admin.functionName')}>
                                                                 {handler.callback}
