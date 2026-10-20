@@ -21,7 +21,6 @@ offering.
 
 | Dependency | Declared | WordJS elects | Notes |
 |---|---|---|---|
-| `node-forge` | `(BSD-3-Clause OR GPL-2.0)` | **BSD-3-Clause** | Permissive option taken. |
 | `@zone-eu/mailsplit` (via `mailparser`) | `(MIT OR EUPL-1.1+)` | **MIT** | Permissive option taken. |
 | `dompurify` (frontend) | `(MPL-2.0 OR Apache-2.0)` | **Apache-2.0** | MPL is file-level copyleft only; Apache-2.0 elected for clarity. |
 | `expand-template` (via `better-sqlite3` → `prebuild-install`) | `(MIT OR WTFPL)` | **MIT** | Permissive option taken. Build-time helper for downloading prebuilt native binaries; not loaded at runtime. |

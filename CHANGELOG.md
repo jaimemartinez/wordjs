@@ -441,8 +441,34 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `PUT /network/sites/:id/quota`). An upload or a WXR import download over a site's quota answers
   `413 rest_upload_quota_exceeded`. No quota is set by default, and the main site never has one — see
   [multisite.md](documentation/multisite.md#media-storage-quotas).
+- **Theme permissions.** A theme's `functions.js` can now be granted permissions the plugin way: the
+  theme declares them in `theme.json` (`permissions`), and **Admin → Themes** asks the administrator on
+  activation, with each permission's reason, risk and a switch, and offers a **Permissions** button later
+  (`GET`/`PUT /api/v1/themes/:slug/permissions`). Nothing is granted implicitly; a theme that declares
+  nothing keeps running with no permission, as before — see
+  [themes.md](documentation/themes.md#theme-permissions-functionsjs).
+- **Widget settings.** Each widget instance in **Appearance → Widgets** now has a settings form drawn from
+  the fields its widget declares (`registerWidget(id, name, { fields })`); only those fields are stored,
+  coerced and bounded (`GET`/`PUT /api/v1/widgets/:widgetId/instances/:instanceId`).
+- **Sandboxed plugins register widgets and GraphQL fields.** `wordjs.widgets.register` adds a sidebar widget
+  whose renderer runs in the plugin's sandbox (output sanitized, 2 s cap), and `wordjs.graphql.extend` adds
+  GraphQL types and `Query` fields, each resolved by one of the plugin's own GET routes called as the
+  GraphQL caller, so the route's authorization applies — see
+  [plugins.md](documentation/plugins.md#102-widgets-api) and
+  [graphql.md](documentation/graphql.md#extending-the-schema).
 - **`npm run media` takes `--site <id>` and `--all-sites`** on a network of sites, and **Settings → Media
   storage** lists each site's library state.
+
+### ⚠️ Upgrade note — Node.js 22 or newer is required
+
+WordJS now requires **Node.js 22 or newer** (Node 22 LTS or 24 LTS recommended). Node 20 reached end of
+life in April 2026, and graphql 17 (the GraphQL endpoint) and several native modules declare Node 22.
+Every `package.json` declares `engines.node >= 22.0.0`, and `npm start`, the monolith, the gateway, the
+backend, `npm run setup` and `create-wordjs` all stop with a clear message on an older Node. **Before
+upgrading** a site that runs Node 20, install Node 22 (`node --version` must print v22 or later), then
+reinstall dependencies (`npm run install:all`, or the release bundle's `npm run release:install`) so the
+native modules are rebuilt for it. The Docker image and Helm chart already run Node 22, so nothing
+changes there.
 
 ### ⚠️ Upgrade note — database TLS is now verified
 
@@ -691,6 +717,21 @@ the boot error links there too.
   in those locations (`skipped_unassigned`), so its «Pendientes» match the explorer's «sin asignar» and say
   how many were not touched. Three columns are added on boot (`lodging_admin_changed_at`,
   `lodging_admin_changed_by`, `lodging_admin_changes`), and every path keeps working while they are missing.
+- **Certificates no longer depend on node-forge or acme-client.** The cluster CA, the service identities
+  made by `npm run setup` and the installer, and enrolment CSR signing now use a small X.509 toolkit on
+  Node's own `crypto` (`gateway/src/x509.js`, `setup/x509.js`, `backend/src/core/x509.js`), and Let's
+  Encrypt issuance uses a built-in RFC 8555 client (`backend/src/core/acme-client.ts`). Nothing to do on
+  upgrade: cluster CAs, keys, identities and ACME account keys made by earlier releases keep working
+  and keep signing (covered by tests on PEMs produced by v2.7.0). node-forge is no longer installed.
+- **The two-step DNS-01 flow finishes from the server's own record.** Step 1 stores the order it opened
+  (`backend/data/ssl/pending-dns-01.json`, owner-only), and step 2 acts on that copy. The URLs the
+  browser sends back are no longer used, and the ACME client only ever requests URLs on its CA's origin.
+  A request started before the upgrade has to be started again.
+- **graphql 17.** The GraphQL endpoint runs on graphql-js 17; its depth and cost limits are unchanged, and
+  graphql 17's experimental fragment arguments stay disabled (the cost walk measures each fragment once).
+- Dependency updates: next 16.4.2, react 19.3.1, @anthropic-ai/sdk 0.135, @modelcontextprotocol/sdk 1.32,
+  zod 4.6, nodemailer 10.1, smtp-server 3.20, mailparser 3.10, mysql2 3.24.6, sql.js 1.15,
+  sanitize-html 2.18.1, dotenv 18.0.8, express-rate-limit 8.7.1, puppeteer-core 25.14 and patch updates.
 - **Password-reset and verification email has its own transport.** WordJS now sends these links itself
   through an SMTP relay you configure in **Settings → Account email** (host, port, TLS mode, credentials,
   test message). A mail provider plugin carries them only if an administrator allows that plugin by name
@@ -831,6 +872,18 @@ the boot error links there too.
   «Cancelar» share one row, and where the row with the full question would still be taller than the screen,
   the question is the short one («¿Deshacer la entrega de Almuerzo?»). The row above already names the person
   and the meal, and the full question stays the dialog's accessible name.
+- **WordPress import stores attachments like uploads.** An imported image now gets the same size ladder
+  and WebP/AVIF derivatives as an uploaded one, an imported SVG is stored sanitized instead of being refused,
+  and with an S3 media store the imported files go to the bucket like uploads do.
+- **`create-wordjs` survives a timed-out prebuilt download.** When the `better-sqlite3` binary download
+  timed out on a server without a compiler, the installer ended in a raw `gyp ERR!`. It now retries the
+  dependency install with backoff and, if it still fails, explains what to do (retry, or install
+  `build-essential`/`python3`), keeps the config (and the `--systemd` unit), and running the same command
+  again resumes the install.
+- **MCP tools say where every id comes from.** Each `id` argument (and every enum) of the MCP server's
+  tools is described, and the tool descriptions spell out the create → update → publish flow, so small
+  models stop sending `id: 1` instead of the id `create_draft` returned.
+
 - **Uploads on a network of sites.** A file upload larger than the first network packet (most real photos)
   could fail with "No site context" on a multisite install, because the body was read outside the
   request's site. Every middleware that reads a request body now runs as the request's site.

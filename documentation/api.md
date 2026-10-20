@@ -625,13 +625,14 @@ Base path: `/api/v1/widgets` (`backend/src/routes/widgets.ts`; core `backend/src
 
 | Method   | Endpoint                            | Auth  | Description                                                     |
 | :------- | :---------------------------------- | :---- | :--------------------------------------------------------------- |
-| `GET`    | `/`                                 | No    | Registered widget types (`id`, `name`, `description`)            |
+| `GET`    | `/`                                 | No    | Registered widget types (`id`, `name`, `description`, `fields` — the instance settings form, `null` when the widget declares none) |
 | `GET`    | `/sidebars`                         | No    | Registered sidebars, each with its resolved widget instances     |
 | `GET`    | `/sidebars/:id/render`              | No    | Server-rendered **HTML** of a sidebar (`text/html`, not JSON)    |
-| `POST`   | `/sidebars/:id`                     | Admin | Add a widget instance to a sidebar. Body `{ widgetId, settings }` |
+| `POST`   | `/sidebars/:id`                     | Admin | Add a widget instance to a sidebar. Body `{ widgetId, settings }`; `404` for an unregistered widget |
 | `POST`   | `/sidebars/:id/reorder`             | Admin | Reorder a sidebar. Body `{ widgets: [instanceKey, …] }`          |
 | `DELETE` | `/sidebars/:sidebarId/:instanceKey` | Admin | Remove one instance from a sidebar                              |
-| `PUT`    | `/:widgetId/instances/:instanceId`  | Admin | Update one instance's settings. Body `{ settings }`              |
+| `GET`    | `/:widgetId/instances/:instanceId`  | Admin | One instance's stored settings: `{ settings, fields }`            |
+| `PUT`    | `/:widgetId/instances/:instanceId`  | Admin | Update one instance's settings. Body `{ settings }`; answers the settings as stored |
 
 `/sidebars/:id/render` escapes every value the built-in widgets interpolate (term names, post titles and
 slugs, widget titles); only the `text` and `custom_html` widgets, which are admin-configured, emit their
@@ -640,6 +641,12 @@ setting as markup. The response carries `Content-Security-Policy: default-src 'n
 script; the public frontend fetches it as text and sanitizes it before inserting it. Plugins cannot
 filter it (`dynamic_sidebar` is a denied raw-HTML hook). Instance keys are `<widgetId>-<instanceId>`
 and are resolved against the registered widget ids, so UUID instance ids and hyphenated widget ids work.
+
+**Settings are the widget's declared fields.** Adding or updating an instance stores only the `fields` its
+widget declares (§12.1), each coerced to its type and bounded (`number` clamped to `min`/`max`, `checkbox`
+a boolean, text clipped); anything else in the body is dropped, and a body that is not an object is a `400`.
+A widget registered without `fields` stores a plain JSON object of at most 100 KB. The **Widgets** admin
+screen draws each instance's form from these fields.
 
 ### 6.14 Post Types 🗂️
 Base path: `/api/v1/types` (`backend/src/routes/post-types.ts`). Reads are public; mutations are `authenticate` + `isAdmin`.
@@ -911,9 +918,18 @@ const { registerWidget } = require('../../src/core/widgets');
 // Signature: registerWidget(id, name, options)
 registerWidget('clock_widget', 'Analog Clock', {
     description: 'Displays the current time',
-    render: (options) => `<div class="clock">...</div>`
+    // The instance settings form (Widgets admin screen). Types: text, textarea, html, number, checkbox.
+    fields: [
+        { name: 'title', label: 'Title', type: 'text', max: 200 },
+        { name: 'timezone', label: 'Time zone', type: 'text', default: 'UTC' },
+        { name: 'seconds', label: 'Show seconds', type: 'checkbox', default: false },
+    ],
+    render: (settings) => `<div class="clock">...</div>` // settings: { title, timezone, seconds }
 });
 ```
+
+`render(settings)` receives exactly the stored fields; `title`, when present, is printed escaped above
+the widget by the sidebar. Escape everything else you interpolate.
 
 
 ## 13. Developing Extensions

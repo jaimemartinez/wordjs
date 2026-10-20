@@ -19,6 +19,9 @@ const { sandboxPaths } = require('./sandbox-paths');
 // Use the EFFECTIVE plugin (context OR call stack), not ALS-only, so this global-fs backstop
 // also applies to detached plugin code that reaches the real fs.
 const { getEffectivePlugin } = require('./plugin-context');
+// Required HERE, before any fs patch exists: declaredPermissionsOf runs inside the guard, where a lazy
+// require() would re-enter it through the module loader's own file reads.
+const { themeDeclaredPermissions } = require('./theme-declaration');
 
 // Coalesce repeated block warnings. A plugin in a tight fs-probe loop (e.g. a logger retrying a denied
 // write) otherwise floods the host log with thousands of identical lines, drowning everything else.
@@ -465,9 +468,15 @@ const _manifestPermCache = new Map<string, any[]>();
 function declaredPermissionsOf(pluginSlug: string): any[] {
     const cached = _manifestPermCache.get(pluginSlug);
     if (cached) return cached;
-    const manifestPath = pluginSlug.startsWith('theme:')
-        ? path.join(ROOT_DIR, 'themes', pluginSlug.slice('theme:'.length), 'manifest.json')
-        : path.join(ROOT_DIR, 'plugins', pluginSlug, 'manifest.json');
+    if (pluginSlug.startsWith('theme:')) {
+        // A theme declares in theme.json (or a legacy manifest.json) — the same reader plugin-context uses,
+        // fed the unpatched readFileSync for the reason given below.
+        const declared = themeDeclaredPermissions(path.join(ROOT_DIR, 'themes', pluginSlug.slice('theme:'.length)), ORIGINALS.readFileSync);
+        const themePerms = Array.isArray(declared) ? declared : [];
+        _manifestPermCache.set(pluginSlug, themePerms);
+        return themePerms;
+    }
+    const manifestPath = path.join(ROOT_DIR, 'plugins', pluginSlug, 'manifest.json');
     let perms: any[] = [];
     try {
         // ORIGINALS.readFileSync, never the patched fs: this runs INSIDE isPathSafe, and going through
@@ -618,14 +627,8 @@ function fsCapabilityAllowed(pluginSlug: string, access: 'read' | 'write'): bool
  */
 function fsCapabilityRevoked(pluginSlug: string, access: 'read' | 'write'): boolean {
     if (!pluginSlug) return false;
-    // THEMES ARE OUT OF SCOPE HERE, AND THIS IS A LIMITATION, NOT A DESIGN CHOICE TO BE PROUD OF:
-    // plugin-permissions.setGrants only accepts a slug matching PLUGIN_SLUG, which a `theme:<slug>`
-    // identifier cannot match, so there is no way for an operator to GRANT a theme anything. Applying
-    // "declared and not granted ⇒ denied" to themes would therefore turn any theme that declares
-    // filesystem into a permanent, unliftable denial rather than an operator decision. For themes the
-    // AST scan (which does read their whole tree, hidden dirs included) remains the only gate — say so
-    // rather than let the exported name imply a coverage that is not there.
-    if (pluginSlug.startsWith('theme:')) return false;
+    // Themes too: an administrator grants a theme's declared filesystem access in Appearance → Themes
+    // (core/plugin-permissions '@themes'), so "declared and not granted" is their decision, as for a plugin.
     if (!fsCapabilityDeclared(pluginSlug, access)) return false; // never asked ⇒ nothing to revoke
     return !fsCapabilityGranted(pluginSlug, access);
 }

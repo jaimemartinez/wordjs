@@ -220,17 +220,14 @@ function deriveEmitters(): Emitter[] {
  */
 const REVIEWED_EMITTERS: Array<{ file: string; marker: string; reason: string }> = [
     {
-        file: 'backend/src/routes/media.ts',
-        // RE-PINNED after the request/response boundary was typed (f95f139f). `req.file` is
-        // `Express.Multer.File | undefined` once the handler is typed, so the route now narrows it once
-        // into a local `uploaded` and reads that. The marker moved with it.
-        //
-        // The review below was re-done rather than re-pinned: the sanitizer config at that site still
-        // admits `class` and still keeps `style` OUT of allowedTags, and the file is still written back
-        // and served as its own image/svg+xml document. Both halves of the reason hold unchanged.
-        marker: "uploaded.mimetype === 'image/svg+xml'",
+        file: 'backend/src/core/svg-sanitize.ts',
+        // MOVED from routes/media.ts when the SVG allowlist became a core module shared by the upload
+        // route and the WordPress importer (core/wxr-media). Re-reviewed, not just re-pinned: the config
+        // still admits `class`, still keeps <style> OUT of allowedTags, and BOTH callers write the result
+        // to disk as its own file, served as an image/svg+xml document. The reason holds for both.
+        marker: 'function sanitizeSvg(raw: string): string',
         reason:
-            'An UPLOADED SVG, sanitized and written back to disk as its own file. It is served as a ' +
+            'An uploaded or imported SVG, sanitized and written back to disk as its own file. It is served as a ' +
             'separate document (image/svg+xml), so a class inside it can only match rules inside that ' +
             'same document — no site stylesheet, and no Tailwind bundle, is ever loaded there. The ' +
             'config also keeps <style> out of allowedTags, so the document carries no rules of its ' +

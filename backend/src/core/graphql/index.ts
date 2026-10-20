@@ -24,7 +24,9 @@ export type { GraphQLContext } from './schema';
 /** REST clamps every list at 100 per page; a GraphQL page can never be larger than the read behind it. */
 export const MAX_PAGE_SIZE = 100;
 
-let cached: { schema: GraphQLSchema; version: number; fingerprint: readonly unknown[] } | null = null;
+// One built schema per site: a plugin's declarative extension (core/graphql/plugin-bridge) belongs to the
+// site its worker serves. A single site has the one entry it always had.
+const cached = new Map<number, { schema: GraphQLSchema; version: number; fingerprint: readonly unknown[] }>();
 
 function sameFingerprint(a: readonly unknown[], b: readonly unknown[]): boolean {
     return a.length === b.length && a.every((v, i) => v === b[i]);
@@ -33,10 +35,17 @@ function sameFingerprint(a: readonly unknown[], b: readonly unknown[]): boolean 
 export function getSchema(): GraphQLSchema {
     const version = registryVersion();
     const fingerprint = hookFingerprint();
-    if (!cached || cached.version !== version || !sameFingerprint(cached.fingerprint, fingerprint)) {
-        cached = { schema: applyExtensions(buildCoreSchema()), version, fingerprint };
+    let site = 1;
+    try {
+        const siteContext = require('../site-context');
+        site = siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID;
+    } catch { /* single site */ }
+    let entry = cached.get(site);
+    if (!entry || entry.version !== version || !sameFingerprint(entry.fingerprint, fingerprint)) {
+        entry = { schema: applyExtensions(buildCoreSchema(), site), version, fingerprint };
+        cached.set(site, entry);
     }
-    return cached.schema;
+    return entry.schema;
 }
 
 export function limitOptions(): LimitOptions & { maxTokens: number } {
@@ -70,7 +79,12 @@ export async function extraValidationRules(): Promise<ValidationRule[]> {
     return rules;
 }
 
-/** graphql-js parse with the token cap (a cheap guard against huge documents before validation runs). */
+/**
+ * graphql-js parse with the token cap (a cheap guard against huge documents before validation runs).
+ * graphql 17's experimental fragment arguments (`...F(a: 1)` / `fragment F($a: Int)`) stay OFF whatever
+ * a caller passes: the cost walk (core/graphql/limits) measures each fragment once per type and reuses
+ * the figure at every spread, which is only sound while a fragment cannot vary with its arguments.
+ */
 export function parseWithLimits(source: any, options?: any) {
-    return graphqlParse(source, { ...(options || {}), maxTokens: limitOptions().maxTokens });
+    return graphqlParse(source, { ...(options || {}), maxTokens: limitOptions().maxTokens, experimentalFragmentArguments: false });
 }

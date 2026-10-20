@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { themesApi, themesMarketplaceApi, settingsApi, Theme, ThemeMarketplaceEntry } from "@/lib/api";
+import { themesApi, themesMarketplaceApi, settingsApi, Theme, ThemeMarketplaceEntry, ThemePermissions } from "@/lib/api";
+import ThemePermissionsDialog from "./ThemePermissionsDialog";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
@@ -35,6 +36,12 @@ export default function ThemesPage() {
     const [savingSrc, setSavingSrc] = useState(false);
 
     const { confirm } = useModal();
+
+    // A theme's permissions (theme.json `permissions`, granted by the administrator — never implicitly).
+    // `mode` "activate": the consent dialog an activation goes through when the theme declares any;
+    // "manage": the Permissions button of an installed theme.
+    const [permDialog, setPermDialog] = useState<{ theme: Theme; data: ThemePermissions; mode: "activate" | "manage" } | null>(null);
+    const [permBusy, setPermBusy] = useState(false);
 
     useEffect(() => {
         loadThemes();
@@ -144,14 +151,47 @@ export default function ThemesPage() {
         }
     };
 
-    const activateTheme = async (slug: string) => {
+    const activateTheme = async (slug: string, grant?: string[]) => {
         try {
-            await themesApi.activate(slug);
+            await themesApi.activate(slug, grant);
             loadThemes();
             setMessage({ type: "success", text: t('themes.activateSuccess') });
         } catch (error) {
             console.error("Failed to activate theme:", error);
             setMessage({ type: "error", text: t('themes.activateError') });
+        }
+    };
+
+    /** Activate — through the consent dialog when the theme's code declares permissions. */
+    const requestActivation = async (theme: Theme) => {
+        let data: ThemePermissions | null = null;
+        try { data = await themesApi.permissions(theme.slug); }
+        catch { setMessage({ type: "error", text: t('themes.permissions.loadError') }); return; }
+        if (!data.declared.length) { await activateTheme(theme.slug); return; }
+        setPermDialog({ theme, data, mode: "activate" });
+    };
+
+    const openPermissions = async (theme: Theme) => {
+        try { setPermDialog({ theme, data: await themesApi.permissions(theme.slug), mode: "manage" }); }
+        catch { setMessage({ type: "error", text: t('themes.permissions.loadError') }); }
+    };
+
+    const confirmPermissions = async (granted: string[]) => {
+        if (!permDialog) return;
+        setPermBusy(true);
+        try {
+            if (permDialog.mode === "activate") {
+                await activateTheme(permDialog.theme.slug, granted);
+            } else {
+                await themesApi.setPermissions(permDialog.theme.slug, granted);
+                setMessage({ type: "success", text: t('themes.permissions.saved') });
+                loadThemes();
+            }
+            setPermDialog(null);
+        } catch (error: any) {
+            setMessage({ type: "error", text: error?.message || t('themes.activateError') });
+        } finally {
+            setPermBusy(false);
         }
     };
 
@@ -242,6 +282,16 @@ export default function ThemesPage() {
 
     return (
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
+            {permDialog && (
+                <ThemePermissionsDialog
+                    themeName={permDialog.theme.name}
+                    data={permDialog.data}
+                    mode={permDialog.mode}
+                    busy={permBusy}
+                    onCancel={() => setPermDialog(null)}
+                    onConfirm={confirmPermissions}
+                />
+            )}
             {/* Header Section */}
             <div className="max-w-7xl mx-auto">
                 <PageHeader
@@ -480,7 +530,7 @@ export default function ThemesPage() {
 
                                         {!theme.active ? (
                                             <button
-                                                onClick={() => activateTheme(theme.slug)}
+                                                onClick={() => requestActivation(theme)}
                                                 className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl transition-all duration-300 hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30 active:scale-95 flex items-center justify-center gap-2"
                                             >
                                                 {t('themes.activate')}
@@ -491,6 +541,18 @@ export default function ThemesPage() {
                                                 className="w-full bg-blue-50 text-blue-600 font-black py-4 rounded-2xl flex items-center justify-center gap-2 border border-blue-100 cursor-default"
                                             >
                                                 {t('themes.inUse')}
+                                            </button>
+                                        )}
+
+                                        {(theme.declaredPermissions || 0) > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => openPermissions(theme)}
+                                                data-theme-permissions-button={theme.slug}
+                                                className="w-full bg-gray-50 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-100 transition-all flex items-center justify-center gap-2 text-sm border border-gray-100"
+                                            >
+                                                <i className="fa-solid fa-sliders text-xs opacity-60" aria-hidden="true"></i>
+                                                {t('themes.permissions.button')}
                                             </button>
                                         )}
 
