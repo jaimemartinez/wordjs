@@ -1,7 +1,10 @@
 /**
- * WordJS - GraphQL API (phase 1: read-only), assembled.
+ * WordJS - GraphQL API, assembled.
  *
  *  · schema    — core/graphql/schema (every data field is a REST read through core/graphql/dispatch)
+ *  · mutations — core/graphql/mutations (every mutation is a REST write through the same dispatcher)
+ *  · resources — core/graphql/resources (users, revisions, access levels, webhooks, plugins, network sites)
+ *  · subscriptions — core/graphql/subscriptions (GraphQL over SSE, fed by the content outbox)
  *  · seam      — core/graphql/extensions (registerGraphQLExtension + the wordjs_graphql_register_types hook)
  *  · limits    — core/graphql/limits (depth + cost), parser token cap, max page size, introspection switch
  *
@@ -18,7 +21,9 @@ import type { LimitOptions } from './limits';
 
 export { registerGraphQLExtension, unregisterGraphQLExtensions, REGISTER_HOOK } from './extensions';
 export type { GraphQLExtension, GraphQLResolverSpec } from './extensions';
-export { createRestClient, restGet } from './dispatch';
+export { createRestClient, restGet, restWrite } from './dispatch';
+export { GraphQLUploadFile, MUTATION_REST_TWINS } from './mutations';
+export { RESOURCE_REST_TWINS } from './resources';
 export type { GraphQLContext } from './schema';
 
 /** REST clamps every list at 100 per page; a GraphQL page can never be larger than the read behind it. */
@@ -55,6 +60,7 @@ export function limitOptions(): LimitOptions & { maxTokens: number } {
         maxDepth: g.maxDepth || 10,
         maxCost: g.maxCost || 1000,
         maxTokens: g.maxTokens || 5000,
+        maxMutations: g.maxMutations || 10,
         maxPageSize: MAX_PAGE_SIZE,
     };
 }

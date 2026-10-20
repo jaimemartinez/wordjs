@@ -126,7 +126,7 @@
   t()/getStoredLanguage (se construye fuera del árbol React).
 - **C14 Estados**: spinner centrado mientras loading; si initialData es null (carga fallida) el editor
   y el Save nunca se montan.
-- **C15 Legacy paralelo**: /admin/footer sigue existiendo durante la beta (fuera de este alcance).
+- **C15 Legacy retirado**: /admin/footer ya no existe — redirige a /admin/chrome?part=footer; sus ajustes se convierten con POST /api/v1/chrome/migrate-legacy (ver documentation/themes.md, «Migrating from the legacy footer settings»).
 
 ## 5. Tests existentes
 

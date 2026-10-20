@@ -17,6 +17,9 @@ const TEXT_SIZE: Record<"sm" | "md" | "lg", string> = {
 
 export interface ChromeLogoViewProps {
     size?: "sm" | "md" | "lg";
+    // Logo image AND the site title side by side (the legacy footer brand line). Without an image the
+    // block already shows the title, so this only adds the text next to a logo.
+    showTitle?: boolean;
     // Chrome slot this block renders into, forwarded by ChromeRenderer — see the hook below.
     location?: "header" | "footer";
     // Resolved bindings
@@ -24,7 +27,7 @@ export interface ChromeLogoViewProps {
     siteTitle?: string;
 }
 
-export default function ChromeLogo({ size = "md", location = "header", logoUrl, siteTitle }: ChromeLogoViewProps) {
+export default function ChromeLogo({ size = "md", showTitle = false, location = "header", logoUrl, siteTitle }: ChromeLogoViewProps) {
     // Most catalog themes style the site logo through .wjs-header-logo, the hook Header.tsx emits on
     // this very shape (<a><img|span></a>), so the composed header logo emits it too. NEVER in a footer:
     // those rules carry masthead colors and `order`/`width` !important overrides.
@@ -34,7 +37,14 @@ export default function ChromeLogo({ size = "md", location = "header", logoUrl, 
     return (
         <Link href="/" className={`wjs-chrome-logo${hook} flex items-center gap-2`}>
             {logoUrl ? (
-                <img src={logoUrl} alt={siteTitle || "Logo"} width={160} height={40} className={`${IMG_SIZE[size]} w-auto object-contain`} />
+                <>
+                    {/* With the title printed next to it, the image is decorative: an alt repeating the
+                        title would make a screen reader announce the site name twice. */}
+                    <img src={logoUrl} alt={showTitle && siteTitle ? "" : siteTitle || "Logo"} width={160} height={40} className={`${IMG_SIZE[size]} w-auto object-contain`} />
+                    {showTitle && siteTitle ? (
+                        <span className={`${TEXT_SIZE[size]} font-bold text-[var(--wjs-color-text-main,gray)]`}>{siteTitle}</span>
+                    ) : null}
+                </>
             ) : siteTitle ? (
                 <span className={`${TEXT_SIZE[size]} font-bold text-[var(--wjs-color-text-main,gray)]`}>{siteTitle}</span>
             ) : null}
