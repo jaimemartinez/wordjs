@@ -8,6 +8,44 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Header & footer editor, out of beta.** Admin → *Header & footer* (`/admin/chrome`) now covers
+  everything the built-in header and footer did, and more: a mobile hamburger that can collapse on
+  phones, phones and tablets, or always; a sticky header and a header that is **transparent over the
+  hero** and turns solid on scroll; multi-row headers (a toned top bar) and multi-column footers
+  (`ChromeColumns`); per-breakpoint visibility on every block (hide on phones / tablets / desktop);
+  and new blocks — heading, formatted text (sanitized on every render), copyright with `{year}` and
+  `{site}` tokens, a language switcher that links the current page's translations and stays hidden on a
+  monolingual site, and widget areas. The editor previews at desktop, tablet and phone widths, offers a
+  gallery of starter templates, shows where the current design comes from (this site, the theme, or
+  the built-in chrome) with a one-click restore, has undo/redo buttons, explains validation problems in
+  plain language, edits the site's social profiles, and is translated into English, Spanish and
+  Portuguese. Chrome is per site in a network. The contract additions are optional (`root.props`
+  `sticky` / `transparent` / `width`, the `hide*` flags, the new blocks and props), so every theme's
+  `chrome/*.json` and every stored composition keep validating and rendering as before. See
+  [themes.md](documentation/themes.md#composable-chrome-chromejson) and
+  [tutorial 17](documentation/tutorials/17-design-your-header-and-footer.md).
+- **GraphQL is complete: mutations, uploads, the admin reads and subscriptions.** Every mutation is the REST
+  write it names, dispatched in process as the same caller (content of any type — create, update, publish,
+  schedule, unpublish, trash, restore, delete, meta; revisions; categories and tags; media upload, update and
+  delete; comments and moderation; menus and their items; settings; the caller's own profile), with typed
+  payloads and the REST error `code`/`status` in `extensions`. Mutations are `POST` only (a `GET` mutation is
+  `405`), cost 20 more than the same read and are capped at 10 per document (`WORDJS_GRAPHQL_MAX_MUTATIONS`).
+  Uploads use the GraphQL multipart request spec and are re-streamed to `POST /media` behind the upload rate
+  limiter. New reads with REST parity: `users`, `user`, `revisions`, `revision`, `ContentNode.revisions`,
+  `contentAccessLevels`, `webhooks`, `webhook`, `webhookEvents`, `plugins`, `networkSites`, and
+  `comments(status:)` for moderators. Subscriptions (`contentChanged`, `commentAdded`) are served as GraphQL
+  over Server-Sent Events at `/api/v1/graphql/stream`, fed by the content outbox and the comments table and
+  re-authorized per event as the subscriber, with `Last-Event-ID` resume. See
+  [graphql.md](documentation/graphql.md).
+- **Plugins can declare per-account capabilities.** A manifest's new `accountCapabilities` block names
+  capabilities in the plugin's own namespace that an administrator grants per account on the user screen
+  (one toggle each, rendered from the declaration, for `edit_users` holders only — `GET
+  /api/v1/users/account-capabilities`). Only `edit_users` can change a grant, it is never self-assignable
+  and never derived from the email address, no role implies it, and only the declaring plugin is told
+  (`req.user.accountCapabilities` and `accountCapabilities` on `wordjs.users.*`). A declaration may ask for
+  two generic effects: `locksEmail` (the account cannot move its own address while it holds the grant) and,
+  on a menu item, `requiresAccountCapability` (hidden from non-administrators without it). See
+  [plugins.md §12b](documentation/plugins.md#12b-declaring-per-account-capabilities-accountcapabilities-).
 - **Multisite: an idle site's plugin and theme workers stop, and start again on its next need.** On a network,
   the workers of a site other than the main one now start on the site's first request, due scheduled event
   or content event (not when a background pass opens the site) and stop once the site has been idle for
@@ -557,6 +595,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   a full page load. The main site and single-site installs render the same document as before. See
   [frontend.md](documentation/frontend.md).
 
+### ⚠️ Upgrade note — mail-server 3.1.1 with this release
+
+The "Professional mail account" grant is no longer a core concept: mail-server **3.1.1** declares it as its
+account capability `mail_server_mailbox`, and schema migration `0019` moves every existing
+`professional_mailbox` value to it unchanged at boot. Update the plugin together with the core. A 3.0.x copy
+still installed keeps working — its mailboxes, menu, address lock and its own user-form toggle are bridged
+onto the migrated grant, behind the same `edit_users` gate — until it is updated; the bridge
+(`core/legacy-account-flags.ts`) goes away in the next major.
+
 ### ⚠️ Upgrade note — Node.js 22 or newer is required
 
 WordJS now requires **Node.js 22 or newer** (Node 22 LTS or 24 LTS recommended). Node 20 reached end of
@@ -586,6 +633,14 @@ the boot error links there too.
 
 ### Changed
 
+- **Settings ▸ Motions: the interaction presets screen is a motion library.** It explains what a preset is and how to
+  use one in three steps; shows the site's motions as cards with a live preview (the real compiler, played on a sample
+  card), a plain-language description («appears sliding up when it scrolls into view, its items one after another») and
+  the pages that use each, with links; offers templates and the included motions as starting points; and edits a motion
+  in a simple mode (effect, when, speed, delay, this block or its items one by one) with a preview that replays on every
+  change, the full step and timeline editor behind *Advanced*. Deleting a motion in use names the pages it leaves still.
+  Previews respect *reduce motion*. In Verso, the block's Motion panel opens with the same «Choose a motion» picker. The
+  presets, their storage and how pages compile them are unchanged.
 - **The admin works on a phone and a tablet.** Every core list (posts, pages, media, comments, users,
   categories, tags, audit log, form submissions, API tokens, backups, site addresses) renders through one
   responsive table: labelled cards on a phone, columns that wait for room on a tablet, row actions that never
@@ -593,6 +648,25 @@ the boot error links there too.
   below 1024 px, so a tablet gets the whole width; core screens have 44 px touch targets, phone-sized gutters
   and readable 11 px labels; dialogs fit the viewport. Labels are tied to their fields, icon-only buttons are
   named, and the media library and two sidebar entries that were Spanish-only are translated.
+- **The Footer settings page was retired.** `/admin/footer` redirects to the footer in the header &
+  footer editor. Its settings are converted into the site footer composition by
+  `POST /api/v1/chrome/migrate-legacy` (the editor's *Convert* button): losslessly (the old options are
+  kept, so *Restore* brings the built-in footer back) and idempotently (it never overwrites an existing
+  composition). A site whose theme ships `chrome/footer.json` is not converted — that file is what
+  renders there — and the editor offers the old footer text as blocks to insert instead. The social
+  profiles moved to the editor's *Social profiles* panel. New read-only route:
+  `GET /api/v1/chrome/:part/legacy`.
+- **The core no longer knows about mailboxes.** `user_meta.professional_mailbox`, `User.hasProfessionalMailbox`,
+  the `professionalMailbox` field of `POST /users` / `PUT /users/:id`, the `hasProfessionalMailbox`
+  projection and the `requiresProfessionalMailbox` menu flag are replaced by the generic account
+  capabilities above; the user API now takes and returns `accountCapabilities`. `core/mailbox.ts` became
+  `core/email-address.ts` (the address-shape rule and the self-service email-write rule — reserved site
+  email domain, `locksEmail`); the error codes are unchanged. The deprecated fields are still served to a
+  mail-server older than 3.1.1 (`core/legacy-account-flags.ts`) and will be removed in the next major.
+- **mail-server 3.1.1: the mailbox grant is a declared account capability.** The plugin declares
+  `mail_server_mailbox` (`locksEmail`, on by default for new accounts), gates its routes, delivery and menu
+  on `accountCapabilities`, and its user-form extension now only keeps a mailbox holder's address on
+  `<username>@<mail domain>` — the toggle itself is rendered by the core.
 - **conference-manager 2.30.0: the conference portal is the plugin's own page.** The coordinators' portal
   (`/portal/conference`), «Mi inscripción» (`/portal/conference/yo`) and the badge links
   (`/portal/conference/badge`) were pages of the core (`frontend/src/app/portal/conference`); they are now the
@@ -861,6 +935,12 @@ the boot error links there too.
   a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
   `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
 
+### Removed
+
+- **`backend/src/models/Email.ts`** — an unused copy of the mail plugin's store (the plugin has its own in
+  `lib/email-store.js`), together with the `uploads/mail-attachments` directory it created at load and the
+  `backend/cli/debug-inbox.js` script that used it.
+
 ### Fixed
 
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
@@ -869,6 +949,37 @@ the boot error links there too.
   from the catalogue in English, Spanish and Portuguese. The built-in public footer's *Quick Links* and *Connect*
   headings follow the site language, like the other visitor-facing strings.
 
+- **Verso on a phone or a tablet: nothing is desktop-only any more.** Below 768 px the block's motion (entrance
+  animation, interaction preset, steps and timeline) had no way in at all: the motion dock is a desktop/tablet panel
+  and those fields are not in the inspector. Its body now opens as a *Motion* section of the properties sheet. Below
+  1280 px a *More options* menu in the header holds what only the desktop header and rail showed: undo/redo,
+  publication status and date, preview, replaying the entrance animations, guides, templates, the media library,
+  review comments, revision history, the accessibility check and the command palette.
+- **Public header and footer on a touch screen.** Menu links, the site title and the logo are at least 44 px
+  tall where the pointer is a finger (a mouse keeps the theme's own line height), the drawer's close button is
+  44 px, and a header menu with submenus uses the drawer up to 1024 px on a touch screen: its dropdowns open on
+  hover or focus, and a tap on the parent link navigated away before either could happen.
+- **Static front page: plugin `[tag]` embeds come from the plugins' manifests.** The front page kept its
+  own list (`[cards]` → card-gallery, `[vgallery]` → video-gallery). It now renders whatever tags the
+  active plugins declare in their manifest `shortcodes` and render with their own site component, with
+  attributes passed as props (`[vgallery id="…"]` — the form video-gallery's own handler emits — used to
+  stay as text). New public route `GET /api/v1/plugins/shortcodes`.
+- **photo-carousel 2.1.0: `[carousel]` works in sanitized post HTML.** Its output relied on a `<style>`
+  block the sanitizer always removed, plus an initialiser the core mounted on every post. It now renders
+  plain markup on the core's new, plugin-neutral `wjs-snap-strip` classes (a swipeable, scroll-snapping
+  row in `wordjs-ui.css`, no script), and the core no longer carries that initialiser. Autoplay and arrow
+  buttons remain on the Verso block.
+- **mail-server 3.1.1: an account sends as its mailbox address, never its personal email.** An account an
+  administrator gave a mailbox while its account email was a personal address (or one whose email later
+  moved off the mail domain) could still open the composer, and its mail went out with that personal
+  address — in From on local delivery, on the stored Sent copy and on the relay path, and in Reply-To on
+  direct-to-MX delivery, so replies reached the private inbox. The sending identity is now the account's
+  address on the mail domain, the same rule as delivery. Without one, sending is refused with a clear
+  message (`mail_no_mailbox_address`): from the composer, the scheduled queue (the message goes back to
+  Drafts and the owner is told), the retry queue and a manual retry. The address is never replaced by
+  another. Drafts store that address too, the alignment rewrite no longer puts an account's address in
+  Reply-To, and Server → Mailboxes flags an account that has the grant but no address on the domain. An
+  administrator without a mailbox of their own still answers catch-all mail, as the site.
 - **Multisite on Windows: a plugin's or a site's AppContainer profiles go with it.** Each (site, plugin)
   worker of a network runs under its own AppContainer profile. Deleting a plugin removed only the main
   site's; it now removes the profile (and the folder permissions given to it) of the plugin's worker on

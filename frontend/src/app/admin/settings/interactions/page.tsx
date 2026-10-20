@@ -1,49 +1,39 @@
 "use client";
 /**
- * Ajustes → INTERACCIONES: la pantalla de los preajustes del sitio (`wjs_ix_presets`, F9-E).
+ * Ajustes ▸ MOVIMIENTOS — the site's motion library (presets in `wjs_ix_presets`, F9-E).
  *
- * ══════════════════════════════════════════════════════════════════════════════════════════
- * QUÉ ERA ESTO ANTES, Y QUÉ ES AHORA
- * ══════════════════════════════════════════════════════════════════════════════════════════
- * El motor ya LEÍA los preajustes del sitio, los validaba, los propagaba por purga de caché y los
- * ofrecía en el panel del bloque. Lo único que faltaba era poder CREARLOS sin llamar a la API a
- * mano. Esta pantalla es esa pieza, y solo esa: no toca el contrato público, no toca el compilador y
- * no toca un byte de `_puck_data`.
+ * A preset is a named motion a block in Verso can be LINKED to: the block stores the preset's id, not
+ * a copy, so editing it here changes every page that uses it at once (its `rev` enters each page's CSS
+ * hash, the next visit recompiles, and no page's `_puck_data` changes). That contract is unchanged;
+ * this screen is the author-facing side of it:
  *
- * ══════════════════════════════════════════════════════════════════════════════════════════
- * POR QUÉ ESTO ES EL «KILLER FEATURE» Y NO UN CRUD MÁS
- * ══════════════════════════════════════════════════════════════════════════════════════════
- * Un bloque enlazado a un preajuste guarda un ID, no un cuerpo. Editar el preajuste aquí cambia su
- * `rev`, y `rev` entra en el hash del CSS de cada página que lo usa: la siguiente navegación
- * recompila con un nombre de clase nuevo y el navegador no puede servir la hoja vieja. El `git diff`
- * de `_puck_data` de esas páginas está VACÍO. Ese es el gate F9-E entero.
+ *  - what a preset is and how to use one, in three steps;
+ *  - the site's motions as cards with a LIVE preview (the real compiler, played on a sample card),
+ *    a plain-language description and where each is used, with links to those pages;
+ *  - templates and the motions WordJS ships, as starting points;
+ *  - an editor in simple mode by default (MotionEditor), the full step/track editor behind
+ *    «Advanced»;
+ *  - the site-wide motion settings (policy, page transitions, the inventory of what moves).
  *
- * ══════════════════════════════════════════════════════════════════════════════════════════
- * EL AJUSTE ES DATO HOSTIL — EN LOS DOS SENTIDOS
- * ══════════════════════════════════════════════════════════════════════════════════════════
- * · Al LEER: lo que llega del backend pasa entero por `parseSiteIxPresets` → `normalizeIxPreset`.
- *   Puede haberlo escrito esta pantalla, pero también una importación, una restauración de copia o
- *   la API. Un catálogo corrupto deja la lista vacía; nunca una pantalla rota.
- * · Al ESCRIBIR: cada guardado pasa por `ixPresetSave`, que vuelve a normalizar y que reserva el
- *   espacio `sys:`. Y detrás sigue estando el validador de escritura del backend
- *   (`SETTING_VALIDATORS.wjs_ix_presets` en routes/settings.ts), que es la frontera de verdad: esta
- *   pantalla es una comodidad, no una autoridad.
+ * THE SETTING IS HOSTILE DATA, BOTH WAYS. Reading: everything goes through `parseSiteIxPresets` →
+ * `normalizeIxPreset` (a corrupt catalogue is an empty list, never a broken screen). Writing: every
+ * save goes through `ixPresetSave`, which normalizes again and reserves `sys:`; behind it the backend
+ * validator (`SETTING_VALIDATORS.wjs_ix_presets`) is the real boundary. Only the setting's own key is
+ * sent: the backend merges by key, so sending the rest would overwrite another tab's changes.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { PageHeader, Card, Button, EmptyState, DataTable } from "@/components/ui";
+import { MotionPreview } from "@/components/motion/MotionPreview";
+import { useI18n } from "@/contexts/I18nContext";
 import { postsApi, settingsApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
-import { useI18n } from "@/contexts/I18nContext";
-import { t as translate, type Language } from "@/lib/i18n";
-import { defaultIxSpec, IX_TARGET_LABELS, IX_TRIGGER_LABELS } from "@/components/verso/editor/ixPanelModel";
-import { trStr } from "@/lib/editorI18n";
 import {
     ixPresetDelete,
     ixPresetDuplicate,
     ixPresetSave,
     ixPresetToSpec,
-    ixPresetUsage,
     ixSpecToBody,
     parseSiteIxPresets,
     serializeSiteIxPresets,
@@ -57,132 +47,135 @@ import {
 import { normalizeVtStyle, type IxVtStyle } from "@/lib/verso/interactions/viewTransitions";
 import { normalizeIxMotion, type IxMotionPolicy } from "@/lib/verso/interactions";
 import { ixInventoryOf, type IxInventory, type IxInventoryEntry } from "@/lib/verso/interactions/inventory";
-import PresetEditor from "./PresetEditor";
+import {
+    DEFAULT_SIMPLE,
+    MOTION_TEMPLATES,
+    describeMotion,
+    editorHref,
+    presetUsageByPage,
+    simpleToSpec,
+    type UsagePage,
+} from "@/lib/motionLibrary";
+import MotionEditor from "./MotionEditor";
 
-/** Estado del formulario. `null` = no hay ninguno abierto. */
+/** Form state. `null` = no editor open. */
 type Editing = { id: string | null; name: string; draft: IxSpec } | null;
 
-/** La clave del ajuste del sitio y las etiquetas de autor de sus tres valores. */
 const VT_SETTING = "wjs_view_transitions";
-const VT_OPTIONS: ReadonlyArray<{ value: IxVtStyle; labelKey: string }> = [
-    { value: "off", labelKey: "interactions.vt.off" },
-    { value: "fade", labelKey: "interactions.vt.fade" },
-    { value: "slide", labelKey: "interactions.vt.slide" },
-];
-
-/** La política de movimiento del sitio (C5) y las etiquetas de sus tres valores. */
+const VT_VALUES: readonly IxVtStyle[] = ["off", "fade", "slide"];
 const MOTION_SETTING = "wjs_motion";
-const MOTION_OPTIONS: ReadonlyArray<{ value: IxMotionPolicy; labelKey: string; hintKey: string }> = [
-    { value: "full", labelKey: "interactions.motion.full", hintKey: "interactions.motion.fullHint" },
-    { value: "calm", labelKey: "interactions.motion.calm", hintKey: "interactions.motion.calmHint" },
-    { value: "off", labelKey: "interactions.motion.off", hintKey: "interactions.motion.offHint" },
-];
+const MOTION_VALUES: readonly IxMotionPolicy[] = ["full", "calm", "off"];
 
-/** Pinta `texto **fuerte** texto` con `<strong>` en los tramos marcados (el catálogo no lleva HTML). */
-function rich(text: string): React.ReactNode {
-    return text.split("**").map((part, i) => (i % 2 === 1 ? <strong key={i}>{part}</strong> : part));
-}
+const fill = (s: string, vars: Record<string, string | number>): string =>
+    s.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
 
 export default function InteractionPresetsPage() {
+    const { t } = useI18n();
     const { confirm, alert } = useModal();
     const { addToast } = useToast();
-    const { t, language } = useI18n();
 
     const [catalog, setCatalog] = useState<IxCatalog>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [editing, setEditing] = useState<Editing>(null);
     const [error, setError] = useState<string | null>(null);
-    /** Recuento de usos por preajuste, para las tarjetas. `null` = aún no se sabe (cargando o falló). */
-    const [usage, setUsage] = useState<Map<string, number> | null>(null);
+    /** The site's content (pages + posts with a layout), read once: usage and the inventory come from it. */
+    const [entries, setEntries] = useState<IxInventoryEntry[] | null>(null);
+    const [showSystem, setShowSystem] = useState(false);
+    const editorRef = useRef<HTMLDivElement | null>(null);
 
-    /** Transición entre páginas (C1): ajuste del SITIO, vive aquí porque es movimiento, no tema. */
     const [vt, setVt] = useState<IxVtStyle>("off");
     const [vtSaving, setVtSaving] = useState(false);
-
-    /** Política de movimiento del sitio (C5). Misma forma que la anterior: optimista con vuelta atrás. */
     const [motion, setMotion] = useState<IxMotionPolicy>("full");
     const [motionSaving, setMotionSaving] = useState(false);
 
-    /** Inventario «dónde se mueve mi sitio» (C5). `null` = aún no se sabe (cargando o falló). */
-    const [inventory, setInventory] = useState<IxInventory | null>(null);
+    // Read once on mount. (The toast text is the only use of t/addToast here; re-reading the settings
+    // when the language changes would only repeat the request.)
+    useEffect(() => {
+        const load = async () => {
+            try {
+                const data = (await settingsApi.get()) as Record<string, unknown> | null;
+                setCatalog(parseSiteIxPresets(data?.[IX_PRESETS_SETTING]));
+                setVt(normalizeVtStyle(data?.[VT_SETTING]));
+                setMotion(normalizeIxMotion(data?.[MOTION_SETTING]));
+            } catch (e) {
+                console.error("Could not read the motion presets:", e);
+                addToast(t("motion.toast.loadFailed"), "error");
+            } finally {
+                setLoading(false);
+            }
+        };
+        void load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-    const load = useCallback(async () => {
+    /**
+     * One pass over the content (pages and posts, the admin's own listings). Its two consumers are the
+     * usage on each card and the inventory; the delete confirmation re-reads it, because another tab
+     * may have linked the preset since. `null` = could not tell (a failed read, or nothing carried its
+     * content): the cards then show «—», never an invented 0.
+     */
+    const scanContent = useCallback(async (): Promise<IxInventoryEntry[] | null> => {
         try {
-            const data = await settingsApi.get();
-            setCatalog(parseSiteIxPresets((data as Record<string, unknown> | null)?.[IX_PRESETS_SETTING]));
-            setVt(normalizeVtStyle((data as Record<string, unknown> | null)?.[VT_SETTING]));
-            setMotion(normalizeIxMotion((data as Record<string, unknown> | null)?.[MOTION_SETTING]));
-        } catch (e) {
-            console.error("No se pudieron leer los preajustes de interacción:", e);
-            // `t` del contexto cambia de identidad en cada render; el idioma no.
-            addToast(translate("interactions.toast.loadError", language), "error");
-        } finally {
-            setLoading(false);
+            const [pages, posts] = await Promise.all([postsApi.list("page", "any"), postsApi.list("post", "any")]);
+            const out: IxInventoryEntry[] = [];
+            let saw = false;
+            for (const post of [...pages, ...posts]) {
+                const raw = post.meta?._puck_data;
+                if (raw === undefined || raw === null) continue;
+                saw = true;
+                let data: unknown = raw;
+                if (typeof raw === "string") {
+                    try { data = JSON.parse(raw); } catch { continue; }
+                }
+                out.push({
+                    id: post.id,
+                    title: typeof post.title === "string" && post.title ? post.title : `#${post.id}`,
+                    slug: typeof post.slug === "string" ? post.slug : "",
+                    type: typeof post.type === "string" ? post.type : "page",
+                    data,
+                });
+            }
+            return saw ? out : null;
+        } catch {
+            return null;
         }
-    }, [addToast, language]);
+    }, []);
 
     useEffect(() => {
-        void load();
-    }, [load]);
+        let alive = true;
+        void scanContent().then((e) => { if (alive) setEntries(e); });
+        return () => { alive = false; };
+    }, [scanContent]);
 
-    /**
-     * Guarda la transición entre páginas. Igual que el catálogo: se manda SOLO su clave, porque el
-     * backend mergea por clave y reenviar el resto pisaría lo que otra pestaña hubiera cambiado.
-     * Optimista con vuelta atrás: si el guardado falla, el botón activo vuelve al valor anterior.
-     */
-    const saveVt = async (next: IxVtStyle): Promise<void> => {
-        if (next === vt || vtSaving) return;
-        const prev = vt;
-        setVt(next);
-        setVtSaving(true);
-        try {
-            await settingsApi.update({ [VT_SETTING]: next });
-            addToast(next === "off" ? t("interactions.toast.vtOff") : t("interactions.toast.vtSaved"), "success");
-        } catch (e) {
-            setVt(prev);
-            const message = e instanceof Error ? e.message : String(e);
-            await alert(t("interactions.error.saveFailed").replace("{message}", message));
-        } finally {
-            setVtSaving(false);
-        }
-    };
-
-    /**
-     * Guarda la política de movimiento. Igual que la transición: solo su clave (el backend mergea) y
-     * optimista con vuelta atrás si el guardado falla.
-     */
-    const saveMotion = async (next: IxMotionPolicy): Promise<void> => {
-        if (next === motion || motionSaving) return;
-        const prev = motion;
-        setMotion(next);
-        setMotionSaving(true);
-        try {
-            await settingsApi.update({ [MOTION_SETTING]: next });
-            addToast(t("interactions.toast.motionSaved"), "success");
-        } catch (e) {
-            setMotion(prev);
-            const message = e instanceof Error ? e.message : String(e);
-            await alert(t("interactions.error.saveFailed").replace("{message}", message));
-        } finally {
-            setMotionSaving(false);
-        }
-    };
-
-    /** Orden estable por nombre: el ajuste puede llegar en cualquier orden, la lista no baila. */
-    const list = useMemo(
-        () =>
-            Object.values(catalog).sort(
-                (a, b) => a.name.localeCompare(b.name, "es") || a.id.localeCompare(b.id),
-            ),
-        [catalog],
+    const usage = useMemo(() => (entries ? presetUsageByPage(entries) : null), [entries]);
+    // The inventory is what pages really EMIT (the real compiler, the site policy included).
+    const inventory: IxInventory | null = useMemo(
+        () => (entries ? ixInventoryOf(entries, { presets: { ...SYS_IX_PRESETS, ...catalog }, motion }) : null),
+        [entries, catalog, motion],
     );
 
-    /**
-     * Persiste un catálogo entero. Se manda SOLO la clave del ajuste: el backend mergea por clave, y
-     * enviar el resto de ajustes desde aquí sería reescribir con lo que esta pantalla leyó al abrirse
-     * — es decir, pisar en silencio lo que alguien hubiera cambiado en otra pestaña.
-     */
+    const saveSiteSetting = async <V extends string>(key: string, next: V, prev: V, set: (v: V) => void, setBusy: (b: boolean) => void, ok: string) => {
+        if (next === prev) return;
+        set(next);
+        setBusy(true);
+        try {
+            await settingsApi.update({ [key]: next });
+            addToast(ok, "success");
+        } catch (e) {
+            set(prev);
+            await alert(fill(t("motion.toast.saveFailed"), { message: e instanceof Error ? e.message : String(e) }));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const list = useMemo(
+        () => Object.values(catalog).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+        [catalog],
+    );
+    const systemList = useMemo(() => Object.values(SYS_IX_PRESETS), []);
+
     const persist = async (next: IxCatalog): Promise<boolean> => {
         setSaving(true);
         try {
@@ -190,176 +183,60 @@ export default function InteractionPresetsPage() {
             setCatalog(next);
             return true;
         } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            await alert(t("interactions.error.saveFailed").replace("{message}", message));
+            await alert(fill(t("motion.toast.saveFailed"), { message: e instanceof Error ? e.message : String(e) }));
             return false;
         } finally {
             setSaving(false);
         }
     };
 
-    const startNew = () => {
+    const open = (next: Editing) => {
         setError(null);
-        // El cuerpo de partida es el mismo que ofrece «Personalizada» en el panel del bloque: la
-        // entrada de siempre, que es el punto de partida más corto hacia cualquier otra cosa.
-        setEditing({ id: null, name: "", draft: defaultIxSpec() });
+        setEditing(next);
+        // Bring the editor into view (it opens above the gallery).
+        requestAnimationFrame(() => editorRef.current?.scrollIntoView({ block: "start" }));
     };
-
-    const startEdit = (preset: IxPreset) => {
-        setError(null);
-        setEditing({ id: preset.id, name: preset.name, draft: ixPresetToSpec(preset) });
-    };
+    const startNew = () => open({ id: null, name: "", draft: simpleToSpec(DEFAULT_SIMPLE)! });
+    const startFrom = (name: string, draft: IxSpec | undefined) => { if (draft) open({ id: null, name, draft }); };
+    const startEdit = (preset: IxPreset) => open({ id: preset.id, name: preset.name, draft: ixPresetToSpec(preset) });
 
     const save = async () => {
         if (!editing) return;
         const body = ixSpecToBody(editing.draft);
         if (!body) {
-            setError(t("interactions.error.noAnimation"));
+            setError(t("motion.error.nothingAnimates"));
             return;
         }
-        const result = ixPresetSave(catalog, {
-            id: editing.id ?? undefined,
-            name: editing.name,
-            trigger: body.trigger,
-            tracks: body.tracks,
-        });
+        const result = ixPresetSave(catalog, { id: editing.id ?? undefined, name: editing.name, trigger: body.trigger, tracks: body.tracks });
         if (!result.ok) {
             setError(result.error);
             return;
         }
         if (await persist(result.catalog)) {
+            const wasEdit = editing.id !== null;
             setEditing(null);
             setError(null);
-            addToast(
-                editing.id
-                    ? t("interactions.toast.saved")
-                    : t("interactions.toast.created"),
-                "success",
-            );
+            addToast(wasEdit ? t("motion.toast.saved") : t("motion.toast.created"), "success");
         }
     };
 
-    /**
-     * Recuento de usos: cuántos bloques REFERENCIAN cada preajuste por id (riesgo R6 de la spec).
-     *
-     * Es UNA pasada sobre el contenido (dos GET: páginas y entradas, los mismos listados del admin)
-     * con dos consumidores: las tarjetas de la lista, que lo pagan una vez al abrir la pantalla, y
-     * la confirmación de borrado, que lo REHACE al pulsar — el de las tarjetas puede llevar un rato
-     * en pantalla y otra pestaña puede haber enlazado el preajuste mientras tanto. Solo se cuentan
-     * las referencias por id: un bloque que desvinculó el preajuste ya tiene su propio cuerpo y
-     * borrar este no le afecta.
-     */
-    const scanUsage = useCallback(async (): Promise<Map<string, number> | null> => {
-        try {
-            const [pages, posts] = await Promise.all([
-                postsApi.list("page", "any"),
-                postsApi.list("post", "any"),
-            ]);
-            const counts = new Map<string, number>();
-            let sawContent = false;
-            for (const post of [...pages, ...posts]) {
-                const raw = post.meta?._puck_data;
-                if (raw === undefined || raw === null) continue;
-                sawContent = true;
-                let data: unknown = raw;
-                if (typeof raw === "string") {
-                    try {
-                        data = JSON.parse(raw);
-                    } catch {
-                        continue;
-                    }
-                }
-                ixPresetUsage(data, counts);
-            }
-            // Si NINGUNA entrada trajo su contenido, el recuento sería un 0 mentiroso.
-            return sawContent ? counts : null;
-        } catch {
-            return null;
-        }
-    }, []);
-
-    /**
-     * El inventario del movimiento. Recorre los mismos contenidos que el recuento de preajustes y
-     * los pasa por el COMPILADOR de verdad, así que lo que se lista es lo que las páginas emiten —
-     * incluida la política del sitio, que puede estar dejando quieto todo lo que aquí se cuenta.
-     */
-    const scanInventory = useCallback(async (): Promise<IxInventory | null> => {
-        try {
-            const [pages, posts] = await Promise.all([
-                postsApi.list("page", "any"),
-                postsApi.list("post", "any"),
-            ]);
-            const entries: IxInventoryEntry[] = [];
-            for (const post of [...pages, ...posts]) {
-                const raw = post.meta?._puck_data;
-                if (raw === undefined || raw === null) continue;
-                let data: unknown = raw;
-                if (typeof raw === "string") {
-                    try {
-                        data = JSON.parse(raw);
-                    } catch {
-                        continue;
-                    }
-                }
-                entries.push({
-                    id: post.id,
-                    title: typeof post.title === "string" ? post.title : `#${post.id}`,
-                    slug: typeof post.slug === "string" ? post.slug : "",
-                    type: typeof post.type === "string" ? post.type : "page",
-                    data,
-                });
-            }
-            return ixInventoryOf(entries, { presets: { ...SYS_IX_PRESETS, ...catalog }, motion });
-        } catch {
-            return null;
-        }
-    }, [catalog, motion]);
-
-    // El inventario se recalcula cuando cambia la política: es la pregunta «y ahora qué se mueve».
-    useEffect(() => {
-        let alive = true;
-        void scanInventory().then((inv) => {
-            if (alive) setInventory(inv);
-        });
-        return () => {
-            alive = false;
-        };
-    }, [scanInventory]);
-
-    // El recuento de las tarjetas, una vez al montar. Si el escaneo no puede saber (falló, o nada
-    // trajo contenido), `usage` se queda en `null` y las tarjetas enseñan «—», nunca un 0 inventado.
-    useEffect(() => {
-        let alive = true;
-        void scanUsage().then((counts) => {
-            if (alive && counts) setUsage(counts);
-        });
-        return () => {
-            alive = false;
-        };
-    }, [scanUsage]);
-
     const remove = async (preset: IxPreset) => {
-        // Recuento FRESCO al pulsar (y de paso se refrescan las tarjetas, que pueden estar viejas).
-        const counts = await scanUsage();
-        if (counts) setUsage(counts);
-        const uses = counts ? (counts.get(preset.id) ?? 0) : null;
+        // FRESH usage at the moment of deleting (and the cards are refreshed with it).
+        const fresh = await scanContent();
+        if (fresh) setEntries(fresh);
+        const pages = fresh ? (presetUsageByPage(fresh).get(preset.id) ?? []) : null;
+        const blocks = pages ? pages.reduce((n, p) => n + p.blocks, 0) : null;
         const detail =
-            uses === null
-                ? t("interactions.delete.usesUnknown")
-                : uses === 0
-                    ? t("interactions.delete.usesNone")
-                    : uses === 1
-                        ? t("interactions.delete.usesOne")
-                        : t("interactions.delete.usesMany").replace("{count}", String(uses));
-        const ok = await confirm(
-            t("interactions.delete.message").replace("{name}", preset.name).replace("{detail}", detail),
-            t("interactions.delete.title"),
-            true,
-        );
+            pages === null
+                ? t("motion.delete.unknownUse")
+                : blocks === 0
+                    ? t("motion.delete.unused")
+                    : fill(t("motion.delete.used"), { blocks: blocks ?? 0, pages: pages.length, list: pages.slice(0, 5).map((p) => `«${p.title}»`).join(", ") + (pages.length > 5 ? "…" : "") });
+        const ok = await confirm(fill(t("motion.delete.message"), { name: preset.name, detail }), t("motion.delete.title"), true);
         if (!ok) return;
         if (await persist(ixPresetDelete(catalog, preset.id))) {
             if (editing?.id === preset.id) setEditing(null);
-            addToast(t("interactions.toast.deleted"), "success");
+            addToast(t("motion.toast.deleted"), "success");
         }
     };
 
@@ -369,284 +246,305 @@ export default function InteractionPresetsPage() {
             await alert(result.error);
             return;
         }
-        if (await persist(result.catalog)) addToast(t("interactions.toast.duplicated"), "success");
+        if (await persist(result.catalog)) addToast(t("motion.toast.duplicated"), "success");
     };
 
     const full = Object.keys(catalog).length >= IX_MAX_SITE_PRESETS;
+    const segBtn = (active: boolean) =>
+        `min-h-11 rounded-lg px-3 text-xs font-semibold transition-colors disabled:opacity-50 ${active ? "bg-gray-900 text-white" : "border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900"}`;
 
     return (
         <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
-            <div className="max-w-4xl mx-auto">
+            <div className="max-w-5xl mx-auto">
                 <PageHeader
-                    title={t("interactions.title")}
-                    subtitle={t("interactions.subtitle")}
-                    actions={
-                        <Button icon="fa-plus" disabled={full || editing !== null} onClick={startNew}>
-                            {t("interactions.newPreset")}
-                        </Button>
-                    }
+                    title={t("motion.title")}
+                    subtitle={t("motion.subtitle")}
+                    icon="fa-wand-magic-sparkles"
+                    actions={<Button icon="fa-plus" disabled={full || editing !== null} onClick={startNew}>{t("motion.new")}</Button>}
                 />
 
+                {/* ── What a motion is, and how to use one — three steps ── */}
                 <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.about.title")}</h2>
-                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        {rich(t("interactions.about.body"))}
-                    </p>
-                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        {t("interactions.about.system")}
-                    </p>
-                </Card>
-
-                {/* ── Movimiento del sitio (C5) — la política que manda sobre TODAS las páginas ── */}
-                <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.motion.title")}</h2>
-                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        {rich(t("interactions.motion.body"))}
-                    </p>
-                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label={t("interactions.motion.title")}>
-                        {MOTION_OPTIONS.map((opt) => {
-                            const active = motion === opt.value;
-                            return (
-                                <button
-                                    key={opt.value}
-                                    type="button"
-                                    aria-pressed={active}
-                                    disabled={motionSaving}
-                                    onClick={() => void saveMotion(opt.value)}
-                                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                                        active
-                                            ? "bg-gray-900 text-white"
-                                            : "border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900"
-                                    }`}
-                                >
-                                    {t(opt.labelKey)}
-                                </button>
-                            );
-                        })}
-                        {motionSaving && <span className="text-xs text-gray-500">{t("interactions.saving")}</span>}
-                    </div>
-                    <p className="mt-3 text-sm leading-relaxed text-gray-500">
-                        {(() => {
-                            const hintKey = MOTION_OPTIONS.find((o) => o.value === motion)?.hintKey;
-                            return hintKey ? t(hintKey) : null;
-                        })()}
-                    </p>
-                </Card>
-
-                {/* ── Dónde se mueve mi sitio (C5) — el inventario, con el compilador de verdad ── */}
-                <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.inventory.title")}</h2>
-                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        {rich(t("interactions.inventory.body"))}
-                    </p>
-                    {inventory === null ? (
-                        <p className="mt-4 text-sm text-gray-500">{t("interactions.inventory.computing")}</p>
-                    ) : inventory.rows.length === 0 ? (
-                        <p className="mt-4 text-sm text-gray-500">
-                            {motion === "off"
-                                ? t("interactions.inventory.motionOff")
-                                : t("interactions.inventory.noneMoving").replace("{count}", String(inventory.totals.pages))}
-                        </p>
-                    ) : (
-                        <>
-                            <p className="mt-4 text-xs text-gray-500">
-                                {t("interactions.inventory.totals")
-                                    .replace("{moving}", String(inventory.totals.moving))
-                                    .replace("{pages}", String(inventory.totals.pages))
-                                    .replace("{blocks}", String(inventory.totals.blocks))
-                                    .replace("{infinite}", String(inventory.totals.infinite))
-                                    .replace("{runtime}", String(inventory.totals.runtime))
-                                    .replace("{entrances}", String(inventory.totals.entrances))
-                                    .replace("{kb}", (inventory.totals.cssBytes / 1024).toFixed(1))}
-                            </p>
-                            <DataTable
-                                className="mt-3 -mx-1"
-                                rows={inventory.rows}
-                                rowKey={(row) => `${row.type}-${row.id}`}
-                                caption={t("interactions.inventory.caption")}
-                                rowLabel={(row) => row.title}
-                                density="compact"
-                                stackBelow="lg"
-                                columns={[
-                                    {
-                                        key: "page",
-                                        header: t("interactions.inventory.colPage"),
-                                        primary: true,
-                                        cell: (row) => (
-                                            <span className="text-sm">
-                                                <a href={`/admin/${row.type === "page" ? "pages" : "posts"}/${row.id}`} className="inline-flex items-center pointer-coarse:min-h-11 font-medium text-gray-900 hover:underline break-words">
-                                                    {row.title}
-                                                </a>
-                                                <span className="ml-1 text-gray-500 break-all">/{row.slug}</span>
-                                            </span>
-                                        ),
-                                    },
-                                    {
-                                        key: "blocks",
-                                        header: t("interactions.inventory.colBlocks"),
-                                        cell: (row) => (
-                                            <span className="text-xs text-gray-700">
-                                                {row.blocks}
-                                                {row.units !== row.blocks && <span className="text-gray-500"> {t("interactions.inventory.distinct").replace("{count}", String(row.units))}</span>}
-                                            </span>
-                                        ),
-                                    },
-                                    { key: "infinite", header: t("interactions.inventory.colInfinite"), cell: (row) => <span className={`text-xs ${row.infinite > 0 ? "font-semibold text-gray-900" : "text-gray-400"}`}>{row.infinite || "—"}</span> },
-                                    { key: "runtime", header: t("interactions.inventory.colRuntime"), cell: (row) => <span className={`text-xs ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.runtime || "—"}</span> },
-                                    // La entrada CLÁSICA (`anim`) es lo que llevan casi todas las páginas
-                                    // ya publicadas: sin esta columna el inventario diría que están quietas.
-                                    { key: "entrances", header: t("interactions.inventory.colEntrances"), cell: (row) => <span className={`text-xs ${row.entrances > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.entrances || "—"}</span> },
-                                    { key: "presets", header: t("interactions.inventory.colPresets"), cell: (row) => <span className="text-xs text-gray-500 break-words">{row.presets.length > 0 ? row.presets.join(", ") : "—"}</span> },
-                                    { key: "css", header: "CSS", cell: (row) => <span className="text-xs text-gray-500 whitespace-nowrap">{(row.cssBytes / 1024).toFixed(1)} KB</span> },
-                                ]}
-                            />
-                        </>
-                    )}
-                </Card>
-
-                {/* ── Transiciones entre páginas (C1) — ajuste del SITIO, no de un bloque ── */}
-                <Card className="mb-8">
-                    <h2 className="text-sm font-bold text-gray-900">{t("interactions.vt.title")}</h2>
-                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                        {rich(t("interactions.vt.body"))}
-                    </p>
-                    <p className="mt-2 text-sm leading-relaxed text-gray-500">
-                        {t("interactions.vt.fallback")}
-                    </p>
-                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label={t("interactions.vt.groupLabel")}>
-                        {VT_OPTIONS.map((opt) => {
-                            const active = vt === opt.value;
-                            return (
-                                <button
-                                    key={opt.value}
-                                    type="button"
-                                    aria-pressed={active}
-                                    disabled={vtSaving}
-                                    onClick={() => void saveVt(opt.value)}
-                                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                                        active
-                                            ? "bg-gray-900 text-white"
-                                            : "border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900"
-                                    }`}
-                                >
-                                    {t(opt.labelKey)}
-                                </button>
-                            );
-                        })}
-                        {vtSaving && <span className="text-xs text-gray-500">{t("interactions.saving")}</span>}
-                    </div>
+                    <h2 className="text-base font-black text-gray-900">{t("motion.intro.title")}</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-gray-600">{t("motion.intro.body")}</p>
+                    <ol className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+                        {[1, 2, 3].map((n) => (
+                            <li key={n} className="flex gap-3 rounded-2xl bg-gray-50 p-4">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-black text-white" aria-hidden="true">{n}</span>
+                                <div className="min-w-0">
+                                    <p className="text-sm font-bold text-gray-900">{t(`motion.intro.step${n}.title`)}</p>
+                                    <p className="mt-1 text-sm text-gray-600">{t(`motion.intro.step${n}.body`)}</p>
+                                </div>
+                            </li>
+                        ))}
+                    </ol>
+                    <p className="mt-4 text-xs text-gray-500"><i className="fa-solid fa-universal-access mr-1.5" aria-hidden="true"></i>{t("motion.intro.reduced")}</p>
                 </Card>
 
                 {editing && (
-                    <div className="mb-8">
-                        <PresetEditor
-                            draft={editing.draft}
-                            name={editing.name}
+                    <div ref={editorRef} className="mb-8 scroll-mt-4">
+                        <MotionEditor
                             id={editing.id}
+                            name={editing.name}
+                            draft={editing.draft}
                             error={error}
                             saving={saving}
                             onName={(name) => setEditing({ ...editing, name })}
                             onDraft={(draft) => setEditing({ ...editing, draft })}
                             onSave={save}
-                            onCancel={() => {
-                                setEditing(null);
-                                setError(null);
-                            }}
+                            onCancel={() => { setEditing(null); setError(null); }}
                         />
                     </div>
                 )}
 
-                {loading ? (
-                    <Card>
-                        <p className="text-sm text-gray-500">{t("interactions.loading")}</p>
-                    </Card>
-                ) : list.length === 0 ? (
-                    <EmptyState
-                        icon="fa-wand-magic-sparkles"
-                        title={t("interactions.empty.title")}
-                        description={t("interactions.empty.description")}
-                        action={
-                            editing ? undefined : (
-                                <Button icon="fa-plus" onClick={startNew}>
-                                    {t("interactions.newPreset")}
-                                </Button>
-                            )
-                        }
-                    />
-                ) : (
-                    <ul className="space-y-4" aria-label={t("interactions.listLabel")}>
-                        {list.map((preset) => (
-                            <li key={preset.id}>
-                                <Card>
-                                    <div className="flex flex-wrap items-start justify-between gap-4">
-                                        <div className="min-w-0">
-                                            <h3 className="text-base font-bold text-gray-900">{preset.name}</h3>
-                                            <p className="mt-1 font-mono text-xs text-gray-400">{preset.id}</p>
-                                            <p className="mt-2 text-sm text-gray-600">
-                                                {trStr(IX_TRIGGER_LABELS[preset.trigger.on], language)} ·{" "}
-                                                {summaryOfTarget(preset, t, language)} ·{" "}
-                                                {t("interactions.card.stepsRev")
-                                                    .replace("{count}", String(preset.tracks[0].steps.length))
-                                                    .replace("{rev}", String(preset.rev))}
-                                            </p>
-                                            <p className="mt-1 text-xs text-gray-500">
-                                                {usageLabel(usage, preset.id, t)}
-                                            </p>
-                                        </div>
-                                        <div className="flex shrink-0 gap-2">
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
-                                                disabled={saving}
-                                                onClick={() => startEdit(preset)}
-                                            >
-                                                {t("interactions.card.edit")}
-                                            </Button>
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                disabled={saving || full}
-                                                onClick={() => void duplicate(preset)}
-                                            >
-                                                {t("interactions.card.duplicate")}
-                                            </Button>
-                                            <Button
-                                                size="sm"
-                                                variant="danger"
-                                                disabled={saving}
-                                                onClick={() => void remove(preset)}
-                                            >
-                                                {t("interactions.card.delete")}
-                                            </Button>
-                                        </div>
-                                    </div>
-                                </Card>
-                            </li>
-                        ))}
-                    </ul>
-                )}
+                {/* ── The site's motions ── */}
+                <section aria-labelledby="motion-mine" className="mb-10">
+                    <h2 id="motion-mine" className="mb-4 text-lg font-black text-gray-900">{t("motion.mine.title")}</h2>
+                    {loading ? (
+                        <Card><p className="text-sm text-gray-500" role="status">{t("loading")}</p></Card>
+                    ) : list.length === 0 ? (
+                        <Card padding="none">
+                            <EmptyState
+                                icon="fa-wand-magic-sparkles"
+                                title={t("motion.empty.title")}
+                                description={t("motion.empty.body")}
+                                action={editing ? undefined : <Button icon="fa-plus" onClick={startNew}>{t("motion.new")}</Button>}
+                            />
+                        </Card>
+                    ) : (
+                        <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                            {list.map((preset) => (
+                                <li key={preset.id}>
+                                    <PresetCard
+                                        preset={preset}
+                                        usage={usage === null ? null : usage.get(preset.id) ?? []}
+                                        busy={saving}
+                                        canDuplicate={!full}
+                                        onEdit={() => startEdit(preset)}
+                                        onDuplicate={() => void duplicate(preset)}
+                                        onDelete={() => void remove(preset)}
+                                    />
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    {full && <p className="mt-4 text-sm text-gray-500">{fill(t("motion.full"), { max: IX_MAX_SITE_PRESETS })}</p>}
+                </section>
 
-                {full && (
-                    <p className="mt-6 text-sm text-gray-500">
-                        {t("interactions.limitReached").replace("{max}", String(IX_MAX_SITE_PRESETS))}
-                    </p>
-                )}
+                {/* ── Start from a template ── */}
+                <section aria-labelledby="motion-templates" className="mb-10">
+                    <h2 id="motion-templates" className="text-lg font-black text-gray-900">{t("motion.templates.title")}</h2>
+                    <p className="mt-1 mb-4 text-sm text-gray-600">{t("motion.templates.body")}</p>
+                    <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        {MOTION_TEMPLATES.map((tpl) => {
+                            const spec = simpleToSpec(tpl.motion);
+                            const label = t(tpl.labelKey);
+                            return (
+                                <li key={tpl.id} className="flex flex-col rounded-3xl border-2 border-gray-50 bg-white p-4 shadow-sm">
+                                    <MotionPreview spec={spec} size="sm" replayLabel={fill(t("motion.preview.replayOf"), { name: label })} replayText={t("motion.preview.replayShort")} />
+                                    <h3 className="mt-3 text-sm font-bold text-gray-900">{label}</h3>
+                                    <p className="mt-1 flex-1 text-xs text-gray-600">{describeMotion(spec, t)}</p>
+                                    <Button size="sm" variant="secondary" icon="fa-plus" className="mt-3 self-start" disabled={full || editing !== null} onClick={() => startFrom(label, spec)}>
+                                        {t("motion.templates.use")}
+                                    </Button>
+                                </li>
+                            );
+                        })}
+                    </ul>
+
+                    <div className="mt-6">
+                        <button
+                            type="button"
+                            aria-expanded={showSystem}
+                            aria-controls="motion-system-list"
+                            onClick={() => setShowSystem((s) => !s)}
+                            className="inline-flex min-h-11 items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-800"
+                        >
+                            <i className={`fa-solid fa-chevron-${showSystem ? "up" : "down"} text-xs`} aria-hidden="true"></i>
+                            {fill(t("motion.system.toggle"), { n: systemList.length })}
+                        </button>
+                        {showSystem && (
+                            <>
+                                <p className="mt-1 mb-4 text-sm text-gray-600">{t("motion.system.body")}</p>
+                                <ul id="motion-system-list" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                    {systemList.map((p) => {
+                                        const spec = ixPresetToSpec(p);
+                                        return (
+                                            <li key={p.id} className="flex flex-col rounded-3xl border-2 border-gray-50 bg-white p-4 shadow-sm">
+                                                <MotionPreview spec={spec} size="sm" replayLabel={fill(t("motion.preview.replayOf"), { name: p.name })} replayText={t("motion.preview.replayShort")} />
+                                                <h3 className="mt-3 text-sm font-bold text-gray-900">{p.name}</h3>
+                                                <p className="mt-1 flex-1 text-xs text-gray-600">{describeMotion(p, t)}</p>
+                                                <Button size="sm" variant="secondary" icon="fa-copy" className="mt-3 self-start" disabled={full || editing !== null} onClick={() => startFrom(fill(t("motion.system.copyName"), { name: p.name }), spec)}>
+                                                    {t("motion.system.copy")}
+                                                </Button>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            </>
+                        )}
+                    </div>
+                </section>
+
+                {/* ── Site-wide motion settings ── */}
+                <section aria-labelledby="motion-site" className="space-y-6">
+                    <h2 id="motion-site" className="text-lg font-black text-gray-900">{t("motion.site.title")}</h2>
+
+                    <Card>
+                        <h3 className="text-sm font-bold text-gray-900">{t("motion.policy.title")}</h3>
+                        <p className="mt-2 text-sm leading-relaxed text-gray-600">{t("motion.policy.body")}</p>
+                        <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label={t("motion.policy.title")}>
+                            {MOTION_VALUES.map((v) => (
+                                <button key={v} type="button" aria-pressed={motion === v} disabled={motionSaving}
+                                    onClick={() => void saveSiteSetting(MOTION_SETTING, v, motion, setMotion, setMotionSaving, t("motion.toast.policySaved"))}
+                                    className={segBtn(motion === v)}>
+                                    {t(`motion.policy.${v}`)}
+                                </button>
+                            ))}
+                            {motionSaving && <span className="text-xs text-gray-500">{t("motion.saving")}</span>}
+                        </div>
+                        <p className="mt-3 text-sm leading-relaxed text-gray-500">{t(`motion.policy.${motion}.hint`)}</p>
+                    </Card>
+
+                    <Card>
+                        <h3 className="text-sm font-bold text-gray-900">{t("motion.vt.title")}</h3>
+                        <p className="mt-2 text-sm leading-relaxed text-gray-600">{t("motion.vt.body")}</p>
+                        <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label={t("motion.vt.title")}>
+                            {VT_VALUES.map((v) => (
+                                <button key={v} type="button" aria-pressed={vt === v} disabled={vtSaving}
+                                    onClick={() => void saveSiteSetting(VT_SETTING, v, vt, setVt, setVtSaving, v === "off" ? t("motion.toast.vtOff") : t("motion.toast.vtSaved"))}
+                                    className={segBtn(vt === v)}>
+                                    {t(`motion.vt.${v}`)}
+                                </button>
+                            ))}
+                            {vtSaving && <span className="text-xs text-gray-500">{t("motion.saving")}</span>}
+                        </div>
+                    </Card>
+
+                    <Card>
+                        <h3 className="text-sm font-bold text-gray-900">{t("motion.inventory.title")}</h3>
+                        <p className="mt-2 text-sm leading-relaxed text-gray-600">{t("motion.inventory.body")}</p>
+                        {inventory === null ? (
+                            <p className="mt-4 text-sm text-gray-500" role="status">{t("motion.inventory.loading")}</p>
+                        ) : inventory.rows.length === 0 ? (
+                            <p className="mt-4 text-sm text-gray-500">
+                                {motion === "off" ? t("motion.inventory.off") : fill(t("motion.inventory.still"), { n: inventory.totals.pages })}
+                            </p>
+                        ) : (
+                            <>
+                                <p className="mt-4 text-xs text-gray-500">
+                                    {fill(t("motion.inventory.totals"), {
+                                        moving: inventory.totals.moving,
+                                        pages: inventory.totals.pages,
+                                        blocks: inventory.totals.blocks,
+                                        loops: inventory.totals.infinite,
+                                        runtime: inventory.totals.runtime,
+                                        entrances: inventory.totals.entrances,
+                                        kb: (inventory.totals.cssBytes / 1024).toFixed(1),
+                                    })}
+                                </p>
+                                <DataTable
+                                    className="mt-3 -mx-1"
+                                    rows={inventory.rows}
+                                    rowKey={(row) => `${row.type}-${row.id}`}
+                                    caption={t("motion.inventory.title")}
+                                    rowLabel={(row) => row.title}
+                                    density="compact"
+                                    stackBelow="lg"
+                                    columns={[
+                                        {
+                                            key: "page",
+                                            header: t("motion.inventory.col.page"),
+                                            primary: true,
+                                            cell: (row) => (
+                                                <span className="text-sm">
+                                                    <Link href={editorHref(row)} className="inline-flex items-center pointer-coarse:min-h-11 font-medium text-gray-900 hover:underline break-words">{row.title}</Link>
+                                                    <span className="ml-1 text-gray-500 break-all">/{row.slug}</span>
+                                                </span>
+                                            ),
+                                        },
+                                        {
+                                            key: "blocks",
+                                            header: t("motion.inventory.col.blocks"),
+                                            cell: (row) => (
+                                                <span className="text-xs text-gray-700">
+                                                    {row.blocks}
+                                                    {row.units !== row.blocks && <span className="text-gray-500"> {fill(t("motion.inventory.distinct"), { n: row.units })}</span>}
+                                                </span>
+                                            ),
+                                        },
+                                        { key: "infinite", header: t("motion.inventory.col.loops"), cell: (row) => <span className={`text-xs ${row.infinite > 0 ? "font-semibold text-gray-900" : "text-gray-400"}`}>{row.infinite || "—"}</span> },
+                                        { key: "runtime", header: t("motion.inventory.col.runtime"), cell: (row) => <span className={`text-xs ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.runtime || "—"}</span> },
+                                        // The CLASSIC entrance (`anim`) is what almost every published page
+                                        // carries: without this column the inventory would call them still.
+                                        { key: "entrances", header: t("motion.inventory.col.entrances"), cell: (row) => <span className={`text-xs ${row.entrances > 0 ? "text-gray-900" : "text-gray-400"}`}>{row.entrances || "—"}</span> },
+                                        { key: "presets", header: t("motion.inventory.col.presets"), cell: (row) => <span className="text-xs text-gray-500 break-words">{row.presets.length > 0 ? row.presets.join(", ") : "—"}</span> },
+                                        { key: "css", header: "CSS", cell: (row) => <span className="text-xs text-gray-500 whitespace-nowrap">{(row.cssBytes / 1024).toFixed(1)} KB</span> },
+                                    ]}
+                                />
+                            </>
+                        )}
+                    </Card>
+                </section>
             </div>
         </div>
     );
 }
 
-/** «Lo usan N bloques» — referencias por id del escaneo de arriba; «—» mientras no se sabe. */
-function usageLabel(usage: Map<string, number> | null, id: string, t: (key: string) => string): string {
-    if (!usage) return "—";
-    const n = usage.get(id) ?? 0;
-    if (n === 0) return t("interactions.usage.none");
-    return n === 1 ? t("interactions.usage.one") : t("interactions.usage.many").replace("{count}", String(n));
-}
-
-/** «Este bloque» / «Sus hijos» / «Las palabras» — el objetivo de la primera pista, en cristiano. */
-function summaryOfTarget(preset: IxPreset, t: (key: string) => string, language: Language): string {
-    const kind = preset.tracks[0].target.kind;
-    if (kind === "block") return t("interactions.card.otherBlock");
-    return trStr(IX_TARGET_LABELS[kind], language).toLowerCase();
+/** One of the site's motions: live preview, what it does, where it is used, and its actions. */
+function PresetCard({ preset, usage, busy, canDuplicate, onEdit, onDuplicate, onDelete }: {
+    preset: IxPreset;
+    /** Pages using it; `null` = not known (the content could not be read). */
+    usage: UsagePage[] | null;
+    busy: boolean;
+    canDuplicate: boolean;
+    onEdit: () => void;
+    onDuplicate: () => void;
+    onDelete: () => void;
+}) {
+    const { t } = useI18n();
+    const [showPages, setShowPages] = useState(false);
+    const spec = useMemo(() => ixPresetToSpec(preset), [preset]);
+    const blocks = usage ? usage.reduce((n, p) => n + p.blocks, 0) : 0;
+    const listId = `motion-usage-${preset.id}`;
+    return (
+        <article className="flex h-full flex-col rounded-3xl border-2 border-gray-50 bg-white p-4 shadow-xl shadow-gray-100/50">
+            <MotionPreview spec={spec} replayLabel={fill(t("motion.preview.replayOf"), { name: preset.name })} replayText={t("motion.preview.replayShort")} />
+            <h3 className="mt-3 text-base font-black text-gray-900 break-words">{preset.name}</h3>
+            <p className="mt-1 text-sm text-gray-600">{describeMotion(preset, t)}</p>
+            <div className="mt-3 text-xs text-gray-500">
+                {usage === null ? (
+                    <span>{t("motion.usage.unknown")}</span>
+                ) : usage.length === 0 ? (
+                    <span>{t("motion.usage.none")}</span>
+                ) : (
+                    <>
+                        <button type="button" aria-expanded={showPages} aria-controls={listId} onClick={() => setShowPages((s) => !s)}
+                            className="inline-flex min-h-11 sm:min-h-0 items-center gap-1.5 font-bold text-blue-600 hover:text-blue-800">
+                            <i className="fa-solid fa-link text-[10px]" aria-hidden="true"></i>
+                            {fill(t(blocks === 1 ? "motion.usage.oneBlock" : usage.length === 1 ? "motion.usage.onePage" : "motion.usage.pages"), { blocks, pages: usage.length })}
+                            <i className={`fa-solid fa-chevron-${showPages ? "up" : "down"} text-[10px]`} aria-hidden="true"></i>
+                        </button>
+                        {showPages && (
+                            <ul id={listId} className="mt-2 space-y-1">
+                                {usage.map((p) => (
+                                    <li key={`${p.type}-${p.id}`}>
+                                        <Link href={editorHref(p)} className="inline-flex min-h-11 sm:min-h-0 items-center gap-1.5 text-gray-700 hover:text-blue-600 hover:underline">
+                                            <i className="fa-solid fa-pen-to-square text-[10px]" aria-hidden="true"></i>
+                                            {p.title} <span className="text-gray-400">({p.blocks})</span>
+                                        </Link>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </>
+                )}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 border-t border-gray-100 pt-4">
+                <Button size="sm" variant="primary" icon="fa-pen" disabled={busy} onClick={onEdit}>{t("motion.card.edit")}</Button>
+                <Button size="sm" variant="ghost" icon="fa-copy" disabled={busy || !canDuplicate} onClick={onDuplicate} aria-label={fill(t("motion.card.duplicateOf"), { name: preset.name })}>{t("motion.card.duplicate")}</Button>
+                <Button size="sm" variant="danger" icon="fa-trash" disabled={busy} onClick={onDelete} aria-label={fill(t("motion.card.deleteOf"), { name: preset.name })}>{t("motion.card.delete")}</Button>
+            </div>
+        </article>
+    );
 }

@@ -25,13 +25,14 @@ export interface WordJSSafeUser {
     userEmail: string;
     displayName?: string;
     role: string;
+    /** The account's capabilities in THIS plugin's namespace — see {@link WordJSRouteUser.pluginCapabilities}. */
+    pluginCapabilities: string[];
     /**
-     * The ACTIVE CORPORATE MAILBOX grant (`user_meta.professional_mailbox`), projected as a plain
-     * boolean. It is ADMIN-OWNED: read this field, never re-derive it from `userEmail` (the account
-     * itself can write its own email, which would make the grant self-issuable). A row loaded
-     * without meta projects `false` (fail-closed).
+     * The ACCOUNT CAPABILITIES (declared in your manifest's `accountCapabilities`) an administrator granted
+     * this account. ADMIN-OWNED and explicit: read this, never re-derive a grant from `userEmail` (the
+     * account itself writes its own email). Never another plugin's; a row without meta projects `[]`.
      */
-    hasProfessionalMailbox: boolean;
+    accountCapabilities: string[];
 }
 
 /** Metadata for a file uploaded through a `{ multipart: '<field>' }` route. */
@@ -52,8 +53,12 @@ export interface WordJSRouteUser {
     userEmail?: string;
     /** The caller's login — present only when your plugin holds the `users:read` grant (personal data). */
     userLogin?: string;
-    /** Same admin-owned grant as {@link WordJSSafeUser.hasProfessionalMailbox} — gate on this, don't re-derive it. */
-    hasProfessionalMailbox: boolean;
+    /**
+     * The account capabilities your manifest declares (`accountCapabilities`) that an administrator granted
+     * this caller, per account in the user screen. Explicit grants only — no role implies one, not even
+     * administrator. Gate on this, never on the caller's email.
+     */
+    accountCapabilities: string[];
     /**
      * The caller's capabilities that belong to THIS plugin: those in its own namespace (`<slug>_*`),
      * from any role the user holds, including roles this plugin declared. Never a core capability and
@@ -171,16 +176,13 @@ export interface WordJSAdminMenuItem {
      */
     section?: 'core' | 'management';
     /**
-     * When true, core hides this item from any user who does not hold the professional-mailbox
-     * grant. Use it for per-user features that are empty without one — e.g. a webmail inbox.
-     * Administrators always see it.
-     *
-     * The grant is the ADMIN-OWNED `user_meta.professional_mailbox` flag, the same one a mail
-     * plugin's route gate reads, so the menu can never show a page that will only 403. It is
-     * deliberately NOT derived from the account's email domain: the account writes its own email,
-     * which made the old rule self-grantable. Slug-agnostic — any plugin may set it.
+     * One of YOUR account capabilities (manifest `accountCapabilities`): core hides this item from every
+     * non-administrator who has not been granted it. Use it for per-account features that are empty
+     * without the grant. It is the same grant your route gate reads (`req.user.accountCapabilities`), so
+     * the menu never shows a page that will only 403. A capability outside your namespace hides the item
+     * from all non-administrators.
      */
-    requiresProfessionalMailbox?: boolean;
+    requiresAccountCapability?: string;
     [key: string]: any;
 }
 

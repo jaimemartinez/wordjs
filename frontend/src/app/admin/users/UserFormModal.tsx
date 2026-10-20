@@ -7,6 +7,7 @@ import DialogLayer from "@/components/DialogLayer";
 import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
 import { useModal } from "@/contexts/ModalContext";
 import UserMfaReset from "./UserMfaReset";
+import AccountCapabilityToggles, { grantedMap } from "./AccountCapabilityToggles";
 import { useRoleOptions } from "@/lib/useRoleOptions";
 import { useI18n } from "@/contexts/I18nContext";
 
@@ -29,7 +30,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
 
     const [formData, setFormData] = useState<{
         username: string; email: string; displayName: string; role: string;
-        password: string; personalEmail: string; professionalMailbox?: boolean;
+        password: string; personalEmail: string; accountCapabilities?: Record<string, boolean>;
     }>({
         username: "",
         email: "",
@@ -37,12 +38,10 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
         role: "subscriber",
         password: "",
         personalEmail: "",
-        // ACTIVE CORPORATE MAILBOX — the admin-owned grant, rendered by whichever mail plugin registers
-        // the `user_form_before_email` hook (mail-server's "Professional Mail Account" toggle). It is
-        // carried in the form data and submitted with it, so the toggle writes an EXPLICIT permission
-        // instead of implying one by rewriting the email address. `undefined` = the plugin has not
-        // decided yet; the backend leaves an absent field untouched.
-        professionalMailbox: undefined,
+        // PLUGIN-DECLARED ACCOUNT CAPABILITIES — the admin-owned per-account grants, one toggle each
+        // (AccountCapabilityToggles), carried in the form data and submitted with it. The backend writes
+        // only what CHANGED, and only for an `edit_users` caller.
+        accountCapabilities: {},
     });
     const [saving, setSaving] = useState(false);
     const [, setHookTick] = useState(0);
@@ -61,7 +60,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                 role: user.role,
                 password: "", // Don't load password
                 personalEmail: user.personalEmail || "",
-                professionalMailbox: !!user.professionalMailbox,
+                accountCapabilities: grantedMap(user.accountCapabilities),
             });
         }
         // Listen for plugin hook changes
@@ -129,6 +128,11 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                                 required
                             />
                         </div>
+                        <AccountCapabilityToggles
+                            value={formData.accountCapabilities}
+                            onChange={(next) => setFormData((prev) => ({ ...prev, accountCapabilities: next }))}
+                            isNew={isNew}
+                        />
                         <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
                         <div>
                             <label htmlFor="user-form-field-2" className={FIELD_LABEL}>{t('user.edit.email')}</label>

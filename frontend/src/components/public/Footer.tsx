@@ -173,7 +173,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials, v
                                         <ul className="space-y-2 text-[var(--wjs-color-text-footer-dim,gray)]">
                                             {footerMenu.map((item) => (
                                                 <li key={item.id}>
-                                                    <Link href={item.url || '#'} className="hover:text-[var(--wjs-color-primary,white)] transition-colors" aria-current={menuAriaCurrent(item.url, pathname)}>
+                                                    <Link href={item.url || '#'} className="hover:text-[var(--wjs-color-primary,white)] transition-colors pointer-coarse:inline-flex pointer-coarse:items-center pointer-coarse:min-h-11" aria-current={menuAriaCurrent(item.url, pathname)}>
                                                         {item.title}
                                                     </Link>
                                                 </li>

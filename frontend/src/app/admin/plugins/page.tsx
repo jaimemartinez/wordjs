@@ -493,7 +493,7 @@ export default function PluginsPage() {
             refreshMenus();
             // Load the just-activated plugin's frontend hooks NOW: this page never reloads the document,
             // so without it the loader replays an active-plugin list captured before the activation and
-            // the plugin's UI extensions (e.g. mail-server's mailbox toggle in the user form) stay
+            // the plugin's UI extensions (e.g. mail-server's address auto-fill in the user form) stay
             // invisible until the admin reloads the tab by hand.
             reloadActivePlugins();
             addToast(t('plugins.activated'), "success");

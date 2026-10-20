@@ -107,7 +107,7 @@ before(async () => {
         `INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'personal_email', ?)`,
         [U.vgvictim, 'rescue@example.org']);
     await dbAsync.run(
-        `INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'professional_mailbox', '1')`,
+        `INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'account_capability:test_plugin_cap', '1')`,
         [U.vgvictim]);
 });
 

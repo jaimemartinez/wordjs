@@ -9,6 +9,7 @@ import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import UserMfaReset from "../UserMfaReset";
+import AccountCapabilityToggles, { grantedMap } from "../AccountCapabilityToggles";
 import { useRoleOptions } from "@/lib/useRoleOptions";
 
 export default function UserEditorPage() {
@@ -25,7 +26,7 @@ export default function UserEditorPage() {
 
     const [formData, setFormData] = useState<{
         username: string; email: string; displayName: string; role: string;
-        password: string; personalEmail: string; professionalMailbox?: boolean;
+        password: string; personalEmail: string; accountCapabilities?: Record<string, boolean>;
     }>({
         username: "",
         email: "",
@@ -33,9 +34,8 @@ export default function UserEditorPage() {
         role: "subscriber",
         password: "",
         personalEmail: "",
-        // ACTIVE CORPORATE MAILBOX — the admin-owned grant written by a mail plugin's
-        // `user_form_before_email` toggle and submitted with the form. See UserFormModal for the full note.
-        professionalMailbox: undefined,
+        // PLUGIN-DECLARED ACCOUNT CAPABILITIES — see UserFormModal for the full note.
+        accountCapabilities: {},
     });
     // What the record held when it was loaded — the comparison base for "did a gated field really change".
     const [loaded, setLoaded] = useState<{ email: string; personalEmail: string }>({ email: "", personalEmail: "" });
@@ -63,7 +63,7 @@ export default function UserEditorPage() {
                 role: user.role,
                 password: "", // Don't load password
                 personalEmail: user.personalEmail || "",
-                professionalMailbox: !!user.professionalMailbox,
+                accountCapabilities: grantedMap(user.accountCapabilities),
             });
             setLoaded({ email: user.email || "", personalEmail: user.personalEmail || "" });
         } catch (error) {
@@ -144,6 +144,11 @@ export default function UserEditorPage() {
                             required
                         />
                     </div>
+                    <AccountCapabilityToggles
+                        value={formData.accountCapabilities}
+                        onChange={(next) => setFormData((prev) => ({ ...prev, accountCapabilities: next }))}
+                        isNew={isNew}
+                    />
                     <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
                     <div>
                         <label htmlFor="user-edit-2" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.email')}</label>
@@ -167,7 +172,7 @@ export default function UserEditorPage() {
                             placeholder="name@gmail.com"
                             className="w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium"
                         />
-                        <p className="text-[11px] text-gray-600 mt-2 leading-relaxed">{t('user.edit.personalEmail.help') || 'External address for password recovery & notifications — independent of the professional mailbox.'}</p>
+                        <p className="text-[11px] text-gray-600 mt-2 leading-relaxed">{t('user.edit.personalEmail.help') || 'External address for password recovery & notifications — independent of the primary account email.'}</p>
                     </div>
                     <div>
                         <label htmlFor="user-edit-4" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.displayName')}</label>

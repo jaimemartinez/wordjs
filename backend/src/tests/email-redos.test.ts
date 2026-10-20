@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 
-const { isValidAddress, domainOfAddress } = require('../core/mailbox');
+const { isValidAddress, domainOfAddress } = require('../core/email-address');
 
 test('isValidAddress rejects a huge no-"@" value in O(n) time — the regex never runs (ReDoS backstop)', () => {
     // 200K chars with no '@': without the length cap this is ~18s of quadratic backtracking (measured

@@ -7,9 +7,11 @@ import { safeChromeHref, type ChromeSocialLink } from "@/lib/chromeData";
 export interface ChromeSocialsViewProps {
     // Resolved bindings
     links: ChromeSocialLink[];
+    // Optional heading above the icons (the legacy footer's "Connect"); only shown when there are links.
+    title?: string;
 }
 
-export default function ChromeSocials({ links }: ChromeSocialsViewProps) {
+export default function ChromeSocials({ links, title }: ChromeSocialsViewProps) {
     // Estas URLs vienen de un ajuste del sitio, no de la composicion validada, asi que este bloque es
     // el unico sitio donde un enlace del chrome llega al DOM sin comprobar — ChromeButton revalida su
     // propio href. Misma allowlist, asi que una entrada 'javascript:' guardada tampoco puede volverse
@@ -22,7 +24,8 @@ export default function ChromeSocials({ links }: ChromeSocialsViewProps) {
         .map((link) => ({ link, href: safeChromeHref(link.url) }))
         .filter((entry): entry is { link: ChromeSocialLink; href: string } => entry.href !== undefined);
     if (safe.length === 0) return null;
-    return (
+    const heading = typeof title === "string" ? title.trim() : "";
+    const icons = (
         <div className="wjs-chrome-socials wjs-footer-social flex gap-4 flex-wrap">
             {safe.map(({ link, href }, idx) => (
                 <a
@@ -39,6 +42,14 @@ export default function ChromeSocials({ links }: ChromeSocialsViewProps) {
                     <i className={link.icon} aria-hidden="true"></i>
                 </a>
             ))}
+        </div>
+    );
+    if (!heading) return icons;
+    return (
+        <div className="wjs-chrome-socials-group flex flex-col">
+            {/* <h4> like Footer.tsx's "Connect" — see ChromeNav's title for why the level matters. */}
+            <h4 className="wjs-chrome-block-title font-bold mb-4">{heading}</h4>
+            {icons}
         </div>
     );
 }

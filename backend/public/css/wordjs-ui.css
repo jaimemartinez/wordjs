@@ -473,6 +473,59 @@ a:not([href]):not([class]) { color: inherit; text-decoration: none; }
 .wjs-chrome-button--ghost { color: var(--wjs-color-primary, #2F6D86); }
 .wjs-chrome-button--ghost:hover { color: var(--wjs-color-on-primary, #ffffff); }
 
+/* Block titles in the composed FOOTER (a nav's / social links' title, a ChromeHeading) are headings
+ * of the footer band, so they take the footer heading token. They need the !important and the two
+ * classes: themes paint every heading with `:is(h1…h6):not(.wjs-block-heading) { color: … !important }`
+ * — specificity 0,1,1, which also beats their own `footer h3, footer h4` rule — and that is the
+ * page's dark ink, i.e. dark-on-dark on the footer band. Header titles keep the masthead colours. */
+.wjs-chrome-footer .wjs-chrome-block-title {
+  color: var(--wjs-color-text-footer-heading, #ffffff) !important;
+  font-size: var(--wjs-chrome-title-size, 1rem);
+}
+
+/* A row NESTED in another row is a group (nav + button on the right of a logo), not a band: it sizes
+ * to its content. At w-full it claimed the whole parent row and squeezed its siblings, wrapping the
+ * site name onto two lines next to it. A row that is a ChromeColumns cell keeps its full width. */
+.wjs-chrome-row .wjs-chrome-row { width: auto; }
+
+/* Composed header: TRANSPARENT OVER THE HERO (chrome root.transparent). The public layout lays the
+ * header over the top of the page (absolute, or fixed when it is also sticky) and the
+ * ChromeHeaderScroll island mirrors scrolling onto data-scrolled. While the page sits at the top the
+ * header has no surface of its own, so the hero shows through; its links and brand take
+ * --wjs-header-overlay-text when the theme sets one (light text over a dark hero) and keep their
+ * normal colours otherwise. Once the page scrolls the header gets its solid surface back, so it stays
+ * readable over whatever passes beneath it.
+ * !important on purpose: themes paint the masthead with `header { background-color: … !important }`
+ * (the default theme does), which silently cancelled every transparent header — the built-in one's
+ * `layout.header.transparent` included. Transparency is an explicit author choice, so it wins while
+ * it applies (unscrolled, transparent header only) and the theme's surface returns on scroll. */
+.wjs-chrome-header[data-transparent="true"][data-scrolled="false"] {
+  background: transparent !important;
+  border-bottom-color: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+/* root.overlayText: the author's pick for text over the hero, as the overlay token. */
+.wjs-chrome-header[data-overlay-text="light"] { --wjs-header-overlay-text: #ffffff; }
+.wjs-chrome-header[data-overlay-text="dark"] { --wjs-header-overlay-text: #111827; }
+.wjs-chrome-header[data-transparent="true"][data-scrolled="false"] .wjs-header-nav a { color: var(--wjs-header-overlay-text, var(--wjs-nav-color, var(--wjs-color-text-main))) !important; }
+.wjs-chrome-header[data-overlay-text][data-transparent="true"][data-scrolled="false"] .wjs-chrome-button--ghost {
+  color: var(--wjs-header-overlay-text) !important;
+  border-color: var(--wjs-header-overlay-text) !important;
+}
+.wjs-chrome-header[data-transparent="true"][data-scrolled="false"] .wjs-header-logo,
+.wjs-chrome-header[data-transparent="true"][data-scrolled="false"] .wjs-chrome-text { color: var(--wjs-header-overlay-text, var(--wjs-logo-color, var(--wjs-color-text-main))) !important; }
+/* The header is out of flow, so the page content would start underneath it. A page that OPENS WITH A
+ * HERO is the point — it slides under the header — but any other page keeps the room the header
+ * takes (--wjs-chrome-header-h, a theme may tune it). Pure CSS (:has), no measuring script. */
+.wjs-shell:has(> .wjs-chrome-header[data-transparent="true"]) > main {
+  padding-top: var(--wjs-chrome-header-h, 6rem) !important;
+}
+.wjs-shell:has(> .wjs-chrome-header[data-transparent="true"]):has(> main .puck-content > .wjs-block-hero:first-child) > main {
+  padding-top: 0 !important;
+}
+
 small, .small { font-size: 0.875em; }
 mark, .mark { padding: 0.1875em; background-color: var(--wjs-mark-bg, #fcf8c3); color: #422006; } /* fixed dark text — highlight bg is always light */
 strong, b { font-weight: 700; }
@@ -3087,3 +3140,28 @@ html:has(#wjs-motion-pause:checked) { --wjs-ix-play: paused; }
   font-weight: 600;
 }
 .wjs-toc__title { color: var(--wjs-color-heading, var(--wjs-color-text-main, #1f2937)); }
+
+/* SNAP STRIP — a swipeable row of full-width items, for sanitized HTML (shortcode output, imported or
+   classic bodies) where neither a <style> block nor layout inline styles survive and no script runs.
+   Plugin-neutral: any content may use it. Scrolls natively (touch, trackpad, shift+wheel, keyboard once
+   focused); each item snaps into place. `--16x9` crops every item to that frame. */
+.wjs-snap-strip {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  overscroll-behavior-x: contain;
+  gap: 0;
+  width: 100%;
+  max-width: 900px;
+  margin: 2rem auto;
+  border-radius: 16px;
+  background: #1e293b;
+  scrollbar-width: thin;
+}
+.wjs-snap-strip:focus-visible { outline: 2px solid var(--wjs-color-primary, #2f6d86); outline-offset: 2px; }
+.wjs-snap-strip__item { flex: 0 0 100%; scroll-snap-align: start; margin: 0; }
+.wjs-snap-strip__item > img { display: block; width: 100%; height: auto; }
+.wjs-snap-strip--16x9 .wjs-snap-strip__item > img { aspect-ratio: 16 / 9; height: auto; object-fit: cover; }
+.wjs-snap-strip__caption { padding: 0.75rem 1rem; color: #f8fafc; font-size: 0.95rem; }
+@media (prefers-reduced-motion: reduce) { .wjs-snap-strip { scroll-behavior: auto; } }

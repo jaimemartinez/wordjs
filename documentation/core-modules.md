@@ -450,7 +450,7 @@ Full reference: **[ai-agents.md](./ai-agents.md)**.
 
 **Location:** `backend/src/core/graphql/` (`index.ts`, `schema.ts`, `dispatch.ts`, `extensions.ts`, `limits.ts`; route `routes/graphql.ts`)
 
-A read-only endpoint at `/api/v1/graphql`. Every data field resolves through `dispatch.ts`, which issues the REST read it mirrors as an internal sub-request, so a GraphQL read is authorized exactly like that REST read. `extensions.ts` is the seam host code extends the schema through (`registerGraphQLExtension()` and the `wordjs_graphql_register_types` hook); `limits.ts` holds the depth and cost validation rules, checked before any resolver runs; `index.ts` adds the parser token cap and the introspection switch (off in production unless the `graphql_introspection` setting turns it on). Full reference: **[graphql.md](./graphql.md)**.
+The endpoint at `/api/v1/graphql` (and `/api/v1/graphql/stream` for subscriptions). Every data field resolves through `dispatch.ts`, which issues the REST read it mirrors as an internal sub-request, so a GraphQL read is authorized exactly like that REST read; `mutations.ts` does the same with the REST writes (`restWrite`), `resources.ts` holds the reads of users, revisions, access levels, webhooks, plugins and network sites, and `subscriptions.ts` the SSE feed over the content outbox, re-authorizing every event as the subscriber. `extensions.ts` is the seam host code extends the schema through (`registerGraphQLExtension()` and the `wordjs_graphql_register_types` hook); `limits.ts` holds the depth and cost validation rules, checked before any resolver runs; `index.ts` adds the parser token cap and the introspection switch (off in production unless the `graphql_introspection` setting turns it on). Full reference: **[graphql.md](./graphql.md)**.
 
 ---
 
@@ -503,12 +503,13 @@ Each mechanism is activated only after a probe has run a real confined child. Po
 
 ---
 
-## 21. Inbound SMTP & Professional Mailboxes 📮
+## 21. Inbound SMTP, account email addresses & per-account capabilities 📮
 
-**Location:** `backend/src/core/inbound-smtp.ts` + `backend/src/core/mailbox.ts`
+**Location:** `backend/src/core/inbound-smtp.ts` + `backend/src/core/email-address.ts` + `backend/src/core/account-capabilities.ts`
 
 *   **`inbound-smtp.ts`** — the sandbox gives no plugin an inbound socket, so the **host** opens the SMTP listener on behalf of the one plugin an administrator granted `smtp:inbound` (an exclusive grant), runs the protocol itself and asks the plugin over IPC for a verdict at each step (connect, `MAIL FROM`, `RCPT TO`, `DATA`). A plugin that throws or times out gets the sender a temporary `451`. If the declared port cannot be bound, the listener falls back to 2525 and reports why.
-*   **`mailbox.ts`** — whether an account has a mailbox on the site's mail domain is an explicit fact (`user_meta.professional_mailbox`, migration `0006`), not something derived from the account's own e-mail address.
+*   **`email-address.ts`** — the one address-shape rule, and the one self-service email-write rule: an account cannot give itself an address on the site's own email domain (the published `mail_domain` option, else the site hostname), nor move an address a granted capability binds (`locksEmail`).
+*   **`account-capabilities.ts`** — per-account capabilities a plugin declares in its manifest (`accountCapabilities`); only `edit_users` grants them, the core stores and enforces them without knowing what they mean, and only the declaring plugin is told ([plugins.md §12b](./plugins.md#12b-declaring-per-account-capabilities-accountcapabilities-)). `legacy-account-flags.ts` (deprecated) bridges the former core-owned `professional_mailbox` flag onto it — migration `0019`, mixed-version writes, and an outdated mail plugin (its projection, menu flag, address lock and toggle field).
 
 Used by the mail-server plugin: **[mail-server.md](./mail-server.md)**.
 
