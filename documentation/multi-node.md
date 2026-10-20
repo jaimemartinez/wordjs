@@ -106,7 +106,9 @@ registered backends in its route group and round-robins across them. (`advertise
 
 > The `advertiseHost` / `gatewayHost` / `gatewaySecret` / mTLS-cert plumbing per node is written for you
 > by `scripts/node-join.js` when you enroll each node with a join token (**[separate-mode.md](separate-mode.md)**).
-> For an N-replica role, run `node scripts/cluster.js token <backend|frontend>` + `node-join` once **per
+> **Admin → Servers** mints join tokens (with the `node-join` command to run), shows every node and its
+> health, and removes a node ([separate-mode.md](separate-mode.md#managing-the-cluster-from-the-admin-panel)).
+> For an N-replica role, mint a token (or run `node scripts/cluster.js token <backend|frontend>`) + `node-join` once **per
 > replica** (each with its own `--advertise`), then layer the shared Postgres/Redis and `jwtSecret` from
 > this guide onto every replica's `wordjs-config.json`.
 

@@ -1128,3 +1128,6 @@ router.delete('/admins/:id', asyncHandler(async (req: Request, res: Response) =>
 }));
 
 module.exports = router;
+// The password-and-fresh-code gate of the network switch, for the other doors that admit or remove
+// machines (routes/cluster.ts).
+module.exports.requireStepUp = requireStepUp;

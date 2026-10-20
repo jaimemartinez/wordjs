@@ -98,7 +98,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -923,6 +923,27 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => request(app).put(`${B}/system/server`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 200 && r.body.restart === null,
+        },
+        // Admin → Servers (routes/cluster.ts): the password first; minting a token and removing a node then
+        // ask for the second factor (these accounts have none), and revoking reaches the gateway, which this
+        // process has no control channel to — nothing is minted, removed or revoked.
+        {
+            site: 'cluster.ts POST /token', name: 'POST /system/cluster/token', persona: 'doorClusterToken',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/cluster/token`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, role: 'backend' }),
+            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+        },
+        {
+            site: 'cluster.ts POST /tokens/revoke', name: 'POST /system/cluster/tokens/revoke', persona: 'doorClusterRevoke',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/cluster/tokens/revoke`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 502 && r.body.code === 'cluster_gateway_unreachable',
+        },
+        {
+            site: 'cluster.ts POST /nodes/remove', name: 'POST /system/cluster/nodes/remove', persona: 'doorClusterRemove',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/cluster/nodes/remove`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, url: 'https://10.0.0.2:4000' }),
+            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
         },
         // Turning the network on and off from the panel (Settings → Network): the password comes first,
         // then the second factor — these accounts have none, so the right password reaches that refusal

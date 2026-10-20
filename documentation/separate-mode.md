@@ -347,7 +347,27 @@ The gate can also be pointed at itself. `--sabotage <install-host|install-identi
 reverts one of the three fixes **in the deployed copy only** (never in the repo) and the gate must go
 red on the matching check — a gate that stays green while a bug is reintroduced is worth nothing.
 
-## Managing tokens (on the gateway)
+## Managing the cluster from the admin panel
+
+Once the first backend has joined (the panel runs on a backend, so the very first join token comes from
+the gateway machine, as above), every later step is in **Admin → Servers** (network administrators on a
+network, administrators of a single site):
+
+- **Servers in the cluster** — every node the gateway knows, its role, the routes it serves and the
+  gateway's 30-second health verdict (up, down with the last error, not checked yet).
+- **Add a server** — choose the role, pin the address the new machine will advertise and how long the
+  token lasts (1–60 minutes, 15 by default), confirm with your password and a two-factor code. The screen
+  shows the `node-join` command to run on the new machine, with the token in it, once.
+- **Remove** — the node stops receiving traffic at once and the gateway refuses its re-registration
+  (`gateway/cluster-removed.json`) until a new join token is minted for its address. Password and code.
+- **Revoke them all** — burns every unused join token (password).
+
+Every one of these is audited (`cluster.token.create`, `cluster.node.remove`, `cluster.tokens.revoke`;
+the token itself never reaches the log) and goes from the backend to the gateway over the cluster's mTLS
+control channel. Creating the cluster itself (`cluster.js init`) stays on the gateway machine: it mints the
+CA and decides the addresses the gateway listens on.
+
+## Managing tokens from a terminal (on the gateway)
 
 ```bash
 node scripts/cluster.js tokens          # list outstanding tokens

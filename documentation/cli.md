@@ -343,7 +343,7 @@ This is a **file**, not a script. It contains the current state of the Gateway's
 
 ## 6a. Cluster Enrollment (separate mode) 🪪
 
-Two **root** scripts bootstrap **separate mode** — the gateway, backend, and frontend running on **different machines**, joined into one cluster over mutual TLS. They are aliased as `npm run cluster` and `npm run node:join`. The full operator walkthrough is **[separate-mode.md](separate-mode.md)**; the trust-root internals are in **[core-modules.md](core-modules.md)** § 10 (Cluster Certificate Authority).
+After the first backend joins, **Admin → Servers** does what `cluster.js token | tokens | revoke-tokens | info` does, and removes nodes ([separate-mode.md](separate-mode.md#managing-the-cluster-from-the-admin-panel)). Two **root** scripts bootstrap **separate mode** — the gateway, backend, and frontend running on **different machines**, joined into one cluster over mutual TLS. They are aliased as `npm run cluster` and `npm run node:join`. The full operator walkthrough is **[separate-mode.md](separate-mode.md)**; the trust-root internals are in **[core-modules.md](core-modules.md)** § 10 (Cluster Certificate Authority).
 
 ### Gateway side (`scripts/cluster.js`, run **on the gateway machine**)
 
