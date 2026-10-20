@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import DashboardLayoutClient from "./DashboardLayoutClient";
 import { declareSiteFromRequest, getSettings } from "@/lib/server-api";
 import { inter } from "../fonts";
+import RootDocument, { rootMetadata } from "../_root/RootDocument";
 import "./admin-globals.css";
 
 // Admin is an authenticated, data-driven dashboard (Sidebar/pages use useSearchParams);
@@ -19,18 +20,21 @@ export const viewport: Viewport = {
 
 export async function generateMetadata(): Promise<Metadata> {
     try {
-        // Use the shared mono/split-aware server data layer (same as root layout) instead of a
+        // Use the shared mono/split-aware server data layer (same as the root document) instead of a
         // manual fetch to hardcoded http://localhost:3000 — in monolith mode port 3000 serves
         // HTTPS, so the plain-HTTP fetch failed silently and caused route resolution issues in dev.
-        // Multisite: another site's admin is titled with that site's name, not the main site's — and
-        // absolutely, since the root layout's title template carries the main site's name.
-        const site = await declareSiteFromRequest();
-        const settings = await getSettings();
+        // This layout is a root layout (see _root/RootDocument.tsx), so it carries the document's
+        // metadata too. Multisite: declared first, so another site's admin is that site's in all of it
+        // — its name, its title template, its icon.
+        await declareSiteFromRequest();
+        const [root, settings] = await Promise.all([rootMetadata(), getSettings()]);
         const baseTitle = settings?.blogname || "WordJS";
         const icon = settings?.site_icon ? `${settings.site_icon}?t=${Date.now()}` : "/favicon.ico";
 
         return {
-            title: site ? { absolute: `${baseTitle} | Admin` } : `${baseTitle} | Admin`,
+            ...root,
+            // The dashboard's own name as the default; its screens' titles go through the site's template.
+            title: { default: `${baseTitle} | Admin`, template: `%s | ${baseTitle}` },
             icons: {
                 icon: icon,
                 apple: icon,
@@ -43,11 +47,14 @@ export async function generateMetadata(): Promise<Metadata> {
     }
 }
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
+    // Multisite: the document of another site's admin is that site's (its lang, its fonts). The admin is
+    // dynamic anyway, so reading the edge's header costs nothing here.
+    await declareSiteFromRequest();
     // inter.className re-applies the Inter face to the whole admin tree (the root <body> now
     // carries only inter.variable so the public tree can resolve fonts through wordjs-ui.css).
     // The wrapper covers every DashboardLayoutClient return path, including the fullscreen
@@ -60,9 +67,11 @@ export default function DashboardLayout({
     // and whose icons, toggles and sidebars flow the other. Pinning the subtree to ltr keeps the
     // admin exactly as it is today instead of shipping a half-mirrored one; remove this the moment
     // the dashboard's utilities are audited. The public tree is unaffected.
-    return (
-        <div dir="ltr" className={inter.className}>
-            <DashboardLayoutClient>{children}</DashboardLayoutClient>
-        </div>
-    );
+    return RootDocument({
+        children: (
+            <div dir="ltr" className={inter.className}>
+                <DashboardLayoutClient>{children}</DashboardLayoutClient>
+            </div>
+        ),
+    });
 }

@@ -46,7 +46,8 @@ describe('file-type-detect', () => {
     });
 
     it('the installed file-type is a fixed release (>= 21.3.1)', () => {
-        const pkgPath = path.join(path.dirname(require.resolve('file-type/core')), 'package.json');
+        // The entry lives in source/; the package.json one level up.
+        const pkgPath = path.join(path.dirname(require.resolve('file-type')), '..', 'package.json');
         const { version } = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
         const [major, minor, patch] = version.split('.').map(Number);
         assert.ok(major > 21 || (major === 21 && (minor > 3 || (minor === 3 && patch >= 1))), `file-type ${version} is affected by GHSA-5v7r-6r5c-r473`);

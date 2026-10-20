@@ -52,7 +52,7 @@
     },
     "verificationSurface": {
       "backendTestFiles": 385,
-      "frontendTestFiles": 296,
+      "frontendTestFiles": 297,
       "sandboxWorkflowSemanticSha256": "6589c490e047c52e4330eed83db22c91501686ccf6f30ba7ce030938c995a913",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"
     }
