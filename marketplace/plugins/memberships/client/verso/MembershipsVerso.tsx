@@ -315,6 +315,7 @@ const accountDef = {
 function NewsletterToggle() {
     const [pref, setPref] = useState(null);
     const [busy, setBusy] = useState(false);
+    const [note, setNote] = useState("");
     useEffect(() => {
         let active = true;
         getJson("/me/newsletter").then((r) => { if (active && r.ok) setPref(r.body); });
@@ -327,7 +328,6 @@ function NewsletterToggle() {
         setBusy(false);
         if (r.ok) setPref(r.body);
     };
-    const [note, setNote] = useState("");
     const askLink = async () => {
         setBusy(true);
         const r = await postJson("/me/newsletter/confirm", {});
