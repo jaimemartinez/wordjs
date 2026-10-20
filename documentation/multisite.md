@@ -34,6 +34,7 @@ or changes. The design, the isolation guarantees and the road ahead are in
 | Users, roles, sessions | Its own | Its own. User ids repeat across sites; a session or API token of one site is refused on every other |
 | Plugins | Installed here, for the whole network; activated and granted here | Activated and granted per site, among the plugins the network offers ([below](#plugins-on-the-sites)) |
 | Themes | Installed and edited here | Chosen and customised per site; the theme files are shared; each site runs its own theme server code |
+| Pages and sign-in screens | Rendered as before | Rendered in the site's own document: `<html lang>` and text direction from its language settings, its uploaded fonts, its name in every title (the sign-in, registration and password screens included) |
 | TLS certificate | Settings → Certificates, as before | Its own, for its address, served by SNI ([below](#dns-the-gateway-and-tls)) |
 | Backups | Settings → Backups (network administrators) | Its own, made and restored by its administrators ([below](#backups)) |
 

@@ -80,7 +80,7 @@ export function modalText(request: ModalRequest, lang: Language) {
 }
 
 /**
- * The host dialog of a controller. ModalProvider is mounted in app/layout.tsx, ABOVE the admin's and the
+ * The host dialog of a controller. ModalProvider is mounted in app/_root/RootDocument.tsx, ABOVE the admin's and the
  * portals' I18nProvider, so its defaults come from the language every provider reads and writes
  * ('wordjs-lang' in localStorage, 'es' when unset), read when a dialog opens.
  */

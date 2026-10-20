@@ -16,9 +16,12 @@
  *
  * The main site, and every single-site install, never carries the header and is served exactly as before.
  * A client's own `x-wordjs-site-route` is always removed. The main site's own requests for `/wjs-site/...`
- * are answered 404: that tree is only ever reached through the rewrite. Admin, sign-in, install and portal
- * pages are never rewritten (they speak to the backend from the browser, on the site's own address, so
- * they are already that site's), and neither are Next's assets or files with an extension other than the
+ * are answered 404: that tree is only ever reached through the rewrite. The sign-in screens (`/login`,
+ * `/register`, `/reset-password`, `/verify-email`) are routed too: they speak to the backend from the
+ * browser, on the site's own address, but the document around them (its lang, its fonts, its title) is
+ * the root layout's, and only the site tree's root layout is that site's. Admin, install and portal pages
+ * are never rewritten (the admin declares its site from this same header; install and portals are
+ * network-wide or the plugin's), and neither are Next's assets or files with an extension other than the
  * feed, sitemap and robots documents the public tree serves.
  */
 import { NextResponse } from "next/server";
@@ -30,9 +33,13 @@ const SITE_HOST_HEADER = "x-wordjs-site-host";
 const SITE_ROUTE_HEADER = "x-wordjs-site-route";
 const SITE_HOST = /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/;
 const NOT_PUBLIC_PAGES = /^\/(?:api|_next|admin|login|register|reset-password|verify-email|install|migration|portal|health|public|uploads|themes|plugins|fonts)(?:\/|$)/;
+/** The sign-in screens the site tree has a copy of (wjs-site/[siteHost]/login, …): exactly these paths. */
+const SIGN_IN_PAGES = /^\/(?:login|register|reset-password|verify-email)\/?$/;
 const PUBLIC_DOCUMENTS = /(?:^|\/)(?:feed\.xml|feed\.atom|feed\.json|robots\.txt|sitemap\.xml)$|^\/sitemap\/[^/]+$/;
 
-function isPublicPage(pathname: string): boolean {
+/** Whether another site's request for `pathname` is answered by its `wjs-site` tree. */
+function isSitePage(pathname: string): boolean {
+    if (SIGN_IN_PAGES.test(pathname)) return true;
     if (NOT_PUBLIC_PAGES.test(pathname)) return false;
     const last = pathname.slice(pathname.lastIndexOf("/") + 1);
     return !last.includes(".") || PUBLIC_DOCUMENTS.test(pathname);
@@ -55,7 +62,7 @@ export function proxy(request: NextRequest) {
     if (host.length > 253 || !SITE_HOST.test(host)) {
         return new NextResponse("Bad Request", { status: 400, headers: { "Cache-Control": "no-store" } });
     }
-    if (isPublicPage(pathname)) headers.set(SITE_ROUTE_HEADER, host);
+    if (isSitePage(pathname)) headers.set(SITE_ROUTE_HEADER, host);
     return pass();
 }
 

@@ -2,7 +2,7 @@
  * Shared @font-face CSS builder for WordJS-installed fonts.
  *
  * Pure (no "use client", no server-only imports) so BOTH the server component that injects font faces
- * into the SSR <head> (so custom fonts are present on first paint — see app/layout.tsx) AND the client
+ * into the SSR <head> (so custom fonts are present on first paint — see app/_root/RootDocument.tsx) AND the client
  * SystemFontsLoader use the exact same declarations. Before this, faces were injected only client-side
  * in a useEffect, so a public page's first paint had the inline `font-family` but no matching face —
  * the element fell back to the theme font until hydration (and permanently if client JS was blocked).
