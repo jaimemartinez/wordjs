@@ -847,6 +847,12 @@ the boot error links there too.
 
 ### Fixed
 
+- **Verso on a phone or a tablet: nothing is desktop-only any more.** Below 768 px the block's motion (entrance
+  animation, interaction preset, steps and timeline) had no way in at all: the motion dock is a desktop/tablet panel
+  and those fields are not in the inspector. Its body now opens as a *Motion* section of the properties sheet. Below
+  1280 px a *More options* menu in the header holds what only the desktop header and rail showed: undo/redo,
+  publication status and date, preview, replaying the entrance animations, guides, templates, the media library,
+  review comments, revision history, the accessibility check and the command palette.
 - **Multisite on Windows: a plugin's or a site's AppContainer profiles go with it.** Each (site, plugin)
   worker of a network runs under its own AppContainer profile. Deleting a plugin removed only the main
   site's; it now removes the profile (and the folder permissions given to it) of the plugin's worker on

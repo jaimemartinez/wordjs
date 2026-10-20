@@ -720,6 +720,8 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Gestionar preajustes", en: "Manage presets", pt: "Gerenciar predefinições" },
     { es: "Cancelar", en: "Cancel", pt: "Cancelar" },
     { es: "Estado de publicación", en: "Publication status", pt: "Status de publicação" },
+    { es: "Más opciones", en: "More options", pt: "Mais opções" },
+    { es: "Buscar acciones y bloques", en: "Search actions and blocks", pt: "Buscar ações e blocos" },
 ];
 
 const TRIPLES: Tri[] = [...BLOCKS_CATEGORIES, ...FIELD_STRINGS, ...CHROME_STRINGS, ...VERSO_CHROME_STRINGS];
