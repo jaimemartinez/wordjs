@@ -41,7 +41,7 @@ const WEBHOOK_TOLERANCE_S = 26 * 60 * 60;
 const RENEW_LEAD_MS = 24 * 60 * 60 * 1000;      // charge the source a day before the period ends
 const RENEW_RETRY_MS = 24 * 60 * 60 * 1000;     // retry a declined renewal daily
 const RENEW_MAX_ATTEMPTS = 3;
-const AUTO_RENEW_STATUS_TTL_MS = 30 * 1000;     // how long the account block's Nequi status answer is reused
+const NEQUI_STATUS_PER_MINUTE = 6;              // Wompi asked about one pending Nequi approval, per minute
 // What a transaction event must sign, at least (Wompi signs these for `transaction.updated`).
 const REQUIRED_TXN_PROPS = ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'];
 const REQUIRED_NEQUI_PROPS = ['nequi_token.id', 'nequi_token.status'];
@@ -229,7 +229,16 @@ function createWompiProvider(ctx) {
     };
 
     /** A pending Nequi approval, asked at Wompi: approved → becomes the payment source; declined → dropped. */
-    const nequiStatusCache = new Map();
+    const nequiAsks = new Map();
+    const nequiStatusAllowed = (src) => {
+        const now = Date.now();
+        const hits = (nequiAsks.get(src) || []).filter((t) => now - t < 60 * 1000);
+        if (hits.length >= NEQUI_STATUS_PER_MINUTE) { nequiAsks.set(src, hits); return false; }
+        if (!nequiAsks.has(src) && nequiAsks.size >= 1000) nequiAsks.clear();
+        hits.push(now);
+        nequiAsks.set(src, hits);
+        return true;
+    };
     const nequiTokenStatus = async (member, src) => {
         const tok = await request('GET', `/tokens/nequi/${encodeURIComponent(src.slice(6))}`, null, 'public').catch(() => null);
         if (tok && tok.status === 'APPROVED') {
@@ -423,14 +432,10 @@ function createWompiProvider(ctx) {
         async autoRenewStatus(member) {
             const src = member && member.provider_payment_source ? String(member.provider_payment_source) : '';
             if (src.startsWith('nequi:')) {
-                // Asked on every account-block load while the member has not approved yet: the answer is
-                // reused for a few seconds instead of calling Wompi on each one.
-                const cached = nequiStatusCache.get(src);
-                if (cached && Date.now() - cached.at < AUTO_RENEW_STATUS_TTL_MS) return cached.value;
-                if (nequiStatusCache.size > 1000) nequiStatusCache.clear();
-                const value = await nequiTokenStatus(member, src);
-                nequiStatusCache.set(src, { at: Date.now(), value });
-                return value;
+                // Asked on every account-block load while the member has not approved yet: Wompi is asked a
+                // few times a minute per request at most; past that the block shows it as still pending.
+                if (!nequiStatusAllowed(src)) return { method: 'nequi', state: 'pending' };
+                return nequiTokenStatus(member, src);
             }
             if (src.startsWith('source:')) return { method: 'nequi', state: member.cancel_at_period_end ? 'paused' : 'active' };
             return { method: null, state: 'off' };

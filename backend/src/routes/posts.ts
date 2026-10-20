@@ -165,7 +165,9 @@ const NON_CONTENT_META_KEYS: Set<string> = new Set([
 /** Keep WordJS-owned keys driver-independent while preserving plugin keys byte-for-byte. */
 function storageMetaKey(key: string, contentType?: string): string {
     const canonical = canonicalMetaKey(key);
-    return isRevisionableMeta(canonical, contentType) || NON_CONTENT_META_KEYS.has(canonical) ? canonical : key;
+    // `_wjs_access` (core/content-access) too: the SQL gate reads the key byte for byte, so a lookalike or
+    // case variant (which MySQL would still match) must be stored under the one spelling every reader uses.
+    return isRevisionableMeta(canonical, contentType) || NON_CONTENT_META_KEYS.has(canonical) || canonical === '_wjs_access' ? canonical : key;
 }
 
 /**
@@ -1982,7 +1984,10 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticate
     // image: the same rule Post.toJSON applies to `featuredMedia` and to the `_thumbnail_id` it emits.
     const allMeta = await Post.getAllMeta(postId);
     if (canManagePostRecord(req.user, post)) return res.json(allMeta);
-    const visibleMeta = publicPostMeta(allMeta);
+    // A members-only entry's page-builder tree is cut at its access break for a reader who does not hold
+    // the level — the same projection GET /posts/:id applies (core/content-access projectGatedMeta).
+    const contentAccess = require('../core/content-access');
+    const visibleMeta = contentAccess.projectGatedMeta(publicPostMeta(allMeta), await contentAccess.accessFor(req.user, post, allMeta));
     if (!canReadPostContent(req.user, post)) {
         delete visibleMeta._puck_data;
         delete visibleMeta._thumbnail_id;

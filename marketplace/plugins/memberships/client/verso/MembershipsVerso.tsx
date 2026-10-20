@@ -346,15 +346,30 @@ function NewsletterToggle() {
         setBusy(true);
         const r = await postJson("/me/newsletter", { subscribed: !pref.subscribed });
         setBusy(false);
-        if (r.ok) setPref({ ...pref, subscribed: !!r.body.subscribed });
+        if (r.ok) setPref(r.body);
+    };
+    const [note, setNote] = useState("");
+    const askLink = async () => {
+        setBusy(true);
+        const r = await postJson("/me/newsletter/confirm", {});
+        setBusy(false);
+        if (r.ok) { setPref(r.body); setNote(`Te enviamos el enlace de confirmación a ${r.body.email || "tu correo"}.`); }
+        else setNote((r.body && r.body.error) || "No se pudo enviar el enlace.");
     };
     return (
         <div className="wjms-row" style={{ alignItems: "center" }}>
             <span>Newsletters por correo</span>
             <label style={{ display: "inline-flex", gap: ".5rem", alignItems: "center", cursor: "pointer" }}>
                 <input type="checkbox" checked={!!pref.subscribed} disabled={busy} onChange={toggle} />
-                {pref.subscribed ? "Suscrito" : "No suscrito"}
+                {pref.subscribed ? (pref.confirmed ? "Suscrito" : "Pendiente de confirmar") : "No suscrito"}
             </label>
+            {pref.subscribed && !pref.confirmed ? (
+                <div style={{ flexBasis: "100%", fontSize: ".85rem", marginTop: ".4rem" }}>
+                    <span>Confirma tu correo para recibirlas. </span>
+                    <button type="button" className="wjms-btn wjms-btn-ghost" disabled={busy} onClick={askLink}>Enviarme el enlace</button>
+                    {note ? <div role="status" style={{ marginTop: ".3rem" }}>{note}</div> : null}
+                </div>
+            ) : null}
         </div>
     );
 }

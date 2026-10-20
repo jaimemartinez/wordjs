@@ -85,8 +85,21 @@ beforeEach(async () => {
     }
     await plugin.call('post', '/members/comp', { user: ADMIN, body: { user: 'carla', tier_id: tiers.gold.id } });
     await plugin.call('post', '/members/comp', { user: ADMIN, body: { user: 'dani', tier_id: tiers.silver.id } });
+    // Every account with an address has confirmed it (the confirmation flow has its own tests below).
+    for (const a of ACCOUNTS) if (a.userEmail) confirm(a.id, a.userEmail);
     plugin.mails.length = 0;
 });
+
+/** Mark `email` confirmed for account `id`, as clicking the confirmation link does. */
+function confirm(id: number, email: string | null) {
+    plugin.sdb.prepare(`DELETE FROM ${plugin.prefix}nl_prefs WHERE user_id = ?`).run(id);
+    if (email === null) return;
+    try {
+        plugin.sdb.prepare(`INSERT INTO ${plugin.prefix}nl_prefs (user_id, subscribed, confirmed_email) VALUES (?, 1, ?)`).run(id, email);
+    } catch {
+        // (A plugin version without address confirmation: nothing to mark.)
+    }
+}
 
 afterEach(() => plugin.close());
 
@@ -174,7 +187,8 @@ describe('unsubscribe', () => {
         const off = await plugin.call('post', '/public/newsletter', { body: { u: 2, t, subscribed: false } });
         assert.deepStrictEqual([off.status, off.body], [200, { subscribed: false }]);
         assert.deepStrictEqual((await plugin.call('get', '/public/newsletter', { query: { u: '2', t } })).body, { subscribed: false });
-        assert.deepStrictEqual((await plugin.call('get', '/me/newsletter', { user: { id: 2, role: 'subscriber' } })).body, { subscribed: false, enabled: true });
+        const me = (await plugin.call('get', '/me/newsletter', { user: { id: 2, role: 'subscriber' } })).body;
+        assert.deepStrictEqual([me.subscribed, me.enabled], [false, true]);
 
         plugin.mails.length = 0;
         await send(10, 'all');
@@ -294,5 +308,140 @@ describe('the editor field', () => {
         assert.strictEqual(cleanField({ metaKey: 'audience', type: 'select', options: [] }), null, 'a select needs options');
         assert.deepStrictEqual(cleanField({ metaKey: 'audience', type: 'evil', label: 'A', options: [{ value: 'a', label: 'A' }, { bad: 1 }] }),
             { metaKey: 'audience', label: 'A', type: 'select', postTypes: ['post'], options: [{ value: 'a', label: 'A' }] });
+    });
+});
+
+describe('only confirmed addresses (second audit)', () => {
+    test('an unconfirmed address gets one fixed-text confirmation mail, not the newsletter — once every 30 days', async () => {
+        confirm(2, null); // Ana typed an address nobody confirmed
+        await send(11, 'all');
+        await drain();
+        const toAna = plugin.mails.filter((m) => m.to === 'ana@example.com');
+        assert.strictEqual(toAna.length, 1);
+        assert.match(toAna[0].subject, /^Confirma tu correo/);
+        assert.ok(!toAna[0].html!.includes('Everyone reads this'), 'no newsletter before the address is confirmed');
+        assert.ok(!/Ana/.test(toAna[0].html!) && !/Ana/.test(toAna[0].text!), 'nothing a visitor wrote (not even the account name)');
+        assert.ok(mailsTo().includes('bea@example.com') && mailFor('bea@example.com').html!.includes('Everyone reads this'), 'confirmed members get it');
+
+        plugin.mails.length = 0;
+        await send(13, 'all');
+        await plugin.call('post', '/newsletter/sends/:id/approve', { user: ADMIN, params: { id: String((await plugin.call('get', '/newsletter/sends', { user: ADMIN })).body.sends[0].id) } });
+        await drain();
+        assert.ok(!mailsTo().includes('ana@example.com'), 'no second confirmation within 30 days, and still no newsletter');
+    });
+
+    test('the confirmation link confirms that account at that address only; changing the address un-confirms it', async () => {
+        confirm(2, null);
+        await send(11, 'all');
+        await drain();
+        const html = mailFor('ana@example.com').html!;
+        const [, u, t, c] = html.match(/portal\/memberships\?u=(\d+)&amp;t=([0-9a-f]{32})&amp;c=([0-9a-f]{32})/)!;
+        assert.strictEqual(u, '2');
+        assert.strictEqual((await plugin.call('post', '/public/newsletter', { body: { u: 2, t, confirm: true, c: 'f'.repeat(32) } })).status, 400, 'a forged code');
+        const ok = await plugin.call('post', '/public/newsletter', { body: { u: 2, t, confirm: true, c } });
+        assert.deepStrictEqual([ok.status, ok.body], [200, { subscribed: true, confirmed: true }]);
+        assert.strictEqual((await plugin.call('get', '/me/newsletter', { user: { id: 2, role: 'subscriber' } })).body.confirmed, true);
+
+        // Ana changes her address: the old confirmation does not cover the new one.
+        const ana = ACCOUNTS.find((a) => a.id === 2)!;
+        ana.userEmail = 'ana.new@example.com';
+        try {
+            assert.strictEqual((await plugin.call('get', '/me/newsletter', { user: { id: 2, role: 'subscriber' } })).body.confirmed, false);
+            assert.strictEqual((await plugin.call('post', '/public/newsletter', { body: { u: 2, t, confirm: true, c } })).status, 400, 'the old link is for the old address');
+        } finally {
+            ana.userEmail = 'ana@example.com';
+        }
+    });
+
+    test('the member asks for the link from the account block: sent to the account address, once a day', async () => {
+        confirm(3, null);
+        const r = await plugin.call('post', '/me/newsletter/confirm', { user: { id: 3, role: 'subscriber' } });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+        await drain();
+        assert.deepStrictEqual(mailsTo(), ['bea@example.com']);
+        assert.match(mailFor('bea@example.com').subject, /^Confirma tu correo/);
+        assert.strictEqual((await plugin.call('post', '/me/newsletter/confirm', { user: { id: 3, role: 'subscriber' } })).status, 429);
+    });
+});
+
+describe('unsubscribe in one click from the mail client (RFC 8058)', () => {
+    test('every newsletter carries List-Unsubscribe + List-Unsubscribe-Post; that POST unsubscribes with the token only', async () => {
+        await send(11, 'all');
+        await drain();
+        const h = (mailFor('ana@example.com') as any).extraHeaders;
+        assert.ok(h, 'headers handed to the mail provider');
+        assert.strictEqual(h['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
+        const [, url] = String(h['List-Unsubscribe']).match(/^<(.+)>$/)!;
+        const parsed = new URL(url);
+        assert.strictEqual(parsed.pathname, '/api/v1/plugin/memberships/public/newsletter/one-click');
+        assert.strictEqual(parsed.searchParams.get('u'), '2');
+        const t = parsed.searchParams.get('t')!;
+        assert.strictEqual((await plugin.call('post', '/public/newsletter/one-click', { query: { u: '3', t }, rawBody: 'List-Unsubscribe=One-Click' })).status, 400, 'Ana\'s token is not Bea\'s');
+        const r = await plugin.call('post', '/public/newsletter/one-click', { query: { u: '2', t }, rawBody: 'List-Unsubscribe=One-Click' });
+        assert.deepStrictEqual([r.status, r.body], [200, { subscribed: false }]);
+        assert.strictEqual((await plugin.call('get', '/me/newsletter', { user: { id: 2, role: 'subscriber' } })).body.subscribed, false);
+    });
+});
+
+describe('decided when each mail is sent; claimed so it is sent once (second audit)', () => {
+    test('a post gated after its send started goes out as a teaser to the rest', async () => {
+        await plugin.call('post', '/config', { user: ADMIN, body: { newsletterRate: 1 } });
+        const saved = JSON.parse(JSON.stringify(POSTS[11]));
+        try {
+            await send(11, 'all');
+            await process(); // the list is built ("full" for everyone: the post is public) and one mail goes out
+            POSTS[11] = { ...saved, accessLevel: 'paid', content: `<p>Open part</p><hr class="wjs-access-break" /><p>${SECRET} added later</p>` };
+            await plugin.call('post', '/config', { user: ADMIN, body: { newsletterRate: 600 } });
+            await drain();
+            for (const to of ['ana@example.com', 'bea@example.com', 'writer@example.com', 'admin@site.test']) {
+                const m = plugin.mails.find((x) => x.to === to);
+                if (m) assert.ok(!m.html!.includes(SECRET) && !m.text!.includes(SECRET), `${to} received the body gated after the list was built`);
+            }
+            assert.ok(mailFor('carla@example.com').html!.includes(SECRET), 'a paid member still gets it in full');
+        } finally {
+            POSTS[11] = saved;
+        }
+    });
+
+    test('an address that unsubscribed after the list was built is skipped', async () => {
+        await plugin.call('post', '/config', { user: ADMIN, body: { newsletterRate: 1 } });
+        await send(11, 'all');
+        await process();
+        const first = plugin.mails[0].to;
+        const later = ['ana@example.com', 'bea@example.com'].find((e) => e !== first)!;
+        const id = ACCOUNTS.find((a) => a.userEmail === later)!.id;
+        await plugin.call('post', '/me/newsletter', { user: { id, role: 'subscriber' }, body: { subscribed: false } });
+        await plugin.call('post', '/config', { user: ADMIN, body: { newsletterRate: 600 } });
+        await drain();
+        assert.ok(!mailsTo().includes(later), `${later} unsubscribed before their mail went out`);
+    });
+
+    test('one send per post even for two simultaneous requests; a delivery another run claimed is not sent again', async () => {
+        await plugin.call('post', '/config', { user: ADMIN, body: { newsletterRate: 1 } });
+        const both = await Promise.all([send(11, 'all'), send(11, 'all')]);
+        assert.deepStrictEqual(both.map((r) => r.status).sort(), [200, 409]);
+        await process();
+        // Another worker claimed one delivery a moment ago: this run leaves it alone.
+        await plugin.call('post', '/config', { user: ADMIN, body: { newsletterRate: 600 } });
+        const d = plugin.sdb.prepare(`SELECT id, email FROM ${plugin.prefix}nl_deliveries WHERE status = 'pending' ORDER BY id LIMIT 1`).get();
+        plugin.sdb.prepare(`UPDATE ${plugin.prefix}nl_deliveries SET status = 'sending', claimed_at = ? WHERE id = ?`).run(Date.now(), d.id);
+        plugin.mails.length = 0;
+        await drain();
+        assert.ok(!mailsTo().includes(d.email), 'claimed elsewhere: not mailed twice');
+        // ... unless that claim is long dead (the worker stopped): then it is retried.
+        plugin.sdb.prepare(`UPDATE ${plugin.prefix}nl_deliveries SET claimed_at = ? WHERE id = ?`).run(Date.now() - 60 * 60 * 1000, d.id);
+        await drain();
+        assert.ok(mailsTo().includes(d.email));
+    });
+
+    test('a title with a line break is one subject line', async () => {
+        POSTS[15] = { ...POSTS[11], id: 15, title: 'Line one\r\nBcc: victim@example.com' };
+        try {
+            await send(15, 'all');
+            await drain();
+            assert.strictEqual(mailFor('ana@example.com').subject, 'Line one Bcc: victim@example.com');
+        } finally {
+            delete POSTS[15];
+        }
     });
 });

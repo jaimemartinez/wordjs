@@ -16,7 +16,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   RSS / Atom / JSON and taxonomy feeds, search (a gated post matches by title only) and the post's
   comments (not listed, fetchable, writable or in the comments feed). The excerpt is never derived from
   the withheld body. Levels come from two new filters, `content_access_levels` and
-  `content_access_grants`; an unknown level fails closed. Signed-in members get the full body in the
+  `content_access_grants`, which only a plugin holding the new **`content_access:provider`** grant may
+  answer; an unknown or malformed level fails closed. The page-builder tree is cut the same way on
+  `GET /posts/:id/meta`, files attached to a gated entry are listed and served only to who manages it, a
+  gated entry never ranks by its withheld body in search, and answers to a signed-in reader are sent
+  `Cache-Control: private`. Signed-in members get the full body in the
   browser, with their own session, so the cached HTML never carries it. See `documentation/memberships.md`.
 - **`memberships` plugin (1.0.0) in the marketplace catalog.** Free and paid tiers, a paywall block that
   ends a post's free teaser and shows the plans, a member account block (change tier, cancel / resume),
@@ -35,7 +39,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   backoff and the admin sees a send log with delivered / failed counts, approves sends requested by
   authors, retries failures and sends tests. A post that requires an access level goes out in full only to
   members who hold it — everyone else gets the teaser and a link. Every mail has a one-click unsubscribe
-  link (an HMAC token per account) and members manage newsletters from their account block.
+  link (an HMAC token per account) plus RFC 8058 `List-Unsubscribe` / `List-Unsubscribe-Post` headers, and
+  members manage newsletters from their account block. Newsletters go only to addresses the member has
+  confirmed (a fixed-text confirmation mail, at most once every 30 days); what each member receives is
+  decided when their mail is sent, and every step is claimed in the database, so several workers never
+  send the same mail twice.
 - **Mercado Pago and Wompi payments for memberships (`memberships` 1.2.0).** Payments now go through one
   provider interface, and the admin picks **Stripe**, **Mercado Pago** or **Wompi** in Ajustes (Stripe
   behaves as before). Mercado Pago uses preapproval subscriptions verified by the `x-signature` HMAC. Wompi

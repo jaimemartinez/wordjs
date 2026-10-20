@@ -137,7 +137,7 @@ before(async () => {
         },
     });
     const silver = await plugin.call('post', '/tiers', { user: ADMIN, body: { name: 'Silver', price_cents: 500 } });
-    const gold = await plugin.call('post', '/tiers', { user: ADMIN, body: { name: 'Gold', price_cents: 1500, interval: 'year' } });
+    const gold = await plugin.call('post', '/tiers', { user: ADMIN, body: { name: 'Gold', price_cents: 15000, interval: 'year' } });
     assert.strictEqual(silver.status, 200, JSON.stringify(silver.body));
     assert.strictEqual(gold.status, 200, JSON.stringify(gold.body));
     for (const [login, tier] of [['silver', silver], ['gold', gold]] as const) {
@@ -472,5 +472,142 @@ describe('the posts bridge and the editor-field seam', () => {
         } finally {
             hooks.removeFilter('post_editor_fields', decl);
         }
+    });
+});
+
+describe('every twin of the REST projection (second audit)', () => {
+    /** A published post by the author with this raw `_puck_data` text and this raw `_wjs_access` text. */
+    async function seedRaw(title: string, html: string, puckText: string | null, levelText: string) {
+        seq++;
+        const r = await db.run(
+            `INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name, comment_status)
+             VALUES (?, ?, ?, 'publish', 'post', ?, 'open')`,
+            [U.author, title, html, `raw-${seq}`]);
+        if (puckText !== null) await db.run(`INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, '_puck_data', ?)`, [r.lastID, puckText]);
+        await db.run(`INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, '_wjs_access', ?)`, [r.lastID, levelText]);
+        return r.lastID;
+    }
+
+    test('GET /posts/:id/meta serves the same teaser tree as GET /posts/:id', async () => {
+        for (const key of ['members', 'paid', 'gold', 'nobreak', 'unknown']) {
+            const r = await anon('get', `/posts/${P[key]}/meta`);
+            assert.strictEqual(r.status, 200, key);
+            assert.deepStrictEqual(leaks(r.body), [], `GET /posts/${key}/meta leaks to anonymous`);
+        }
+        const free = await as('free', 'get', `/posts/${P.paid}/meta`);
+        assert.deepStrictEqual(leaks(free.body), [], 'a free member reads no paid tree through /meta');
+        assert.strictEqual(free.body._puck_data.content.find((i: any) => i.type === 'MembershipsPaywall').props.accessState, 'locked');
+        const silver = await as('silver', 'get', `/posts/${P.paid}/meta`);
+        assert.ok(JSON.stringify(silver.body).includes(SECRET.paid), 'positive control: a paid member reads the tree');
+        const author = await as('author', 'get', `/posts/${P.gold}/meta`);
+        assert.ok(JSON.stringify(author.body).includes(SECRET.gold), 'positive control: the author reads the raw map');
+    });
+
+    test('the excerpt the editor stores in the root props of the tree is not served to a locked reader', async () => {
+        const secret = 'SECRET-ROOT-EXCERPT-31aa';
+        const tree = {
+            root: { props: { title: 'Root excerpt', excerpt: `${secret} first words of the whole body` } },
+            content: [
+                { type: 'Text', props: { id: 'r1', content: 'teaser' } },
+                { type: 'MembershipsPaywall', props: { id: 'rw', contentAccessBreak: true } },
+            ],
+        };
+        const id = await seedRaw('Root excerpt', '<p>teaser</p><hr class="wjs-access-break" /><p>rest</p>', JSON.stringify(tree), 'paid');
+        for (const path of [`/posts/${id}`, `/posts/${id}/meta`]) {
+            const r = await anon('get', path);
+            assert.deepStrictEqual(leaks(r.body, [secret]), [], `${path} leaks the root excerpt`);
+        }
+        const r = await anon('get', `/posts/${id}`);
+        assert.strictEqual(r.body.meta._puck_data.root.props.title, 'Root excerpt', 'the rest of the root stays');
+        const silver = await as('silver', 'get', `/posts/${id}`);
+        assert.ok(JSON.stringify(silver.body).includes(secret), 'positive control: a reader with access gets it');
+    });
+
+    test('a tree the cut cannot read (double-encoded, zones only) is withheld whole, not served whole', async () => {
+        const secret = 'SECRET-MALFORMED-c0de';
+        const inner = { content: [{ type: 'Text', props: { id: 'm1', content: `${secret} encoded twice` } }] };
+        const twice = await seedRaw('Twice', '', JSON.stringify(JSON.stringify(inner)), 'members');
+        const zonesOnly = await seedRaw('Zones only', '', JSON.stringify({ root: { props: {} }, zones: { 'x:y': [{ type: 'Text', props: { id: 'm2', content: `${secret} in a zone` } }] } }), 'members');
+        for (const id of [twice, zonesOnly]) {
+            for (const path of [`/posts/${id}`, `/posts/${id}/meta`]) {
+                const r = await anon('get', path);
+                assert.strictEqual(r.status, 200, path);
+                assert.deepStrictEqual(leaks(r.body, [secret]), [], `${path} leaks a malformed tree`);
+            }
+        }
+    });
+
+    test('a break inside a legacy zone cuts before the container that owns the zone', async () => {
+        const secret = 'SECRET-ZONE-BREAK-7e7e';
+        const tree = {
+            content: [
+                { type: 'Text', props: { id: 'zb1', content: 'teaser' } },
+                { type: 'Section', props: { id: 'zbs' } },
+                { type: 'MembershipsPaywall', props: { id: 'zbw2', contentAccessBreak: true } },
+            ],
+            zones: { 'zbs:inner': [
+                { type: 'MembershipsPaywall', props: { id: 'zbw', contentAccessBreak: true } },
+                { type: 'Text', props: { id: 'zbt', content: `${secret} after the break of the zone` } },
+            ] },
+        };
+        const id = await seedRaw('Zone break', '', JSON.stringify(tree), 'paid');
+        const r = await anon('get', `/posts/${id}`);
+        assert.deepStrictEqual(leaks(r.body, [secret]), []);
+        assert.deepStrictEqual(r.body.meta._puck_data.content.map((i: any) => i.props.id), ['zb1', 'zbw']);
+    });
+
+    test('a level stored as a non-string (null, [], a number) gates on REST as the SQL gate does', async () => {
+        for (const levelText of ['null', '[]', '{}', '42', 'true']) {
+            const secret = `SECRET-LEVEL-${levelText.replace(/\W/g, 'x')}-55`;
+            const id = await seedRaw(`Level ${levelText}`, `<p>${secret}</p>`, null, levelText);
+            const r = await anon('get', `/posts/${id}`);
+            assert.deepStrictEqual(leaks(r.body, [secret]), [], `level ${levelText} served the body`);
+            assert.strictEqual(r.body.access.gated, true, levelText);
+            const g = await as('gold', 'get', `/posts/${id}`);
+            assert.deepStrictEqual(leaks(g.body, [secret]), [], `no provider level unlocks ${levelText}`);
+            const a = await as('author', 'get', `/posts/${id}`);
+            assert.ok(a.body.content.includes(secret), 'positive control: the author reads it');
+        }
+        assert.deepStrictEqual(contentAccess.cleanLevels(['null', 'true', 'false', '42', '9lives', 'members']), ['members'],
+            'a provider cannot offer or grant a level that JSON-decodes to something else');
+    });
+
+    test('the files attached to a gated entry are not listed or served by id to who does not manage it', async () => {
+        const att = await db.run(
+            `INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name, post_parent, post_mime_type, guid)
+             VALUES (?, 'Premium download', '', 'inherit', 'attachment', 'premium-download', ?, 'application/pdf', '/uploads/SECRET-FILE-premium.pdf')`,
+            [U.author, P.paid]);
+        const id = att.lastID;
+        for (const who of [null, 'free', 'silver']) {
+            const call = (m: string, p: string) => (who ? as(who, m, p) : anon(m, p));
+            assert.strictEqual((await call('get', `/media/${id}`)).status, 404, `${who || 'anon'} GET /media/:id`);
+            const list = await call('get', '/media?per_page=100');
+            assert.strictEqual(list.status, 200);
+            assert.ok(!JSON.stringify(list.body).includes('SECRET-FILE-premium'), `${who || 'anon'} media list`);
+            const posts = await call('get', '/posts?type=attachment&per_page=100');
+            assert.ok(!JSON.stringify(posts.body).includes('SECRET-FILE-premium'), `${who || 'anon'} /posts?type=attachment`);
+        }
+        assert.strictEqual((await as('author', 'get', `/media/${id}`)).status, 200, 'positive control: the author');
+        const list = await as('editor', 'get', '/media?per_page=100');
+        assert.ok(JSON.stringify(list.body).includes('SECRET-FILE-premium'), 'positive control: an editor lists it');
+    });
+
+    test('search does not RANK a gated entry by its withheld body', async () => {
+        // Same title word; the OLDER entry repeats it all over its withheld body. By date alone the newer
+        // one comes first — any other order tells the searcher what the hidden part says.
+        const word = 'quokkaword';
+        const older = await db.run(`INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name, post_date)
+            VALUES (?, ?, ?, 'publish', 'post', 'rank-older', '2020-01-01 00:00:00')`,
+            [U.author, `${word} older`, `<p>t</p><hr class="wjs-access-break" /><p>${Array(60).fill(word).join(' ')}</p>`]);
+        const newer = await db.run(`INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_name, post_date)
+            VALUES (?, ?, ?, 'publish', 'post', 'rank-newer', '2021-01-01 00:00:00')`,
+            [U.author, `${word} newer`, '<p>t</p><hr class="wjs-access-break" /><p>nothing here</p>']);
+        for (const id of [older.lastID, newer.lastID]) {
+            await db.run(`INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, '_wjs_access', 'paid')`, [id]);
+        }
+        const r = await anon('get', `/posts?search=${word}&per_page=10`);
+        assert.strictEqual(r.status, 200);
+        const ids = r.body.map((p: any) => p.id);
+        assert.deepStrictEqual(ids.filter((i: number) => i === older.lastID || i === newer.lastID), [newer.lastID, older.lastID]);
     });
 });
