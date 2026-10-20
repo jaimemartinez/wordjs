@@ -420,6 +420,8 @@ export function withRecordRootFields(
         accessLevels?: readonly AccessLevelOption[];
         /** El nivel guardado del registro abierto (meta `_wjs_access`). */
         currentAccess?: unknown;
+        /** Campos que declaran los plugins activos (GET /editor/fields, backend core/editor-fields). */
+        pluginFields?: readonly PluginEditorField[];
     } = {},
 ): Record<string, VersoField> {
     const out: Record<string, VersoField> = {};
@@ -447,6 +449,8 @@ export function withRecordRootFields(
     if ((opts.accessLevels && opts.accessLevels.length) || currentAccess) {
         out[ACCESS_META_KEY] = accessField(opts.accessLevels || [], currentAccess);
     }
+    // Campos de plugins (p. ej. «Enviar por correo a los miembros»), detrás de Acceso.
+    for (const field of opts.pluginFields || []) out[pluginFieldKey(field.metaKey)] = pluginRootField(field);
     // SEO al final, y solo si el registro base no lo trae ya (entradas SÍ lo traen, páginas no).
     if (opts.seo) {
         for (const [key, field] of Object.entries(seoFields)) {
@@ -647,4 +651,59 @@ export function accessMetaForSave(
     if (typeof value !== "string") return {};
     const next = value.trim();
     return next === String(seeded ?? "").trim() ? {} : { [ACCESS_META_KEY]: next };
+}
+
+/* ------------------------------------------------------------------ */
+/* Campos de plugins (backend core/editor-fields).                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Lo que un plugin declara por el filtro `post_editor_fields`: DATOS, no código — el backend ya los validó
+ * (clave de meta sin prefijo, tipo select/radio/text, opciones acotadas). El valor vive en la meta de la
+ * entrada, como el SEO: se siembra al abrir y viaja en el `meta` del guardado solo si el autor lo cambió.
+ */
+export interface PluginEditorField {
+    metaKey: string;
+    label: string;
+    type: "select" | "radio" | "text";
+    options?: Array<{ value: string; label: string }>;
+    help?: string;
+}
+
+/** La prop de root que edita la meta `metaKey` (prefijada: nunca choca con un campo del núcleo). */
+export function pluginFieldKey(metaKey: string): string {
+    return `wjs_meta__${metaKey}`;
+}
+
+export function pluginRootField(field: PluginEditorField): VersoField {
+    const label = field.help ? `${field.label} — ${field.help}` : field.label;
+    if (field.type === "text") return { type: "text", label };
+    return { type: field.type, label, options: (field.options || []).map((o) => ({ label: o.label, value: o.value })) } as VersoField;
+}
+
+/** Los valores guardados de esos campos, para sembrar root.props (string; '' si no hay). */
+export function seedPluginFieldProps(post: Post | undefined | null, fields: readonly PluginEditorField[]): Record<string, string> {
+    const meta = (post?.meta || {}) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const f of fields) {
+        const raw = meta[f.metaKey];
+        out[pluginFieldKey(f.metaKey)] = raw == null ? "" : String(raw);
+    }
+    return out;
+}
+
+/** La meta a guardar: solo los campos que el autor CAMBIÓ respecto a lo sembrado. */
+export function pluginMetaForSave(
+    rootProps: Record<string, unknown> | undefined | null,
+    fields: readonly PluginEditorField[],
+    seeded: Record<string, string>,
+): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const f of fields) {
+        const key = pluginFieldKey(f.metaKey);
+        const value = rootProps ? rootProps[key] : undefined;
+        if (typeof value !== "string") continue;
+        if (value !== (seeded[key] ?? "")) out[f.metaKey] = value;
+    }
+    return out;
 }

@@ -85,6 +85,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     backups: '/backups',
     dbMigration: '/db-migration',
     contentAccess: '/content-access',
+    editor: '/editor',
 });
 
 // API Info endpoint
@@ -154,6 +155,8 @@ router.use('/auth', authRoutes);
 router.use('/posts', postsRoutes);
 // Members-only content: the access levels the editor may offer (core/content-access).
 router.use('/content-access', require('./content-access'));
+// Post editor fields contributed by plugins (core/editor-fields).
+router.use('/editor', require('./editor'));
 router.use('/users', usersRoutes);
 router.use('/categories', categoriesRoutes);
 router.use('/tags', tagsRoutes);

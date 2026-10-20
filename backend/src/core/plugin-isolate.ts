@@ -1789,6 +1789,7 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',
+    'posts.get',
     // Private media description (gated host-side on media:private_read). Streaming the BYTES is not a
     // bridge call: it is a route reply (`res.sendPrivateMedia`), so file contents never cross the IPC.
     'media.getPrivate',

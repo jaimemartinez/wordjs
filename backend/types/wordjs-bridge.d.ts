@@ -477,7 +477,29 @@ export interface WordJS {
         findByEmail(email: string): Promise<WordJSSafeUser | null>;
         findByLogin(login: string): Promise<WordJSSafeUser | null>;
         findById(id: number | string): Promise<WordJSSafeUser | null>;
-        search(term: string, limit?: number): Promise<WordJSSafeUser[]>;
+        /** Up to `limit` (≤ 200) accounts matching `term`, ordered by id; `offset` pages through all of them. */
+        search(term: string, limit?: number, offset?: number): Promise<WordJSSafeUser[]>;
+    };
+
+    /**
+     * PUBLISHED entries only. Permission: `posts:read`. `null` for anything unpublished, private,
+     * password protected or of a non-public type. `content` is the full body and `accessLevel` the level
+     * the entry requires (`''` = public): a plugin that sends or syndicates it must itself withhold the
+     * gated part from recipients who do not hold the level.
+     */
+    posts: {
+        get(id: number): Promise<{
+            id: number; type: string; status: string; title: string; slug: string;
+            /** Site-relative public path (`/<slug>`) and its absolute URL on the site's main address. */
+            path: string; url: string;
+            date: string; authorId: number;
+            /** The author's own excerpt ('' when none) — never derived from the body. */
+            excerpt: string;
+            content: string;
+            accessLevel: string;
+            /** Public (unprefixed) meta keys only. */
+            meta: Record<string, unknown>;
+        } | null>;
     };
 
     /**
