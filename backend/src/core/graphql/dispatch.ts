@@ -137,6 +137,15 @@ export function setDispatchRouter(router: any): void {
  * Never throws for an HTTP-level failure: the status and REST body come back for the caller to map.
  */
 export function restGet(req: Request, path: string, query?: RestQuery): Promise<RestResult> {
+    return routerGet(getApiRouter(), API_PREFIX, req, path, query);
+}
+
+/**
+ * GET `path` through `router` (mounted at `mountPrefix`) AS the caller of `req` — restGet over any router.
+ * core/graphql/plugin-bridge uses it with a plugin's own GET routes, so a plugin field is authorized by the
+ * plugin route's own middleware, for the same caller.
+ */
+export function routerGet(router: any, mountPrefix: string, req: Request, path: string, query?: RestQuery): Promise<RestResult> {
     // Callers interpolate only integers and encodeURIComponent()-ed strings, which can contain neither `/`
     // nor `?`; a literal dot segment is the one thing that could still re-aim the path, so refuse it.
     if (!path.startsWith('/') || path.includes('?') || path.split('/').some(seg => seg === '.' || seg === '..')) {
@@ -154,7 +163,7 @@ export function restGet(req: Request, path: string, query?: RestQuery): Promise<
         Object.assign(sub, {
             method: 'GET',
             url,
-            originalUrl: `${API_PREFIX}${url}`,
+            originalUrl: `${mountPrefix}${url}`,
             baseUrl: '',
             query: queryObject,
             params: {},
@@ -194,7 +203,7 @@ export function restGet(req: Request, path: string, query?: RestQuery): Promise<
         };
 
         try {
-            getApiRouter().handle(sub, res, done);
+            router.handle(sub, res, done);
         } catch (err) {
             done(err);
         }

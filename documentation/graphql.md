@@ -205,9 +205,43 @@ Rules, enforced by the builder:
 
 **Sandboxed plugins.** The registration hook is host-only (`core/hook-access` classifies
 `wordjs_graphql_register_types` as denied): its argument is a function and its product is executable
-resolvers, neither of which can cross the isolate boundary. A declarative, route-backed bridge — a plugin
-declares SDL and maps each field to one of its own `/api/v1/plugin/<slug>/…` routes, so the plugin's route
-authorization applies — is planned for a later phase.
+resolvers, neither of which can cross the isolate boundary. A sandboxed plugin extends the schema
+**declaratively** instead, from its `init`, with `wordjs.graphql.extend`: SDL plus, for each new `Query`
+field, which of its own GET routes (`wordjs.http.route`) answers it.
+
+```js
+exports.init = (wordjs) => {
+    wordjs.http.route('get', '/books', (req, res) => res.json(listBooks(Number(req.query.first) || 10)));
+    wordjs.http.route('get', '/books/:id', (req, res) => { /* … res.json(book) or res.status(404) */ });
+    wordjs.http.route('get', '/shelf', { auth: true }, (req, res) => res.json(shelfOf(req.user.id)));
+
+    wordjs.graphql.extend({
+        typeDefs: `
+            type Book { id: Int! title: String }
+            type Shelf { count: Int }
+            extend type Query { books(first: Int): [Book!]! book(id: Int!): Book myShelf: Shelf }
+        `,
+        fields: {
+            'Query.books':   { path: '/books', list: true },  // GET /api/v1/plugin/<slug>/books?first=…
+            'Query.book':    { path: '/books/:id' },          // :id takes the field argument `id`
+            'Query.myShelf': { path: '/shelf' },              // the route's { auth: true } applies
+        },
+    });
+};
+```
+
+- The host builds the resolvers (`core/graphql/plugin-bridge.ts`) and calls the route **as the GraphQL
+  caller**: a `:name` path segment takes the field argument of that name (URL-encoded), every other scalar
+  argument goes in the query string, and the route's JSON body is the field's value — a `404` is `null`,
+  a `401`/`403` is a field error with code `UNAUTHENTICATED`/`FORBIDDEN`. The route's own middleware
+  (`auth`, `admin`, the site gate) authorizes it, and the plugin code that answers runs in its sandbox, so
+  a field shows exactly what the REST route would show that caller.
+- Only `Query.<field>` entry points take a route; nested fields read the route's JSON. At most 50 routed
+  fields and 5 `extend` calls per plugin, SDL up to 20 000 characters. Every routed field costs a REST read
+  (`list: true` makes it a page). The extension rules above still apply, so a declaration that names an
+  existing field (`Query.posts`) or a type that already exists is refused as a whole and logged.
+- The routes need the plugin's `express:register_route` grant, as always. Its extensions belong to the site
+  whose worker registered them and disappear when the plugin is deactivated.
 
 ## Choice of library
 

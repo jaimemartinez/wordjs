@@ -13,6 +13,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `PUT /network/sites/:id/quota`). An upload or a WXR import download over a site's quota answers
   `413 rest_upload_quota_exceeded`. No quota is set by default, and the main site never has one — see
   [multisite.md](documentation/multisite.md#media-storage-quotas).
+- **Theme permissions.** A theme's `functions.js` can now be granted permissions the plugin way: the
+  theme declares them in `theme.json` (`permissions`), and **Admin → Themes** asks the administrator on
+  activation, with each permission's reason, risk and a switch, and offers a **Permissions** button later
+  (`GET`/`PUT /api/v1/themes/:slug/permissions`). Nothing is granted implicitly; a theme that declares
+  nothing keeps running with no permission, as before — see
+  [themes.md](documentation/themes.md#theme-permissions-functionsjs).
+- **Widget settings.** Each widget instance in **Appearance → Widgets** now has a settings form drawn from
+  the fields its widget declares (`registerWidget(id, name, { fields })`); only those fields are stored,
+  coerced and bounded (`GET`/`PUT /api/v1/widgets/:widgetId/instances/:instanceId`).
+- **Sandboxed plugins register widgets and GraphQL fields.** `wordjs.widgets.register` adds a sidebar widget
+  whose renderer runs in the plugin's sandbox (output sanitized, 2 s cap), and `wordjs.graphql.extend` adds
+  GraphQL types and `Query` fields, each resolved by one of the plugin's own GET routes called as the
+  GraphQL caller, so the route's authorization applies — see
+  [plugins.md](documentation/plugins.md#102-widgets-api) and
+  [graphql.md](documentation/graphql.md#extending-the-schema).
 - **`npm run media` takes `--site <id>` and `--all-sites`** on a network of sites, and **Settings → Media
   storage** lists each site's library state.
 
@@ -83,6 +98,18 @@ the boot error links there too.
   `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
 
 ### Fixed
+
+- **WordPress import stores attachments like uploads.** An imported image now gets the same size ladder
+  and WebP/AVIF derivatives as an uploaded one, an imported SVG is stored sanitized instead of being refused,
+  and with an S3 media store the imported files go to the bucket like uploads do.
+- **`create-wordjs` survives a timed-out prebuilt download.** When the `better-sqlite3` binary download
+  timed out on a server without a compiler, the installer ended in a raw `gyp ERR!`. It now retries the
+  dependency install with backoff and, if it still fails, explains what to do (retry, or install
+  `build-essential`/`python3`), keeps the config (and the `--systemd` unit), and running the same command
+  again resumes the install.
+- **MCP tools say where every id comes from.** Each `id` argument (and every enum) of the MCP server's
+  tools is described, and the tool descriptions spell out the create → update → publish flow, so small
+  models stop sending `id: 1` instead of the id `create_draft` returned.
 
 - **Uploads on a network of sites.** A file upload larger than the first network packet (most real photos)
   could fail with "No site context" on a multisite install, because the body was read outside the

@@ -36,7 +36,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
         reason: 'runs before the logger can exist: core/logger reads config/app at load time',
     },
     'core/plugin-context.ts': {
-        count: 13,
+        count: 12,
         reason: 'loaded inside the isolated plugin child; its stdio is captured, slug-tagged and rate-limited by the host',
     },
     'core/io-guard.ts': {

@@ -201,7 +201,6 @@ class CertManager {
         this.accountKeyPath = path.join(DATA_DIR, 'account.key');
         // Let's Encrypt URLs
         this.directoryUrl = acme.directory.letsencrypt.production;
-        // this.directoryUrl = acme.directory.letsencrypt.staging; // TODO: Configurable?
     }
 
     async initClient(email: string, useStaging = false, directoryUrlOverride: string | null = null) {

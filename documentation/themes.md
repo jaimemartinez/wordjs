@@ -88,10 +88,10 @@ the webfonts* below).
 > **same RPC bridge** isolated plugins use (the isolate layer already namespaces `theme:` slugs), and
 > the runtime guards (`secure-require`/`io-guard`) confine `fs`/`require` to the theme's own directory
 > and deny secret/DB files. Its bridge calls are permission-checked on the host the way a plugin's
-> are: a call works only for a capability the theme declares (in an optional `manifest.json` next to
-> `functions.js`) **and** that is granted to it (`theme:<slug>`). Declaring is a request, not a grant —
-> a theme's server code runs sandboxed and gets only what is granted. (Handlebars helpers stay
-> built-in and host-side — they are not registered from `functions.js`.)
+> are: a call works only for a capability the theme **declares** (`theme.json` `permissions`) **and**
+> that an administrator **granted** it — see [Theme permissions](#theme-permissions-functionsjs). A
+> theme that declares nothing holds nothing. (Handlebars helpers stay built-in and host-side — they
+> are not registered from `functions.js`.)
 
 ## Available Themes
 
@@ -1468,7 +1468,9 @@ Any installed theme can be packaged back into a ZIP for backup or transfer via
 ## Activating a Theme
 
 1. Go to **Admin → Themes**
-2. Click **Activate** on the desired theme
+2. Click **Activate** on the desired theme. If its `functions.js` declares permissions, the
+   activation dialog lists them first and you choose which to grant — see
+   [Theme permissions](#theme-permissions-functionsjs).
 3. The public site serves the new theme on the next navigation or full page load: activation
    **expires** the `settings` cache tag (not merely marks it stale), so the next request renders with the
    new slug/version instead of getting the previous theme once more while a refresh runs in the
@@ -1524,6 +1526,79 @@ in the source, which would move it backwards). `ASSET_VERSION` is no longer hand
 sha256 of `backend/public/css/wordjs-ui.css`, generated into the committed
 `frontend/src/lib/assetVersion.generated.ts` by `scripts/generate-asset-version.js` (run in the
 frontend `prebuild`, diff-gated in CI). Nothing to bump — edit the CSS and the token follows.
+
+## Theme permissions (`functions.js`)
+
+A theme's `functions.js` follows the same permission model as a plugin: **the theme requests, the
+administrator grants, and nothing is granted implicitly.** Its code runs in an isolated child process
+as the principal `theme:<slug>`, and every host gate (the options/users/mail/notifications/AI
+bridges, the filesystem guard, the content hooks) checks that the permission is both declared by the
+theme and granted to it on this site.
+
+**Declaring.** List what the code needs in `theme.json`, one entry per permission, with an optional
+`reason` the administrator sees in the dialog:
+
+```json
+{
+  "name": "My Theme",
+  "version": "1.2.0",
+  "permissions": [
+    { "scope": "settings", "access": "read", "reason": "Shows the site name in the [site_badge] shortcode" },
+    { "scope": "posts", "access": "read", "reason": "Lists related posts under each article" }
+  ]
+}
+```
+
+An older theme may keep the same array in a `manifest.json` next to `functions.js`; it is read only
+when `theme.json` declares nothing. A theme with no declaration is treated as asking for nothing
+grantable.
+
+**What a theme can be granted.** The plugin vocabulary minus what belongs to a plugin installation:
+
+| Permission | What it lets the theme's code do |
+|---|---|
+| `settings:read`, `settings:write` | Read / write site options through `wordjs.options` (secret-named options stay off-limits) |
+| `users:read` | Look users up through the safe projection (never password hashes) |
+| `posts:read` | Receive the content hooks that carry posts (drafts and private ones included) |
+| `comments:read`, `comments:pii` | Receive the comment hooks; `pii` adds the commenter's email, IP and user agent |
+| `email:admin` | Send mail through the site's mail transport (`wordjs.mail`) |
+| `notifications:send`, `notifications:read` | Send notifications / receive the `notification_sent` hook |
+| `ai:use` | Ask the site's AI provider for a completion (never its key) |
+| `filesystem:read`, `filesystem:write` | Read / write files: its own data files and what the filesystem guard allows beyond its directory (never secrets or the database) |
+
+Not available to themes, because they are keyed to a plugin installation and would collide with a
+plugin of the same name or make no sense for a theme: `database:*` and `express:register_route`
+(own tables and routes), `media:private_read`, `browser:script`, `assets:write`,
+`admin_menu:register`, `roles:declare`, `email:provider`, `notifications:provider`, `smtp:inbound`
+and `network`. A theme that declares one of them still activates; the dialog shows that permission
+as not available and its code runs without it. On a multisite network, a site other than the main
+one cannot grant `users:read` or `filesystem:*` (both reach beyond that site).
+
+**Granting.** In **Admin → Themes**:
+
+- **On activation.** When the theme declares permissions, *Activate* opens a dialog listing each one
+  with the platform's description, its risk and the theme's own reason, each with a switch. Only
+  what is switched on when you confirm is granted (`POST /api/v1/themes/:slug/activate` with
+  `{ "grant": [...] }`). The first time, every permission the theme may hold starts switched on;
+  once you have decided a theme's grants, the dialog starts from your decision, so a revoke survives
+  activating the theme again. An activation without a `grant` list (an API call, a script) changes
+  no grant.
+- **Later.** A theme that declares permissions has a **Permissions** button on its card. Saving
+  replaces its grants (`PUT /api/v1/themes/:slug/permissions` with `{ "granted": [...] }`); on the
+  active theme the code restarts at once, so a revoke takes effect immediately.
+- `GET /api/v1/themes/:slug/permissions` returns what the theme declares, which entries are
+  grantable here, what is granted, and what became of its code at the last load (`running`,
+  `blocked` with the reason, or `error`).
+
+Rules the server enforces: only a permission the theme declares and themes may hold is accepted
+(anything else is refused with `400 theme_grant_not_grantable`, nothing stored); an API token may
+revoke but never add (`403 rest_token_management_forbidden`, as for plugins); when a theme update
+stops declaring a permission, its grant is dropped at the next load; deleting a theme deletes its
+grants, so a different theme uploaded later under the same name starts with nothing. At load the
+static scan runs in *grant* mode: code that needs a declared capability you left off is blocked and
+the theme's `functions.js` does not run (the rest of the theme still works). The grants are stored
+with the plugin grants (`plugin_grants`, under `@themes`), so they reach every node of a cluster the
+same way and a running theme child is respawned when its grants change.
 
 ## Theme lifecycle guarantees (what WordJS will and will not do to `themes/`)
 
