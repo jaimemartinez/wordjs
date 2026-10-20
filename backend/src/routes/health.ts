@@ -369,6 +369,32 @@ function withDegradationFields(status: any): any {
     return report;
 }
 
+/**
+ * @swagger
+ * /health/site:
+ *   get:
+ *     summary: Site Health - the installation's diagnostics in plain words, with where to fix each one
+ *     description: >
+ *       Versions, folder and config-file permissions, free disk space, the database and its engine,
+ *       sending email and the mail domain's SPF/DMARC records, HTTPS and certificate expiry, the
+ *       reverse-proxy trust (judged on this very request), scheduled tasks, plugin isolation, content
+ *       events and whether WordJS can restart itself. Each check is { id, group, status (ok, warn, fail,
+ *       info), title, message, fix? { href, label } } where href is an admin screen. Read-only.
+ *       Administrators; the main site only on a network.
+ *     tags: [System]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ checks, summary: { ok, warn, fail, info }, at, host }"
+ *       403:
+ *         description: Not an administrator
+ */
+router.get('/site', authenticate, isAdmin, async (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(await require('../core/site-health').runSiteHealth(req));
+});
+
 router.get('/details', authenticate, isAdmin, async (req: Request, res: Response) => {
     try {
         const fullStatus = await SystemHealth.getFullStatus();

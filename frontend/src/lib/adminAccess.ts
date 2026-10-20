@@ -99,6 +99,9 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     // Every site has its own backups; the main site's (which carry the network's code) are the network administrators'.
     { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options", networkAdminOnMainSite: true },
     { href: "/admin/security", label: "nav.security", icon: "fa-lock", cap: "manage_options" },
+    // Site Health (backend core/site-health, GET /health/site): the install's diagnostics with fix links.
+    // The main site's on a network, like the certificates and server settings it points at.
+    { href: "/admin/site-health", label: "nav.siteHealth", icon: "fa-heart-pulse", cap: "manage_options", mainSiteOnly: true },
     // Registro de auditoría (solo lectura). Igual que Herramientas: el backend lo gatea con isAdmin
     // (rol), y la pantalla repite esa comprobación — aquí `manage_options` solo evita enseñar la
     // entrada a quien seguro no la puede usar.
@@ -161,6 +164,8 @@ export const ADMIN_ROUTE_RULES: AdminRouteRule[] = (() => {
         // The main site's addresses (Settings → Site address): another site's address is the network's.
         { path: "/admin/settings/site-address", anyOf: ["manage_options"], mainSiteOnly: true, networkWide: true },
         { path: "/admin/settings/media-storage", anyOf: ["manage_options"], mainSiteOnly: true, networkWide: true },
+        // Settings → Network (turning the network on and off): the main site's; another site never has it.
+        { path: "/admin/settings/network", anyOf: ["manage_options"], mainSiteOnly: true },
     ];
     for (const rule of extra) rules.set(rule.path, rule);
     return Array.from(rules.values());

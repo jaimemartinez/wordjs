@@ -319,6 +319,16 @@ function initCoreMenus() {
         networkAdmin: true
     });
 
+    // Site Health: the installation's diagnostics with where to fix each one (core/site-health). The main
+    // site's, like the certificates and the server settings it points at.
+    if (mainSite) registerAdminMenu('core', {
+        href: '/admin/site-health',
+        label: 'Site Health',
+        icon: 'fa-heart-pulse',
+        order: 88,
+        capability: 'manage_options'
+    });
+
     // 9. Tools (Hooks Registry)
     if (mainSite) registerAdminMenu('core', {
         href: '/admin/hooks',
