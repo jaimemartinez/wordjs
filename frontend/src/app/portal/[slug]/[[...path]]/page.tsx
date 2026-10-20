@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { notFound } from "next/navigation";
-import { getPortalPage } from "@/lib/server-api";
+import { getPortalPage, type PortalPageInfo, type PortalSubPageInfo } from "@/lib/server-api";
 import PluginPortal from "./PluginPortal";
 
 /**
@@ -16,8 +16,17 @@ import PluginPortal from "./PluginPortal";
  * hash reach it untouched, and so does any deeper path — /portal/<slug>/a/b renders the same portal with
  * path ["a", "b"], so a plugin can keep sub-pages (a personal confirmation link, say) under its slug.
  *
- * A static folder beside this one (app/portal/conference, …) is a route of its own and wins over it.
+ * A sub-page the manifest describes (frontend.portalPage.pages.<page>) gets its own <head>: its title, a
+ * personal page's privacy (never indexed, never stored by a browser, no Referer) and, for an installable
+ * page, its web app manifest (app.webmanifest/route.ts beside this folder). The core's own paths under a
+ * portal — file, sw.js, app.webmanifest — are sibling routes and win over this one.
+ *
+ * A static folder beside this one (app/portal/<name>) is a route of its own and wins over it.
  */
+
+// Rendered on every request and never stored by a browser: whether the portal is served is per-install state
+// (activation, grants), and a phone must not keep an old copy of a page (and its old scripts) after an update.
+export const dynamic = "force-dynamic";
 
 // The shape the backend accepts (core/portal-pages.ts PORTAL_SLUG_RE): one lowercase URL segment.
 const PORTAL_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -27,15 +36,35 @@ type Props = { params: Promise<{ slug: string; path?: string[] }> };
 // Portals are opened from a link or a QR code someone was given, not found through a search engine.
 const ROBOTS = { index: false, follow: false } as const;
 
+// A personal sub-page: also never stored by a cache.
+const PRIVATE_ROBOTS = { index: false, follow: false, nocache: true, googleBot: { index: false, follow: false } } as const;
+
 async function servedInfo(slug: string) {
     if (!PORTAL_SLUG_RE.test(slug)) return null;
     const portal = await getPortalPage(slug);
     return portal.status === "served" ? portal.info : null;
 }
 
+/** The manifest's details of the sub-page /portal/<slug>/<path[0]>, if it describes that page. */
+function subPageOf(info: PortalPageInfo | null, path: string[] | undefined): PortalSubPageInfo | null {
+    const page = path && path.length ? path[0] : null;
+    if (!info?.pages || !page || !Object.prototype.hasOwnProperty.call(info.pages, page)) return null;
+    return info.pages[page];
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-    const info = await servedInfo((await params).slug);
-    return info?.title ? { title: info.title, robots: ROBOTS } : { robots: ROBOTS };
+    const { slug, path } = await params;
+    const info = await servedInfo(slug);
+    const sub = subPageOf(info, path);
+    const title = sub?.title || info?.title;
+    const meta: Metadata = { robots: sub?.private ? PRIVATE_ROBOTS : ROBOTS };
+    if (title) meta.title = title;
+    if (sub?.private) meta.referrer = "no-referrer";
+    if (sub?.app && path) {
+        meta.manifest = `/portal/${slug}/app.webmanifest?page=${encodeURIComponent(path[0])}`;
+        meta.appleWebApp = { capable: true, title: sub.app.shortName || sub.app.name, statusBarStyle: "default" };
+    }
+    return meta;
 }
 
 export async function generateViewport({ params }: Props): Promise<Viewport> {

@@ -388,6 +388,39 @@ test('TOOL_GRANTS names every grant-gated tool: with every grant, the listed too
     await client.close();
 });
 
+test('tools/list documents every argument: each id says which tool returned it, each enum lists its values', async () => {
+    _resetAgentRateLimits();
+    const all = Array.from(new Set(Object.values(TOOL_GRANTS).flat())) as string[];
+    const { token, connection } = await createAgent('admin', all);
+    assert.strictEqual((await grant(connection.id, all)).status, 200);
+    const client = await mcp(token);
+    const tools = (await client.listTools()).tools;
+    const byName = Object.fromEntries(tools.map((t: any) => [t.name, t]));
+    for (const t of tools) {
+        for (const [arg, schema] of Object.entries<any>((t.inputSchema && t.inputSchema.properties) || {})) {
+            assert.ok(typeof schema.description === 'string' && schema.description.length >= 10, `${t.name}.${arg} has no description`);
+            if (Array.isArray(schema.enum)) {
+                for (const v of schema.enum) assert.ok(schema.description.includes(`"${v}"`), `${t.name}.${arg} does not explain "${v}"`);
+            }
+        }
+    }
+    // The id a write tool takes is the one create_draft returned, and the schema says so — never "1".
+    for (const name of ['get_content', 'update_draft', 'submit_for_review', 'publish_content']) {
+        const d = byName[name].inputSchema.properties.id.description;
+        assert.match(d, /create_draft \(created\.id\)/, name);
+        assert.match(d, /never use 1/i, name);
+    }
+    assert.match(byName.moderate_comment.inputSchema.properties.id.description, /list_comments/);
+    assert.match(byName.create_term.inputSchema.properties.parent.description, /list_terms/);
+    // The create → update → publish flow is spelled out in the tool descriptions and the instructions.
+    assert.match(byName.create_draft.description, /created\.id/);
+    assert.match(byName.create_draft.description, /update_draft/);
+    assert.match(byName.update_draft.description, /create_draft returned/);
+    assert.match(byName.publish_content.description, /create_draft first/);
+    assert.match(String(client.getInstructions()), /create_draft \(returns created\.id\) -> update_draft/);
+    await client.close();
+});
+
 // ── Protocol smoke ────────────────────────────────────────────────────────────────────────────────
 
 test('MCP protocol: initialize advertises tools + instructions, resources read, GET is 405', async () => {

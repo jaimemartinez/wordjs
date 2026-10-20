@@ -1862,7 +1862,7 @@ test('conference-manager: a coordinator\'s placement and an admin\'s cancellatio
         const portal = await locationPortal(p);
         const place = (inscription: number) => p.call('post', '/portal/lodging/assign', { headers: portal, body: { inscription_id: inscription, room_id: 1 } });
         // The portal reads the attendee under the lock; the admin's cancellation lands before its write.
-        const cancel = interleaveAfter(p, /^SELECT id, status, room_id, location_id FROM \w+inscriptions/, () => cancelInscription(p, 1));
+        const cancel = interleaveAfter(p, /^SELECT \* FROM \w+inscriptions WHERE id = \? AND location_id = \?/, () => cancelInscription(p, 1));
         const placed = await place(1);
         const cancelled = await cancel.result();
         const row = inscriptionRow(p, 1);
@@ -1873,92 +1873,109 @@ test('conference-manager: a coordinator\'s placement and an admin\'s cancellatio
     });
 });
 
-test('conference-manager: a bus capacity cut lands only while it still covers the tickets sold', async () => {
+test('conference-manager: a bus capacity cut lands only while it still covers the seats sold', async () => {
     await withPlugin('conference-manager', async (p) => {
-        seedLodging(p);
-        p.sdb.prepare(`INSERT INTO ${p.prefix}buses (conference_id, name, capacity, price) VALUES (1, 'Bus', 10, 0)`).run();
-        const sell = (inscription: number) => p.call('post', '/buses/:id/passengers', { user: CM_ADMIN, params: { id: '1' }, body: { inscription_ids: [inscription] } });
-        assert.strictEqual((await sell(1)).status, 200);
-        // The capacity is cut to the one ticket sold while a second sale lands between the check and the write.
-        const sale = interleaveAfter(p, /^SELECT b\.\*, \(SELECT COUNT\(\*\) FROM \w+tickets/, () => sell(2));
+        seedBusWithPackage(p, 0);
+        assert.strictEqual((await sellPackage(p, 1)).status, 200);
+        // The capacity is cut to the one seat sold while a second sale lands between the check and the write.
+        const sale = interleaveAfter(p, /^SELECT b\.\*, \(SELECT COUNT\(\*\) FROM \w+tickets/, () => sellPackage(p, 2));
         const cut = await p.call('put', '/buses/:id', { user: CM_ADMIN, params: { id: '1' }, body: { capacity: 1 } });
         const saleReply = await sale.result();
         const bus = p.sdb.prepare(`SELECT capacity, (SELECT COUNT(*) FROM ${p.prefix}transport_tickets WHERE bus_id = 1) AS sold FROM ${p.prefix}buses WHERE id = 1`).get();
-        assert.ok(bus.sold <= bus.capacity, `capacity ${bus.capacity} with ${bus.sold} tickets sold (cut ${cut.status}, sale ${saleReply.status})`);
+        assert.ok(bus.sold <= bus.capacity, `capacity ${bus.capacity} with ${bus.sold} seats sold (cut ${cut.status}, sale ${saleReply.status})`);
         assert.strictEqual(countOf([cut.status, saleReply.status], 200), 1, JSON.stringify([cut.body, saleReply.body]));
     });
 });
 
-// Transport payments check what a ticket still owes under the assignment lock. The bus edit with
-// reprice_tickets checked "nothing is paid beyond the new price" under it but wrote the tickets' new
-// price after releasing it, and the bus delete, the passenger removal and the attendee delete checked
-// for payments (or erased them) outside it: a payment landing in the gap was accepted against the old
-// price — a ticket paid beyond its price — or answered as recorded and then erased with a ticket
-// deleted right after.
-function seedBusWithTicket(p: BootedPlugin, price: number) {
+// Transport (2.26.0: sold as packages of buses) is sold and paid under the assignment lock, where a payment checks
+// what the sale still owes. A package reprice checks "nothing is paid beyond the new price" and writes the new
+// price under it; the package delete, the sale removal and the attendee delete check for payments and erase the
+// sale under it: a payment landing in a gap would be accepted against the old price — a sale paid beyond its
+// price — or answered as recorded and then erased with the sale.
+function seedBusWithPackage(p: BootedPlugin, price: number) {
     seedLodging(p);
-    p.sdb.prepare(`INSERT INTO ${p.prefix}buses (conference_id, name, capacity, price) VALUES (1, 'Bus', 10, ?)`).run(price);
+    p.sdb.prepare(`INSERT INTO ${p.prefix}buses (conference_id, name, capacity, price) VALUES (1, 'Bus', 10, 0)`).run();
+    const pkg = p.sdb.prepare(`INSERT INTO ${p.prefix}transport_packages (conference_id, name, price) VALUES (1, 'Ida y vuelta', ?)`).run(price).lastInsertRowid;
+    p.sdb.prepare(`INSERT INTO ${p.prefix}transport_package_buses (package_id, bus_id) VALUES (?, 1)`).run(pkg);
 }
-const sellSeat = (p: BootedPlugin, inscription: number) =>
-    p.call('post', '/buses/:id/passengers', { user: CM_ADMIN, params: { id: '1' }, body: { inscription_ids: [inscription] } });
-const payTicket = (p: BootedPlugin, ticket: number, amount: number) =>
-    p.call('post', '/tickets/:id/payments', { user: CM_ADMIN, params: { id: String(ticket) }, body: { amount, method: 'Efectivo' } });
-const ticketOf = (p: BootedPlugin, inscription: number) =>
-    p.sdb.prepare(`SELECT id, price, amount_paid, payment_status FROM ${p.prefix}transport_tickets WHERE inscription_id = ?`).get(inscription);
-const orphanTransportPayments = (p: BootedPlugin) => p.sdb.prepare(
-    `SELECT COUNT(*) AS n FROM ${p.prefix}transport_payments WHERE ticket_id NOT IN (SELECT id FROM ${p.prefix}transport_tickets)`).get().n;
-const transportPaymentsOnLiveTickets = (p: BootedPlugin) => p.sdb.prepare(
-    `SELECT COUNT(*) AS n FROM ${p.prefix}transport_payments tp JOIN ${p.prefix}transport_tickets t ON t.id = tp.ticket_id`).get().n;
+const sellPackage = (p: BootedPlugin, inscription: number) =>
+    p.call('post', '/transport/packages/:id/sales', { user: CM_ADMIN, params: { id: '1' }, body: { inscription_ids: [inscription] } });
+const paySale = (p: BootedPlugin, sale: number, amount: number) =>
+    p.call('post', '/transport/package-sales/:id/payments', { user: CM_ADMIN, params: { id: String(sale) }, body: { amount, method: 'Efectivo' } });
+const saleOf = (p: BootedPlugin, inscription: number) =>
+    p.sdb.prepare(`SELECT id, price, amount_paid, payment_status FROM ${p.prefix}transport_package_sales WHERE inscription_id = ?`).get(inscription);
+const orphanPackagePayments = (p: BootedPlugin) => p.sdb.prepare(
+    `SELECT COUNT(*) AS n FROM ${p.prefix}transport_package_payments WHERE sale_id NOT IN (SELECT id FROM ${p.prefix}transport_package_sales)`).get().n;
+const packagePaymentsOnLiveSales = (p: BootedPlugin) => p.sdb.prepare(
+    `SELECT COUNT(*) AS n FROM ${p.prefix}transport_package_payments pp JOIN ${p.prefix}transport_package_sales s ON s.id = pp.sale_id`).get().n;
 
-test('conference-manager: a reprice and a transport payment never leave a ticket paid beyond its price', async () => {
+test('conference-manager: a package reprice and a payment never leave a sale paid beyond its price', async () => {
     await withPlugin('conference-manager', async (p) => {
-        seedBusWithTicket(p, 100);
-        assert.strictEqual((await sellSeat(p, 1)).status, 200);
-        const ticket = ticketOf(p, 1).id;
-        // The bus drops to 40 for the tickets already sold (nothing is paid yet, so the check passes);
-        // a payment of the full old price lands right before the tickets' new price is written.
-        const pay = interleaveBefore(p, /^UPDATE \w+transport_tickets SET price = \?/, () => payTicket(p, ticket, 100));
-        const reprice = await p.call('put', '/buses/:id', { user: CM_ADMIN, params: { id: '1' }, body: { price: 40, reprice_tickets: true } });
+        seedBusWithPackage(p, 100);
+        assert.strictEqual((await sellPackage(p, 1)).status, 200);
+        const sale = saleOf(p, 1).id;
+        // The package drops to 40 for the sales already made (nothing is paid yet, so the check passes); a payment
+        // of the full old price lands right before the sales' new price is written.
+        const pay = interleaveBefore(p, /^UPDATE \w+transport_package_sales SET price = \?/, () => paySale(p, sale, 100));
+        const reprice = await p.call('put', '/transport/packages/:id', { user: CM_ADMIN, params: { id: '1' }, body: { price: 40, reprice_sales: true } });
         const payReply = await pay.result();
-        const row = ticketOf(p, 1);
+        const row = saleOf(p, 1);
         assert.ok(Number(row.amount_paid) <= Number(row.price) + 0.005,
-            `ticket priced ${row.price} with ${row.amount_paid} paid (reprice ${reprice.status}, payment ${payReply.status} ${JSON.stringify(payReply.body)})`);
+            `sale priced ${row.price} with ${row.amount_paid} paid (reprice ${reprice.status}, payment ${payReply.status} ${JSON.stringify(payReply.body)})`);
         assert.strictEqual(reprice.status, 200, JSON.stringify(reprice.body));
         assert.strictEqual(row.price, 40);
         assert.strictEqual(payReply.status, 400, JSON.stringify(payReply.body));
-        // The ticket is paid at its new price.
-        assert.strictEqual((await payTicket(p, ticket, 40)).status, 200);
-        assert.deepStrictEqual({ ...ticketOf(p, 1), id: 0 }, { id: 0, price: 40, amount_paid: 40, payment_status: 'paid' });
+        // The sale is paid at its new price.
+        assert.strictEqual((await paySale(p, sale, 40)).status, 200);
+        assert.deepStrictEqual({ ...saleOf(p, 1), id: 0 }, { id: 0, price: 40, amount_paid: 40, payment_status: 'paid' });
     });
 });
 
 for (const [label, remove, gap] of [
-    ['the bus is deleted', (p: BootedPlugin) => p.call('delete', '/buses/:id', { user: CM_ADMIN, params: { id: '1' } }),
-        /^SELECT COUNT\(\*\) AS n FROM \w+transport_payments WHERE ticket_id IN \(SELECT id FROM \w+transport_tickets WHERE bus_id/],
-    ['the passenger is removed', (p: BootedPlugin) => p.call('delete', '/buses/:id/passengers/:inscriptionId', { user: CM_ADMIN, params: { id: '1', inscriptionId: '1' } }),
-        /^SELECT COUNT\(\*\) AS n FROM \w+transport_payments WHERE ticket_id = \?/],
+    ['the package is deleted', (p: BootedPlugin) => p.call('delete', '/transport/packages/:id', { user: CM_ADMIN, params: { id: '1' } }),
+        /^SELECT COUNT\(\*\) AS n FROM \w+transport_package_payments WHERE sale_id IN \(SELECT id FROM \w+transport_package_sales WHERE package_id/],
+    ['the package is taken from the person', (p: BootedPlugin) => p.call('delete', '/transport/package-sales/:id', { user: CM_ADMIN, params: { id: '1' } }),
+        /^SELECT COUNT\(\*\) AS n FROM \w+transport_package_payments WHERE sale_id = \?/],
     ['the attendee is deleted', (p: BootedPlugin) => p.call('delete', '/inscriptions/:id', { user: CM_ADMIN, params: { id: '1' } }),
-        /^DELETE FROM \w+transport_payments WHERE ticket_id IN/],
+        /^DELETE FROM \w+transport_package_payments WHERE sale_id IN/],
 ] as const) {
-    test(`conference-manager: a transport payment recorded while ${label} is never erased with its ticket`, async () => {
+    test(`conference-manager: a transport payment recorded while ${label} is never erased with its sale`, async () => {
         await withPlugin('conference-manager', async (p) => {
-            seedBusWithTicket(p, 100);
-            assert.strictEqual((await sellSeat(p, 1)).status, 200);
-            const ticket = ticketOf(p, 1).id;
-            const pay = interleaveAfter(p, gap, () => payTicket(p, ticket, 30));
+            seedBusWithPackage(p, 100);
+            assert.strictEqual((await sellPackage(p, 1)).status, 200);
+            const sale = saleOf(p, 1).id;
+            const pay = interleaveAfter(p, gap, () => paySale(p, sale, 30));
             const removed = await remove(p);
             const payReply = await pay.result();
-            // The ticket's foreign key cascades its deletion to its payments where foreign keys are
-            // enforced (elsewhere the payment is left pointing at nothing): a payment the admin was
-            // told is recorded must still be in the ledger, on a ticket that exists.
-            assert.strictEqual(orphanTransportPayments(p), 0, `a payment points at a deleted ticket (removal ${removed.status}, payment ${payReply.status})`);
-            assert.strictEqual(transportPaymentsOnLiveTickets(p), payReply.status === 200 ? 1 : 0,
+            // The sale's foreign key cascades its deletion to its payments where foreign keys are enforced
+            // (elsewhere the payment is left pointing at nothing): a payment the admin was told is recorded must
+            // still be in the ledger, on a sale that exists.
+            assert.strictEqual(orphanPackagePayments(p), 0, `a payment points at a deleted sale (removal ${removed.status}, payment ${payReply.status})`);
+            assert.strictEqual(packagePaymentsOnLiveSales(p), payReply.status === 200 ? 1 : 0,
                 `the payment answered ${payReply.status} is not in the ledger (removal answered ${removed.status})`);
             assert.strictEqual(removed.status, 200, JSON.stringify(removed.body));
             assert.strictEqual(payReply.status, 404, JSON.stringify(payReply.body));
         });
     });
 }
+
+// A seat that is part of a package keeps its bus and its passenger list honest: the bus delete and the passenger
+// removal refuse it (the package would lose a trip it was paid for); the old per-bus sale and payment routes are
+// gone (410) — nothing is sold or paid outside a package any more.
+test('conference-manager: a packaged seat keeps its bus; the per-bus sale and payment routes are gone', async () => {
+    await withPlugin('conference-manager', async (p) => {
+        seedBusWithPackage(p, 100);
+        assert.strictEqual((await sellPackage(p, 1)).status, 200);
+        const busDelete = await p.call('delete', '/buses/:id', { user: CM_ADMIN, params: { id: '1' } });
+        assert.strictEqual(busDelete.status, 409, JSON.stringify(busDelete.body));
+        const removal = await p.call('delete', '/buses/:id/passengers/:inscriptionId', { user: CM_ADMIN, params: { id: '1', inscriptionId: '1' } });
+        assert.deepStrictEqual([removal.status, removal.body.code], [409, 'package']);
+        const ticket = p.sdb.prepare(`SELECT id FROM ${p.prefix}transport_tickets WHERE inscription_id = 1`).get().id;
+        assert.strictEqual((await p.call('post', '/buses/:id/passengers', { user: CM_ADMIN, params: { id: '1' }, body: { inscription_ids: [2] } })).status, 410);
+        assert.strictEqual((await p.call('post', '/tickets/:id/payments', { user: CM_ADMIN, params: { id: String(ticket) }, body: { amount: 10, method: 'Efectivo' } })).status, 410);
+        assert.strictEqual(p.sdb.prepare(`SELECT COUNT(*) AS n FROM ${p.prefix}transport_tickets WHERE bus_id = 1`).get().n, 1);
+    });
+});
 
 // The location portal: location ids are public (GET /public/locations). Same throttle and session model as
 // the vendor portal above; the session also ends when the conference's form is unpublished (the login

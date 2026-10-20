@@ -22,7 +22,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const forge = require('node-forge');
+const x509 = require('../core/x509');
 
 function stubFrontend() {
     const waiters: any[] = [];
@@ -43,17 +43,16 @@ function stubFrontend() {
     return { server, next };
 }
 
-function certificate(cn: string, keys: any, issuer: any) {
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = String(Date.now()) + Math.floor(Math.random() * 1000);
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    cert.setSubject([{ name: 'commonName', value: cn }]);
-    cert.setIssuer(issuer ? issuer.cert.subject.attributes : [{ name: 'commonName', value: cn }]);
-    if (!issuer) cert.setExtensions([{ name: 'basicConstraints', cA: true }]);
-    cert.sign(issuer ? issuer.keys.privateKey : keys.privateKey, forge.md.sha256.create());
-    return cert;
+function certificate(cn: string, keys: any, issuer: any): string {
+    return x509.createCertificate({
+        subject: [['CN', cn]],
+        ...(issuer ? { issuerCertPem: issuer.cert } : {}),
+        publicKey: keys.publicKey,
+        signingKey: issuer ? issuer.keys.privateKey : keys.privateKey,
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+        ...(issuer ? {} : { ca: true }),
+    });
 }
 
 describe('an HTTPS split install, before the frontend restarts', () => {
@@ -74,16 +73,16 @@ describe('an HTTPS split install, before the frontend restarts', () => {
         fs.mkdirSync(path.join(root, 'frontend'), { recursive: true });
         fs.writeFileSync(path.join(root, 'frontend', 'package.json'), '{"name":"frontend"}');
 
-        const caKeys = forge.pki.rsa.generateKeyPair(2048);
+        const caKeys = x509.generateRsaKeyPair(2048);
         const ca = { keys: caKeys, cert: certificate('WordJS Cluster Root CA', caKeys, null) };
         const leaf = (cn: string) => {
-            const keys = forge.pki.rsa.generateKeyPair(2048);
-            return { key: forge.pki.privateKeyToPem(keys.privateKey), cert: forge.pki.certificateToPem(certificate(cn, keys, ca)) };
+            const keys = x509.generateRsaKeyPair(2048);
+            return { key: keys.privateKeyPem, cert: certificate(cn, keys, ca) };
         };
         const certs = path.join(backend, 'certs');
         const fe = leaf('frontend');
         const be = leaf('backend');
-        fs.writeFileSync(path.join(certs, 'cluster-ca.crt'), forge.pki.certificateToPem(ca.cert));
+        fs.writeFileSync(path.join(certs, 'cluster-ca.crt'), ca.cert);
         fs.writeFileSync(path.join(certs, 'frontend.key'), fe.key);
         fs.writeFileSync(path.join(certs, 'frontend.crt'), fe.cert);
         fs.writeFileSync(path.join(certs, 'backend.key'), be.key);

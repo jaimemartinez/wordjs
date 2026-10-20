@@ -109,6 +109,8 @@ function pluginsOnSecondarySite(req: Request, res: Response, next: NextFunction)
 const SITE_THEME_ROUTES = [
     { method: 'POST', re: /^\/[^/]+\/activate\/?$/i },
     { method: 'POST', re: /^\/mods\/import\/?$/i },
+    // What this site grants a theme's functions.js (per-site grants, like the activation that carries them).
+    { method: 'PUT', re: /^\/[^/]+\/permissions\/?$/i },
 ];
 function themeFilesOnSecondarySite(req: Request, res: Response, next: NextFunction) {
     const method = req.method === 'HEAD' ? 'GET' : req.method;

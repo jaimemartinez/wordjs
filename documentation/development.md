@@ -23,7 +23,7 @@ All public traffic should go through the **Gateway on 3000**; 4000 and 3001 stay
 
 ## 📦 Install
 
-- **Node:** v20.9 or higher (every workspace's `package.json` declares `engines.node >= 20.9.0`; CI runs on Node 22). `monolith.js` preflights the running version and exits with a clear message on anything older (Next 16 + native modules need Node 20 LTS or 22 LTS).
+- **Node:** v22 or higher (every workspace's `package.json` declares `engines.node >= 22.0.0`; CI runs on Node 22). `monolith.js` preflights the running version and exits with a clear message on anything older (Node 22 LTS or 24 LTS).
 
 Install every workspace's dependencies in one shot from the repo root:
 

@@ -94,6 +94,8 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `hooks.addAction(hook, cb, priority)` / `hooks.addFilter(...)` | `register` | Hook access policy (`core/hook-access.ts`): raw-HTML hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`/`dynamic_sidebar`), host-only hooks and unclassified core-namespace names denied to **every** plugin; data hooks need the matching grant (`comments:read`, `posts:read`, `notifications:read`, `settings:read`) and every delivery is re-checked and minimized (commenter email/IP/agent only with `comments:pii`; no post passwords, notification tokens or protected option values); capped per-plugin (`MAX_HOOKS`) and per-hook-name (`MAX_PER_HOOK`); each shim runs with a 2 s timeout. |
 | `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware, and the handler's `req.user` is `{ id, role, hasProfessionalMailbox, pluginCapabilities }`, plus `userEmail` and `userLogin` only when the plugin holds the **`users:read` grant** (they are personal data) (`pluginCapabilities`: the caller's capabilities in the plugin's own namespace — [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-)); `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; the temp file is unlinked when the response finishes). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) The handler may reply with `res.sendPrivateMedia(mediaId, { filename })`: with the **`media:private_read` grant** the host streams that PRIVATE media item itself (`Content-Disposition: attachment`, nosniff, sandbox CSP, `Cache-Control: private, no-store`; plugin headers ignored; 404 for anything that is not a private attachment), without it the reply is `403`. File bytes never cross the IPC channel. A plugin route sits behind the global CSRF gate like every other API route: a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must carry an `X-CSRF-Token` header equal to the caller's `wjs_csrf` cookie or it is refused with `403 rest_csrf_token`; `Bearer` callers are exempt. |
 | `shortcodes.add(tag, handler)` | `register-shortcode` | Capped per-plugin; handler resolves HTML over RPC (`doShortcodeAsync`). |
+| `widgets.register(id, def)` | `register-widget` | Capped at 50 per plugin; the renderer resolves HTML over RPC (2 s cap), sanitized on the host; an id core or another plugin holds is refused. |
+| `graphql.extend({ typeDefs, fields })` | `register-graphql` | Declarative only: the host builds each `Query.<field>` resolver (`core/graphql/plugin-bridge`) and resolves it through the plugin's own GET route as the GraphQL caller; at most 5 extensions / 50 fields; the usual extension rules (no rerouting an existing field). |
 | `provideMail(handler)` | `register-mail-provider` | `email:provider` grant (administrator-level) — becomes the host-wide mail sender (sandboxed). Account email (reset and verification links) reaches it only when an administrator allows the plugin by name (`core/account-mail`). |
 | `notify.registerTransport(name, handler)` | `register-notify-transport` | `notifications:provider` grant (administrator-level) — registers a core notification transport that receives the full content it delivers (sandboxed). |
 | `smtp.listen(handlers, opts)` / `smtp.status()` | `register-smtp-listener` / `smtp-status` (host → child `invoke-smtp`) | `smtp:inbound` grant — EXCLUSIVE (one plugin at a time); the host opens the plugin's `claimPorts` SMTP port (core/inbound-smtp.ts) and asks the plugin for a verdict at each step; a plugin error or a 25 s timeout answers the sender a temporary 451. |
@@ -180,7 +182,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.17.2
+**ID:** `conference-manager` | **Version:** 2.30.0
 
 Complex business logic for managing church conferences.
 
@@ -205,10 +207,151 @@ Complex business logic for managing church conferences.
     *   **Fee rules** (`/fee-rules`): the base fee plus ordered `set`/`add` rules matched against form values, in
         integer cents. `POST /public/quote` returns the fee for a set of values (the portal shows it live while
         registering); `POST /reprice` re-applies the current rules to every inscription of a conference.
-    *   **Payment validation workflow**: payments enter `pending` (a proof **image** data URL is required, ≤ 1 MB)
-        and an admin moves them to `validated` or `rejected` (`pending → validated | rejected`, `validated →
-        rejected`, `rejected → validated`; a validated payment cannot be deleted); only validated payments count
-        towards `amount_paid` / `payment_status`. Reviews are audited (`reviewed_at`, `reviewed_by`).
+    *   **Fee payments — «Pagos de cuotas»** (2.18.0; fees only — transport is paid in Transporte). A
+        **payment** is one receipt (a bank transfer or a cash handover): a row of `payment_transfers` (the
+        header) split into **parts**, one per person, which are rows of `payments` linked by `transfer_id` and
+        stamped with the header's allocation generation `alloc_gen`.
+        *   **Status lives on the header**: `pending` («Por validar») | `validated` | `returned` («Devuelto»: the
+            admin sends it back with a note for the recorder to correct and resend) | `rejected` (the money did
+            not arrive, or a validated payment is voided — a reason is required); `draft` is internal and never
+            shown. Transitions (`payments:manage`): validate from pending / returned / rejected; return from
+            pending, only to someone who can correct it — the administration (its own payments) or the
+            portal of an existing location (its own: the location is looked up, and a payment never keeps the id
+            of a deleted one — the write clears it if another node deleted the location meanwhile, and the boot
+            clears any left over); a pre-2.18 (`legacy`) payment or a portal one whose
+            location was deleted answers `409 no_recorder` (edit, validate or reject it instead); reject from
+            pending / returned / validated. Editing (a corrected split, people, amounts,
+            receipt) is allowed while pending or returned and puts it back to pending; a validated payment is
+            never edited or deleted — reject it, then «Duplicar» (`copy_proof_from`) records it again re-using
+            its receipt. Only a REJECTED payment's receipt can be copied: a source that still counts or can
+            count (pending, validated, returned) answers `409 proof_source_live` (with `source: { id, status }`),
+            so one receipt never stands behind two live payments. «Duplicar» also sends `duplicate_of` (the
+            voided payment it records again — with or without `copy_proof_from`, cash without a photo too); the
+            header stores the FIRST payment of the chain, and that payment plus its copies are one handover: at
+            most one of them counts (pending, validated or returned) at a time. A second copy, or validating a
+            voided one while a copy counts, answers `409 source_used` (with `used_by: { id, status }`; `null` to
+            a portal when it is not its own payment) — re-checked after writing, as `over_cap`, across nodes.
+            Admin payments carry `duplicate_of` and `reused_by[{ id, status }]` (the family's other payments that
+            count); the portal's own carry `duplicate_of`, `reused` and `reused_by`. Voiding or deleting the copy
+            frees the voided payment. `duplicate_of` is set when a payment is recorded and never changed by a
+            correction: a `PUT` that names another payment in `duplicate_of` / `copy_proof_from` answers `400
+            source_fixed` (naming its own family is accepted and changes nothing). An edit puts the payment back to pending and clears `reviewed_at` /
+            `reviewed_by` (it awaits a new review; `events` keep who returned it). Every action sends `expected: { status, alloc_gen }` and is a compare-and-set: `409
+            stale` (with `current`) when someone changed the payment meanwhile, so a shared payment is validated
+            exactly as the admin saw it, **all or nothing**. A part's own `status` column is only a mirror of its
+            header (for a downgrade), written from the header as it is after each write (never from what the
+            writer meant to write) and only for the header's live generation.
+        *   **The split** adds up to the receipt's amount **to the cent** (`400 sum_mismatch`); the server
+            computes «Iguales» itself from `inscription_ids` + `split: 'equal'` (the leftover cents go to the
+            first people: 100.00 / 3 = 33.34 + 33.33 + 33.33); «Manual» sends `allocations`. At most 200 people
+            per payment. **Nobody is ever paid more than they owe**, for the admin and the portal alike: each part
+            ≤ total due − validated − pending of the person's other payments (`409 over_cap` listing `people[{
+            inscription_id, amount, max }]`); validating re-checks it against validated money, and a cancelled
+            inscription owes nothing: validating a payment that still holds one answers `409 cancelled_people`
+            (with `ids`) until the split is corrected, the person reactivated or the payment rejected. Unknown,
+            other-conference (for the portal: other-location) or cancelled people refuse the whole request
+            (`400 unknown_people | cancelled_people` with `ids`). A payment a location's portal recorded holds
+            only that location's people, also when the administration corrects it (`400 unknown_people` for
+            anyone added from another location; a person who moved away after it was recorded may stay).
+        *   **The receipt** (an image data URL, ≤ 1.4 M characters) is **required for a transfer and optional for
+            cash**, for everyone. The size its header declares (PNG, GIF — every frame —, WebP, JPEG) must be at
+            most 8192 px on a side and 24 megapixels, and the header must be readable (`400` otherwise): a few
+            hundred KB can declare a picture no browser could decode. It is stored **once**, on the header —
+            parts carry none — and never travels in a list: items say `has_proof`, and `GET
+            /fee-payments/:id/proof` (`payments:view`) or `GET /portal/fee-payments/:id/proof` (the recording
+            location only) return `{ id, proof }`. A STORED receipt is held to the same rule: one that fails it
+            (written before 2.18, when only the data-URL shape and the size in characters were checked) is
+            never served (`422 invalid_proof`), copied by «Duplicar» (`400 proof_source`) or kept by an edit
+            (a transfer then needs a new receipt).
+        *   Admin payments are **born validated** unless `leave_pending: true` («Dejar por validar») and may span
+            several locations (the header's `location_id` is then `NULL`); portal payments are always pending.
+            `client_key` (8–64 of `[A-Za-z0-9_-]`) makes a retry idempotent (`replayed: true`, and the replay
+            recomputes its people's balances, repairing a first attempt that failed after writing; another
+            recorder with the same key → `409 client_key_conflict`). Only the SAME request is a replay: the same
+            method, reference, note, amount, split, «Duplicar» source and receipt (and date, when the request
+            names one); a request that changed any of them under a used key answers `409 client_key_changed`
+            with the payment that key recorded (`id`, also in `details`) — a send whose answer was lost, then
+            corrected on screen and sent again, is never answered «registered» for a payment that is not the one
+            on screen. A transfer reference already used by another live payment of the conference → `409
+            duplicate_reference` (`other: { id }`, also in `details`) unless `allow_duplicate_reference: true` —
+            when recording, correcting, and validating ANY payment (pending, returned or rejected: `POST
+            /fee-payments/:id/validate` takes the same flag; its own «Duplicar» family is left out). A payment
+            recorded with a repeated reference (the portal's «Registrar de todas formas», an older portal's
+            `/portal/payments/bulk`) therefore asks the administration again when it is validated, and a
+            confirmed one leaves a `reference_confirmed` line in its history (`note`: the other payment's id). On
+            several nodes each of those re-checks after writing, so two payments with one reference never both
+            stand. `GET /fee-payments/:id` names the other one in `flags.duplicate_reference_of`.
+        *   **Admin routes** (each checks the caller's permission FIRST: an account without «Pagos» gets `403`,
+            never a `503` nor a migration attempt): `GET /fee-payments?conference_id` (`payments:view`) answers `{ summary, by_location[],
+            counts, transfers[], people[], methods, max_people, proof }` in one call — each `people[]` item also
+            says who the person is: `name` (the form's name fields, else its name fallback fields), the live
+            `location`, `family_group`, the inscription `status` and `reg_code` (`null` without
+            `inscriptions:view`), and nothing else of the roster: the section never reads `GET /inscriptions`
+            (optional filters `status`
+            (comma list), `location_id` (a number or `none`; a payment matches its recorder's location and each
+            of its people's, `none` included), `inscription_id`, `recorded_via`, `method`, `from` /
+            `to` — summary and counts always cover the whole conference); `GET /fee-payments/:id` adds each
+            person's facts (name, due, other money, the position after validation) and the history (`events`);
+            `POST /fee-payments`, `PUT /fee-payments/:id`, `POST /fee-payments/:id/validate | return | reject`
+            (`{ note?, expected }`), `DELETE /fee-payments/:id` (pending / returned / rejected).
+        *   **Per person**: `due` (0 for a cancelled inscription), `validated` (= `amount_paid`), `pending`,
+            `returned`, `to_cover` = max(0, due − validated − pending) — the most a new payment may carry — and
+            `credit` = max(0, validated − due). **The «Resumen»** (`summary`, `by_location[]`, the portal's
+            `summary`): `validated` and `pending` count each person's money only up to their fee (validated
+            first), `to_cover` is the rest, so validated + pending + to_cover = due exactly; validated money past
+            a fee is `credit` only, and pending money past it (a cancelled person's) counts in no figure. `amount_paid` / `payment_status` still come from **validated**
+            money only; `GET /inscriptions` and `GET /inscriptions/:id` add `pending_amount` and `returned_amount`.
+        *   **Older data and clients**: every pre-2.18 payment is wrapped at boot as a 1-person payment (old
+            group payments become N single ones; amounts, dates, statuses and review stamps are kept, the receipt
+            is read through `legacy_payment_id`, never copied; idempotent). The pre-2.18 routes stay as wrappers:
+            `POST /inscriptions/:id/payments` records a 1-person payment left pending; `POST
+            /payments/:id/validate | reject` and `DELETE /payments/:id` act on a 1-person payment by its part
+            id and answer `409 shared` for a shared one (and `409 stale` when the payment changed between their
+            check and their action: they act only on the status and generation they inspected); `GET /inscriptions/:id/payments` lists the person's
+            parts with their payment's summary and no receipts (`with_proof=1` adds them for `payments:view`);
+            to a caller with `inscriptions:view` but without `payments:view` each part is only `{ id,
+            inscription_id, amount, date, method, status }` — never the payment it belongs to (its number, size,
+            people), its reference, receipt or review.
+            After a **downgrade** below 2.18 the mirrored part statuses keep the balances right, but receipts of
+            new payments are not visible in the old screens, and reviews made while downgraded are overwritten
+            by the header on the next upgrade.
+        *   Writes run without transactions (the db bridge has none): under one in-process lock, a create
+            inserts the header as an invisible draft, then all its parts in ONE multi-row `INSERT`, then flips
+            it; an edit mints a generation of its own (a compare-and-set on the header's `gen_seq`: unique per
+            attempt, above every earlier one), inserts the new parts with it and swaps them in with ONE header
+            compare-and-set, then deletes the OLDER generations — a failed attempt deletes only its own, and an
+            attempt undone by its re-check (below) puts the split it replaced back as a FRESH generation (the old
+            one may already be gone: a node booting meanwhile removes every older generation). The boot
+            removes crashed drafts (older than a day), orphan parts, older-generation parts, newer-generation
+            parts older than a day (a newer one may be an edit in flight on another node), headers without a
+            live part, and re-writes the mirrors. **Several nodes** (each runs its own plugin process, so the
+            lock serialises only one node): every write that adds money (create, edit, validate) re-reads the
+            people's live money after writing and, when someone is now past their fee (another node wrote
+            meanwhile), undoes itself and answers `409 over_cap` — of two racing writers at least one sees the
+            other, so they never both stand. If the boot migration of the payments fails (a lock timeout, a
+            missing column), the plugin keeps running on the parts' mirrored statuses: the roster, the portal and
+            the reports work, `/portal/login` and `/portal/me` carry no `features.fee_payments`, and no payment
+            can be recorded until the migration completes: the fee routes answer `503 unavailable` after one
+            more migration attempt of their own (for a caller with the permission), `POST /portal/payments/bulk`
+            included — the portal's with a message for the coordinator («Los pagos no están disponibles en este
+            momento; inténtalo más tarde.»), the admin's with the reason. `DELETE /inscriptions/:id` answers `409
+            shared` for a person who is part of a payment shared with others — its message says what to do for
+            each blocking payment's status (take them out of a pending / returned split, void a validated
+            payment and record it again without them, delete a rejected one — or cancel the inscription), and
+            the body lists them in `transfers[{ id, status }]` — and deletes their 1-person payments with them,
+            each at the split it has: every one is read again before anything is deleted, validated ones go
+            last, and one that another node moved to someone else meanwhile is left alone (it is no longer
+            theirs). One that became shared answers `409 stale` (`transfer_id`) and the person is left as they
+            were — before anything is deleted, or, in the instant between two deletes, naming the payments
+            already deleted (`deleted_transfer_ids`, also in the message and the server log). A correction or a
+            validation whose payment another node deleted meanwhile answers `409 stale`, never success.
+            Across nodes it first marks the person cancelled and checks again, so a payment another node records
+            with that person meanwhile either shows up (`409 shared`, the person left as they were) or fails its
+            own re-check after writing and backs off (`400 cancelled_people`, or `400 unknown_people` once the
+            person is gone). While the payment tables are unavailable a person with payment rows answers `503
+            unavailable` (which of them are parts of a shared receipt cannot be told); one without any is deleted. A
+            caller without `payments:manage` (or `transport:manage` for transport payments) gets the generic `409`
+            «La inscripción tiene pagos registrados…» first, never the payment ids, statuses or sizes; `DELETE /locations/:id` keeps its payments.
     *   **Locations**: each location has a required **maximum number of registrants** (`capacity`; a full
         location refuses new registrations from the portal and the admin with `409`; locations created before
         2.3.0 stay unlimited until one is set) and the **forms of payment** it receives (`payment_methods`:
@@ -218,11 +361,143 @@ Complex business logic for managing church conferences.
         to be split, capacity) with the rule's name and whether the rule was hard. **Lodging per location**:
         the admin allots rooms to a location (`/hotels/:id/allot`), the coordinator arranges and submits it
         from the portal (`/portal/lodging*`), and the admin validates, returns or reopens it
-        (`/locations/:id/lodging/validate|return|reopen`). A conference-wide **lodging deadline**
-        (`lodging_deadline`) closes portal lodging changes, with an optional per-location permission after it.
+        (`/locations/:id/lodging/validate|return|reopen`). **Lodging dates** (since 2.21.0): portal lodging
+        changes are allowed from a general opening (`lodging_opens`) to a general closing (`lodging_deadline`),
+        both whole days in the admin's zone (`lodging_tz`); a location may have its own (`lodging_opens`:
+        a date or `now`; `lodging_closes`: a date or `never`; null = the general one) — the former
+        per-location permission is such a closing.
+        Since 2.20.0 the engine **packs**: the hard `separate_by` rules split people into classes that never share
+        a room, and each class takes the fewest rooms, then the fewest spare beds (`server/lodging-pack.js`: an
+        exact choice of rooms over their free beds, then Best Fit Decreasing, then an exact search for a few
+        groups), filling rooms that already hold people first; a soft rule is kept when that costs nothing and
+        gives way when keeping it would cost a room or beds (reported as a preference, never hard). Every run tries
+        that packing and the 2.19 placement on copies of the rooms and keeps the best by [hard rules broken, people
+        without a bed, rooms used, empty beds, preferences broken], and the conference-wide run chooses the same way
+        between that and 2.19's placement in every scope, on copies of the whole conference. The engine reads through an `io` (the
+        database, or an in-memory copy of the conference), so `/assignment/simulate` answers exactly what
+        `/assignment/run` would do without writing. **«Sugerir reparto»** (`/assignment/plan`,
+        `/assignment/plan/apply`) plans which free rooms (or beds of a shared room, or free beds next to people
+        already placed) each draft location with people waiting gets, AND who sleeps where; it reports `current`
+        (today: the current allotment plus a run) next to `after` (the plan plus a run), and apply writes the
+        allotments and the placements, then runs the automatic assignment, only while it is the plan the admin saw (`409 plan_changed`) and never a plan worse than today
+        (`409 plan_worse`). A room the plan SHARES keeps the class it gives it (2.21.0): the value its people have for
+        each hard `separate_by` field is written on the room (`rooms.share_lock`, JSON `[{ field, value }]`; `lock` on
+        the plan's `after`, on `GET /hotels` rooms and on the portal's `shared`) and every bed of it keeps that value —
+        the engine's runs, the planner, `POST /portal/lodging/assign` and `POST /inscriptions/:id/assign` (`409`) —
+        while the room is shared and a hard `separate_by` on that field is enabled; `PUT /rooms/:id/beds` with
+        `release_lock: true` frees it, and a room no longer shared keeps none. With beds enough every plan carries
+        `variants` (2.21.0): `keep` (the fewest families divided without anyone losing a bed, then the fewest rooms) and
+        `divide` (the fewest rooms, preferred mixed families divided by the hard `separate_by` values, then the fewest
+        families divided), each with `rooms` / `empty_beds` (the plan's measure: the rooms holding the people it places
+        and their empty beds), and the rooms view — over the rooms the plan may fill (in the hotel chosen, not blocked:
+        a pool room, a room of a location with someone waiting, a shared room with pool beds or such a share) plus any
+        other room holding the people it places — `used_rooms` / `used_empty_beds` (rooms with someone in them and their
+        empty beds) and `free_rooms` / `free_beds` (rooms the plan may fill with nobody in them; all four also on
+        `current` and `after`), `unplaced`, `hard` and `families_divided` (families, one per location, whose people
+        are in more than one room) and `today` (the answer is today's arrangement), `chosen` and `same`. TODAY competes
+        (2.21.0): leaving everything as it is — no room allotted or released, nobody moved, the automatic assignment for
+        whoever waits — is scored like any arrangement the plan tries (the variant keys end with the preferences broken)
+        and replaces each answer it beats, or ties with when that answer moves someone who has a bed or changes no
+        allotment; only when, of the people whose beds the plan decides (whoever waits; with `fresh`, whoever it took
+        out of a bed), it beds no more outside their location's rooms (whole or a share; the pool's people outside pool
+        rooms) than that answer. `keeps_today: true` when it is the plan: no `changes`, `placements` or `moved_ids`;
+        `locations` and `pool` as today has them. `divide_families: true` on
+        `/assignment/plan` and `/assignment/plan/apply` plans and applies the divided answer (`variants` is `null` with
+        beds short or when no preferred family can divide). HELD BY THE ADMINISTRATION (2.21.0): `PUT /rooms/:id/block`
+        `{ blocked }` and `PUT /inscriptions/:id/pin` `{ pinned }` (`lodging:manage`; pinning needs a bed) — the engine
+        (runs, plans with or without `fresh`, the overflow, `/locations/:id/beds`, both resets) never places anyone in a
+        blocked room, never takes anyone out of it and never moves a pinned person; `POST /portal/lodging/assign`
+        answers `409` for any of those, and so does `PUT /inscriptions/:id` that would free such a bed without
+        `lodging:manage`; the admin's `POST /inscriptions/:id/assign` still may. `room_locked` stores the room the person
+        was fixed in and holds only there: every write that changes `room_id` clears it (and boot clears any left over);
+        `DELETE /locations/:id` leaves held people in their rooms. Plans report `held: { rooms, people }`; `GET /portal/lodging` marks `blocked` rooms and `room_locked`
+        occupants.
         The admin and the portal share a lodging board / explorer (hotel → room → occupant, drag & drop).
-    *   **Registration codes**: every attendee gets a unique random 10-character `reg_code` (the Code 128
-        barcode payload), visible only in the admin panel with `inscriptions:view` — never in a portal response.
+    *   **Administration adjustments** (2.17.0): while a location's arrangement is `submitted` or `validated`
+        the coordinator's portal stays read-only (every `/portal/lodging*` write answers `409`), but the admin
+        side can change it without reopening it. With `lodging:manage` (administrators and team roles with
+        Hospedaje › gestionar), `POST /inscriptions/:id/assign`, `POST /hotels/:id/allot`, `PUT|DELETE
+        /rooms/:id` and `DELETE /hotels/:id` work on such a location as on a draft. Attendees follow the
+        **bed rule**: an arrangement is who sleeps where, so only an attendee who holds a bed is part of it,
+        in either direction. `PUT /inscriptions/:id` that moves such an attendee out of it (the move frees
+        the bed, or they take a pool bed along) or into it with the bed they keep (a pool bed, or one of its
+        own rooms) also needs `lodging:manage` (`409` otherwise — its text says when the move becomes possible
+        without it: once a `validated` location is reopened, or once a `submitted` one is returned to its
+        coordinator, since only a validated one can be reopened) and is recorded. Cancelling one, or
+        `DELETE /inscriptions/:id`, frees the bed with `inscriptions:manage` alone and is recorded. An attendee
+        WITHOUT a bed (none, or one the move itself frees) changes nobody's arrangement: moving them in or
+        out, cancelling, deleting or registering them (`POST /inscriptions`, the portal, the public form) takes
+        `inscriptions:manage` alone (or the coordinator's own registration) and is never recorded, the same
+        going in as coming out. The status does not change and the review stamps stay.
+        Every change to who sleeps where, or to which rooms and how many beds the location has (not a room's
+        name, gender or notes), is recorded on it: `lodging_admin_changed_at`, `lodging_admin_changed_by` and
+        `lodging_admin_changes` (the count since the coordinator's last submission; idempotent `ADD COLUMN`
+        on boot). A deleted room or hotel is recorded on the locations it was allotted to and on those whose
+        attendees slept in it (a pool room's occupants included). The change and the record are written under
+        the lock that every status transition also takes, deciding on the inscription and room rows as they
+        are under it, and the record only lands while the location is still `submitted` / `validated`. An
+        inscription edit or deletion that touches no bed does not take that lock. Each of those routes answers
+        `lodging_adjusted: [{ location_id, name, status }]` with the locations it changed (empty for a draft
+        or a write that changed nothing). `GET /locations` (with `lodging_admin_changed_by` only for
+        `locations:view`) and `GET /locations/:id/lodging` return the record; `GET /inscriptions` returns
+        `room_location_id`, the location each attendee's room is allotted to. `GET /portal/lodging` returns
+        `admin_changed_at` and `admin_changes`, without who made the change; `/portal/me` returns none of the
+        three. `POST /locations/:id/lodging/validate|return` take `seen: { submitted_at, admin_changes }`, the
+        review the admin looked at: if the arrangement changed since (an adjustment or a new submission) they
+        answer `409` with `code: 'lodging_changed'`; without `seen` the status alone decides, as before. A
+        validation keeps the record and the coordinator's next submission clears it. «Reabrir» still hands the
+        arrangement back to the coordinator. The conference-wide `/assignment/run` and `/assignment/reset`
+        still skip submitted / validated locations (`skipped_frozen: [{ location_id, name, status }]`): a bulk
+        operation does not rewrite a reviewed arrangement. The run's entries also carry `unassigned` (that
+        location's attendees still without a bed), summed in `skipped_unassigned`: `remaining +
+        skipped_unassigned` is everyone still without a bed once the run is done. The lodging review shows the record and offers
+        «Ajustar en Asignación» (the explorer filtered by that location). The explorer, its pickers and the
+        inscriptions' room dialog mark such a location instead of locking it, once per location and with its
+        actual state. Confirmations and toasts name the arrangements a change affects. The coordinator's
+        portal shows «Ajustado por la administración el …», and its submit confirmation says the
+        administration may adjust the arrangement.
+    *   **Registration codes**: every attendee gets a unique random 10-character `reg_code` (a QR Code since
+        2.22.0, the Code 128 barcode before; the scanners read both), visible in the admin panel with `inscriptions:view`. It is never in a portal LIST; a
+        person's badge (below) carries it, through the badge endpoints only.
+    *   **Badges** («Escarapelas», 2.19.0): one design per conference (`conferences.badge_config`: orientation,
+        title, colours, legibility panel, the fields and their labels; policy: on / off, coordinators may share, an
+        expiry date) plus a background image and a logo. The designer composites the card's static layer in the
+        browser into two JPEG «plates» (`badge_assets`); the server computes each person's badge once as a display
+        list (`server/badge-layout.js`: text runs fitted with Helvetica metrics, Code 128 bars, all in mm on a CR80
+        85.6 × 54 mm card) that the PDF (`server/badge-pdf.js`, no dependency, one per page or a Letter sheet with
+        cut guides), the admin and the portal draw alike. Each inscription has at most one
+        link (`badge_links`, a 128-bit token in the URL fragment: `/portal/conference/badge#t=…`); the public view
+        answers 404 for any wrong token (throttled per client and globally) and 410 for a cancelled inscription
+        (back on reactivation), past the expiry date or with badges off. Files go through a ticket (`badge_tickets`,
+        120 s, 3 uses) that the core's portal file route `/portal/conference/file` turns into bytes (PDF only;
+        `frontend.portalPage.file`). Staff need
+        `badges:view` AND `inscriptions:view` for links and files, `badges:manage` for the design and to regenerate
+        or revoke a link; the portal reaches only its own location's people while the conference lets coordinators
+        share badges (`features.badges` on /portal/login and /portal/me).
+        **The badge designer** (2.29.0): a free-form canvas (`badge_config.design`, version 2, one model shared by
+        the server and the browser — `server/badge-design.js`): six templates, texts in 13 typefaces (25 font files) shipped with
+        the plugin (SIL OFL, `fonts/`, loaded by literal `require` as base64 modules — no `filesystem` grant),
+        the person's data as tokens, images (JPEG / PNG, `badge_assets`), shapes, rotation and opacity; the PDF
+        embeds the TrueType fonts (`server/badge-pdf.js`, `badge-font.js`, `badge-png.js`). Exactly one QR
+        always. Older designs open converted (`client/lib/badgeEditor.ts` `fromLegacy`).
+    *   **«Mi inscripción»** (2.23.0): `/portal/conference/yo#c=<code>`, the registrant's own page behind their
+        badge's QR. The code alone is not enough: the person confirms the document type and number they
+        registered with (the form fields chosen in «Escarapelas › Uso», detected by label otherwise); a match opens
+        a session (a 128-bit token kept by the phone, stored hashed in `self_sessions`, 30 days or the badges'
+        expiry). It shows only the person's own badge, answers, meals delivered and to come, hotel, room and map —
+        never anyone else. Sign-in follows the portal's rule (2.30.0): only the caller's own budgets refuse; the
+        per-code and site-wide budgets only make attempts wait. A shared badge link (2.28.0) leads here instead
+        of showing the badge. Routes: `POST /public/me/start | verify | view | ticket | logout`.
+    *   **Boarding and transport packages** (2.24.0–2.27.0): hotels are found and pinned on a map (2.24.0);
+        «Verificar abordaje» (`POST /transport/check`, transport) scans a badge and says whether the person
+        travels on THIS bus (2.25.0); transport is sold as **packages** of buses with one price and their own
+        payments (`/transport/packages*`, `/transport/package-sales/:id/payments`; the per-bus sale and ticket
+        payment routes answer 410 — earlier tickets became one-bus package sales, payments included) (2.26.0);
+        and the transport team tells a bus's passengers that it is BOARDING, that it LEFT, or sends a message
+        (`POST /buses/:id/notice`), shown on their «Mi inscripción» and, where the person turned notices on, as a
+        real browser notification (Web Push, RFC 8291 encryption and RFC 8292 VAPID, no dependency —
+        `server/transport-push.js`; only the browsers' push services are contacted, and only with the
+        `network` grant) (2.27.0). A phone's subscription belongs to its «Mi inscripción» session.
     *   **Transport** (`/buses`, tickets and their own payments, sold apart from the participation fee),
         **accounting** (`/accounting`: income/expense ledger plus the validated registration and transport
         payments as read-only income) and **meals** (`/meals*`: services, a location × service plan, per-person
@@ -270,6 +545,35 @@ Complex business logic for managing church conferences.
         whole). Configured from «Entrega» › «Qué se muestra al entregar», with a live preview of the
         card; «Restablecer» refills the form with the default and «Guardar» stores it (saving the default
         stores `null`).
+    *   **Latest deliveries** (2.17.0): `GET /meals/services/:id/deliveries?limit=` (`meals:view` |
+        `meals_delivery:manage`; newest first, `limit` ≤ 100, default 20) returns `service` — the same `id`,
+        `service_date`, `meal`, `label`, `start_time`, `end_time` as `/meals/check` — next to `deliveries`, whose
+        rows carry their `service_id`. «Entrega» › «Últimas entregas» shows on every row the person, the meal
+        delivered («Desayuno · Vie 11/12»), the method (scan, manual, authorised override), the time, the
+        location and who recorded it, and reloads as soon as the phone scanner records or undoes a delivery.
+        In the phone scanner, the verdict card stays inside the camera area and, from 320×460 up, always shows
+        its short status, the meal (one line on a short phone, the label giving way; a tap shows it whole), the
+        person's name and its buttons (44 px), while the other details give way and scroll, ending on a whole
+        line with «Más abajo ↓» under the cut. Its inline «¿Entregar de todas formas?» keeps «Sí, entregar» /
+        «Cancelar» side by side. The confirmation card does the same from 320×460 up: the status and the name
+        are its own header and give way last, the meal takes one line on a short phone (the label giving way),
+        and «Entregar sin derecho (autorizar)» reads «Autorizar» wherever the whole label would take more than
+        two lines (every phone width, both cards; measured, its accessible name whole). The reason a not-entitled
+        person has no right to the meal is a line under the status that never gives way. In «Entrega», the
+        inline confirmations («¿Deshacer…?», «¿Entregar de todas formas?») scroll themselves into view when
+        they open — the latter spanning the card, its buttons first when the card is taller than the screen; for
+        «¿Deshacer…?» the whole row of «Últimas entregas» (the name included) comes into view below the admin
+        header, its buttons on one row, the question short when the row with the full one would not fit. A tap
+        on the meal shows it whole on both cards; only when the card cannot hold it without cutting the status,
+        the name or the buttons does it keep the whole lines that fit, with «Más abajo ↓», and scroll. «Entrega»
+        caps its «Entregado» / «Ya recibió» card to the visible band like its confirmation card (on a phone the
+        meal and the person's data take the card's whole width and the name breaks only between words), keeps
+        «Cancelar» / «Entregar» side by side inside the card on a 320 px phone, and caps and brings into view the
+        result of every delivery with the confirmation off too — a USB-wedge scan, a name picked, «Sí, entregar».
+        Its not-entitled card has the short status «Sin derecho» with the meal under it, and its «¿Entregar de
+        todas formas?» drops whole sentences when the capped card is short (on a phone «Sí, entregar» /
+        «Cancelar» side by side) and brings the whole card into view, the status and the name with it. In the
+        phone scanner, the aim hint, the «En pausa» heartbeat and the focus hint hide while a card reaches them.
     *   **Team & per-section permissions** (`/staff/*`, administrators only): roles give each section
         (dashboard, inscriptions, payments, locations, lodging, transport, accounting, meals, meal delivery,
         reports, settings) `none`, `view` or `manage`; members are WordJS users (found via `users:read`).
@@ -278,6 +582,12 @@ Complex business logic for managing church conferences.
         with it, so it needs `settings:manage` plus `manage` on each of inscriptions, payments, transport and
         accounting whose records the conference still holds (`409 conference_has_records`, with `sections`,
         otherwise); an empty conference needs `settings:manage` only.
+        «Pagos de cuotas» (2.18.0) needs `payments:view` to look and `payments:manage` to register and review;
+        the «Inscripciones» tab no longer opens with the payments section alone, and neither does the roster:
+        `GET /inscriptions` and `GET /inscriptions/:id` answer `inscriptions`, `lodging`, `transport`,
+        `accounting`, `dashboard` or `reports` (`view`), not `payments` — a payments-only role learns who each
+        person is from `GET /fee-payments` (`people[]`: name, location, family group), never their contacts,
+        form answers or notes.
     *   **Team WordJS role** (2.17.0): the manifest declares the role «Equipo de conferencia»
         (`conference_manager_team`, through `roles:declare`; see [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-))
         whose only capability is `conference_manager_access` — the capability the «Conference» menu entry
@@ -298,17 +608,48 @@ Complex business logic for managing church conferences.
         account in Users with the role «Equipo de conferencia», then add it to the team in «Equipo y permisos»
         and choose its team role.
     *   **Coordinator portal** (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/groups`,
-        `/portal/payments/bulk`, `/portal/lodging*`) surfaced at `/portal/conference` on the frontend. A per-location 6-digit
+        `/portal/fee-payments*`, `/portal/payments/bulk`, `/portal/lodging*`, `/portal/badges/*`) surfaced at `/portal/conference` — the plugin's own portal page (`frontend.portalPage`, `client/portal`; a page of the core before 2.30.0). A per-location 6-digit
         access code is required; there is **no anonymous public registration**. A login opens a 7-day session
         (an opaque id kept on the server) that a new code, deleting the location, unpublishing the form or a
         logout ends; wrong codes are throttled per client, per location and site-wide. Each coordinator's view is
         isolated by the location's **id** (not its name — names are unique per conference and renaming a
-        location keeps its attendees), and the portal listing is a projection (no admin notes, room or status).
+        location keeps its attendees), and the portal listing is a projection (no admin notes, room or status;
+        2.18.0 adds `pending_amount`, `returned_amount` and `cancelled: true|false` — a cancelled inscription owes
+        nothing and cannot be paid — ordered by first name, then id).
+        **«Pagos de cuotas» in the portal** (2.18.0): `GET /portal/fee-payments` returns the whole view in ONE
+        request (`{ features, location, methods, can_record, proof, max_people, summary, people[], counts,
+        transfers[] }`): the location's own payments in full (except the receipt) with `can_edit` /
+        `can_delete`, and every other payment that covers some of its people — the administration's, or a
+        pre-2.18 one — as a read-only line with `foreign: true` and only those people's parts, without receipt,
+        reference or notes. `POST /portal/fee-payments` records a pending payment of the location's own people
+        with one of its enabled methods (`400 no_methods` when none is enabled); `PUT /portal/fee-payments/:id`
+        corrects and resends one of its own pending or returned payments; `DELETE /portal/fee-payments/:id`
+        deletes one; each answers with the refreshed `view`. `/portal/me` and `/portal/login` carry `features:
+        { fee_payments: 1 }` (a core portal without it keeps its previous payment flow) and `fees: { pending,
+        returned }` (the tab badge). `POST /portal/payments/bulk` stays for older core portals: the same amount
+        for each selected person becomes ONE pending payment of N equal parts with the receipt stored once, and
+        any person outside the location (or cancelled, or already covered) refuses the whole request. A transfer
+        reference already used is accepted there (that portal cannot ask for confirmation, and its
+        one-amount-per-person form needs two posts for one transfer when fees differ); the admin's queue flags
+        it «Referencia repetida».
+    *   **Roster rows** (2.18.0): `GET /inscriptions/:id` returns exactly one row of `GET /inscriptions` (same
+        gate, same `reg_code` masking; 404 for a missing or non-integer id), so a page refreshes one person
+        after an action; the roster and its CSV export are ordered by last name, first name, then id, so the
+        legacy `limit`/`offset` pages never repeat or drop anyone. The CSV export gains «Por validar».
+        `/accounting` has ONE read-only income line per validated payment («Pago de cuotas · N personas», or
+        «Pago de inscripción» with `inscription_id` for one person) dated by the payment date, with its
+        `allocations`, `people`, `transfer_id` and `location_id`. `/reports/summary` follows «Pagos de
+        cuotas» › Resumen's per-person model, in total and per location: `due` = Cuotas (a cancelled
+        inscription owes 0), `paid` = Validado (each person's validated money up to the fee), `pending` = Por
+        validar, `to_cover` = Por cobrar, `credit` = A favor, `returned` = Devuelto (so `due − paid` =
+        `pending + to_cover`, never negative); `paid_count` / `partial_count` / `unpaid_count` are the roster
+        pills of active people (`people`), `cancelled_count` apart, and `owing_count` the active people with
+        something no payment covers yet (the Dashboard's «Con saldo»). `total` still counts every inscription.
     *   Reports (`/reports/summary`, cents-rounded totals), CSV export of inscriptions (`/inscriptions/export`),
         and Excel (`.xlsx`) workbooks built in the browser (custom inscription export with optional barcode
         images, hotel assignment, transport and accounting reports).
 *   **Documented caps** (a request over a cap answers `400` instead of running unbounded): 200 people per
-    bulk payment, 20 000 inscriptions per `/reprice`, 5 000 unassigned attendees per `/assignment/run`,
+    fee payment (and per bulk payment), 20 000 inscriptions per `/reprice`, 5 000 unassigned attendees per `/assignment/run`,
     500 passengers per bus operation, 60 dates per bulk meal-service creation.
 *   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `conference_manager_access`, which administrators and the team role hold; the page then shows only the sections the user's team role allows), `users` (read — find WordJS users to add to the conference team), `roles` (declare — the team role «Equipo de conferencia»).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: activation grants its declared

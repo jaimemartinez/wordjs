@@ -37,17 +37,35 @@
  * delivers at once (2.15.x). On a short phone the card takes the whole camera area (the counters fold away)
  * and the person's name sits above the part that scrolls; its buttons — and those of the «Entregado» card
  * that follows — ignore taps for a moment after they appear, so an impatient second tap cannot «Deshacer».
+ *
+ * 2.17.0 («en últimas entregas no muestra qué se le entregó»): the «Entregado» and «Ya recibió» cards name
+ * the meal under their title («Desayuno · Vie 11/12», `mealLine`), here and in «Entrega»; «Últimas
+ * entregas» (RecentDeliveries.tsx) names it on every row. Over the camera the verdict card is bounded by the
+ * camera area like the confirmation card and, on every phone from 320×460 up, shows without scrolling its
+ * status, the meal, the person's NAME and all its buttons — 44 px targets; the person's other data give way
+ * and scroll (VERDICT_FIT), ending on a whole line with «Más abajo» under the cut (useWholeEntries). So does
+ * the confirmation card: its status and the name are its own header, no longer inside the part that scrolls
+ * (on a 320×460 phone that part was shorter than the header and the name was cut or hidden), the meal keeps
+ * to one line on a short phone, and «Entregar sin derecho (autorizar)» reads «Autorizar» there (CONFIRM_CSS) and
+ * wherever it would take more than two lines — every phone width (useLabelFit). WHY a not-entitled person has no
+ * right to the meal is a line of that header, never one of the data that give way (CONFIRM_WHY_STYLE).
+ * The camera's aiming hint hides while a card reaches it. A tap on the meal shows it whole on both cards
+ * (useOpenMeal: only when the card cannot hold it, its whole lines that fit, «Más abajo» and a scroll).
+ * «Entrega»'s verdict card is bounded the same way (VERDICT_BOX) and capped by the tab to the visible band, and
+ * its confirmation card keeps «Cancelar» / «Entregar» inside a 320 px phone's card.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { conferenceApi } from "../lib/conference";
 import { createReadRouter, createScanMeter, normalizeCode, scanLoopDelay, sortServices, stampTime, verdictTone, groupByDay } from "../lib/meals";
 import {
-    CONFIRM_PREF_EVENT, CONFIRM_PREF_KEY, TAP_ARM_MS, VERDICT_TAP_ARM_MS, createConfirmFlow, displayLabel, displayValue, holdAfterClose, isDecision,
-    readConfirmPref, splitPersonFields, tapArmed, writeConfirmPref,
+    CONFIRM_PREF_EVENT, CONFIRM_PREF_KEY, LABEL_MAX_LINES, MORE_CUE_PX, REVEAL_MARGIN_PX, TAP_ARM_MS, VERDICT_TAP_ARM_MS, createConfirmFlow, detailsStale, displayLabel, displayValue, holdAfterClose, isDecision,
+    labelTooLong, measureDetails, openMealCut, readConfirmPref, revealAsk, revealNearest, splitPersonFields, tapArmed, textLineBottoms, writeConfirmPref,
+    type DetailsFit,
 } from "../lib/mealConfirm";
 import { aimCrop, decodeVideoRegion, formatLabel } from "../lib/barcodeScan";
+import { decodeQrVideoRegion, qrSquare } from "../lib/qrScan";
 import { lockBodyScroll } from "../lib/overlay";
 import { fillVars } from "../lib/lodgingView";
 
@@ -84,6 +102,15 @@ export const dayLabel = (date: string, language?: string, long = false) => {
 /** «Mié 12/11 · Almuerzo» (+ « — label»). */
 export const serviceName = (tx, s, language?: string) =>
     s ? `${dayLabel(s.service_date, language)} · ${mealName(tx, s.meal)}${s.label ? ` — ${s.label}` : ''}` : '';
+/**
+ * WHAT was delivered, the meal first: «Desayuno · Vie 11/12» (« — label» after the meal). The rows of
+ * «Últimas entregas» and the «Entregado» / «Ya recibió» cards name the meal with it.
+ */
+export const mealLine = (tx, s, language?: string) =>
+    s ? `${mealName(tx, s.meal)}${s.label ? ` — ${s.label}` : ''} · ${dayLabel(s.service_date, language)}` : '';
+/** How a delivery was recorded: «Escaneo» (a code), «Manual» (picked by name), «Sin derecho (autorizado)». */
+export const methodLabel = (tx, m) =>
+    m === 'scan' ? tx('meals.method.scan', 'Escaneo') : m === 'manual' ? tx('meals.method.manual', 'Manual') : m === 'override' ? tx('meals.method.override', 'Sin derecho (autorizado)') : (m || '');
 
 /**
  * «{served} de {entitled} entregados» (+ « · +{n} sin derecho»). `delivered` from the server also counts
@@ -264,17 +291,334 @@ const TONE_CLS = {
 const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 
 /**
+ * 2.17.0 — the phone scanner's verdict card fits the room it is given: the camera area (the verdict slot,
+ * bounded like the confirmation card's). The live round on short phones (iPhone SE in Safari 375×548 and
+ * 375×667, a first-generation SE 320×460, an iPhone 13 in Safari 390×664) found it scrolling the person's
+ * name and location away, cutting a not-entitled head («Sin derecho a Jue 08/10 · Almuerzo — …») mid-phrase
+ * with no cue and hiding «Sí, entregar» / «Cancelar». Now, on every phone from 320×460 up and without
+ * scrolling inside the card:
+ *   - the HEAD never shrinks: the icon and a SHORT status — «Entregado», «Ya recibió», «Sin derecho» — then
+ *     WHAT: the meal line «Almuerzo — label · Jue 08/10» (up to three lines; on a short screen ONE line where
+ *     only the label gives way, with an ellipsis, the meal and the day stay; a tap shows it WHOLE — useOpenMeal
+ *     — and the whole text is its title and its accessible text), and «Sin derecho (autorizado)» for an override;
+ *   - the person's NAME is its own line under the head, never in the part that scrolls: it gives way LAST,
+ *     and never below one line;
+ *   - the person's other data (location, the configured entries, «Recibió a las…», the unknown code) give way
+ *     FIRST, and scroll — WHOLE entries only, «Más abajo ↓» under the cut, left out when not even one fits
+ *     (useWholeEntries; never a lone label or the tops of a value); the armed question takes all their room
+ *     before it loses a sentence (askGiveWay);
+ *   - the buttons never shrink and are 44 px targets: «Deshacer», «Entregar de todas formas» and, once armed,
+ *     «Sí, entregar» / «Cancelar» side by side under a short question — the card already names the person,
+ *     the meal and «Sin derecho»; the whole question is the dialog's accessible name. The question gives way
+ *     before the name, by whole sentences (ASK_LEVELS), its box never below its buttons (VERDICT_ASK_MIN).
+ * `flex-shrink` weights set that order (100000 → 1000 → 1). Short screens get a tighter card whose body is no
+ * longer indented under the icon: the whole width for the name (VERDICT_CSS). «Entrega»'s card (VERDICT_BOX)
+ * gives way in the same order inside the cap its tab sets (desktop keeps its sizes and layout), and its
+ * «¿Entregar de todas formas?», which opens under the button that was tapped, spans the card's whole width
+ * (no longer indented under the icon: at 320 px it was a 16-line column), asks the short question (the card
+ * names the person and the service right above; the whole sentence is its accessible name), gives way by whole
+ * sentences inside the cap (askStepDown; on a phone its two buttons share a row) and scrolls into view with the
+ * card — the question alone, or its buttons, only when the card is taller than the screen (revealAsk).
+ * Structure INLINE (see SCANNER_ROOT_STYLE); the media rules ship with the card.
+ */
+/** The armed question's box at its smallest — its buttons alone: border 2 + padding 2 × 12 + the 44 px buttons. */
+export const VERDICT_ASK_MIN = 70;
+export const VERDICT_FIT: Record<string, React.CSSProperties> = {
+    card: { display: 'flex', flexDirection: 'column', maxHeight: '100%', minHeight: 0, overflowY: 'auto' },
+    row: { display: 'flex', alignItems: 'flex-start', gap: 16, flexShrink: 0 },
+    icon: { flexShrink: 0, width: 48, textAlign: 'center' },
+    head: { minWidth: 0, flex: '1 1 0%' },
+    body: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: '0 1 auto', paddingLeft: 64 },
+    name: { flex: '0 1 auto', minHeight: '1.15em', overflowY: 'auto', fontSize: 26, fontWeight: 900, lineHeight: 1.15, overflowWrap: 'anywhere', marginTop: 6 },
+    scroll: { position: 'relative', overflowY: 'auto', minHeight: 0, flex: '0 100000 auto' },
+    actions: { flexShrink: 0 },
+    ask: { display: 'flex', flexDirection: 'column', gap: 8, flex: '0 1000 auto', minHeight: VERDICT_ASK_MIN, marginTop: 12, marginLeft: -64, padding: 12 },
+    askText: { flex: '0 1 auto', minHeight: 0, overflow: 'hidden' },
+    askButtons: { display: 'flex', gap: 8, flexShrink: 0 },
+    askButton: { flex: '1 1 auto', minWidth: 0, minHeight: 44, paddingLeft: 10, paddingRight: 10, letterSpacing: '0.06em' },
+    target: { minHeight: 44 },
+};
+/**
+ * 2.17.0 — «Entrega»'s verdict card (not large), bounded like its confirmation card. The live round at 320×460
+ * found it 888 px tall: its body sat in a 124 px column under the icon (the name broke mid-word, «Villavicen /
+ * cio»; the meal took six lines) and «Deshacer» was 450 px below the fold. Now the tab caps it to the visible
+ * band (REVEAL_FIT_VAR, cardEssentials) and it gives way inside that cap in the phone scanner's order: the
+ * person's other data first (whole entries, «Más abajo» under the cut), then an open question's sentences (whole
+ * ones, askStepDown), the name last (never below one line); the head and the buttons never. The tab caps it
+ * whether the confirmation is ON or OFF (decisionSlotKey). Its status is short — «Sin derecho» too, with the meal
+ * line under it like «Entregado» (2.17.0: «Sin derecho a Jue 08/10 · Almuerzo — …» took 8 lines beside the icon at
+ * 320 px). The name breaks only between words (inside one only when a
+ * single word is wider than the card). On a phone (VERDICT_CSS) its body takes the card's whole width and the
+ * meal keeps to one line where only its label gives way (a tap shows it whole). Desktop: as before — the body
+ * in line with the title (the icon's 36 px + the 16 px gap), the meal whole.
+ */
+export const VERDICT_BOX: Record<string, React.CSSProperties> = {
+    card: { display: 'flex', flexDirection: 'column', maxHeight: '100%', minHeight: 0, overflowY: 'auto', scrollMarginTop: REVEAL_MARGIN_PX, scrollMarginBottom: REVEAL_MARGIN_PX },
+    row: { flexShrink: 0 },
+    icon: { flexShrink: 0, width: 36, textAlign: 'center' },
+    body: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: '0 1 auto', paddingLeft: 52 },
+    name: { flex: '0 1 auto', minHeight: '1.15em', overflowY: 'auto', fontSize: 22, fontWeight: 900, lineHeight: 1.15, overflowWrap: 'break-word', marginTop: 4 },
+    scroll: VERDICT_FIT.scroll,
+    actions: { flexShrink: 0 },
+    ask: { flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, scrollMarginTop: REVEAL_MARGIN_PX, scrollMarginBottom: REVEAL_MARGIN_PX },
+    askButtons: { display: 'flex', flexWrap: 'wrap', gap: 8, scrollMarginTop: REVEAL_MARGIN_PX, scrollMarginBottom: REVEAL_MARGIN_PX },
+};
+/** A server without the configured entries (2.15): the plain name as «Entrega» always showed it (20 px, bold). */
+VERDICT_BOX.plainName = { ...VERDICT_BOX.name, fontSize: 20, fontWeight: 700, lineHeight: 1.4 };
+/** How many px of an element's content it cannot show (it scrolls inside itself, or clips): 0 for none. */
+export const clippedPx = (el: { scrollHeight: number; clientHeight: number } | null | undefined): number =>
+    (el ? Math.max(0, el.scrollHeight - el.clientHeight) : 0);
+/**
+ * The meal line shown whole on a tap, on both cards (lib/mealConfirm textLineBottoms / openMealCut). The live
+ * round at 320×460 found it cut after two lines, mid-phrase, with no cue (a fixed max-height). Now `open` shows it
+ * WHOLE — the person's other data give way to it — and, after every layout while it is open and the card's
+ * essentials lack `over()` px (the name scrolling inside itself, the card or its header clipping), it keeps the
+ * whole lines that fit (`cap`) with «Más abajo ↓» under them and scrolls to the rest; when not even one line
+ * fits it closes again (the name always wins). A new card (`key`) closes it; another window size measures it
+ * again from whole. `atEnd`: scrolled to its end, the cue says nothing more. `cuePx`: the room the cue takes
+ * (none in the confirmation card's band, where it sits at the end of the day's line).
+ */
+export function useOpenMeal(key: unknown, over: () => number, cuePx = MORE_CUE_PX) {
+    const [open, setOpen] = useState(false);
+    const [cap, setCap] = useState<number | null>(null);
+    const [atEnd, setAtEnd] = useState(false);
+    const ref = useRef<HTMLDivElement | null>(null);
+    useLayoutEffect(() => { setOpen(false); }, [key]);
+    useLayoutEffect(() => { setCap(null); setAtEnd(false); }, [key, open]);
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!open || !el) return;
+        const cut = openMealCut(textLineBottoms(el), el.clientHeight, over(), cap != null, cuePx);
+        if (cut == null) return;
+        if (cut > 0) setCap(cut); else setOpen(false);
+    });
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const refit = () => { setCap(null); setAtEnd(false); };
+        window.addEventListener('resize', refit);
+        return () => window.removeEventListener('resize', refit);
+    }, []);
+    const onScroll = useCallback(() => {
+        const el = ref.current;
+        if (el) setAtEnd(el.scrollHeight - el.scrollTop - el.clientHeight <= 2);
+    }, []);
+    return { open, setOpen, cap, atEnd, ref, onScroll };
+}
+/** The open meal line as it is shown: whole, or cut on a whole line and scrolling (useOpenMeal `cap`). */
+export const openMealStyle = (cap: number | null): React.CSSProperties | undefined =>
+    (cap != null ? { maxHeight: cap, overflowY: 'auto' } : undefined);
+/** «Más abajo ↓» on the coloured verdict card: small capitals in the card's own colour. */
+export const VERDICT_MORE_STYLE: React.CSSProperties = { fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase' };
+/**
+ * The person's other data on both cards show WHOLE entries (lib/mealConfirm wholeEntries): measured after
+ * layout, the part that scrolls (`ref`) is cut at the bottom of the last entry that fits with the «Más abajo»
+ * line under it, or left out when not even one does. `key` — a new card, the question armed, the meal line
+ * opened or closed — and another window size measure it again from the uncut layout (`fit` null renders it
+ * uncut). «Entrega» caps its card in ITS layout effect, after this card's: a room that changed since is
+ * measured again after paint (detailsStale). `atEnd`: scrolled to its end, the line says nothing more.
+ */
+export function useWholeEntries(key: unknown) {
+    const ref = useRef<HTMLDivElement | null>(null);
+    const [fit, setFit] = useState<DetailsFit | null>(null);
+    const [atEnd, setAtEnd] = useState(false);
+    useLayoutEffect(() => { setFit(null); setAtEnd(false); }, [key]);
+    useLayoutEffect(() => {
+        if (fit) return;
+        const el = ref.current;
+        if (el) setFit(measureDetails(el));
+    });
+    useEffect(() => {
+        const el = ref.current;
+        if (el && fit && detailsStale(fit, el)) setFit(null);
+    });
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const refit = () => { setFit(null); setAtEnd(false); };
+        window.addEventListener('resize', refit);
+        return () => window.removeEventListener('resize', refit);
+    }, []);
+    const onScroll = useCallback(() => {
+        const el = ref.current;
+        if (el) setAtEnd(el.scrollHeight - el.scrollTop - el.clientHeight <= 2);
+    }, []);
+    return { ref, fit, atEnd, onScroll };
+}
+/** The part that scrolls, for what was measured: uncut (or not measured yet), or cut at the last whole entry. */
+export const detailsStyle = (base: React.CSSProperties, fit: DetailsFit | null): React.CSSProperties =>
+    (fit && fit.height != null ? { ...base, maxHeight: fit.height } : base);
+/** Whether the part is shown (left out when not even one entry fits) and whether «Más abajo» goes under it. */
+export const detailsShown = (fit: DetailsFit | null) => !fit || fit.height !== 0;
+export const detailsMore = (fit: DetailsFit | null) => !!fit && !!fit.height && fit.hidden > 0;
+/**
+ * «Más abajo ↓» under the cut (MORE_CUE_PX tall, never shrinks): some of the person's data are below, scroll
+ * them. Hidden — its room kept — once they are scrolled to their end. Not a control (aria-hidden).
+ */
+export function MoreCue({ atEnd = false, attr, style }: any) {
+    const tx = useTx();
+    return (
+        <div {...{ [attr]: '' }} aria-hidden="true" style={{
+            flexShrink: 0, height: MORE_CUE_PX, lineHeight: `${MORE_CUE_PX}px`, overflow: 'hidden', whiteSpace: 'nowrap', fontWeight: 900,
+            visibility: atEnd ? 'hidden' : undefined, ...style,
+        }}>
+            {tx('meals.confirm.more', 'Más abajo')} <i className="fa-solid fa-arrow-down" aria-hidden="true"></i>
+        </div>
+    );
+}
+/**
+ * The armed question («¿Entregar de todas formas?» + «Quedará registrado como autorizado.») gives way by
+ * WHOLE sentences: level 0 shows both, 1 the question, 2 none — the buttons stay, and the dialog's accessible
+ * name always holds the whole question with the person and the service. A level is cut when its text needs
+ * more than 2 px beyond the room it got.
+ */
+export const ASK_LEVELS = 3;
+export const askClipped = (el: { scrollHeight: number; clientHeight: number } | null | undefined): boolean =>
+    !!el && el.scrollHeight > el.clientHeight + 2;
+/**
+ * What gives way next while the armed question is cut: the person's other data first — ALL of them, they
+ * come last — and only then a sentence of the question (null: it is not cut).
+ */
+export const askGiveWay = (clipped: boolean, detailsShown: boolean): 'details' | 'sentence' | null =>
+    (!clipped ? null : detailsShown ? 'details' : 'sentence');
+/**
+ * «Entrega»'s armed question (2.17.0 live round: with the confirmation OFF, at 320×460 … 390×664, the status and
+ * the name sat above the top edge while it was open): the level it shows next — one more WHOLE sentence gone while
+ * the card its tab capped lacks `over` px for it (the name or the card scrolling inside itself; 2 px is rounding),
+ * never below none (ASK_LEVELS); its buttons always stay.
+ */
+export const askStepDown = (level: number, over: number): number =>
+    (over > 2 && level < ASK_LEVELS - 1 ? level + 1 : level);
+/**
+ * The phone scanner's «¿Entregar de todas formas?» (VERDICT_FIT.ask), once armed: the question as much as
+ * fits — `level` 0 both sentences, 1 the question, 2 none (ASK_LEVELS) — over «Sí, entregar» / «Cancelar» side
+ * by side. `label` (the dialog's accessible name) is the whole question, with the person and the service.
+ */
+export function ForceAsk({ level = 0, label, yes, no, askRef, textRef }: any) {
+    const tx = useTx();
+    return (
+        <div ref={askRef} className="rounded-2xl bg-amber-950/10 border border-amber-950/20" style={VERDICT_FIT.ask} role="alertdialog" aria-label={label} data-verdict-ask="">
+            {level < 2 && (
+                <p ref={textRef} className="text-sm font-bold" style={VERDICT_FIT.askText} data-verdict-ask-text={level}>
+                    {tx('meals.force.confirm.ask', '¿Entregar de todas formas?')}
+                    {level === 0 && <span className="font-semibold">{' '}{tx('meals.force.confirm.note', 'Quedará registrado como autorizado.')}</span>}
+                </p>
+            )}
+            <div style={VERDICT_FIT.askButtons}>{yes}{no}</div>
+        </div>
+    );
+}
+/**
+ * «Entrega»'s «¿Entregar de todas formas?» (VERDICT_BOX.ask), once armed: the card's whole width, the question
+ * as much as the capped card holds — `level` 0 both sentences, 1 the question, 2 none (askStepDown) — over
+ * «Sí, entregar» / «Cancelar» (on a phone side by side, VERDICT_CSS). `label` (the dialog's accessible name) is
+ * the whole question, with the person and the service.
+ */
+export function DeliveryForceAsk({ level = 0, label, yes, no, askRef, buttonsRef }: any) {
+    const tx = useTx();
+    return (
+        <div ref={askRef} className="mt-3 rounded-2xl bg-amber-950/10 border border-amber-950/20 p-3" style={VERDICT_BOX.ask} role="alertdialog" aria-label={label} data-verdict-ask="">
+            {level < 2 && (
+                <p className="text-sm font-bold" data-verdict-ask-text={level}>
+                    {tx('meals.force.confirm.ask', '¿Entregar de todas formas?')}
+                    {level === 0 && <span className="font-semibold">{' '}{tx('meals.force.confirm.note', 'Quedará registrado como autorizado.')}</span>}
+                </p>
+            )}
+            <div ref={buttonsRef} style={VERDICT_BOX.askButtons} data-verdict-ask-buttons="">{yes}{no}</div>
+        </div>
+    );
+}
+/**
+ * The meal line (up to three lines; tapped: WHOLE — useOpenMeal), and the short screens — the phones whose
+ * scanner folds its counters for a confirmation card (an iPhone SE shows 375×667, 375×548 in Safari; an iPhone 13
+ * 390×664 in Safari): tighter paddings, a smaller icon beside the head, smaller text, the meal on ONE line (only
+ * its label gives way), the body under the icon at full width. The shortest (a first-generation SE in Safari,
+ * 320×460): tighter still. Narrow ones: the armed buttons' labels fit side by side. Inline styles win over a
+ * stylesheet, hence !important. The large card changes with the screen's height; «Entrega»'s (not large) only
+ * on a phone (≤ 600 px wide; VERDICT_BOX): a smaller icon beside the status, then the meal and the body at the
+ * card's whole width (a 320 px phone leaves 144 px beside the icon) — the meal on one line where only its label
+ * gives way, with an ellipsis (a tap shows it whole); where not even the meal and the day fit on one line, the
+ * day goes to a second one, whole: never cut, never past the card's edge. On the narrowest (≤ 380 px: a 184 px
+ * line at 320) the closed line leaves out the meal's icon, so the label keeps room for a whole «…». The armed
+ * «Sí, entregar» / «Cancelar» of «Entrega» share a row on a phone, as wide as each other — a row of their own
+ * only when not even their longest words fit side by side — and, on the narrowest, with smaller labels and
+ * paddings (with their wide desktop labels they wrapped to two rows at 320 px, taking a name line's room twice).
+ */
+export const VERDICT_CSS = `
+[data-verdict][data-verdict-large] [data-verdict-meal] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; margin-top: 2px; cursor: pointer; }
+[data-verdict][data-verdict-large] [data-verdict-meal][data-open] { display: block; -webkit-line-clamp: none; }
+[data-verdict][data-verdict-large] [data-verdict-meal-icon] { margin-right: 6px; }
+@media (max-height: 700px) {
+  [data-verdict][data-verdict-large] { padding: 16px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-row] { gap: 10px !important; align-items: center !important; }
+  [data-verdict][data-verdict-large] [data-verdict-icon] { font-size: 36px !important; width: 36px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-title] { font-size: 24px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-meal] { font-size: 16px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-meal]:not([data-open]) { display: flex; align-items: baseline; white-space: pre; }
+  [data-verdict][data-verdict-large] [data-verdict-meal]:not([data-open]) > * { flex-shrink: 0; }
+  [data-verdict][data-verdict-large] [data-verdict-meal]:not([data-open]) > [data-verdict-meal-label] { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  [data-verdict][data-verdict-large] [data-verdict-body] { padding-left: 0 !important; }
+  [data-verdict][data-verdict-large] [data-verdict-name] { font-size: 22px !important; margin-top: 8px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-scroll] [data-field] > span:last-child { font-size: 16px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-actions] > * { margin-top: 8px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-ask] { margin-top: 8px !important; margin-left: 0 !important; }
+}
+@media (max-height: 520px) {
+  [data-verdict][data-verdict-large] { padding: 12px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-icon] { font-size: 30px !important; width: 30px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-title] { font-size: 22px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-meal] { font-size: 15px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-name] { font-size: 20px !important; margin-top: 6px !important; }
+  [data-verdict][data-verdict-large] [data-verdict-ask] { padding: 8px !important; gap: 6px !important; min-height: 62px !important; }
+}
+@media (max-width: 380px) {
+  [data-verdict][data-verdict-large] [data-verdict-ask] button { font-size: 11px !important; letter-spacing: 0.03em !important; padding-left: 6px !important; padding-right: 6px !important; }
+}
+@media (max-width: 600px) {
+  [data-verdict]:not([data-verdict-large]) { padding: 16px !important; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-row] { display: grid !important; grid-template-columns: auto minmax(0, 1fr); gap: 0 10px !important; align-items: center !important; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-head] { display: contents; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-icon] { font-size: 30px !important; width: 30px !important; margin-top: 0 !important; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-meal], [data-verdict]:not([data-verdict-large]) [data-verdict-method] { grid-column: 1 / -1; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-meal] { font-size: 15px !important; margin-top: 6px !important; cursor: pointer; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-meal]:not([data-open]) { display: flex; flex-wrap: wrap; align-items: baseline; white-space: pre; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-meal]:not([data-open]) > * { flex: 0 0 auto; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-meal]:not([data-open]) > [data-verdict-meal-label] { flex: 1 1 0%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-body] { padding-left: 0 !important; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-ask-buttons] > button { flex: 1 1 0%; }
+}
+@media (max-width: 380px) {
+  [data-verdict]:not([data-verdict-large]) [data-verdict-meal] { font-size: 14px !important; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-meal]:not([data-open]) > [data-verdict-meal-icon] { display: none; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-ask] { padding: 8px !important; }
+  [data-verdict]:not([data-verdict-large]) [data-verdict-ask] button { font-size: 11px !important; letter-spacing: 0.03em !important; padding-left: 6px !important; padding-right: 6px !important; }
+}`;
+
+/**
  * `onForce(outcome)` is called only after the inline confirmation; `onArmedChange(true|false)` lets the
  * phone scanner pause decoding while someone is deciding. `armMs` (2.16.0, when it follows a pressed
  * «Entregar» of the confirmation card): taps on it — «Deshacer», «Entregar de todas formas», dismiss — count
  * only once it has been on screen that long; «Deshacer» sits where «Entregar» was, and an impatient second
  * tap must not undo the delivery it just recorded. Without `armMs` (the immediate 2.15 delivery) nothing
- * changes.
+ * changes. `large`: the phone scanner's card (VERDICT_FIT); else «Entrega»'s (VERDICT_BOX), which the tab caps
+ * to the visible band.
  */
 export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onArmedChange, busy, large = false, language, armMs = 0 }: any) {
     const tx = useTx();
     const [armed, setArmed] = useState(false);
+    /** How much of «¿Entregar de todas formas? Quedará registrado…» the phone scanner's card shows (ASK_LEVELS). */
+    const [askLevel, setAskLevel] = useState(0);
+    /** The person's other data left out while the armed question needs their room (askGiveWay). */
+    const [dropDetails, setDropDetails] = useState(false);
+    const askRef = useRef<HTMLDivElement | null>(null);
+    const askTextRef = useRef<HTMLParagraphElement | null>(null);
+    const askButtonsRef = useRef<HTMLDivElement | null>(null);
+    const nameRef = useRef<HTMLDivElement | null>(null);
+    const cardRef = useRef<HTMLDivElement | null>(null);
     const seq = outcome?.seq;
+    /** The meal line shown whole (a tap on it): whole, or its whole lines that fit with «Más abajo» (useOpenMeal). */
+    const meal = useOpenMeal(seq, () => Math.max(clippedPx(nameRef.current), clippedPx(cardRef.current)));
+    const mealOpen = meal.open;
+    /** The person's other data: whole entries (useWholeEntries). */
+    const restFit = useWholeEntries(`${seq}:${armed}:${mealOpen}:${meal.cap}`);
     // When THIS outcome appeared (a new seq = a new card).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const shownAt = useMemo(() => Date.now(), [seq]);
@@ -282,6 +626,43 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
     useEffect(() => { setArmed(false); }, [seq]);
     useEffect(() => { onArmedChange?.(armed); }, [armed]);
     useEffect(() => () => onArmedChange?.(false), []);
+    // «Entrega»: «¿Entregar de todas formas?» opens under the button that was tapped. Once it has settled (the next
+    // frame: the sentences that give way are gone), bring into view the whole card when it fits on screen — the
+    // status and the name with the question — else the question, else its buttons (320×460; revealAsk). The phone
+    // scanner's card fits its slot.
+    useEffect(() => {
+        if (!armed || large || typeof window === 'undefined') return;
+        const reveal = () => { revealAsk(askRef.current, window, askButtonsRef.current, cardRef.current); };
+        if (typeof window.requestAnimationFrame !== 'function') { reveal(); return; }
+        const frame = window.requestAnimationFrame(reveal);
+        return () => window.cancelAnimationFrame(frame);
+    }, [armed, large]);
+    // «Entrega»: the meal line shown whole makes the card taller — its buttons stay in view.
+    useEffect(() => { if (mealOpen && !large && typeof window !== 'undefined') revealNearest(cardRef.current, window); }, [mealOpen, meal.cap, large]);
+    // The phone scanner's card, after every layout: while the armed question would be cut, leave the person's
+    // other data out, then step the question down by whole sentences (never a half line). A new card, a new
+    // question, the meal line opened or closed, another window size: everything again, then as much as fits.
+    useLayoutEffect(() => { setAskLevel(0); setDropDetails(false); }, [seq, armed, mealOpen]);
+    useLayoutEffect(() => {
+        if (!large) return;
+        const way = askGiveWay(askClipped(askTextRef.current), !!restFit.ref.current);
+        if (way === 'details') setDropDetails(true);
+        else if (way === 'sentence') setAskLevel((l) => Math.min(ASK_LEVELS - 1, l + 1));
+    });
+    // «Entrega»'s card, after every layout: while the card its tab capped cannot hold the armed question with the
+    // WHOLE name (the name or the card scrolls inside itself; the person's other data have already given way, they
+    // shrink first), the question steps down by whole sentences — its buttons stay (askStepDown).
+    useLayoutEffect(() => {
+        if (large || !armed) return;
+        const next = askStepDown(askLevel, Math.max(clippedPx(nameRef.current), clippedPx(cardRef.current)));
+        if (next !== askLevel) setAskLevel(next);
+    });
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const refit = () => { setAskLevel(0); setDropDetails(false); };
+        window.addEventListener('resize', refit);
+        return () => window.removeEventListener('resize', refit);
+    }, []);
     if (!outcome) return null;
     const r = outcome.result;
     const v = outcome.verdict || {};
@@ -291,70 +672,149 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
     const title =
         r === 'delivered' ? tx('meals.verdict.delivered', 'Entregado')
             : r === 'already' ? tx('meals.verdict.already', 'Ya recibió')
-                : r === 'not_entitled' ? tx('meals.verdict.not_entitled', 'Sin derecho a {service}', { service: svc })
+                : r === 'not_entitled' ? tx('meals.verdict.not_entitled.short', 'Sin derecho')
                     : r === 'cancelled' ? tx('meals.verdict.cancelled', 'Inscripción cancelada')
                         : r === 'unknown' ? tx('meals.verdict.unknown', 'Código no encontrado')
                             : r === 'other_conference' ? tx('meals.verdict.other_conference', 'Ese código es de otra conferencia')
                                 : r === 'offline' ? tx('meals.verdict.offline', 'Sin conexión — vuelve a escanear')
                                     : r === 'no_service' ? tx('meals.verdict.no_service', 'Servicio no encontrado: elige otro')
                                         : (outcome.message || tx('meals.verdict.error', 'No se pudo registrar'));
+    // WHAT was delivered (or already received, or what a not-entitled person has no right to — its status is
+    // short on both cards; 2.17.0 live round: «Entrega»'s «Sin derecho a Jue 08/10 · Almuerzo — …» took 8 lines,
+    // 240 px, in the 144 px beside the icon at 320×460): the service the server answered for, else the selected one.
+    const ms = v.service || service || null;
+    const what = (r === 'delivered' || r === 'already' || r === 'not_entitled') && ms ? mealLine(tx, ms, language) : '';
     const icon = r === 'delivered' ? 'fa-circle-check' : r === 'not_entitled' ? 'fa-triangle-exclamation' : r === 'unknown' || r === 'other_conference' ? 'fa-circle-question' : r === 'offline' ? 'fa-wifi' : 'fa-circle-xmark';
     const loc = p ? (p.location_id == null ? tx('meals.no.location', 'Sin localidad') : (p.location || '')) : '';
     const canForce = r === 'not_entitled' && onForce && p;
     const canUndo = r === 'delivered' && onUndo && v.delivery_id;
+    const confirmText = canForce ? tx('meals.force.confirm', '{name} no tiene derecho a {service}. ¿Entregar de todas formas? Quedará registrado como autorizado.', { name: p.name, service: svc }) : '';
+    const yes = (style?: React.CSSProperties, cls = 'px-4 py-3 rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase tracking-widest disabled:opacity-50') => (
+        <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); setArmed(false); onForce(outcome); }}
+            className={cls} style={style} data-force-confirm="">
+            <i className="fa-solid fa-check mr-1.5" aria-hidden="true"></i>{tx('meals.force.yes', 'Sí, entregar')}
+        </button>
+    );
+    const no = (style?: React.CSSProperties, cls = 'px-4 py-3 rounded-2xl bg-white/60 text-amber-950 font-black text-xs uppercase tracking-widest') => (
+        <button type="button" onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); setArmed(false); }}
+            className={cls} style={style} data-force-cancel="">
+            {tx('cancel', 'Cancelar')}
+        </button>
+    );
+    const forceBtn = (
+        <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); if (tapOk()) setArmed(true); }}
+            className="px-4 py-3 rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase tracking-widest disabled:opacity-50" style={VERDICT_FIT.target} data-force="">
+            <i className="fa-solid fa-hand mr-1.5" aria-hidden="true"></i>{tx('meals.force', 'Entregar de todas formas')}
+        </button>
+    );
+    const undoBtn = (
+        <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); if (tapOk()) onUndo(v.delivery_id, outcome); }}
+            className="px-4 py-2.5 rounded-2xl bg-white/20 hover:bg-white/30 font-black text-[11px] uppercase tracking-widest disabled:opacity-50" style={VERDICT_FIT.target} data-verdict-undo="">
+            <i className="fa-solid fa-rotate-left mr-1.5" aria-hidden="true"></i>{tx('meals.undo', 'Deshacer')}
+        </button>
+    );
+    const alreadyAt = r === 'already' && v.delivered_at ? (v.delivered_by
+        ? tx('meals.verdict.already.at.by', 'Recibió a las {time} · registró {who}', { time: stampTime(v.delivered_at), who: v.delivered_by })
+        : tx('meals.verdict.already.at', 'Recibió a las {time}', { time: stampTime(v.delivered_at) })) : '';
+
+    // Both cards: head → name → the rest (gives way, scrolls) → the decision (VERDICT_FIT / VERDICT_BOX).
+    const L = displayLabelsOf(tx);
+    const withFields = !!(p && Array.isArray(p.fields) && p.fields.length > 0);
+    const { name, rest } = withFields ? splitPersonFields(p) : { name: null, rest: [] };
+    const nameText = !p ? '' : name ? displayValue(name, L) : String(p.name || '');
+    const plain = p && !withFields ? [loc, p.family_group ? tx('meals.family', 'Grupo familiar: {name}', { name: p.family_group }) : '', p.reg_code || ''].filter(Boolean).join(' · ') : '';
+    const code = r === 'unknown' && outcome.code ? outcome.code : '';
+    const details = rest.length > 0 || !!plain || !!alreadyAt || !!code;
+    // WHAT, as parts (on a short screen only the label gives way); tapped: whole (useOpenMeal), «Más abajo» under
+    // it when the card cannot hold it. The tap never dismisses the card, and in «Entrega» never takes the focus
+    // from the scan input.
+    const mealLineEl = (cls: string, iconCls: string) => (what ? <>
+        <div ref={meal.ref} className={cls} title={what} data-verdict-meal="" data-open={mealOpen ? '' : undefined} style={openMealStyle(meal.cap)} onScroll={meal.onScroll}
+            onMouseDown={large ? undefined : keepFocus} onClick={(e) => { e.stopPropagation(); meal.setOpen((o) => !o); }}>
+            <i className={`fa-solid ${MEAL_ICON[ms.meal] || 'fa-utensils'}${iconCls}`} aria-hidden="true" data-verdict-meal-icon=""></i>
+            <span data-verdict-meal-name="">{mealName(tx, ms.meal)}</span>
+            {ms.label ? <span data-verdict-meal-label="">{` — ${ms.label}`}</span> : null}
+            <span data-verdict-meal-day="">{` · ${dayLabel(ms.service_date, language)}`}</span>
+        </div>
+        {mealOpen && meal.cap != null && <MoreCue attr="data-verdict-meal-more" atEnd={meal.atEnd} style={VERDICT_MORE_STYLE} />}
+    </> : null);
+    const method = r === 'delivered' && v.method === 'override' && <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90" data-verdict-method="override">{tx('meals.method.override', 'Sin derecho (autorizado)')}</div>;
+    const F = large ? VERDICT_FIT : VERDICT_BOX;
+    const body = (
+        <div style={F.body} data-verdict-body="">
+            {/* WHO: gives way last, never below one line. */}
+            {nameText && <div ref={nameRef} style={!large && !withFields ? VERDICT_BOX.plainName : F.name} data-verdict-name="" data-field="@name">{nameText}</div>}
+            {/* The rest of the person's data: gives way first, and scrolls — whole entries, «Más abajo» under the cut. */}
+            {details && !dropDetails && detailsShown(restFit.fit) && (
+                <div ref={restFit.ref} onScroll={restFit.onScroll} style={detailsStyle(F.scroll, restFit.fit)} data-verdict-scroll="" data-more={detailsMore(restFit.fit) ? '' : undefined}>
+                    {rest.length > 0 && <div className="mt-1"><PersonFields fields={rest} large={large} onColour={tone !== 'warn'} /></div>}
+                    {plain && <div className={`text-sm font-semibold opacity-90 ${large ? 'mt-1' : 'mt-0.5'}`} data-entry="">{plain}</div>}
+                    {alreadyAt && <div className="text-sm font-bold mt-1" data-entry="">{alreadyAt}</div>}
+                    {code && <div className="text-sm font-mono font-bold mt-1 opacity-90 break-all" data-entry="">{code}</div>}
+                </div>
+            )}
+            {details && !dropDetails && detailsMore(restFit.fit) && <MoreCue attr="data-verdict-more" atEnd={restFit.atEnd} style={VERDICT_MORE_STYLE} />}
+            {/* «¿Entregar de todas formas?» (the phone scanner's): the question gives way before the name; its buttons never. */}
+            {large && canForce && armed && (
+                <ForceAsk askRef={askRef} textRef={askTextRef} level={askLevel} label={confirmText}
+                    yes={yes(VERDICT_FIT.askButton, 'rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase disabled:opacity-50')}
+                    no={no(VERDICT_FIT.askButton, 'rounded-2xl bg-white/60 text-amber-950 font-black text-xs uppercase')} />
+            )}
+            {/* The decision and «Deshacer»: never shrink; 44 px targets. */}
+            {((canForce && !armed) || canUndo) ? (
+                <div style={F.actions} data-verdict-actions="">
+                    <div className="flex flex-wrap gap-2 mt-3">
+                        {canForce && !armed && forceBtn}
+                        {canUndo && undoBtn}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+
+    if (large) {
+        // The phone scanner's card (VERDICT_FIT): head → name → the rest (scrolls) → the decision.
+        return (
+            <div ref={cardRef} className={`rounded-3xl border-2 shadow-xl ${TONE_CLS[tone]} p-6 animate-in fade-in zoom-in-95 duration-150`} style={VERDICT_FIT.card} role="status" aria-live="assertive" data-verdict={r} data-verdict-large="" onClick={() => { if (!armed && tapOk()) onDismiss?.(); }}>
+                {/* The verdict and WHAT: never shrinks. */}
+                <div style={VERDICT_FIT.row} data-verdict-row="">
+                    <i className={`fa-solid ${icon} text-5xl`} style={VERDICT_FIT.icon} aria-hidden="true" data-verdict-icon=""></i>
+                    <div style={VERDICT_FIT.head} data-verdict-head="">
+                        <div className="text-3xl font-black tracking-tight leading-tight break-words" data-verdict-title="">{title}</div>
+                        {mealLineEl('text-lg font-black leading-snug', '')}
+                        {method}
+                    </div>
+                </div>
+                {body}
+                {/* Last child: the meal line's and the short screens' rules (VERDICT_CSS); it takes no room. */}
+                <style>{VERDICT_CSS}</style>
+            </div>
+        );
+    }
+
+    // «Entrega» (VERDICT_BOX): the same order, capped by the tab to the visible band; on a phone the body takes the
+    // card's whole width (VERDICT_CSS).
     return (
-        <div className={`rounded-3xl border-2 shadow-xl ${TONE_CLS[tone]} ${large ? 'p-6' : 'p-5'} animate-in fade-in zoom-in-95 duration-150`} role="status" aria-live="assertive" data-verdict={r} onClick={() => { if (!armed && tapOk()) onDismiss?.(); }}>
-            <div className="flex items-start gap-4">
-                <i className={`fa-solid ${icon} ${large ? 'text-5xl' : 'text-4xl'} shrink-0 mt-0.5`} aria-hidden="true"></i>
-                <div className="min-w-0 flex-1">
-                    <div className={`${large ? 'text-3xl' : 'text-2xl'} font-black tracking-tight leading-tight break-words`}>{title}</div>
-                    {/* 2.16.0: the conference's configured entries (the same the confirmation card showed). */}
-                    {p && Array.isArray(p.fields) && p.fields.length > 0
-                        ? <div className="mt-1"><PersonFields fields={p.fields} large={large} onColour={tone !== 'warn'} /></div>
-                        : p && <>
-                            <div className={`${large ? 'text-2xl' : 'text-xl'} font-bold mt-1 break-words`}>{p.name}</div>
-                            <div className="text-sm font-semibold opacity-90 mt-0.5">{[loc, p.family_group ? tx('meals.family', 'Grupo familiar: {name}', { name: p.family_group }) : '', p.reg_code || ''].filter(Boolean).join(' · ')}</div>
-                        </>}
-                    {r === 'already' && v.delivered_at && (
-                        <div className="text-sm font-bold mt-1">{v.delivered_by
-                            ? tx('meals.verdict.already.at.by', 'Recibió a las {time} · registró {who}', { time: stampTime(v.delivered_at), who: v.delivered_by })
-                            : tx('meals.verdict.already.at', 'Recibió a las {time}', { time: stampTime(v.delivered_at) })}</div>
-                    )}
-                    {r === 'unknown' && outcome.code && <div className="text-sm font-mono font-bold mt-1 opacity-90 break-all">{outcome.code}</div>}
-                    {r === 'delivered' && v.method === 'override' && <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90">{tx('meals.method.override', 'Sin derecho (autorizado)')}</div>}
-                    {canForce && armed && (
-                        <div className="mt-3 rounded-2xl bg-amber-950/10 border border-amber-950/20 p-3 space-y-2" role="alertdialog" aria-label={tx('meals.force', 'Entregar de todas formas')}>
-                            <p className="text-sm font-bold">{tx('meals.force.confirm', '{name} no tiene derecho a {service}. ¿Entregar de todas formas? Quedará registrado como autorizado.', { name: p.name, service: svc })}</p>
-                            <div className="flex flex-wrap gap-2">
-                                <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); setArmed(false); onForce(outcome); }}
-                                    className="px-4 py-3 rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase tracking-widest disabled:opacity-50" data-force-confirm="">
-                                    <i className="fa-solid fa-check mr-1.5" aria-hidden="true"></i>{tx('meals.force.yes', 'Sí, entregar')}
-                                </button>
-                                <button type="button" onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); setArmed(false); }}
-                                    className="px-4 py-3 rounded-2xl bg-white/60 text-amber-950 font-black text-xs uppercase tracking-widest">
-                                    {tx('cancel', 'Cancelar')}
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                    {((canForce && !armed) || canUndo) ? (
-                        <div className="flex flex-wrap gap-2 mt-3">
-                            {canForce && !armed && (
-                                <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); if (tapOk()) setArmed(true); }}
-                                    className="px-4 py-3 rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase tracking-widest disabled:opacity-50" data-force="">
-                                    <i className="fa-solid fa-hand mr-1.5" aria-hidden="true"></i>{tx('meals.force', 'Entregar de todas formas')}
-                                </button>
-                            )}
-                            {canUndo && (
-                                <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); if (tapOk()) onUndo(v.delivery_id, outcome); }}
-                                    className="px-4 py-2.5 rounded-2xl bg-white/20 hover:bg-white/30 font-black text-[11px] uppercase tracking-widest disabled:opacity-50" data-verdict-undo="">
-                                    <i className="fa-solid fa-rotate-left mr-1.5" aria-hidden="true"></i>{tx('meals.undo', 'Deshacer')}
-                                </button>
-                            )}
-                        </div>
-                    ) : null}
+        <div ref={cardRef} className={`rounded-3xl border-2 shadow-xl ${TONE_CLS[tone]} p-5 animate-in fade-in zoom-in-95 duration-150`} style={VERDICT_BOX.card} role="status" aria-live="assertive" data-verdict={r} onClick={() => { if (!armed && tapOk()) onDismiss?.(); }}>
+            <div className="flex items-start gap-4" style={VERDICT_BOX.row} data-verdict-row="">
+                <i className={`fa-solid ${icon} text-4xl mt-0.5`} style={VERDICT_BOX.icon} aria-hidden="true" data-verdict-icon=""></i>
+                <div className="min-w-0 flex-1" data-verdict-head="">
+                    <div className="text-2xl font-black tracking-tight leading-tight break-words" data-verdict-title="">{title}</div>
+                    {mealLineEl('text-base font-black leading-snug mt-0.5 break-words', ' mr-1.5')}
+                    {method}
                 </div>
             </div>
+            {body}
+            {/* Armed: the card's whole width (not indented under the icon), the short question — the card names
+                the person and the service right above; the whole sentence is the dialog's name — and its buttons.
+                Inside the cap the question gives way by whole sentences (askStepDown), its buttons never; on a
+                phone they share a row (VERDICT_CSS). */}
+            {canForce && armed && (
+                <DeliveryForceAsk askRef={askRef} buttonsRef={askButtonsRef} level={askLevel} label={confirmText}
+                    yes={yes(VERDICT_FIT.target)} no={no(VERDICT_FIT.target)} />
+            )}
+            {/* Last child: the phone rules (VERDICT_CSS); it takes no room. */}
+            <style>{VERDICT_CSS}</style>
         </div>
     );
 }
@@ -401,33 +861,172 @@ export const confirmTone = (r: string) =>
     (r === 'ready' ? 'ready' : r === 'not_entitled' ? 'not_entitled' : r === 'already' || r === 'cancelled' || r === 'no_service' || r === 'error' ? 'bad' : 'muted');
 
 /**
- * Short screens (an iPhone SE in Safari shows 375×548, a first-generation SE 320×460): the meal band on one
- * line where it fits, tighter paddings and slimmer buttons, so the person's name and data keep their room;
- * narrow ones: a smaller label on «Entregar sin derecho (autorizar)», which wraps there. Inline styles win
- * over a stylesheet, hence !important; only the phone scanner's card (`large`) changes.
+ * The phone scanner's card: the meal under the day takes at most three lines (a 120-character label took ten
+ * and cut the name on a 375×667 phone); a tap on the band shows it WHOLE (useOpenMeal: only when the card
+ * cannot hold it, its whole lines that fit with «Más abajo» under them; its title holds the whole text too).
+ * Short screens (an iPhone SE in Safari shows 375×548, a first-generation SE 320×460):
+ * tighter paddings and slimmer buttons, and the meal keeps to ONE line where only the service's label gives
+ * way (an ellipsis; the meal stays) — a long label took three lines (100 px) on a 320×460 phone and pushed the
+ * person's name under the buttons. The shortest (320×460): the day and the meal share that line, and
+ * everything is tighter still. Narrow or short ones: «Entregar sin derecho (autorizar)» reads «Autorizar» (its
+ * accessible name stays whole) — it wrapped to four lines and took the name's room. Inline styles win over a
+ * stylesheet, hence !important; these change only the phone scanner's card (`large`). «Entrega»'s card keeps
+ * its layout except on a narrow AND short phone, where its meal too keeps to one line and «Autorizar» is
+ * short: on a 320×460 phone under the admin header its four-line meal and six-line «Entregar sin derecho
+ * (autorizar)» left no room for its buttons (the cap could not hold them). On a narrow phone (≤ 380 px: a 214 px
+ * card at 320) its paddings and buttons are tighter so «Cancelar» + «Entregar» (or «Autorizar») fit side by side
+ * — the live round found «Entregar» 28 px wider than the card, cut by it («Entrega»). The row wraps rather than
+ * cut a button, whatever the language or the font.
+ * 2.17.0 live round (r6): wherever else the whole «Entregar sin derecho (autorizar)» would take more than two lines
+ * (390–412 px phones: four lines in a 118 px button) the card shows «Autorizar» too (useLabelFit, measured); on the
+ * narrowest (≤ 380 px) its hand icon gives way so «Autorizar» keeps to one line. WHY a not-entitled person has no
+ * right to the meal is a line of the header (CONFIRM_WHY_STYLE), compact on a short screen; to make room for it,
+ * «Entrega»'s card on the shortest narrow phone (320×460) is tighter still — its essentials must fit the band
+ * under the admin header, or the tab cannot cap it and its buttons end below the edge.
  */
 export const CONFIRM_CSS = `
+[data-confirm-card][data-confirm-large] [data-confirm-meal] { cursor: pointer; }
+[data-confirm-card][data-confirm-large] [data-confirm-meal]:not([data-open]) [data-confirm-meal-name] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 @media (max-height: 640px) {
   [data-confirm-card][data-confirm-large] [data-confirm-meal] { display: flex !important; flex-wrap: wrap; align-items: baseline; column-gap: 10px; padding-top: 8px !important; padding-bottom: 8px !important; }
-  [data-confirm-card][data-confirm-large] [data-confirm-meal-name] { font-size: 20px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-meal-name] { font-size: 20px !important; min-width: 0; }
+  [data-confirm-card][data-confirm-large] [data-confirm-meal]:not([data-open]) [data-confirm-meal-name] { display: flex; align-items: baseline; white-space: pre; }
+  [data-confirm-card][data-confirm-large] [data-confirm-meal]:not([data-open]) [data-confirm-meal-name] > * { flex-shrink: 0; }
+  [data-confirm-card][data-confirm-large] [data-confirm-meal]:not([data-open]) [data-confirm-meal-label] { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   [data-confirm-card][data-confirm-large] [data-confirm-head] { padding-top: 8px !important; gap: 6px !important; }
   [data-confirm-card][data-confirm-large] [data-confirm-name] { font-size: 22px !important; }
   [data-confirm-card][data-confirm-large] [data-confirm-body] { padding-bottom: 8px !important; }
   [data-confirm-card][data-confirm-large] [data-confirm-actions] { padding-bottom: 12px !important; }
   [data-confirm-card][data-confirm-large] [data-confirm-actions] button { min-height: 50px !important; padding-top: 6px !important; padding-bottom: 6px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-why] { font-size: 12px !important; line-height: 1.2 !important; margin-top: -2px; }
+}
+@media (max-height: 520px) {
+  [data-confirm-card][data-confirm-large] [data-confirm-meal] { flex-wrap: nowrap; padding: 6px 12px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-meal][data-open] { flex-wrap: wrap; }
+  [data-confirm-card][data-confirm-large] [data-confirm-day] { flex-shrink: 0; }
+  [data-confirm-card][data-confirm-large] [data-confirm-meal-name] { font-size: 18px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-head] { padding: 6px 12px 4px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-status] { padding: 4px 10px !important; font-size: 13px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-name] { font-size: 20px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-body] { padding-left: 12px !important; padding-right: 12px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-actions] { padding: 0 12px 10px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-actions] button { min-height: 46px !important; }
+}
+@media (max-width: 380px), (max-height: 640px) {
+  [data-confirm-card][data-confirm-large] [data-label-long] { display: none !important; }
+  [data-confirm-card][data-confirm-large] [data-label-short] { display: inline !important; }
 }
 @media (max-width: 380px) {
   [data-confirm-card][data-confirm-large] [data-long-label] { font-size: 13px !important; padding-left: 8px !important; padding-right: 8px !important; }
+  [data-confirm-card][data-confirm-large] button[data-long-label] > i { display: none; }
+}
+@media (max-width: 600px) and (max-height: 640px) {
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-meal] { cursor: pointer; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-meal]:not([data-open]) [data-confirm-meal-name] { display: flex; align-items: baseline; white-space: pre; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-meal]:not([data-open]) [data-confirm-meal-name] > * { flex-shrink: 0; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-meal]:not([data-open]) [data-confirm-meal-label] { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  [data-confirm-card]:not([data-confirm-large]) [data-label-long] { display: none !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-label-short] { display: inline !important; }
+}
+@media (max-width: 380px) {
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-meal] { padding-left: 12px !important; padding-right: 12px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-head] { padding-left: 12px !important; padding-right: 12px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-body] { padding-left: 12px !important; padding-right: 12px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-actions] { gap: 6px !important; padding-left: 12px !important; padding-right: 12px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-actions] button { padding-left: 8px !important; padding-right: 8px !important; gap: 6px !important; font-size: 14px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-actions] button[data-long-label] { font-size: 13px !important; }
+  [data-confirm-card]:not([data-confirm-large]) button[data-long-label] > i { display: none; }
+}
+@media (max-width: 380px) and (max-height: 520px) {
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-head] { padding-top: 8px !important; padding-bottom: 6px !important; gap: 6px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-status] { padding: 4px 10px !important; font-size: 13px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-why] { font-size: 12px !important; line-height: 1.2 !important; margin-top: -2px; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-name] { font-size: 20px !important; }
+  [data-confirm-card]:not([data-confirm-large]) [data-confirm-actions] { padding-bottom: 10px !important; }
 }`;
+/** «Más abajo ↓» on the white confirmation card. */
+export const CONFIRM_MORE_STYLE: React.CSSProperties = { textAlign: 'center', fontSize: 12, color: '#374151' };
+/**
+ * 2.17.0 — WHY a not-entitled person has no right to the meal («No está en el plan de su localidad», «Se la quitaron
+ * a esta persona»): a compact line under the status, in the header that never gives way. It was the first entry of
+ * the part that scrolls, and the live round at 320×460 found it gone with that part (left out when not even one
+ * entry fits) — staff authorised without knowing why. It never shrinks; it wraps.
+ */
+export const CONFIRM_WHY_STYLE = (color: string): React.CSSProperties => ({ flexShrink: 0, fontSize: 13, fontWeight: 700, lineHeight: 1.25, color, overflowWrap: 'anywhere' });
+/**
+ * «Más abajo ↓» over the open meal in the coloured band: at the end of the day's line, taking no room of its own —
+ * floated right of it (the band's block layout), or after it in the row with the meal next (`order`, the band's
+ * wrapping row on a short screen); 16 px, inside the day's 18 px line. On a 320×460 phone the 20 px of a line of
+ * its own decided between one line of the meal and none.
+ */
+export const CONFIRM_MEAL_MORE_STYLE: React.CSSProperties = { float: 'right', order: 1, marginLeft: 'auto', height: 16, lineHeight: '16px', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase' };
+/**
+ * «Registrando…» replaces «Entregar» (or «Autorizar») while the delivery is recorded: a moment, and a longer word.
+ * That button may then shrink, its label ending in «…», instead of pushing «Cancelar» to a second row (the card
+ * would jump) or out of the card. Its accessible name stays the whole word (the text is all there).
+ */
+export const BUTTON_SHRINKS: React.CSSProperties = { minWidth: 0 };
+export const BUTTON_LABEL_FIT: React.CSSProperties = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+/** The part of the confirmation card that scrolls (whole entries: useWholeEntries); it gives way first. */
+export const CONFIRM_SCROLL: React.CSSProperties = { position: 'relative', overflowY: 'auto', minHeight: 0, flex: '0 100000 auto' };
+/**
+ * 2.17.0 — a button's whole label shows only while it takes at most `max` lines (lib/mealConfirm labelTooLong):
+ * measured after layout, before paint; `short` once it would take more — the button then shows its short label
+ * (its accessible name stays whole). The live round found «Entregar sin derecho (autorizar)» in four lines in a
+ * 118 px button at 390×664 and 390×844 (both cards) and at 412×915: the media rules (CONFIRM_CSS) give «Autorizar»
+ * only on a narrow or short screen, and stay as they are; this covers every other width, language and font. A new
+ * `key` (another card, another text), another window size or a web font that finished loading measure it again
+ * from the whole label. `ref`: the whole label's element.
+ */
+export function useLabelFit(key: unknown, max = LABEL_MAX_LINES) {
+    const ref = useRef<HTMLSpanElement | null>(null);
+    const [short, setShort] = useState(false);
+    useLayoutEffect(() => { setShort(false); }, [key]);
+    useLayoutEffect(() => {
+        if (short) return;
+        const el = ref.current;
+        if (el && labelTooLong(el, max)) setShort(true);
+    });
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const refit = () => setShort(false);
+        const fonts: any = typeof document !== 'undefined' ? (document as any).fonts : null;
+        window.addEventListener('resize', refit);
+        try { fonts?.addEventListener?.('loadingdone', refit); } catch { /* no FontFaceSet events */ }
+        return () => {
+            window.removeEventListener('resize', refit);
+            try { fonts?.removeEventListener?.('loadingdone', refit); } catch { /* ignore */ }
+        };
+    }, []);
+    return { ref, short };
+}
+/**
+ * «Entregar sin derecho (autorizar)»'s label: «Registrando…» while it records (it shortens with «…»); the short one
+ * alone once the whole one would take more than two lines (useLabelFit); else both, the short one hidden — the media
+ * rules (CONFIRM_CSS) swap them on a narrow or short screen. `labelRef` goes on the whole one (it is measured).
+ */
+export function AuthorizeLabel({ text, shortText, delivering = false, short = false, labelRef }: any) {
+    if (delivering) return <span style={BUTTON_LABEL_FIT}>{text}</span>;
+    if (short) return <span data-label-short="" data-label-fit="short">{shortText}</span>;
+    return <>
+        <span ref={labelRef} data-label-long="">{text}</span>
+        <span data-label-short="" style={{ display: 'none' }}>{shortText}</span>
+    </>;
+}
 
 /**
- * The confirmation card (2.16.0): the meal (day + meal, prominent; never shrinks), then the middle — the
- * status and the person's NAME in a header that stays at its top (sticky), the other configured entries
- * scrolling under it, with «Más abajo» while some of it is out of view (iOS hides scrollbars) — and the
- * decision at the bottom (thumb reach; never shrinks, so no screen can push the buttons out of the card):
+ * The confirmation card (2.16.0): the meal (day + meal, prominent; never shrinks), then WHO — the status and
+ * the person's NAME, a header that gives way last (2.17.0: no longer inside the part that scrolls, where a
+ * header taller than that part was cut for good on a 320×460 phone; now the name gives way only after
+ * everything else, never below one line, scrolling inside itself) — then the other configured entries, the
+ * part that gives way first and scrolls, WHOLE entries with «Más abajo» under the cut (useWholeEntries; iOS
+ * hides scrollbars), and the decision at the bottom (thumb reach; never shrinks, so no screen can push the
+ * buttons out of the card):
  *   'ready'        → «Cancelar» + «Entregar» (primary, right)
- *   'not_entitled' → «Entregar sin derecho (autorizar)» (outlined, left) + «Cancelar» (primary, right): the
- *                    routine tap on the big right-hand button never authorises an override
+ *   'not_entitled' → «Entregar sin derecho (autorizar)» (outlined, left; «Autorizar» where the whole label would
+ *                    take more than two lines) + «Cancelar» (primary, right): the routine tap on the big right-hand
+ *                    button never authorises an override. WHY (not in the plan of their location, removed for
+ *                    this person) is a line of the header, under the status: it never gives way
  *   anything else  → «Cerrar».
  * The decision buttons ignore taps for `armMs` after the card appears (a tap meant for what was there before
  * must not decide for this person). Structure and colours are INLINE (it lives inside the phone scanner, see
@@ -438,18 +1037,23 @@ export function ConfirmCard({ card, service, language, delivering = false, waiti
     const tx = useTx();
     const txn = makeTxn(tx);
     const L = displayLabelsOf(tx);
-    const scrollRef = useRef<HTMLDivElement | null>(null);
-    const [more, setMore] = useState(false);
-    const measure = useCallback(() => {
-        const el = scrollRef.current;
-        if (el) setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
-    }, []);
-    useEffect(() => {
-        measure();
-        if (typeof window === 'undefined') return;
-        window.addEventListener('resize', measure);
-        return () => window.removeEventListener('resize', measure);
-    }, [measure, card?.seq]);
+    const nameRef = useRef<HTMLDivElement | null>(null);
+    const headRef = useRef<HTMLDivElement | null>(null);
+    const cardRef = useRef<HTMLDivElement | null>(null);
+    /**
+     * The meal band shown whole (a tap on it: on a short screen it keeps to one line): whole, or — when the card
+     * cannot hold it without cutting the status, the name or the buttons — its whole lines that fit with «Más
+     * abajo» under them (useOpenMeal; the name always wins).
+     */
+    const meal = useOpenMeal(card?.seq, () => Math.max(clippedPx(nameRef.current), clippedPx(headRef.current), clippedPx(cardRef.current)), 0);
+    const mealOpen = meal.open;
+    // «Entregar sin derecho (autorizar)»: whole while it takes at most two lines, else «Autorizar» (useLabelFit). The
+    // switch makes the buttons shorter: the person's other data are measured again for the room it leaves.
+    const authorizeWhole = tx('meals.confirm.authorize', 'Entregar sin derecho (autorizar)');
+    const authorizeFit = useLabelFit(`${card?.seq}:${card?.result}:${authorizeWhole}`);
+    const restFit = useWholeEntries(`${card?.seq}:${mealOpen}:${meal.cap}:${authorizeFit.short}`);
+    // «Entrega»: the meal band shown whole makes the card taller — its buttons stay in view.
+    useEffect(() => { if (mealOpen && !large && typeof window !== 'undefined') revealNearest(cardRef.current, window); }, [mealOpen, meal.cap, large]);
     if (!card) return null;
     const r = card.result;
     const v = card.verdict || {};
@@ -483,54 +1087,61 @@ export function ConfirmCard({ card, service, language, delivering = false, waiti
             {tx('meals.confirm.cancel', 'Cancelar')}
         </button>
     );
+    const authorize = delivering ? tx('meals.confirm.delivering', 'Registrando…') : authorizeWhole;
+    const mealText = s ? `${dayLabel(s.service_date, language, true)} · ${mealName(tx, s.meal)}${s.label ? ` — ${s.label}` : ''}` : '';
     return (
-        <div role={decision ? 'alertdialog' : 'status'} aria-live="assertive" aria-label={tx('meals.confirm.title', 'Confirmar entrega')} data-confirm-card={r} data-confirm-large={large ? '' : undefined}
-            style={{ background: '#fff', color: '#111827', borderRadius: 24, overflow: 'hidden', border: `3px solid ${tone.band}`, boxShadow: '0 12px 40px rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column', maxHeight: '100%', minHeight: 0 }}>
-            <div data-confirm-meal="" style={{ background: tone.band, color: '#fff', padding: large ? '12px 16px' : '10px 14px', flexShrink: 0 }}>
+        <div ref={cardRef} role={decision ? 'alertdialog' : 'status'} aria-live="assertive" aria-label={tx('meals.confirm.title', 'Confirmar entrega')} data-confirm-card={r} data-confirm-large={large ? '' : undefined}
+            style={{ background: '#fff', color: '#111827', borderRadius: 24, overflow: 'hidden', border: `3px solid ${tone.band}`, boxShadow: '0 12px 40px rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column', maxHeight: '100%', minHeight: 0, scrollMarginTop: REVEAL_MARGIN_PX, scrollMarginBottom: REVEAL_MARGIN_PX }}>
+            <div data-confirm-meal="" title={s ? mealText : undefined} data-open={mealOpen ? '' : undefined}
+                onClick={s ? () => meal.setOpen((o) => !o) : undefined}
+                style={{ background: tone.band, color: '#fff', padding: large ? '12px 16px' : '10px 14px', flexShrink: 0 }}>
                 {s ? <>
+                    {mealOpen && meal.cap != null && <MoreCue attr="data-confirm-meal-more" atEnd={meal.atEnd} style={CONFIRM_MEAL_MORE_STYLE} />}
                     <div data-confirm-day="" style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{dayLabel(s.service_date, language, true)}</div>
-                    <div data-confirm-meal-name="" style={{ fontSize: large ? 26 : 22, fontWeight: 900, lineHeight: 1.1, overflowWrap: 'anywhere' }}>
-                        <i className={`fa-solid ${MEAL_ICON[s.meal] || 'fa-utensils'}`} aria-hidden="true" style={{ marginRight: 8 }}></i>{mealName(tx, s.meal)}{s.label ? ` — ${s.label}` : ''}
+                    <div ref={meal.ref} data-confirm-meal-name="" onScroll={meal.onScroll} style={{ fontSize: large ? 26 : 22, fontWeight: 900, lineHeight: 1.1, overflowWrap: 'anywhere', order: 2, ...openMealStyle(meal.cap) }}>
+                        <i className={`fa-solid ${MEAL_ICON[s.meal] || 'fa-utensils'}`} aria-hidden="true" style={{ marginRight: 8 }}></i>
+                        <span data-confirm-meal-meal="">{mealName(tx, s.meal)}</span>
+                        {s.label ? <span data-confirm-meal-label="">{` — ${s.label}`}</span> : null}
                     </div>
                 </> : <div style={{ fontSize: 18, fontWeight: 900 }}>{tx('meals.confirm.title', 'Confirmar entrega')}</div>}
             </div>
-            {/* The middle scrolls; its header — the status and WHO it is — stays at its top (sticky), so on the
-                shortest phone the name stays visible and nothing can push the buttons out of the card. */}
-            <div data-confirm-scroll="" ref={scrollRef} onScroll={measure} style={{ position: 'relative', overflowY: 'auto', minHeight: 0, flex: '0 1 auto' }}>
-                <div data-confirm-head="" style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff', padding: large ? '12px 16px 8px' : '12px 14px 8px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
-                    <div data-confirm-status="" style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: tone.chip, color: tone.text, fontWeight: 900, fontSize: 14 }}>
-                        <i className={`fa-solid ${r === 'offline' ? 'fa-wifi' : tone.icon}`} aria-hidden="true"></i>{status}
-                    </div>
-                    {name && <div data-confirm-name="" data-field="@name" style={{ fontSize: large ? 26 : 22, fontWeight: 900, lineHeight: 1.15, overflowWrap: 'anywhere' }}>{displayValue(name, L)}</div>}
+            {/* WHO: the status and the name — they give way last (the name never below one line). */}
+            <div ref={headRef} data-confirm-head="" style={{ flex: '0 1 auto', minHeight: 0, overflow: 'hidden', padding: large ? '12px 16px 8px' : '12px 14px 8px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+                <div data-confirm-status="" style={{ alignSelf: 'flex-start', flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: tone.chip, color: tone.text, fontWeight: 900, fontSize: 14 }}>
+                    <i className={`fa-solid ${r === 'offline' ? 'fa-wifi' : tone.icon}`} aria-hidden="true"></i>{status}
                 </div>
-                <div data-confirm-body="" style={{ padding: large ? '2px 16px 14px' : '2px 14px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {why && <div style={{ fontSize: 13, fontWeight: 700, color: tone.text }}>{why}</div>}
-                    {rest.length > 0 && <PersonFields fields={rest} large={large} />}
-                    {r === 'already' && v.delivered_at && (
-                        <div style={{ fontSize: 14, fontWeight: 700 }}>{v.delivered_by
-                            ? tx('meals.verdict.already.at.by', 'Recibió a las {time} · registró {who}', { time: stampTime(v.delivered_at), who: v.delivered_by })
-                            : tx('meals.verdict.already.at', 'Recibió a las {time}', { time: stampTime(v.delivered_at) })}</div>
-                    )}
-                    {r === 'unknown' && card.code && <div style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800, fontSize: 15, overflowWrap: 'anywhere' }}>{card.code}</div>}
-                    {waiting > 0 && <div data-confirm-waiting={waiting} style={{ fontSize: 12, fontWeight: 800, color: '#6b7280' }}>{txn('meals.confirm.waiting', '{n} códigos en espera', '{n} código en espera', waiting)}</div>}
-                    {keyHints && decision && <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280' }}>{r === 'ready' ? tx('meals.confirm.keys', 'Enter = Entregar · Esc = Cancelar') : tx('meals.confirm.keys.authorize', 'Enter no autoriza: usa el botón · Esc = Cancelar')}</div>}
-                    {more && (
-                        <div data-confirm-more="" aria-hidden="true" style={{ position: 'sticky', bottom: 0, marginTop: -6, paddingTop: 14, textAlign: 'center', fontSize: 12, fontWeight: 900, color: '#374151', background: 'linear-gradient(rgba(255,255,255,0), #fff 55%)', pointerEvents: 'none' }}>
-                            {tx('meals.confirm.more', 'Más abajo')} <i className="fa-solid fa-arrow-down" aria-hidden="true"></i>
-                        </div>
-                    )}
-                </div>
+                {/* WHY there is no right to it: decision information, part of the status — never a detail that gives way. */}
+                {why && <div data-confirm-why="" style={CONFIRM_WHY_STYLE(tone.text)}>{why}</div>}
+                {name && <div ref={nameRef} data-confirm-name="" data-field="@name" style={{ flex: '0 1 auto', minHeight: '1.15em', overflowY: 'auto', fontSize: large ? 26 : 22, fontWeight: 900, lineHeight: 1.15, overflowWrap: 'anywhere' }}>{displayValue(name, L)}</div>}
             </div>
-            <div data-confirm-actions="" style={{ display: 'flex', gap: 8, padding: large ? '0 16px 16px' : '0 14px 14px', flexShrink: 0 }}>
+            {/* The rest gives way first and scrolls: whole entries, «Más abajo» under the cut, left out when none fits. */}
+            {detailsShown(restFit.fit) && (
+                <div data-confirm-scroll="" ref={restFit.ref} onScroll={restFit.onScroll} style={detailsStyle(CONFIRM_SCROLL, restFit.fit)}>
+                    <div data-confirm-body="" style={{ padding: large ? '2px 16px 14px' : '2px 14px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {rest.length > 0 && <PersonFields fields={rest} large={large} />}
+                        {r === 'already' && v.delivered_at && (
+                            <div data-entry="" style={{ fontSize: 14, fontWeight: 700 }}>{v.delivered_by
+                                ? tx('meals.verdict.already.at.by', 'Recibió a las {time} · registró {who}', { time: stampTime(v.delivered_at), who: v.delivered_by })
+                                : tx('meals.verdict.already.at', 'Recibió a las {time}', { time: stampTime(v.delivered_at) })}</div>
+                        )}
+                        {r === 'unknown' && card.code && <div data-entry="" style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800, fontSize: 15, overflowWrap: 'anywhere' }}>{card.code}</div>}
+                        {waiting > 0 && <div data-confirm-waiting={waiting} data-entry="" style={{ fontSize: 12, fontWeight: 800, color: '#6b7280' }}>{txn('meals.confirm.waiting', '{n} códigos en espera', '{n} código en espera', waiting)}</div>}
+                        {keyHints && decision && <div data-entry="" style={{ fontSize: 11, fontWeight: 700, color: '#6b7280' }}>{r === 'ready' ? tx('meals.confirm.keys', 'Enter = Entregar · Esc = Cancelar') : tx('meals.confirm.keys.authorize', 'Enter no autoriza: usa el botón · Esc = Cancelar')}</div>}
+                    </div>
+                </div>
+            )}
+            {detailsMore(restFit.fit) && <MoreCue attr="data-confirm-more" atEnd={restFit.atEnd} style={CONFIRM_MORE_STYLE} />}
+            <div data-confirm-actions="" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: large ? '0 16px 16px' : '0 14px 14px', flexShrink: 0 }}>
                 {r === 'ready' ? <>
                     {cancelBtn(false)}
-                    <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onDeliver)} data-confirm-deliver="" style={btn('#059669', '#fff', '2 1 0%')}>
-                        <i className="fa-solid fa-check" aria-hidden="true"></i>{delivering ? tx('meals.confirm.delivering', 'Registrando…') : tx('meals.confirm.deliver', 'Entregar')}
+                    <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onDeliver)} data-confirm-deliver="" style={{ ...btn('#059669', '#fff', '2 1 0%'), ...(delivering ? BUTTON_SHRINKS : null) }}>
+                        <i className="fa-solid fa-check" aria-hidden="true"></i>{delivering ? <span style={BUTTON_LABEL_FIT}>{tx('meals.confirm.delivering', 'Registrando…')}</span> : tx('meals.confirm.deliver', 'Entregar')}
                     </button>
                 </> : r === 'not_entitled' ? <>
                     <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onAuthorize)} data-confirm-authorize="" data-long-label=""
-                        style={{ ...btn('#fff', '#92400e', '1 1 0%'), border: '2px solid #b45309', fontSize: large ? 15 : 14, flexWrap: 'wrap', textAlign: 'center' }}>
-                        <i className="fa-solid fa-hand" aria-hidden="true"></i>{delivering ? tx('meals.confirm.delivering', 'Registrando…') : tx('meals.confirm.authorize', 'Entregar sin derecho (autorizar)')}
+                        style={{ ...btn('#fff', '#92400e', '1 1 0%'), border: '2px solid #b45309', fontSize: large ? 15 : 14, flexWrap: 'wrap', textAlign: 'center', ...(delivering ? BUTTON_SHRINKS : null) }} aria-label={authorize}>
+                        <i className="fa-solid fa-hand" aria-hidden="true"></i>
+                        <AuthorizeLabel text={authorize} shortText={tx('meals.confirm.authorize.short', 'Autorizar')} delivering={delivering} short={authorizeFit.short} labelRef={authorizeFit.ref} />
                     </button>
                     {cancelBtn(true)}
                 </> : (
@@ -628,21 +1239,24 @@ export function PersonSearch({ conferenceId, onPick, busy, autoFocus = true, dar
 }
 
 // ── Camera support ───────────────────────────────────────────────────────────────────────────────────
-/** What BarcodeDetector is asked for when it cannot list its formats: the badge's and the retail ones. */
-export const NATIVE_DEFAULT_FORMATS = ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39'];
+/**
+ * What BarcodeDetector is asked for when it cannot list its formats: the badges' QR (2.22.0), the Code 128
+ * of the badges printed before, and the retail ones.
+ */
+export const NATIVE_DEFAULT_FORMATS = ['qr_code', 'code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39'];
 /**
  * The formats to ask BarcodeDetector for: EVERY one it supports (the scanner shows whatever it reads —
  * 2.15.0 asked for Code 128 only, so a product box was invisible), or null when it cannot read the
- * badges' Code 128 (the built-in reader is used then).
+ * badges' QR (the built-in reader, which reads QR and Code 128, is used then).
  */
 export function pickNativeFormats(supported: string[] | null | undefined): string[] | null {
     if (!Array.isArray(supported)) return [...NATIVE_DEFAULT_FORMATS];
     const list = supported.filter((f) => typeof f === 'string' && f && f !== 'unknown');
-    return list.includes('code_128') ? list : null;
+    return list.includes('qr_code') ? list : null;
 }
 
 let detectorPromise: Promise<any> | null = null;
-/** A BarcodeDetector (Chrome / Android) for every format it reads, Code 128 included; else null. */
+/** A BarcodeDetector (Chrome / Android) for every format it reads, QR included; else null. */
 export function getNativeDetector(): Promise<any> {
     if (detectorPromise) return detectorPromise;
     detectorPromise = (async () => {
@@ -657,12 +1271,13 @@ export function getNativeDetector(): Promise<any> {
 }
 
 /**
- * One built-in decode of the current frame: the band under the aiming frame (`frameEl`), at the camera's
- * full resolution, in every symbology the plugin reads, nothing filtered (`regCodeOnly: false` — the
- * caller decides what is a registration code and shows the rest). Falls back to the whole frame when
+ * One built-in decode of the current frame: first a QR (the badges since 2.22.0) in a square around the aiming
+ * frame (`frameEl`), then the band under it at the camera's full resolution in every barcode symbology the
+ * plugin reads (the Code 128 badges printed before, retail codes), nothing filtered (`regCodeOnly: false` —
+ * the caller decides what is a registration code and shows the rest). Falls back to the whole frame when
  * the aiming frame has no layout.
  */
-export function decodeCameraFrame(video: any, canvas: any, frameEl: any) {
+export function decodeCameraFrame(video: any, canvas: any, frameEl: any): { text: string; format: string } | null {
     let band = null;
     try {
         if (frameEl && typeof video.getBoundingClientRect === 'function') {
@@ -670,6 +1285,8 @@ export function decodeCameraFrame(video: any, canvas: any, frameEl: any) {
             band = aimCrop(video.videoWidth, video.videoHeight, { width: v.width, height: v.height }, { x: f.left - v.left, y: f.top - v.top, width: f.width, height: f.height });
         }
     } catch { band = null; }
+    const qr = decodeQrVideoRegion(video, canvas, qrSquare(video.videoWidth, video.videoHeight, band));
+    if (qr) return qr;
     return decodeVideoRegion(video, canvas, band, { regCodeOnly: false });
 }
 
@@ -679,12 +1296,16 @@ export function decodeCameraFrame(video: any, canvas: any, frameEl: any) {
  * moves a frame-sized layer with `transform` — composited, so the line keeps moving while the built-in
  * reader holds the main thread (animating `top` re-ran layout on the main thread and stuttered exactly
  * while a frame was being decoded). translateY(%) is relative to the layer's own height, the frame's.
+ * The counters fold away on a short phone while a confirmation card is open, and on the shortest ones
+ * (a first-generation SE in Safari, 320×460) while a verdict card is shown (2.17.0: its meal and «Deshacer»
+ * need the room).
  */
 export const SCANNER_CSS = `
 @keyframes cm-scan-sweep { 0%, 100% { transform: translateY(14%); } 50% { transform: translateY(86%); } }
 @keyframes cm-scan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { [data-scan-line], [data-scan-dot] { animation: none !important; } }
 @media (max-height: 700px) { [data-meal-scanner][data-card-open] [data-scanner-counters] { display: none !important; } }
+@media (max-height: 520px) { [data-meal-scanner][data-verdict-open] [data-scanner-counters] { display: none !important; } }
 `;
 export const SCANNER_ROOT_STYLE: React.CSSProperties = {
     position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, height: '100dvh', zIndex: 6000,
@@ -698,6 +1319,21 @@ export const SCANNER_BAR_STYLE: React.CSSProperties = { background: 'rgba(0,0,0,
  */
 export const SAFE_LEFT = 'max(12px, env(safe-area-inset-left))';
 export const SAFE_RIGHT = 'max(12px, env(safe-area-inset-right))';
+/** The aim hint is hidden while a card's box reaches it — its top above the hint's bottom (no hint, no box: shown). */
+export const coversHint = (hint: { bottom: number } | null | undefined, box: { top: number; height: number } | null | undefined): boolean =>
+    !!hint && !!box && box.height > 0 && box.top < hint.bottom;
+/**
+ * The camera's own lines a card can reach, each hidden (its place kept) while the card's box does (coversHint):
+ * the aim hint at the top, and under the aiming frame the heartbeat pill («En pausa») and the focus hint. 2.17.0
+ * live round: at 412×915 the offline / error card's top edge ran through «En pausa», its lower half hidden — the
+ * aim hint's twin, which hid itself while that pill did not.
+ */
+export type CameraLines = { hint: boolean; pill: boolean; focus: boolean };
+export const NO_CAMERA_LINE_COVERED: CameraLines = { hint: false, pill: false, focus: false };
+type Bottom = { bottom: number } | null | undefined;
+export const coveredCameraLines = (lines: { hint?: Bottom; pill?: Bottom; focus?: Bottom }, box: { top: number; height: number } | null | undefined): CameraLines =>
+    ({ hint: coversHint(lines.hint, box), pill: coversHint(lines.pill, box), focus: coversHint(lines.focus, box) });
+export const sameCameraLines = (a: CameraLines, b: CameraLines): boolean => a.hint === b.hint && a.pill === b.pill && a.focus === b.focus;
 const pill: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999,
     background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 12, fontWeight: 800, lineHeight: 1.2,
@@ -726,13 +1362,14 @@ export function AimFrame({ frameRef, scanning }: any) {
  * pulsing dot, «En pausa» while a sheet / a verdict / a request holds the loop. Nothing when stalled
  * (CameraNotice covers the camera then). «Escaneando…» without a number while no frame has been analysed
  * in the last second (the camera just turned on, a slow first native detect()): «0 cuadros/s» on the
- * screen meant to reassure the operator read like a fault.
+ * screen meant to reassure the operator read like a fault. `covered`: a card reaches it — hidden, its place
+ * kept (coveredCameraLines).
  */
-export function ScanPill({ health, tx }: any) {
+export function ScanPill({ health, tx, pillRef, covered = false }: any) {
     if (!health || health.state === 'stalled') return null;
     const scanning = health.state === 'scanning';
     return (
-        <div data-scan-state={health.state} role="status" aria-live="off" style={pill}>
+        <div ref={pillRef} data-scan-state={health.state} role="status" aria-live="off" style={covered ? { ...pill, visibility: 'hidden' } : pill}>
             <span data-scan-dot="" aria-hidden="true" style={{
                 width: 8, height: 8, borderRadius: 999, background: scanning ? '#34d399' : '#fbbf24',
                 animation: scanning ? 'cm-scan-pulse 1s ease-in-out infinite' : 'none',
@@ -1220,6 +1857,34 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         if (p && typeof p.then === 'function') p.then(() => { if (aliveRef.current) { setPlayBlocked(false); meter.current.start(); } }, () => { /* still refused: the button stays */ });
     };
 
+    // The camera's own lines — the aim hint (top 12 of the camera area), the heartbeat pill and the focus hint
+    // under the aiming frame — hide while a card reaches them: a card's top edge over one cut its letters in half
+    // (the aim hint at 390×664, «En pausa» at 412×915). Measured on the card's box, again whenever that box or the
+    // camera area changes size (the counters folding move the centred frame), and when the pill appears.
+    const hintRef = useRef<HTMLDivElement | null>(null);
+    const pillRef = useRef<HTMLDivElement | null>(null);
+    const focusHintRef = useRef<HTMLDivElement | null>(null);
+    const cameraAreaRef = useRef<HTMLDivElement | null>(null);
+    const cardBoxRef = useRef<HTMLDivElement | null>(null);
+    const [covered, setCovered] = useState<CameraLines>(NO_CAMERA_LINE_COVERED);
+    const slotKind = confirm.card || confirm.checking ? 'card' : outcome ? 'verdict' : '';
+    const pillOn = cam === 'on' && !playBlocked && !!health && health.state !== 'stalled';
+    useLayoutEffect(() => {
+        const box = cardBoxRef.current;
+        if (!slotKind || !box) { setCovered(NO_CAMERA_LINE_COVERED); return; }
+        const rect = (r: React.MutableRefObject<HTMLDivElement | null>) => r.current?.getBoundingClientRect() || null;
+        const check = () => {
+            const now = coveredCameraLines({ hint: rect(hintRef), pill: rect(pillRef), focus: rect(focusHintRef) }, box.getBoundingClientRect());
+            setCovered((was) => (sameCameraLines(was, now) ? was : now));
+        };
+        check();
+        if (typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(check);
+        ro.observe(box);
+        if (cameraAreaRef.current) ro.observe(cameraAreaRef.current);
+        return () => ro.disconnect();
+    }, [slotKind, cam, pillOn]);
+
     const camMessage =
         cam === 'insecure' ? tx('meals.camera.insecure', 'La cámara solo funciona con https. Puedes escribir el código o buscar por nombre.')
             : cam === 'unsupported' ? tx('meals.camera.unsupported', 'Este navegador no permite usar la cámara. Puedes escribir el código o buscar por nombre.')
@@ -1238,6 +1903,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     return createPortal(
         <div ref={rootRef} tabIndex={-1} className="fixed inset-0 z-[6000] bg-black text-white flex flex-col select-none outline-none" style={SCANNER_ROOT_STYLE} role="dialog" aria-modal="true" aria-label={tx('meals.scanner', 'Modo escáner')} data-meal-scanner="" data-engine={engine}
             data-card-open={confirm.card || confirm.checking ? '' : undefined}
+            data-verdict-open={outcome && !confirm.card && !confirm.checking ? '' : undefined}
             onPointerDown={() => feedback.current.prime()}>
             <style>{SCANNER_CSS}</style>
             {/* Top: service + exit */}
@@ -1262,7 +1928,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             </div>
 
             {/* Camera — no page panning or pinch-zoom on it (touch-action), the bars and sheets keep theirs */}
-            <div className="relative flex-1 min-h-0 overflow-hidden" data-camera-area="" style={{
+            <div ref={cameraAreaRef} className="relative flex-1 min-h-0 overflow-hidden" data-camera-area="" style={{
                 position: 'relative', flex: '1 1 0%', minHeight: 0, overflow: 'hidden', touchAction: 'none',
                 boxShadow: flash === 'ok' ? 'inset 0 0 0 8px #10b981' : flash === 'bad' ? 'inset 0 0 0 8px #f43f5e' : 'none',
             }}>
@@ -1270,14 +1936,14 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                 {cam === 'on' && !playBlocked && health?.state !== 'stalled' && (
                     <div style={{ ...fill, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, pointerEvents: 'none' }}>
                         <AimFrame frameRef={aimRef} scanning={scanning} />
-                        <ScanPill health={health} tx={tx} />
-                        <div style={{ maxWidth: 320, margin: '0 16px', padding: '4px 10px', borderRadius: 10, background: 'rgba(0,0,0,0.55)', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.85)' }}>
+                        <ScanPill health={health} tx={tx} pillRef={pillRef} covered={covered.pill} />
+                        <div ref={focusHintRef} data-scanner-focus-hint="" style={{ maxWidth: 320, margin: '0 16px', padding: '4px 10px', borderRadius: 10, background: 'rgba(0,0,0,0.55)', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.85)', visibility: covered.focus ? 'hidden' : undefined }}>
                             {tx('meals.scanner.focus.hint', 'Mantén el código recto a unos 15–20 cm: más cerca la cámara no enfoca.')}
                         </div>
                     </div>
                 )}
                 {cam === 'on' && (
-                    <div style={{ position: 'absolute', top: 12, left: 0, right: 0, textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.85)', pointerEvents: 'none', textShadow: '0 1px 2px #000' }}>{tx('meals.scanner.aim', 'Apunta al código de barras del participante')}</div>
+                    <div ref={hintRef} data-scanner-aim-hint="" style={{ position: 'absolute', top: 12, left: 0, right: 0, textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.85)', pointerEvents: 'none', textShadow: '0 1px 2px #000', visibility: covered.hint ? 'hidden' : undefined }}>{tx('meals.scanner.aim', 'Apunta al código de barras del participante')}</div>
                 )}
                 {cam === 'on' && read && (
                     <div style={{ position: 'absolute', top: 40, left: SAFE_LEFT, right: `calc(60px + ${SAFE_RIGHT})`, zIndex: 1 }}>
@@ -1317,7 +1983,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                 {(confirm.card || confirm.checking) && (
                     <div data-confirm-slot="" style={{ position: 'absolute', left: SAFE_LEFT, right: SAFE_RIGHT, bottom: 12, top: 8, zIndex: 4, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', pointerEvents: 'none' }}>
                         {/* A long card shrinks to the camera area and scrolls its middle; the name and the buttons stay visible. */}
-                        <div style={{ pointerEvents: 'auto', minHeight: 0, maxHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+                        <div ref={cardBoxRef} style={{ pointerEvents: 'auto', minHeight: 0, maxHeight: '100%', display: 'flex', flexDirection: 'column' }}>
                             {confirm.card
                                 ? <ConfirmCard card={confirm.card} service={service} language={language} large delivering={confirm.delivering}
                                     onDeliver={() => flow.deliver()}
@@ -1328,15 +1994,20 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                         </div>
                     </div>
                 )}
-                {/* Verdict over the bottom third */}
+                {/* The verdict over the camera, at the bottom. 2.17.0: bounded by the camera area like the
+                    confirmation card (top 8) — it used to grow upwards past it and lose its head («Entregado» and
+                    the meal) on a short phone; now the status, the meal, the name and the buttons stay, the
+                    person's other data give way (VERDICT_FIT). */}
                 {outcome && !confirm.card && !confirm.checking && (
-                    <div className="absolute left-3 right-3 bottom-3" style={{ position: 'absolute', left: SAFE_LEFT, right: SAFE_RIGHT, bottom: 12, zIndex: 4 }}>
-                        <VerdictCard outcome={outcome} service={service} large busy={busy} language={language}
-                            armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
-                            onForce={outcome.result === 'not_entitled' ? force : undefined}
-                            onArmedChange={(a) => { armedRef.current = !!a; }}
-                            onUndo={undo}
-                            onDismiss={() => setOutcome(null)} />
+                    <div data-verdict-slot="" style={{ position: 'absolute', left: SAFE_LEFT, right: SAFE_RIGHT, bottom: 12, top: 8, zIndex: 4, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', pointerEvents: 'none' }}>
+                        <div ref={cardBoxRef} style={{ pointerEvents: 'auto', minHeight: 0, maxHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+                            <VerdictCard outcome={outcome} service={service} large busy={busy} language={language}
+                                armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
+                                onForce={outcome.result === 'not_entitled' ? force : undefined}
+                                onArmedChange={(a) => { armedRef.current = !!a; }}
+                                onUndo={undo}
+                                onDismiss={() => setOutcome(null)} />
+                        </div>
                     </div>
                 )}
             </div>

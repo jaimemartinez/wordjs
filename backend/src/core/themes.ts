@@ -48,6 +48,8 @@ class Theme {
   templatePath: any;
   layout: any;
   translations: Record<string, { description?: string }> | null;
+  /** How many permissions the theme's functions.js declares (theme.json `permissions`): 0 = none to grant. */
+  declaredPermissions: number;
 
   constructor(data: any) {
     this.name = data.name;
@@ -63,6 +65,7 @@ class Theme {
     // The Next.js public layout honors it via the active_theme_layout option (see switchTheme).
     this.layout = (data.layout && typeof data.layout === 'object') ? data.layout : null;
     this.translations = themeTranslations(data.translations);
+    this.declaredPermissions = Number.isInteger(data.declaredPermissions) ? data.declaredPermissions : 0;
   }
 
   /**
@@ -192,6 +195,7 @@ function scanThemes() {
 
       records.push({
         ...metadata,
+        declaredPermissions: (require('./theme-declaration').themeDeclaredPermissions(themeDir) || []).length,
         slug: entry.name,
         path: themeDir,
         templatePath: path.join(themeDir, 'templates')
@@ -445,6 +449,7 @@ async function getAllThemes() {
     author: theme.author,
     screenshot: theme.screenshot,
     layout: theme.layout,
+    declaredPermissions: theme.declaredPermissions,
     active: theme.slug === current
   }));
 }

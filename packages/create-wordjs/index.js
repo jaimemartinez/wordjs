@@ -27,14 +27,14 @@
 const REPO = 'jaimemartinez/wordjs';
 
 // ---------------------------------------------------------------------------------------------
-// Node preflight — same floor as WordJS itself (Next 16 + native modules need >= 20.9). Failing
+// Node preflight — same floor as WordJS itself (Node >= 22: graphql 17 and the native modules declare it). Failing
 // here with a clear message beats the cryptic EBADENGINE/native-binding crash mid-install.
 // ---------------------------------------------------------------------------------------------
 {
-    const [maj, min] = process.versions.node.split('.').map(Number);
-    if (maj < 20 || (maj === 20 && min < 9)) {
-        console.error(`\n✖ WordJS requires Node.js >= 20.9 — you are running ${process.versions.node}.`);
-        console.error('  Install Node 20 LTS or 22 LTS from https://nodejs.org and try again.\n');
+    const maj = Number(process.versions.node.split('.')[0]);
+    if (maj < 22) {
+        console.error(`\n✖ WordJS requires Node.js >= 22 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 22 LTS or 24 LTS from https://nodejs.org and try again.\n');
         process.exit(1);
     }
 }
@@ -581,17 +581,94 @@ async function obtainBundleZip(opts) {
     return { zipPath, tag, cleanup };
 }
 
-function runNpmScript(script, cwd, extraEnv) {
-    // A single command string with shell:true resolves npm/npm.cmd on every platform (and avoids
-    // Node's DEP0190 warning about args-array + shell). The string is fixed — no user input in it.
-    const r = spawnSync(`npm run ${script}`, {
-        cwd,
-        stdio: 'inherit',
-        shell: true,
-        env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+// --- dependency install with retries -------------------------------------------------------------
+//
+// `release:install` downloads prebuilt native binaries (better-sqlite3 above all). When that download
+// times out (`prebuild-install warn install Request timed out`), npm falls back to compiling from
+// source, and a server without a C/C++ toolchain ends in a raw `gyp ERR!`. The same command run a
+// minute later usually succeeds, so it is retried with backoff; if it still fails, the operator gets a
+// plain explanation instead of the compiler log.
+
+const INSTALL_ATTEMPTS = 3;
+// Waits before the 2nd and 3rd attempts. CREATE_WORDJS_RETRY_BASE_MS scales them (tests use a few ms).
+const INSTALL_RETRY_BASE_MS = /^\d+$/.test(process.env.CREATE_WORDJS_RETRY_BASE_MS || '') ? Number(process.env.CREATE_WORDJS_RETRY_BASE_MS) : 15000;
+// Left in a site whose dependency install did not finish; `create-wordjs <dir>` resumes from it.
+const INCOMPLETE_MARKER = '.create-wordjs-incomplete';
+
+/** What a failed install's output says about why it failed. */
+function classifyInstallFailure(output) {
+    const text = String(output || '');
+    const prebuiltTimeout = /prebuild-install (warn|WARN|ERR!).*(timed out|ETIMEDOUT|ECONNRESET|ESOCKETTIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up)/i.test(text);
+    const nativeBuild = /gyp ERR!|node-gyp|not found: (make|python)|No (C|C\+\+) compiler|g\+\+: (command )?not found|Could not find any Python/i.test(text);
+    const network = prebuiltTimeout || /\b(ETIMEDOUT|ECONNRESET|ESOCKETTIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED)\b|network (timeout|request)|Request timed out/i.test(text);
+    return { prebuiltTimeout, nativeBuild, network };
+}
+
+/** The operator-facing explanation of an install that failed every attempt. */
+function installFailureAdvice(cwd, why, attempts) {
+    const lines = [`The runtime dependencies could not be installed (${attempts} attempt${attempts === 1 ? '' : 's'}).`];
+    if (why.prebuiltTimeout || why.nativeBuild) {
+        lines.push(
+            why.prebuiltTimeout
+                ? 'Downloading a prebuilt native module (better-sqlite3) timed out, and npm then tried to compile it'
+                : 'A native module (better-sqlite3) had to be compiled from source,',
+            why.prebuiltTimeout
+                ? 'from source, which needs a C/C++ toolchain and Python that this machine does not have.'
+                : 'which needs a C/C++ toolchain and Python that this machine does not have.',
+        );
+    } else if (why.network) {
+        lines.push('The package downloads kept failing on the network (timeouts or refused connections).');
+    }
+    lines.push(
+        '',
+        'Nothing is lost — the site files are in place. Either:',
+        `  • retry later (the download usually works on a second try):  cd ${cwd} && npm run release:install`,
+        '    (or run the same create-wordjs command again: it resumes this install), or',
+        '  • install a build toolchain so the module can be compiled locally, then retry:',
+        '      Debian/Ubuntu:  sudo apt-get install -y build-essential python3',
+        '      Fedora/RHEL:    sudo dnf install -y gcc-c++ make python3',
+        '      Alpine:         sudo apk add build-base python3',
+    );
+    return lines.join('\n');
+}
+
+/**
+ * `npm run release:install` with up to INSTALL_ATTEMPTS attempts and growing waits between them. The
+ * output still streams to the terminal; its tail is kept to explain a failure. Returns
+ * { ok, attempts, why } — never exits, so the caller can still write what the next attempt needs.
+ */
+async function installDependencies(cwd, { attempts = INSTALL_ATTEMPTS, baseDelayMs = INSTALL_RETRY_BASE_MS, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+    let why = { prebuiltTimeout: false, nativeBuild: false, network: false };
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        if (attempt > 1) {
+            const wait = baseDelayMs * Math.pow(3, attempt - 2);   // 15 s, then 45 s
+            console.log(`\n  ↻ Retrying the dependency install in ${Math.round(wait / 1000)} s (attempt ${attempt} of ${attempts})…\n`);
+            await sleep(wait);
+        }
+        const r = await runReleaseInstallOnce(cwd);
+        if (r.ok) return { ok: true, attempts: attempt, why };
+        why = classifyInstallFailure(r.output);
+        const reason = why.prebuiltTimeout ? 'the prebuilt binary download timed out'
+            : why.nativeBuild ? 'a native module could not be compiled'
+                : why.network ? 'a network error' : (r.error ? r.error : `exit code ${r.status}`);
+        console.error(`\n  ⚠️  Dependency install attempt ${attempt} of ${attempts} failed: ${reason}.`);
+        if (r.status === 127 || (r.error && /ENOENT/.test(r.error))) return { ok: false, attempts: attempt, why, fatal: 'Is npm on your PATH?' };
+    }
+    return { ok: false, attempts, why };
+}
+
+function runReleaseInstallOnce(cwd) {
+    return new Promise((resolve) => {
+        let tail = '';
+        const keep = (b) => { tail = (tail + b.toString()).slice(-256 * 1024); };
+        // A single fixed command string with shell:true resolves npm/npm.cmd on every platform (and
+        // avoids Node's DEP0190 warning about args-array + shell). No user input goes into it.
+        const child = spawn('npm run release:install', { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
+        child.stdout.on('data', (b) => { process.stdout.write(b); keep(b); });
+        child.stderr.on('data', (b) => { process.stderr.write(b); keep(b); });
+        child.on('error', (e) => resolve({ ok: false, status: null, error: String(e && e.message || e), output: tail }));
+        child.on('close', (code) => resolve({ ok: code === 0, status: code, output: tail }));
     });
-    if (r.error) fail(`Could not run "npm run ${script}": ${r.error.message}`, 'Is npm on your PATH?');
-    if (r.status !== 0) fail(`"npm run ${script}" exited with code ${r.status}.`, `Fix the error above, then re-run it manually inside ${cwd}.`);
 }
 
 // First non-internal IPv4 — a sensible default advertise/host when the user doesn't pass one.
@@ -1178,7 +1255,13 @@ async function upgrade(opts) {
         // Re-sync dependencies (a new version may add/upgrade packages). Skippable for a code-only swap.
         if (opts.install) {
             console.log('\n📦 Syncing runtime dependencies (npm run release:install)…\n');
-            runNpmScript('release:install', installDir);
+            const installed = await installDependencies(installDir);
+            if (!installed.ok) {
+                restoreInstallOwner(installDir, siteOwner);
+                // The new code is in place and the unit matches it: stage it for when the install is re-run.
+                if (opts.systemd) { try { emitSystemd(installDir, opts); } catch { /* the advice below still applies */ } }
+                fail(installFailureAdvice(opts.dir === '.' ? installDir : opts.dir, installed.why, installed.attempts), installed.fatal);
+            }
         } else {
             console.log('\n  --no-install: skipped dependency sync. Run "npm run release:install" yourself if deps changed.');
         }
@@ -1229,7 +1312,8 @@ async function scaffoldBundle(opts, targetDir) {
     }
 
     console.log('\n📦 Installing runtime dependencies (this downloads prebuilt binaries — a few minutes)…\n');
-    runNpmScript('release:install', targetDir);
+    const installed = await installDependencies(targetDir);
+    if (!installed.ok) fail(installFailureAdvice(opts.dir, installed.why, installed.attempts), installed.fatal);
 }
 
 // `create-wordjs gateway` — set this machine up as the cluster gateway: install, mint the cluster CA +
@@ -1347,28 +1431,37 @@ async function main() {
     if (opts.mode === 'join') return join(opts);
     const targetDir = path.resolve(process.cwd(), opts.dir);
 
+    // A site whose dependency install failed earlier is RESUMED: its release files are already extracted
+    // (and were verified then), so only the install and what follows it run again. The marker is only
+    // ever written by this installer, into a directory it extracted a bundle into.
+    const resuming = fs.existsSync(path.join(targetDir, INCOMPLETE_MARKER));
+
     // Refuse to scribble over anything that already exists (an existing EMPTY dir is fine).
-    if (fs.existsSync(targetDir)) {
+    if (!resuming && fs.existsSync(targetDir)) {
         if (!fs.statSync(targetDir).isDirectory()) fail(`"${opts.dir}" already exists and is not a directory.`);
         if (fs.readdirSync(targetDir).length > 0) {
             fail(`Directory "${opts.dir}" already exists and is not empty.`, 'Pick a new directory name, or empty it first.');
         }
-    } else {
+    } else if (!resuming) {
         fs.mkdirSync(targetDir, { recursive: true });
     }
 
     console.log('\n🚀 create-wordjs\n');
 
-    // 1) Obtain the release ZIP (local path, https URL, or GitHub latest/tagged release) and verify
-    //    its SHA-256 before anything is extracted.
-    const { zipPath, cleanup } = await obtainBundleZip(opts);
+    if (resuming) {
+        console.log(`  Resuming the unfinished install in ${targetDir} (the release files are already in place).`);
+    } else {
+        // 1) Obtain the release ZIP (local path, https URL, or GitHub latest/tagged release) and verify
+        //    its SHA-256 before anything is extracted.
+        const { zipPath, cleanup } = await obtainBundleZip(opts);
 
-    // 2) Extract + sanity-check that this really is a WordJS release bundle.
-    console.log(`  Extracting into ${targetDir}…`);
-    try {
-        extractZip(zipPath, targetDir);
-    } finally {
-        cleanup();
+        // 2) Extract + sanity-check that this really is a WordJS release bundle.
+        console.log(`  Extracting into ${targetDir}…`);
+        try {
+            extractZip(zipPath, targetDir);
+        } finally {
+            cleanup();
+        }
     }
     const pkgPath = path.join(targetDir, 'package.json');
     let pkg = {};
@@ -1378,12 +1471,25 @@ async function main() {
             `Expected a wordjs-*.zip from https://github.com/${REPO}/releases.`);
     }
 
-    // 3) Install runtime dependencies (pre-compiled bundle — no build step).
+    // 3) Install runtime dependencies (pre-compiled bundle — no build step), retried with backoff. The
+    //    marker stays until it succeeds, so running this same command again resumes from here.
+    fs.writeFileSync(path.join(targetDir, INCOMPLETE_MARKER), 'The dependency install of this site has not finished. Run "npm run release:install" here, or the same create-wordjs command again.\n');
     console.log('\n📦 Installing runtime dependencies (this downloads prebuilt binaries — a few minutes)…\n');
-    runNpmScript('release:install', targetDir);
+    const installed = await installDependencies(targetDir);
 
-    // 4) Default to self-signed HTTPS unless the user explicitly asked for HTTP.
+    // 4) Default to self-signed HTTPS unless the user explicitly asked for HTTP. Written whether or not
+    //    the install worked: the config belongs to the site, not to its node_modules.
     if (!opts.http) ensureHttpsConfig(targetDir);
+
+    if (!installed.ok) {
+        // Leave everything the next attempt needs: the files, the config and (with --systemd) the unit,
+        // none of which depends on node_modules. Only the install has to run again.
+        if (opts.systemd) {
+            try { emitSystemd(targetDir, opts); } catch (e) { console.error(`  (systemd unit not staged: ${e && e.message || e})`); }
+        }
+        fail(installFailureAdvice(opts.dir, installed.why, installed.attempts), installed.fatal);
+    }
+    fs.rmSync(path.join(targetDir, INCOMPLETE_MARKER), { force: true });
 
     const proto = opts.http ? 'http' : 'https';
     const line = '━'.repeat(64);
@@ -1471,4 +1577,5 @@ module.exports = {
     copyMerge, PRESERVE_ON_UPGRADE,
     sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP, installedFileMode,
     installDirOwner, restoreInstallOwner,
+    installDependencies, classifyInstallFailure, installFailureAdvice, INCOMPLETE_MARKER,
 };

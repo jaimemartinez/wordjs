@@ -18,6 +18,13 @@
  *     `extra` — e.g. `pluginCapabilities`, which a 2.16.0 host forwards on every request).
  *   - `adminMenu.add` records the menu items; `crypto` is node's CSPRNG.
  * `reboot()` runs init() again on the SAME database (a restart), so boot-time migrations can be pinned.
+ * `bootPlugin({ raw: p.raw })` boots a SECOND plugin process on the same database — another node of a
+ * multi-node install: its own module instance, its own in-memory locks, the same tables.
+ * `p.onSql(fn)` runs `await fn(sql, params, verb)` before every statement this instance sends (and before
+ * each createTable, with sql = 'CREATE TABLE <name>'): a test pauses a request at an exact statement (to
+ * interleave two writers deterministically) or makes one statement fail. `p.onSql(null)` removes it.
+ * `setDbHook(fn)` makes every statement await `fn(sql)` first, so a race test can hold one statement while
+ * another request runs (the real bridge is asynchronous; better-sqlite3 here is not). Off by default.
  */
 import path from 'path';
 
@@ -39,9 +46,15 @@ const typeMap = (col: string) => col.replace(/\bINT_PK\b/g, 'INTEGER PRIMARY KEY
 
 export const ADMIN: HarnessUser = { id: 1, role: 'administrator', userLogin: 'boss', userEmail: 'boss@example.test', displayName: 'Boss' };
 
-export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boolean; quiet?: boolean } = {}) {
-    const raw = new Database(':memory:');
-    raw.pragma('foreign_keys = ON');
+export type SqlHook = (sql: string, params: any[], verb: 'all' | 'get' | 'run' | 'batch' | 'create') => any;
+
+export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boolean; quiet?: boolean; raw?: any; siteUrl?: string | null } = {}) {
+    const raw = opts.raw || new Database(':memory:');
+    const siteState = { url: opts.siteUrl === undefined ? 'https://congreso.example.org' : opts.siteUrl };
+    if (!opts.raw) raw.pragma('foreign_keys = ON');
+    let hook: SqlHook | null = null;
+    // Only a set hook adds an await: without one every statement runs exactly as before (same microtask timing).
+    const before = (sql: string, params: any[] | undefined, verb: Parameters<SqlHook>[2]) => (hook ? hook(sql, params || [], verb) : undefined);
     const usersState = {
         grant: opts.usersGrant !== false,
         directory: new Map<number, HarnessUser>([[ADMIN.id, ADMIN], ...(opts.users || []).map(u => [u.id, u] as [number, HarnessUser])]),
@@ -51,13 +64,19 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
     const logs: [string, string][] = [];
     const sqlLog: string[] = [];
     const guard = (sql: string, verbs: string[]) => { sqlLog.push(sql); assertSqlAllowed(sql, verbs, PREFIX, SLUG); };
+    // Optional (setDbHook): awaited before a statement runs, so a test can hold ONE statement for a while —
+    // the bridge to a real database is asynchronous; this in-memory one would otherwise never let another
+    // request run between two statements of the same request.
+    let dbHook: ((sql: string) => unknown) | null = null;
 
     const db = {
         tablePrefix: PREFIX,
-        async all(sql: string, params: any[] = []) { guard(sql, READ); return raw.prepare(sql).all(...bindable(params)); },
-        async get(sql: string, params: any[] = []) { guard(sql, READ); return raw.prepare(sql).get(...bindable(params)); },
+        async all(sql: string, params: any[] = []) { guard(sql, READ); if (hook) await before(sql, params, 'all'); if (dbHook) await dbHook(sql); return raw.prepare(sql).all(...bindable(params)); },
+        async get(sql: string, params: any[] = []) { guard(sql, READ); if (hook) await before(sql, params, 'get'); if (dbHook) await dbHook(sql); return raw.prepare(sql).get(...bindable(params)); },
         async run(sql: string, params: any[] = []) {
             guard(sql, WRITE);
+            if (hook) await before(sql, params, 'run');
+            if (dbHook) await dbHook(sql);
             if (/^\s*(?:create|alter|drop)\b/i.test(sql) && !(params || []).length) { raw.exec(sql); return { lastID: 0, changes: 0 }; }
             const info = raw.prepare(sql).run(...bindable(params));
             return { lastID: Number(info.lastInsertRowid), changes: info.changes };
@@ -71,6 +90,7 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
                 guard(sql, /^\s*(?:select|with)\b/i.test(sql) ? READ : ['insert', 'update', 'delete', 'replace']);
             }
             const out: any[] = [];
+            if (hook) for (const [sql, params = []] of plan) await before(sql, params, 'batch');
             for (const [sql, params = []] of plan) {
                 if (/^\s*(?:select|with)\b/i.test(sql)) out.push(raw.prepare(sql).all(...bindable(params)));
                 else { const i = raw.prepare(sql).run(...bindable(params)); out.push({ lastID: Number(i.lastInsertRowid), changes: i.changes }); }
@@ -79,6 +99,7 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
         },
         async createTable(name: string, columns: string[]) {
             if (!String(name).startsWith(PREFIX)) throw new Error(`createTable outside the plugin prefix: ${name}`);
+            if (hook) await before(`CREATE TABLE ${name}`, [], 'create');
             raw.exec(`CREATE TABLE IF NOT EXISTS ${name} (${columns.map(typeMap).join(', ')})`);
         },
         getType() { return 'sqlite'; },
@@ -117,6 +138,13 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
             randomInt: async (lo: number, hi: number) => require('crypto').randomInt(lo, hi),
             randomToken: async (bytes = 16) => require('crypto').randomBytes(Math.min(Math.max(Math.floor(Number(bytes) || 16), 8), 64)).toString('hex'),
         },
+        // settings:read's site info: the link base, or the host's refusal when the grant is off (siteUrl: null).
+        site: {
+            async url() {
+                if (siteState.url == null) throw new Error(`Security Block: Plugin '${SLUG}' tried to access 'settings' (read) without permission. Declare it in manifest.json first.`);
+                return siteState.url;
+            },
+        },
     };
 
     async function init() {
@@ -149,8 +177,12 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
         return null;
     }
 
-    /** One request. `user` defaults to the administrator; `anonymous` sends none. */
-    async function call(method: string, url: string, { body, user, anonymous }: { body?: any; user?: HarnessUser & Record<string, any>; anonymous?: boolean } = {}): Promise<CallResult> {
+    /**
+     * One request. `user` defaults to the administrator; `anonymous` sends none. `headers` are the request
+     * headers the host forwards (e.g. the coordinator portal's `x-portal-token`); `clientKey` the host's keyed hash of
+     * the caller's address (req.clientKey), which the sign-in throttles key on.
+     */
+    async function call(method: string, url: string, { body, user, anonymous, headers, clientKey }: { body?: any; user?: HarnessUser & Record<string, any>; anonymous?: boolean; headers?: Record<string, string>; clientKey?: string } = {}): Promise<CallResult> {
         const [urlPath, qs] = url.split('?');
         const m = match(method.toLowerCase(), urlPath);
         if (!m) return { status: 404, body: { error: 'no route' }, route: null };
@@ -164,7 +196,8 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
         const req = {
             params: m.params, query: Object.fromEntries(new URLSearchParams(qs || '')),
             body: body === undefined ? {} : JSON.parse(JSON.stringify(body)),
-            headers: {}, cookies: {}, user: fwdUser, method: method.toUpperCase(),
+            headers: { ...(headers || {}) }, cookies: {}, user: fwdUser, method: method.toUpperCase(),
+            ...(clientKey ? { clientKey } : {}),
         };
         const res: any = {
             statusCode: 200, _body: undefined,
@@ -183,8 +216,14 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
     return {
         raw, routes, menu, logs, sqlLog, call,
         reboot: init,
+        /** Run `fn` before every statement of THIS instance (null removes it); see the header. */
+        onSql: (fn: SqlHook | null) => { hook = fn; },
         addUser: (u: HarnessUser) => { usersState.directory.set(u.id, u); },
         setUsersGrant: (v: boolean) => { usersState.grant = !!v; },
+        /** The site address wordjs.site.url() answers (null = the settings:read grant is off). */
+        setSiteUrl: (v: string | null) => { siteState.url = v; },
+        /** Awaited before each db.all/get/run statement (null = none, the default): to hold one statement. */
+        setDbHook: (fn: ((sql: string) => unknown) | null) => { dbHook = fn; },
         /** Direct SQL on the plugin's tables (test setup / assertions only). */
         q: (sql: string, ...params: any[]) => raw.prepare(sql).all(...params),
         one: (sql: string, ...params: any[]) => raw.prepare(sql).get(...params),

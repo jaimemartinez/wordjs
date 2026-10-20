@@ -728,11 +728,11 @@ jobs:
           done
       - name: Coverage ratchet (c8 report over all four shards)
         working-directory: backend
-        # c8 merges every V8 profile of the four shards in one process. Each suite that boots the whole
-        # app (the multisite engine suites boot it once per engine) adds a full-size profile, and the merge
-        # outgrew Node's default old-space limit (exit 134, "heap out of memory"). The runner has 16 GB.
+        # Merging every shard's V8 profiles (~2.5 GB of JSON: each process carries the TypeScript compiler's
+        # coverage and the transpiled source maps) outgrew Node's default heap — c8 died with "JavaScript heap
+        # out of memory" before evaluating anything. The runner has 16 GB; the thresholds are unchanged.
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=8192
         run: npm run test:coverage:report
       - name: Upload backend coverage (lcov)
         if: always()
@@ -752,12 +752,6 @@ jobs:
     # DB pool + its own Redis connections); it can only learn node A's freshly-random value through the
     # shared infrastructure. Break the publish, the DB sharing, or the invalidation → node B never sees it
     # → the job goes red. It also `docker compose config`-validates the Dockerfile/compose stack.
-    #
-    # The same job runs a 2-node multisite NETWORK (multinode-network.integration.ts): node B boots before
-    # any site exists, node A creates two sites, and node B must answer them (registry over the shared
-    # network store + the `wordjs:network-changed` bus), see a per-site setting change, receive the same
-    # site's collaboration operations and none of the twin site's, serve an ACME answer recorded on A, and
-    # follow a suspension and a deletion made on A.
     #
     # This is the deliberately LIGHTER-but-real form the task allows: two app cores in one job sharing
     # DB+Redis. It does not stand up two gateway-fronted, mTLS-enrolled full stacks — the gateway is a
