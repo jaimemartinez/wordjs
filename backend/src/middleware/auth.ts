@@ -113,6 +113,19 @@ const SESSION_MINTED_ON = new WeakMap<object, string | null>();
 const SESSION_MFA = new WeakMap<object, boolean>();
 const MFA_AMR = 'mfa';
 
+/**
+ * The `hof` claim of the session that authenticated this request: a network administrator's handoff
+ * into this site (core/network-handoff) — who, from which address, until when. Set by verifyAndAttachUser
+ * only, same WeakMap discipline as SESSION_MINTED_ON. A session minted FROM it (POST /auth/refresh) keeps
+ * the claim and never outlives its end; GET /auth/me reports it so the admin shows the handoff banner.
+ */
+const SESSION_HANDOFF = new WeakMap<object, { uid: number; by: string; from: string; exp: number }>();
+
+/** The handoff the presenting session belongs to, or null for any other session. */
+function sessionHandoff(req: Request): { uid: number; by: string; from: string; exp: number } | null {
+    return (req && SESSION_HANDOFF.get(req)) || null;
+}
+
 /** Was this request authenticated by a session that was signed in WITH a second factor? */
 function sessionMfaVerified(req: Request): boolean {
     return SESSION_MFA.get(req) === true;
@@ -591,6 +604,16 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
             });
         }
 
+        // MULTISITE: a network administrator's handoff account is reached only through a live handoff,
+        // and a handoff session ends with its handoff (core/network-handoff).
+        if (require('../core/network-handoff').handoffSessionRefusal(decoded, user)) {
+            return res.status(401).json({
+                code: 'rest_token_revoked',
+                message: 'This handoff session has ended. Open the site again from the network screen.',
+                data: { status: 401 }
+            });
+        }
+
         // Stateless-JWT revocation: reject any token issued before the user's security epoch, which is
         // stamped on logout and password change (User meta `token_valid_after`). Without this, a stolen
         // token stays valid until expiry even after logout/password reset.
@@ -612,6 +635,7 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         // ...and whether it was signed in with a second factor, so a refresh keeps that assurance and
         // POST /auth/tokens can tell an MFA-verified session from one that never answered a code.
         SESSION_MFA.set(req, Array.isArray(decoded.amr) && decoded.amr.includes(MFA_AMR));
+        if (decoded.hof) SESSION_HANDOFF.set(req, decoded.hof);
         req.user = user;
         noteAuthenticatedUse(req);
         next();
@@ -949,7 +973,9 @@ function hasBearerCredential(req: Request): boolean {
 // handed back (`mfa.verifyChallenge`), and issues no cookie of its own until it succeeds. Neither has any
 // use for a token the caller may not yet possess. ENUMERATED and exact, exactly like CSRF_EXEMPT_PATHS
 // above — see csrfTokenGate for why this must never become an '/auth/' or '/auth/mfa/' subtree.
-const CSRF_TOKEN_EXEMPT_PATHS = new Set(['/auth/login', '/auth/mfa']);
+// POST /auth/handoff is a third door of the same kind: it is authenticated by the one-time handoff token in
+// its body (core/network-handoff), which only a network administrator can obtain.
+const CSRF_TOKEN_EXEMPT_PATHS = new Set(['/auth/login', '/auth/mfa', '/auth/handoff']);
 
 /**
  * THE DOUBLE-SUBMIT GATE. Runs only for mutating methods, only after the origin check has already
@@ -1420,6 +1446,8 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
         const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
         if (user && validAfter && decoded.iat && decoded.iat <= validAfter) {
             req.user = null;
+        } else if (user && require('../core/network-handoff').handoffSessionRefusal(decoded, user)) {
+            req.user = null;
         } else {
             req.user = user;
             if (user) noteAuthenticatedUse(req);
@@ -1442,17 +1470,23 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
  * (POST /auth/mfa); a session minted FROM an authenticated one (POST /auth/refresh) inherits the marker of
  * the session presented, so refreshing never upgrades — nor silently drops — that assurance.
  */
-function generateToken(user: any, req?: Request, opts?: { mfa?: boolean }) {
+function generateToken(user: any, req?: Request, opts?: { mfa?: boolean; handoff?: { uid: number; by: string; from: string; exp: number } }) {
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
     if ((opts && opts.mfa === true) || (req && sessionMfaVerified(req))) claims.amr = [MFA_AMR];
     const address = sessionAddressClaims(req);
     if (address) claims.mh = address.mh;
+    // A network administrator's handoff (core/network-handoff): the session says so, and ends with it —
+    // also when it is minted FROM a handoff session (refresh).
+    const handoff = (opts && opts.handoff) || (req ? sessionHandoff(req) : null);
+    if (handoff) claims.hof = handoff;
+    const ends = [address ? address.notAfterSeconds : null, handoff ? handoff.exp : null].filter((v): v is number => typeof v === 'number');
     const token = signForSite(claims, { expiresIn: config.jwt.expiresIn });
-    if (!address || address.notAfterSeconds === null) return token;
+    if (!ends.length) return token;
     // The configured lifetime is a duration string the signer interprets; compare its result with the
-    // alias's own end and re-sign with the earlier one, so the session never outlives the address.
+    // alias's own end (and the handoff's) and re-sign with the earliest, so the session never outlives them.
+    const notAfter = Math.min(...ends);
     const { exp } = jwt.decode(token) as { exp: number };
-    return exp <= address.notAfterSeconds ? token : signForSite({ ...claims, exp: address.notAfterSeconds });
+    return exp <= notAfter ? token : signForSite({ ...claims, exp: notAfter });
 }
 
 /**
@@ -1747,6 +1781,8 @@ module.exports = {
     // Whether the presenting session signed in with a second factor (`amr`) — the step-up question
     // POST /auth/tokens asks of a user whose role requires 2FA.
     sessionMfaVerified,
+    // Multisite: the network administrator's handoff the presenting session belongs to (`hof`), or null.
+    sessionHandoff,
     // ...and what such a session may not do to accounts, roles and registration (rest_account_bound_session).
     refuseBoundSession,
     unboundSessionOnly,

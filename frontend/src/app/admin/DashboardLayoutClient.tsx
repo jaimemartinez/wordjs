@@ -100,6 +100,7 @@ function AdminLoadingScreen() {
 
 export function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     const { user, isLoading, logout, can, refreshUser } = useAuth();
+    const { t } = useI18n();
     const { pluginMenus, isLoading: menusLoading } = useMenu();
     const router = useRouter();
     const pathname = usePathname();
@@ -326,6 +327,24 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                     </div>
                     <NotificationCenter variant="inline" />
                 </header>
+
+                {user.handoff && (
+                    // Multisite: a network administrator's handoff session (backend core/network-handoff) —
+                    // who is in, from which site, and until when, on every screen for as long as it lasts.
+                    <div data-wjs-host-ui="" data-wjs-handoff-banner="" role="status" className="flex-shrink-0 bg-violet-50 border-b border-violet-200 px-4 py-2.5 flex items-center justify-center gap-3 text-sm">
+                        <i className="fa-solid fa-sitemap text-violet-500" aria-hidden="true"></i>
+                        <span className="text-violet-900 font-medium">
+                            {fillTemplate(t("handoff.banner"), {
+                                admin: user.handoff.networkAdmin,
+                                from: user.handoff.from || "?",
+                                time: new Date(user.handoff.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                            })}
+                        </span>
+                        <button type="button" onClick={logout} className="text-violet-900 font-bold underline underline-offset-2 hover:text-violet-950 whitespace-nowrap">
+                            {t("handoff.bannerEnd")}
+                        </button>
+                    </div>
+                )}
 
                 {graceDaysLeft !== null && (
                     <div data-wjs-host-ui="" className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center justify-center gap-3 text-sm">

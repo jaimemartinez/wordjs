@@ -7,6 +7,7 @@
  *   POST /network/sites/:id/suspend      suspend a site (re-authenticates)
  *   POST /network/sites/:id/resume       resume it (re-authenticates)
  *   DELETE /network/sites/:id            delete a site and everything it holds (re-authenticates; confirmSlug)
+ *   POST /network/sites/:id/handoff      open the site's admin as administrator: a one-time link (re-authenticates)
  *   GET  /network/certificates           every other site's TLS certificate (status, never a key)
  *   POST /network/sites/:id/certificate  issue it now with Let's Encrypt (re-authenticates)
  *   PUT  /network/sites/:id/certificate  install one the operator brings (re-authenticates)
@@ -25,7 +26,7 @@ import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
-const { authenticate, sessionOnly } = require('../middleware/auth');
+const { authenticate, sessionOnly, sessionMfaVerified } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { requireSudoPassword } = require('./users');
 const { isNetworkAdminRequest, requireNetworkAdmin } = require('../core/network-auth');
@@ -288,6 +289,68 @@ router.post('/sites/:id/suspend', asyncHandler(async (req: Request, res: Respons
 router.post('/sites/:id/resume', asyncHandler(async (req: Request, res: Response) => {
     if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
     return changeStatus(req, res, 'active');
+}));
+
+/**
+ * @swagger
+ * /network/sites/{id}/handoff:
+ *   post:
+ *     summary: Open a site's admin as administrator (a one-time, audited handoff)
+ *     description: >-
+ *       Re-authenticates the network administrator and answers a one-time URL on the site's main address
+ *       (/login/handoff, the token in the fragment). The token is signed with the site's own key, names
+ *       this network administrator and the site's address, works once and for 60 seconds; redeeming it
+ *       (POST /auth/handoff on the site) starts a 30-minute session there, marked as a handoff, under the
+ *       site's handoff account for this network administrator. Recorded in the network audit log
+ *       (site.handoff.issued) and, once redeemed, in both logs. Never for the main site, a suspended site,
+ *       an API token or an agent.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ url, expiresAt }"
+ *       400:
+ *         description: The main site (network_primary_site)
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: A wrong currentPassword (rest_bad_current_password), not a network administrator (rest_forbidden_network), or an API token or agent (rest_token_management_forbidden)
+ *       404:
+ *         description: No such site (network_site_not_found)
+ *       409:
+ *         description: The site is suspended (network_site_suspended)
+ */
+router.post('/sites/:id/handoff', asyncHandler(async (req: Request, res: Response) => {
+    const id = siteIdParam(req.params.id);
+    if (id === null) return res.status(404).json({ code: 'network_site_not_found', message: 'No such site.', data: { status: 404 } });
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    try {
+        const handoff = await require('../core/network-handoff').issueHandoff(id, { id: Number(req.user.id), login: String(req.user.userLogin) }, {
+            mfa: sessionMfaVerified(req),
+            ip: String(require('../core/client-ip').clientIp(req) || '').slice(0, 45),
+        });
+        res.set('Cache-Control', 'no-store');
+        res.json(handoff);
+    } catch (e: any) {
+        return sendError(res, e);
+    }
 }));
 
 /**
