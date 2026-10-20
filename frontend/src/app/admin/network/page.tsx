@@ -17,6 +17,10 @@ import { fmtBytes, fromMbField, toMbField } from "@/lib/networkQuota";
  * A new site gets its own database, uploads, users and settings; its first administrator is created
  * here and signs in on the site's own address.
  *
+ * "Open as administrator" is the network administrator's audited handoff into another site (backend
+ * core/network-handoff): a one-time link to the site's own address that starts a 30-minute session there,
+ * recorded in the network's audit log and in the site's.
+ *
  * Plugins (phase 2): their code is installed once, network-wide. The "Plugins for the sites" card offers a
  * plugin to the other sites with a grant CEILING — the most a site administrator may grant it — or stops
  * offering it (it is then deactivated on every other site). The server enforces the ceiling on every
@@ -45,6 +49,8 @@ export default function NetworkPage() {
     const [createError, setCreateError] = useState<string | null>(null);
     const [actionPassword, setActionPassword] = useState("");
     const [busyId, setBusyId] = useState<number | null>(null);
+    // The busy site is being opened as administrator (not suspended): which button spins.
+    const [opening, setOpening] = useState(false);
     const [netPlugins, setNetPlugins] = useState<NetworkPlugin[]>([]);
     const [ceilingDraft, setCeilingDraft] = useState<Record<string, string[]>>({});
     const [busyPlugin, setBusyPlugin] = useState<string | null>(null);
@@ -155,6 +161,27 @@ export default function NetworkPage() {
             addToast(err?.message || t("network.certFailed"), "error");
         } finally {
             setBusyCert(null);
+        }
+    };
+
+    /**
+     * Open the site's admin as administrator: the server re-authenticates, records the handoff and answers
+     * a one-time URL on the site's own address (valid for a minute, usable once), which this tab follows.
+     */
+    const openAsAdmin = async (site: NetworkSite) => {
+        if (!actionPassword) {
+            addToast(t("network.passwordRequired"), "error");
+            return;
+        }
+        setBusyId(site.id);
+        setOpening(true);
+        try {
+            const { url } = await networkApi.handoff(site.id, actionPassword);
+            window.location.assign(url);
+        } catch (err: any) {
+            addToast(err?.message || t("network.openAsAdminFailed"), "error");
+            setBusyId(null);
+            setOpening(false);
         }
     };
 
@@ -393,7 +420,10 @@ export default function NetworkPage() {
                                 {!site.main && (
                                     <div className="shrink-0 flex flex-col items-end gap-2">
                                         {site.status === "active" ? (
-                                            <Button variant="secondary" icon="fa-pause" loading={busyId === site.id} onClick={() => changeStatus(site, "suspend")}>{t("network.suspend")}</Button>
+                                            <>
+                                                <Button variant="primary" icon="fa-right-to-bracket" loading={busyId === site.id && opening} onClick={() => openAsAdmin(site)} title={t("network.openAsAdminHint")} data-open-as-admin={site.id}>{t("network.openAsAdmin")}</Button>
+                                                <Button variant="secondary" icon="fa-pause" loading={busyId === site.id && !opening} onClick={() => changeStatus(site, "suspend")}>{t("network.suspend")}</Button>
+                                            </>
                                         ) : (
                                             <div className="flex flex-wrap gap-2 justify-end">
                                                 <Button variant="secondary" icon="fa-play" loading={busyId === site.id} onClick={() => changeStatus(site, "resume")}>{t("network.resume")}</Button>

@@ -769,7 +769,20 @@ export const authApi = {
      */
     verifyEmail: (data: { uid?: number; token: string }) =>
         apiPost<{ ok: boolean; message: string }>("/auth/verify-email", data),
+    /**
+     * Multisite: redeem a network administrator's one-time handoff into this site (the token from the
+     * fragment of /login/handoff). Sets a 30-minute session marked as a handoff.
+     */
+    redeemHandoff: (token: string) =>
+        apiPost<{ user: User; handoff: SessionHandoff }>("/auth/handoff", { token }),
 };
+
+/** A network administrator's handoff session (GET /auth/me `handoff`, POST /auth/handoff). */
+export interface SessionHandoff {
+    networkAdmin: string;
+    from: string;
+    expiresAt: string;
+}
 
 export const commentsApi = {
     list: (params: { post?: number; status?: string; page?: number; per_page?: number } = {}) => {
@@ -1676,6 +1689,8 @@ export const networkApi = {
     create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+    /** Open a site's admin as administrator: a one-time URL on the site's address, valid for a minute. */
+    handoff: (id: number, currentPassword: string) => apiPost<{ url: string; expiresAt: string }>(`/network/sites/${id}/handoff`, { currentPassword }),
     /** Delete a suspended site and everything it holds (confirmSlug repeats its slug). */
     remove: (id: number, confirmSlug: string, currentPassword: string) =>
         api<{ deleted: number }>(`/network/sites/${id}`, { method: "DELETE", body: { confirmSlug, currentPassword } }),

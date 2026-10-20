@@ -8,6 +8,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Multisite: a network administrator can open any other site's admin as administrator.** Admin → Network →
+  *Open as administrator* re-checks the password and sends the browser to the site's own address with a
+  one-time link (signed with that site's key, bound to its address, valid once and for one minute). It starts a
+  30-minute session there, marked as a handoff by a banner that says who came in, from which site and until
+  when; it cannot be extended and ends when the network administrator is removed from the network. Every
+  handoff is recorded in the network's audit log (issued, redeemed, refused) and in the site's own
+  (`auth.network_handoff`). The session works under a dedicated, clearly labelled account of the site
+  (`network.<login>`), created by the first handoff, that cannot sign in by itself, cannot be edited by the
+  site's administrators and cannot mint API tokens or agent connections. Not for the main site, a suspended
+  site, an API token or an agent. New routes: `POST /api/v1/network/sites/:id/handoff` and
+  `POST /api/v1/auth/handoff`. See [multisite.md](documentation/multisite.md#opening-a-site-as-administrator).
 - **conference-manager 2.30.0: everything since 2.17.2, in one release.** Versions 2.18.0 to 2.29.0 were built
   and tried on a test site but never released; they ship together now, and the entries below keep the version
   each change was made in: «Pagos de cuotas», split fee payments in the admin and the portal (2.18.0); rooms

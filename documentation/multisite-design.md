@@ -398,8 +398,9 @@ triggers a reset cannot choose where its link points. Site 1 keeps reading `site
   install and remove plugin and theme code, set grant ceilings, and see the network audit log.
 - A network administrator does **not** silently get into a site's content. To administer a site it
   uses an explicit, audited, short-lived "open as administrator" handoff into that site (recorded in
-  both the network audit log and the site's own audit log). Phase 1 can omit the handoff: creating a
-  site creates its first administrator, who signs in on the site.
+  both the network audit log and the site's own audit log) — built in phase 2, see
+  [The handoff into a site](#the-handoff-into-a-site-as-built). Phase 1 omitted it: creating a site
+  creates its first administrator, who signs in on the site.
 - On enabling multisite, the administrators of site 1 who run the command become network
   administrators (the CLI asks which).
 
@@ -653,9 +654,58 @@ The rest of phase 2, as built.
   F6 "Phase suites on 3 engines" matrix), `tests-integration/multinode-network.integration.ts` (two
   processes, one network, in the multi-node job), `gateway/test/site-certs.test.js` (SNI on a real TLS
   listener).
-- **Still open in phase 2**: the network administrator's audited "open as administrator" handoff into a
-  site, a root layout per site in the frontend, idle reaping of a site's workers, and removing a site's
-  AppContainer profiles when a plugin is deleted.
+- **The network administrator's handoff into a site** (`core/network-handoff`): see
+  [The handoff into a site](#the-handoff-into-a-site-as-built) below.
+- **Still open in phase 2**: a root layout per site in the frontend, idle reaping of a site's workers,
+  and removing a site's AppContainer profiles when a plugin is deleted.
+
+### The handoff into a site (as built)
+
+`POST /network/sites/:id/handoff` (main site; network administrator; interactive session;
+`currentPassword`) and `POST /auth/handoff` (the target site), in `core/network-handoff`.
+
+- **The token.** A JWT signed with the TARGET site's key (`core/site-keys`, `sid` = the target), carrying
+  `purpose: network_handoff`, the network administrator's id and login (`uid`, `by`), the site's main
+  hostname (`aud`), the main site's hostname (`from`), a random `jti` and a 60-second `exp`. The `jti` is a
+  row of the network store (`network_handoffs`), so redemption is one `DELETE` that changes one row, on
+  whichever node receives it: a token works once across the network. The row is deleted before anything
+  else is judged, so a token refused for its address or its site cannot be tried again. The URL carries
+  the token in its fragment (`/login/handoff#token=…`): it is never sent to a server, logged or put in a
+  `Referer`, and the page removes it from the address bar and the history before redeeming it.
+- **The checks at redemption.** This site's key and `sid` (a token of another site fails the signature);
+  `purpose`; the `jti` still unspent; the request's address equal to `aud`; the site active (a suspended
+  site answers 503 at the gate before this); the network administrator still listed (`isNetworkAdmin(uid,
+  login)`). The main site and a single site answer 404.
+- **The session.** An ordinary site session (`generateToken`) with a `hof` claim `{ uid, by, from, exp }`,
+  `exp` 30 minutes ahead. The JWT's own `exp` is capped at `hof.exp`, and a session minted from it
+  (`/auth/refresh`) keeps the claim and the cap. Every verifier of a session (`authenticate`,
+  `optionalAuth`, the collaboration stream) asks `handoffSessionRefusal`: a `hof` session authenticates only
+  the handoff account it names, on a site other than the main one, before its end, while the network
+  administrator is still listed — removing them from the network ends their open handoffs on every site.
+  `GET /auth/me` reports `handoff` and the admin shows a banner for the whole session.
+- **Both audit logs.** Network: `site.handoff.issued`, `site.handoff.redeemed`, `site.handoff.refused`
+  (with the reason, whenever the token verified). Site: `auth.network_handoff` (actor = the handoff account;
+  detail: the network administrator's login and id, `from`, IP, end of the session).
+- **Why a dedicated account, and not none.** The brief was a session that creates no permanent account.
+  It does create one, per network administrator per site, because every write a session makes is
+  attributed to a row of the site's `users` table — `posts.post_author`, revisions, uploads, comment
+  moderation, edit locks, `audit_log.actor_id`, collaboration presence. The network administrator's own
+  id is a main-site id; on this site it is whichever site user holds the same number, so acting under it
+  would put their writes on that person's name. A synthetic user with no row breaks every model that
+  looks the actor up (`User.findById(req.user.id)` is everywhere). An account created per handoff and
+  deleted at its end would orphan or reassign whatever it wrote. One durable, clearly labelled account
+  keeps every write attributable to the network administrator, on the site's own records, and adds no
+  standing access: it is marked (`user_meta.network_handoff_of` = `"<id>:<login>"`, a key no request
+  writes), has a random password and an `.invalid` address, is refused by the password sign-in, cannot be
+  edited or have its second factor reset by the site's administrators (they may cut its sessions or delete
+  it; the next handoff creates it again), and a session for it without a live `hof` claim is no session.
+  A handoff session mints nothing that outlives it: no API token, agent connection, second-factor
+  enrolment or profile write of its own account (`refuseHandoffSession`). The site's two-factor policy
+  does not apply to the account: its person signed in on the main site under the main site's policy, and
+  it cannot enrol.
+- **Tests**: `backend/src/tests/multisite-handoff.test.ts` (the real app: issue, redeem, replay, another
+  site and address, expiry, suspension, removal from the network, the session's end and refresh, the
+  account's restrictions, both audit logs); the issue route is a row of `sudo-gate-classes.test.ts`.
 
 ## Decisions
 
