@@ -276,6 +276,8 @@ function makeRevalidate(req: Request, postId: number): () => Promise<boolean> {
         if (Number(decoded.userId) !== Number(userId)) return false;
         const user = await User.findById(userId);
         if (!user) return false;
+        // A network administrator's handoff session ends with its handoff (core/network-handoff).
+        if (require('../core/network-handoff').handoffSessionRefusal(decoded, user)) return false;
         const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
         if (validAfter && decoded.iat && decoded.iat <= validAfter) return false;
 

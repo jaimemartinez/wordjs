@@ -623,7 +623,7 @@ class User {
             // PREVIOUS_NICENAME_META is an author-archive ALIAS the lookups resolve: writing it would claim
             // another author's old URL.
             const PROTECTED_META = new Set(['role', 'token_valid_after', MAILBOX_META_KEY, PREVIOUS_NICENAME_META]);
-            const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_'];
+            const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_', 'network_handoff'];
             const isProtectedMeta = (k: string) =>
                 PROTECTED_META.has(k) || PROTECTED_META_PREFIXES.some((p) => k.startsWith(p));
             for (const [key, value] of Object.entries(data.meta)) {

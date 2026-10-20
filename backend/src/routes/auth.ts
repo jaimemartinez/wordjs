@@ -18,7 +18,9 @@ const User = require('../models/User');
 // refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
 // sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
 // unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS } = require('../middleware/auth');
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, sessionHandoff, trustedHost, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS } = require('../middleware/auth');
+const networkHandoff = require('../core/network-handoff');
+const { refuseHandoffSession } = networkHandoff;
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
@@ -976,6 +978,9 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
 
     try {
         const user = await User.authenticate(username, password);
+        // A network administrator's handoff account never signs in by itself (core/network-handoff): it
+        // answers exactly like a wrong password, and counts as one.
+        if (networkHandoff.isHandoffAccount(user)) throw new Error('Invalid credentials');
         await clearLoginFails(lockId);
         // The owner proved the password: the account's code ceiling at the session doors starts over.
         await clearMfaCeiling(user.id);
@@ -1115,7 +1120,81 @@ router.get('/me', withSignInEligibility, authenticate, asyncHandler(async (req: 
             networkAdmin: require('../core/network-auth').isNetworkAdminRequest(req),
         }
         : undefined;
-    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user), roleName, ...(network ? { network } : {}) });
+    // A network administrator's handoff session (core/network-handoff): the admin shows who, from where
+    // and until when, for as long as it lasts.
+    const hof = sessionHandoff(req);
+    const handoff = hof ? { networkAdmin: hof.by, from: hof.from, expiresAt: new Date(hof.exp * 1000).toISOString() } : undefined;
+    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user), roleName, ...(network ? { network } : {}), ...(handoff ? { handoff } : {}) });
+}));
+
+/**
+ * @swagger
+ * /auth/handoff:
+ *   post:
+ *     summary: Redeem a network administrator's handoff into this site (multisite)
+ *     description: >-
+ *       Starts a session on this site for the network administrator who opened it from Admin → Network
+ *       (POST /network/sites/{id}/handoff on the main site). The one-time token must have been minted for
+ *       this site and this address, within the last minute, and never redeemed before; the site must be
+ *       active and the network administrator still listed. The session belongs to the site's handoff
+ *       account for that network administrator (created on the first handoff, marked, unable to sign in
+ *       by password), lasts 30 minutes, cannot be refreshed beyond that, and cannot mint API tokens or
+ *       agent connections. Recorded in the site's audit log (auth.network_handoff) and in the network's
+ *       (site.handoff.redeemed; a refused redemption as site.handoff.refused). Answers 404 on the main
+ *       site and on a single-site install.
+ *     tags: [Auth, Network]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token]
+ *             properties:
+ *               token:
+ *                 type: string
+ *                 description: The token from the fragment of the URL the network screen opened.
+ *     responses:
+ *       200:
+ *         description: "{ user, handoff: { networkAdmin, from, expiresAt } }; sets the session cookie"
+ *       401:
+ *         description: >-
+ *           network_handoff_invalid (not a handoff token of this site), network_handoff_expired,
+ *           network_handoff_used (already redeemed - a replay), network_handoff_wrong_host (sent to another
+ *           address of the site)
+ *       403:
+ *         description: network_handoff_not_admin (no longer a network administrator), or the sign-in rule of this address
+ *       404:
+ *         description: The main site, or multisite is off
+ *       409:
+ *         description: network_site_suspended
+ *       503:
+ *         description: The site is suspended (rest_site_suspended, from the site gate)
+ */
+router.post('/handoff', asyncHandler(async (req: Request, res: Response) => {
+    if (refuseInsecureSignIn(req, res)) return;
+    if (refuseRetiringSignIn(req, res)) return;
+    const raw = trustedHost(req);
+    const hostname = typeof raw === 'string' ? raw.replace(/:\d+$/, '').replace(/^\[|\]$/g, '') : null;
+    const ip = clientIp(req);
+    let result: any;
+    try {
+        result = await networkHandoff.redeemHandoff((req.body || {}).token, hostname, { ip: auditText(ip, 45) });
+    } catch (e: any) {
+        if (e && typeof e.status === 'number' && typeof e.code === 'string') {
+            return res.status(e.status).json({ code: e.code, message: e.message, data: { status: e.status } });
+        }
+        throw e;
+    }
+    const { user, handoff, expiresAt } = result;
+    await recordAudit(user.id, 'auth.network_handoff', 'user', user.id, {
+        networkAdmin: auditText(handoff.by), networkAdminId: handoff.uid, from: auditText(handoff.from, 255), ip: auditText(ip, 45), expiresAt,
+    });
+    const token = generateToken(user, req, { mfa: result.mfa, handoff });
+    if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
+    res.set('Cache-Control', 'no-store');
+    res.json({ user: user.toJSON(), handoff: { networkAdmin: handoff.by, from: handoff.from, expiresAt } });
 }));
 
 /**
@@ -2148,7 +2227,7 @@ async function requireMfaForMachineCredential(req: Request, res: Response, kind:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
-router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/tokens', authenticate, sessionOnly, refuseHandoffSession, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     // An API token carries no address binding and can live forever. Minted from a session bound to a
     // secondary address — whose cookie the next holder of that name may receive (REDTEAM R2) — it would
     // outlive the address and survive its removal. Such a session may not create one; the main address
@@ -2565,7 +2644,7 @@ function requireSudoPassword(req: Request, res: Response): Promise<boolean> {
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
-router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
+router.post('/mfa/setup', authenticate, sessionOnly, refuseHandoffSession, asyncHandler(async (req: Request, res: Response) => {
     // Before the pending secret is minted or disclosed: /mfa/setup is what hands the caller the TOTP
     // secret, so it is the first door that must prove the password, not just the second one.
     if (await requireSudoPassword(req, res)) return;
@@ -2653,7 +2732,7 @@ router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: Re
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
-router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
+router.post('/mfa/enable', authenticate, sessionOnly, refuseHandoffSession, asyncHandler(async (req: Request, res: Response) => {
     // Both halves of enrollment are gated, not just /setup: a pending secret may already exist (minted
     // before this guard shipped, or by the legitimate owner who then walked away), and activating it is
     // the step that actually locks the account. Checked BEFORE the 'mfa:' bucket is entered so a wrong
@@ -2848,7 +2927,7 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
-router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
+router.post('/mfa/backup-codes', authenticate, sessionOnly, refuseHandoffSession, asyncHandler(async (req: Request, res: Response) => {
     if (!(await mfa.isEnabled(req.user.id))) {
         return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
     }

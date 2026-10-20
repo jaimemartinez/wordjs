@@ -189,6 +189,14 @@ const TABLES = [
         key_authorization TEXT NOT NULL,
         expires_at BIGINT NOT NULL
     )`,
+    // The network administrator's "open as administrator" handoffs (core/network-handoff): one row per
+    // token issued, deleted when it is redeemed, so a token works once, on whichever node receives it.
+    `CREATE TABLE IF NOT EXISTS network_handoffs (
+        jti VARCHAR(64) PRIMARY KEY,
+        site_id INTEGER NOT NULL,
+        admin_user_id INTEGER NOT NULL,
+        expires_at BIGINT NOT NULL
+    )`,
     // One certificate per site address (core/site-certs), readable by every node.
     `CREATE TABLE IF NOT EXISTS network_site_certs (
         host VARCHAR(255) PRIMARY KEY,
@@ -838,10 +846,11 @@ function effectiveUploadQuota(siteId: number): number | null {
 // ── Shared records for certificates (core/site-certs, core/cert-manager) ─────────────────────────────
 // Not mirrored: they are read when the CA calls or a certificate is installed, never on the request path.
 
-/** Run a statement against the store, whichever it is. */
-async function storeRun(sql: string, params: any[] = []): Promise<void> {
-    if (!isSqlStore()) { openStore().prepare(sql).run(...params); return; }
-    await (await sqlStore()).run(sql, params);
+/** Run a statement against the store, whichever it is; resolves to the number of rows it changed. */
+async function storeRun(sql: string, params: any[] = []): Promise<number> {
+    if (!isSqlStore()) return Number(openStore().prepare(sql).run(...params).changes) || 0;
+    const r = await (await sqlStore()).run(sql, params);
+    return Number(r && r.changes) || 0;
 }
 async function storeGet(sql: string, params: any[] = []): Promise<Row | undefined> {
     if (!isSqlStore()) return openStore().prepare(sql).get(...params);

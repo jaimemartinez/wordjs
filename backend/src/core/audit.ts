@@ -37,6 +37,10 @@ const AUDIT_ACTIONS = Object.freeze({
     LOGIN_SUCCESS: 'auth.login.success',
     LOGIN_FAILURE: 'auth.login.failure',
     LOGOUT: 'auth.logout',
+    // Multisite: a network administrator opened this site's admin through the audited handoff
+    // (core/network-handoff): {networkAdmin, networkAdminId, from, ip, expiresAt}. The network's own log
+    // records the same event (site.handoff.redeemed).
+    NETWORK_HANDOFF: 'auth.network_handoff',
     // A new password stored through a profile write (routes/users.ts PUT /users/me and PUT /users/:id).
     // Kept under `auth.` rather than as a `user.update` field, so "who changed whose password" is one query.
     PASSWORD_CHANGE: 'auth.password.change',

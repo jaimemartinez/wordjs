@@ -233,7 +233,7 @@ router.delete('/publish-queue/:postId', authenticate, sessionOnly, can('manage_a
  *       400:
  *         description: Unknown capability, nothing requested, or invalid expiry.
  */
-router.post('/', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/', authenticate, sessionOnly, require('../core/network-handoff').refuseHandoffSession, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     if (sessionBoundToSecondaryAddress(req)) {
         return res.status(403).json({
             code: 'rest_token_bound_session',
