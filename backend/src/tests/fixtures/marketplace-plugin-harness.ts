@@ -214,6 +214,10 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
                 const { createPluginApi } = require('../../core/plugin-api');
                 return createPluginApi(slug).crypto.hmac(algo, key, data, enc);
             },
+            hash: async (algo: string, data: string, enc?: string) => {
+                const { createPluginApi } = require('../../core/plugin-api');
+                return createPluginApi(slug).crypto.hash(algo, data, enc);
+            },
             timingSafeEqual: async (a: string, b: string) => {
                 const { createPluginApi } = require('../../core/plugin-api');
                 return createPluginApi(slug).crypto.timingSafeEqual(a, b);

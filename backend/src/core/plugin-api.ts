@@ -844,6 +844,15 @@ function createPluginApi(slug: string) {
                 const enc = encoding === 'base64' ? 'base64' : 'hex';
                 return require('crypto').createHmac(algo, key).update(data, 'utf8').digest(enc);
             },
+            // A plain digest (no key) — some providers sign webhooks and checkout requests with SHA-256 over
+            // a concatenation that already ends in the shared secret (Wompi's event checksum and integrity
+            // signature). Same allowlist and bounds as hmac().
+            hash(algorithm: string, data: string, encoding: string = 'hex') {
+                const algo = String(algorithm || '').toLowerCase();
+                if (!HMAC_ALGORITHMS.has(algo)) throw new Error('crypto.hash: unsupported algorithm');
+                if (typeof data !== 'string' || data.length > HMAC_MAX_DATA) throw new Error('crypto.hash: invalid data');
+                return require('crypto').createHash(algo).update(data, 'utf8').digest(encoding === 'base64' ? 'base64' : 'hex');
+            },
             // Constant-time comparison of two strings (a received signature vs the computed one). Unequal
             // lengths answer false without a short-circuit on content.
             timingSafeEqual(a: string, b: string) {
