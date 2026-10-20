@@ -1601,6 +1601,18 @@ export interface NetworkPlugin {
     /** The most any other site may grant it; null = not offered (main site only). */
     ceiling: string[] | null;
 }
+/** A site's own TLS certificate, as the network screen shows it (never its key). */
+export interface NetworkSiteCertificate {
+    siteId: number;
+    host: string;
+    installed: boolean;
+    notAfter?: string;
+    issuer?: string;
+    daysLeft?: number;
+    updatedAt?: string;
+    served?: boolean;
+}
+
 export const networkApi = {
     status: () => apiGet<{ enabled: boolean; networkAdmin: boolean }>("/network/status"),
     plugins: () => apiGet<{ plugins: NetworkPlugin[] }>("/network/plugins"),
@@ -1616,6 +1628,12 @@ export const networkApi = {
     remove: (id: number, confirmSlug: string, currentPassword: string) =>
         api<{ deleted: number }>(`/network/sites/${id}`, { method: "DELETE", body: { confirmSlug, currentPassword } }),
     quotas: () => apiGet<NetworkQuotas>("/network/quotas"),
+    /** Every other site's TLS certificate (status only) and whether Let's Encrypt issues them on its own. */
+    certificates: () => apiGet<{ autoIssue: boolean; certificates: NetworkSiteCertificate[] }>("/network/certificates"),
+    issueCertificate: (id: number, currentPassword: string) =>
+        apiPost<{ certificate: NetworkSiteCertificate }>(`/network/sites/${id}/certificate`, { currentPassword }),
+    installCertificate: (id: number, certPem: string, keyPem: string, currentPassword: string) =>
+        apiPut<{ certificate: NetworkSiteCertificate }>(`/network/sites/${id}/certificate`, { certPem, keyPem, currentPassword }),
     setDefaultQuota: (bytes: number | null, currentPassword: string) =>
         apiPut<{ defaultQuota: number | null }>("/network/quotas/default", { bytes, currentPassword }),
     setSiteQuota: (id: number, bytes: number | null, currentPassword: string) =>

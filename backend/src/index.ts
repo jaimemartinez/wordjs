@@ -306,7 +306,14 @@ function limiterStore(prefix: string): any {
         const client = cache.getClient();
         if (!client) return undefined;
         const { RedisStore } = require('rate-limit-redis');
-        return new RedisStore({ sendCommand: (...args: any[]) => client.call(...args), prefix });
+        const store = new RedisStore({ sendCommand: (...args: any[]) => client.call(...args), prefix });
+        // The store loads its scripts at construction. With Redis not reachable yet (a boot during an
+        // outage) those loads reject, and nothing awaits them until the first request — an unhandled
+        // rejection. The store reloads a script on its next failed use, so the first failure is noise.
+        for (const p of [store.incrementScriptSha, store.getScriptSha]) {
+            if (p && typeof p.catch === 'function') p.catch(() => { /* reloaded on first use */ });
+        }
+        return store;
     } catch (e: any) {
         log.warn({ err: e }, '[rate-limit] Redis store unavailable, using in-memory');
         return undefined;

@@ -1,8 +1,10 @@
 # Multisite: design
 
-Status: **phase 1 and phase 2 implemented** — phase 2's plugin and theme-code half; what of phase 2
-remains open is listed in [Phase 2 as built](#phase-2-as-built-plugins-and-theme-code-per-site). Phase 3
-proposed. This page is the design for running several independent sites from one WordJS install: one network of sites, each with its own domain, content,
+Status: **phase 1 and phase 2 implemented** — plugins and theme code per site
+([Phase 2 as built](#phase-2-as-built-plugins-and-theme-code-per-site)), and Postgres/MySQL networks,
+multi-node networks, certificates, backups and real-time collaboration per site
+([Engines, nodes, certificates](#phase-2-as-built-engines-nodes-certificates-backups-collaboration)). What
+of phase 2 remains open is listed at the end of that section. Phase 3 proposed. This page is the design for running several independent sites from one WordJS install: one network of sites, each with its own domain, content,
 options, uploads, users and plugin data. It records how the code was wired before multisite, the tenancy
 model it picks and why, what changes, what it guarantees, and the order in which it is built.
 
@@ -26,6 +28,7 @@ narrowed or departed from the plan below, and why.
 - [Phased plan](#phased-plan)
 - [Phase 1 as built](#phase-1-as-built)
 - [Phase 2 as built (plugins and theme code per site)](#phase-2-as-built-plugins-and-theme-code-per-site)
+- [Phase 2 as built (engines, nodes, certificates, backups, collaboration)](#phase-2-as-built-engines-nodes-certificates-backups-collaboration)
 - [Decisions](#decisions)
 - [Alternatives considered](#alternatives-considered)
 
@@ -125,8 +128,8 @@ one certificate with no SNI selection; ACME issues one multi-SAN certificate cov
 | Engine | A site's "database" |
 |---|---|
 | SQLite (both drivers) | Its own file: `data/sites/<id>/wordjs-native.db` (or `wordjs.db` for the legacy driver). |
-| PostgreSQL | Its own database on the same server, one small connection pool per open site. |
-| MySQL / MariaDB | Its own database (schema) on the same server, one small pool per open site. |
+| PostgreSQL | Its own **schema** of the configured database (`wordjs_site_<id>`), one small connection pool per open site whose connections start with `search_path` set to it. (The plan said a database per site; see [as built](#phase-2-as-built-engines-nodes-certificates-backups-collaboration) for why a schema.) |
+| MySQL / MariaDB | Its own database (MySQL's word for a schema) on the same server (`<db.name>_site_<id>`), one small pool per open site. |
 
 Why this model, against the alternatives in [Alternatives considered](#alternatives-considered):
 
@@ -501,10 +504,9 @@ retention, network dashboard and metrics per site, optional Postgres schema-per-
 
 Phase 1 follows the plan above with these narrowings and departures, each deliberate:
 
-- **SQLite only.** A network needs the `sqlite-native` driver (`npm run network -- enable` refuses any
-  other); the network store, every site database and every site's files live on one host. Postgres and
-  MySQL site databases, and so multi-node networks, are phase 2 work. The per-site pub/sub envelope and
-  cache namespacing are already in place for it.
+- **SQLite only** (in phase 1). A network needed the `sqlite-native` driver; the network store, every
+  site database and every site's files lived on one host. Postgres and MySQL networks, and multi-node
+  networks, came in phase 2 ([as built](#phase-2-as-built-engines-nodes-certificates-backups-collaboration)).
 - **Uploads live with the site.** Another site's files are in `<data dir>/sites/<id>/uploads` and
   `…/private-uploads`, next to its database, not under `uploads/sites/<id>`: under the main site's served
   tree, the main site's address would have served them. Each site is one directory. `core/io-guard`
@@ -546,9 +548,8 @@ Phase 1 follows the plan above with these narrowings and departures, each delibe
 
 ## Phase 2 as built (plugins and theme code per site)
 
-The plugin half of phase 2. Certificates per site (SNI, per-site ACME), per-site backup/export/restore,
-the audited handoff, Postgres/MySQL site databases, real-time collaboration per site and a root layout
-per site in the frontend remain open (see "Phased plan").
+The plugin half of phase 2. The rest — engines, nodes, certificates, backups, collaboration — is in the
+next section.
 
 - **Worker key.** `core/plugin-isolate` keys every registry (isolates, in-flight loads, health, restart
   timers, live pids, spawn policies) by `siteKeyPrefix(site) + slug`: `<slug>` on site 1 — single-site
@@ -590,12 +591,71 @@ per site in the frontend remain open (see "Phased plan").
   declaration. On Windows each (site, plugin) worker has its own AppContainer profile.
 - **Database principals.** `core/plugin-db-isolation` names the Postgres role / MySQL user of another site
   `…__s<id>` (a slug can never produce a double underscore), so each site's worker queries under its own
-  principal. Dormant until site databases may be Postgres or MySQL; SQLite has no principals.
+  principal. On Postgres and MySQL networks each site's role / user is granted only that site's plugin
+  tables (in the site's schema / database); SQLite has no principals.
 - **Theme workers per site.** `core/theme-engine` keeps its active theme and its re-init lock per site;
   each site runs its own `functions.js` worker, started when the site is prepared and on a theme switch.
 - **Not yet**: idle reaping of workers (a site's workers start with the site and stay up), and removing a
   secondary site's AppContainer profiles when a plugin is deleted.
 - **Tests**: `backend/src/tests/multisite-plugins.test.ts` (real plugin workers: I5 and I8).
+
+## Phase 2 as built (engines, nodes, certificates, backups, collaboration)
+
+The rest of phase 2, as built.
+
+- **Postgres: a schema per site; MySQL: a database per site** (`core/site-storage`). `config/database`
+  opens each site's namespace with its own small pool (`multisite.sitePoolMax`, default 4): a
+  `PostgresDriver` whose `search_path` is the site's schema (a startup parameter, checked against
+  `current_schema()` when the pool opens), or a `MysqlDriver` on the site's database. The main site's
+  connection creates the namespace first (`CREATE SCHEMA` / `CREATE DATABASE … utf8mb4`); an operator
+  without that right creates it beforehand. Every catalog query that used to name `public` or no schema
+  at all — the driver's table listing, column introspection and plugin grants, the schema migrations'
+  column probes, the search engine probe, the email model's column probe, the plugin uninstall's table
+  scan, the engine migration's table listing — now reads `current_schema()` (MySQL: `DATABASE()`), so on
+  a network it sees the site's own tables and nothing else. Two places that bypassed the site
+  (`createPluginTable`, `clearDatabase`) now go through the current site's driver. A table prefix was
+  rejected for MySQL for the reasons in [Alternatives](#alternatives-considered).
+- **The network store on the database server.** `core/network` keeps its tables in the `wordjs_network`
+  schema / `<db.name>_network` database on Postgres and MySQL (SQLite keeps `network.db`). Reads stay
+  synchronous: each node keeps an in-memory mirror, reloaded after its own writes, when another node
+  announces a change (`wordjs:network-changed`) and every 15 s. Writes are async and transactional; two
+  nodes creating a site at once compete for the next id and the loser retries. Site ids are never reused
+  (a high-water mark in `network_meta`), so a namespace a failed deletion left behind never reaches a new
+  site.
+- **Multi-node.** Each node follows the registry (`network-sites.followRegistryChanges`): a site suspended
+  elsewhere stops its workers here, one deleted is forgotten (workers, connection, preparation). The bus
+  delivers a site's message only on a node that has that site open (`cache.siteRouting`): a node that
+  never opened a site has nothing to invalidate, and one still opening it gets the message once it is
+  ready. Each site's cron runs under its own lease, in its own database (`dist-lock` keeps its table state
+  per site, and every site's database gets the lock table when it opens). The plugin-policy re-sync runs
+  for every site a node has open.
+- **Certificates per site** (`core/site-certs`, `gateway/src/site-certs.js`). One certificate per site
+  address, stored in the network store (`network_site_certs`), pushed to the gateway (`POST /site-cert` on
+  the control plane) or written for the monolith, and selected by `SNICallback` in both; the main site's
+  certificate stays the default. Let's Encrypt over HTTP-01 reuses the main site's ACME account and the
+  order flow of `core/cert-manager` (`obtainHttp01Certificate`); challenge answers are shared through
+  `network_acme_challenges` and answered by every backend; the gateway's port-80 listener redirects a
+  token it does not hold to HTTPS. The renewal pass runs on the main site's cron leader.
+- **Backups per site** (`core/backup`). A site's archives are its own (`<data dir>/sites/<id>/backups`),
+  hold its database (file copy, `pg_dump -n <schema>`, `mysqldump` of its database), uploads and private
+  files and never code; a restore drops and restores the site's namespace whole, then prepares the site
+  again (fresh plugin principals). On a Postgres network the main site's dump is limited to its schema.
+- **Real-time collaboration per site** (`core/collab-rooms`). Rooms, per-user caps and budgets, log
+  sizes and the sweep cursor live in one container per site; replica ids mix in the site (site 1 keeps
+  its ids); the bus message signs its site inside the HMAC and a receiver drops one whose signed site is
+  not the envelope's. The 404 off the main site is gone, and each site's sweep runs from its own cron.
+- **Site deletion** (`network-sites.deleteSite`): suspended first, slug confirmed; media objects,
+  principals (installed plugins', this process's, and every role / user with the site's suffix on the
+  server), cache keys, database, files, certificate and record are removed.
+- **The engine migration moves the network** (`db-admin/migration.js migrateNetwork`): every site into its
+  namespace on the target and the network store, fail-closed before the config switches.
+- **Tests**: `multisite-engine-{sqlite,postgres,mysql}.test.ts` (the same suite on each engine, in the
+  F6 "Phase suites on 3 engines" matrix), `tests-integration/multinode-network.integration.ts` (two
+  processes, one network, in the multi-node job), `gateway/test/site-certs.test.js` (SNI on a real TLS
+  listener).
+- **Still open in phase 2**: the network administrator's audited "open as administrator" handoff into a
+  site, a root layout per site in the frontend, idle reaping of a site's workers, and removing a site's
+  AppContainer profiles when a plugin is deleted.
 
 ## Decisions
 
@@ -637,11 +697,14 @@ database principals' `LIKE prefix%` grants would change shape; and the failure m
 prefix is a query against the main site's tables, WordPress's long-running bug class. It has one real
 advantage (one connection), which matters less than isolation for this market.
 
-**Postgres schema per site** (one database, `search_path` per connection). A good variant for large
-Postgres networks (one pool, many sites), kept for phase 3. Not first because the driver assumes the
-`public` schema in introspection and grants, `search_path` must be set reliably on every checkout, and
-it has no SQLite or MySQL equivalent; one database per site works on all three engines with the same
-code.
+**Postgres schema per site** (one database, `search_path` per connection). Kept for phase 3 in the
+first plan, because the driver assumed the `public` schema in introspection and grants and `search_path`
+had to be set reliably on every checkout. **Chosen as built**: the driver's introspection and grants now
+read `current_schema()`, and `search_path` is a startup parameter of each site's pool (it cannot be lost
+by a pooled connection). It needs only `CREATE` on one database where a database per site needs
+`CREATEDB`, which managed Postgres plans often withhold, and it keeps one database to back up and one
+connection limit to plan. MySQL's "database" is the same thing as a Postgres schema, so both engines
+follow the same shape.
 
 **Process or container per site.** What hosters do today without multisite. It gives the strongest
 isolation but none of the shared-install benefits (one upgrade, one plugin install, one admin). The

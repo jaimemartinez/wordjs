@@ -656,7 +656,7 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 | `WORDJS_MEDIA_S3_BUCKET`, `_REGION`, `_ENDPOINT`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_SESSION_TOKEN`, `_PREFIX` | `mediaStorage.bucket`, `.region`, `.endpoint`, `.accessKeyId`, `.secretAccessKey`, `.sessionToken`, `.prefix` | region `us-east-1`, prefix `uploads` | env (per field) | The bucket. A partial configuration counts as not configured, and media stays local. (`core/media-storage.ts`) |
 | `WORDJS_MEDIA_PUBLIC_URL` | `mediaStorage.publicUrl` | — | env | Public base URL of the bucket or the CDN in front of it. |
 | `WORDJS_MEDIA_KEEP_LOCAL_COPY` | `mediaStorage.keepLocalCopy` | — | env | Keep new uploads on disk as well as in the bucket. |
-| — | `multisite.enabled` | `false` | — | A network of sites. Set it with `npm run network -- enable --admin <login>`, not by hand; needs the `sqlite-native` driver and a restart ([multisite.md](multisite.md)). |
+| — | `multisite.enabled` | `false` | — | A network of sites. Set it with `npm run network -- enable --admin <login>`, not by hand; needs the `sqlite-native`, `postgres` or `mysql` driver and a restart of every node ([multisite.md](multisite.md)). |
 | `METRICS_TOKEN` | `metrics.token` | empty (`/metrics` answers 404) | file | Scrape token for `GET /metrics` ([observability.md](observability.md)). |
 | `LOG_LEVEL` | `logging.level` | `info` | env | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`; an unknown value is skipped. |
 | `WORDJS_TRUST_PROXY` | `trustProxy` | unset (by mode) | file | Which peers are your proxies — see [site-address.md](site-address.md). |

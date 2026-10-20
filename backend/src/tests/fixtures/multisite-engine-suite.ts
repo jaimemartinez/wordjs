@@ -190,6 +190,21 @@ export function runMultisiteEngineSuite(engine: Engine): void {
 
     after(async () => {
         try { if (server) await new Promise<void>((resolve) => server.close(() => resolve())); } catch { /* */ }
+        // The probe plugin's principals are server-wide (roles / users outlive the database): drop them.
+        if (!skipReason && engine !== 'sqlite-native') {
+            try {
+                if (engine === 'postgres') {
+                    for (const r of await serverQuery(engine, "SELECT rolname FROM pg_roles WHERE rolname LIKE 'wjp!_role!_msprobe%' ESCAPE '!'")) {
+                        await serverQuery(engine, `DROP OWNED BY "${r.rolname}"`).catch(() => { /* */ });
+                        await serverQuery(engine, `DROP ROLE IF EXISTS "${r.rolname}"`);
+                    }
+                } else {
+                    for (const r of await serverQuery(engine, "SELECT User AS u FROM mysql.user WHERE User LIKE 'wjp!_msprobe%' ESCAPE '!'")) {
+                        await serverQuery(engine, `DROP USER IF EXISTS '${String(r.u)}'@'%'`);
+                    }
+                }
+            } catch { /* best-effort */ }
+        }
         try { require('../../core/collab-rooms')._resetForTests(); } catch { /* */ }
         try { await database.closeSiteDatabases(); } catch { /* */ }
         try { await database.closeDatabase(); } catch { /* */ }
@@ -308,7 +323,9 @@ export function runMultisiteEngineSuite(engine: Engine): void {
                 await assert.rejects(iso.runScoped(probe, 'all', `SELECT * FROM ${mainTable}`, []), "the main site's tables are refused");
             });
             await siteContext.runWithSite(ids.three, async () => {
-                await database.dbAsync.exec('CREATE TABLE IF NOT EXISTS wjp_msprobe_items (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT)');
+                // Through run(), as a plugin's `db.run('CREATE TABLE …')` sends it: the SQLite dialect is
+                // translated there too (it failed on Postgres with "syntax error at or near AUTOINCREMENT").
+                await database.dbAsync.run('CREATE TABLE IF NOT EXISTS wjp_msprobe_items (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT)');
                 await iso.provision(probe);
                 assert.deepStrictEqual(await iso.runScoped(probe, 'all', 'SELECT label FROM wjp_msprobe_items', []), [], "site three sees its own (empty) table");
                 const twosTable = engine === 'postgres' ? `wordjs_site_${ids.two}.wjp_msprobe_items` : `\`${DB}_site_${ids.two}\`.wjp_msprobe_items`;

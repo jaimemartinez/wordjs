@@ -604,7 +604,7 @@ class CertManager {
      */
     async pushSiteCertToEdge(host: string, keyContent: string, certContent: string) {
         if (process.env.WORDJS_EMBEDDED === '1') {
-            const siteCerts = require(path.resolve(__dirname, '../../../gateway/src/site-certs.js'));
+            const siteCerts = require('../../../gateway/src/site-certs.js');
             siteCerts.writeSiteCert(siteCerts.defaultSitesDir(), host, keyContent, certContent);
             return { success: true, embedded: true };
         }
@@ -616,7 +616,7 @@ class CertManager {
     /** MULTISITE: take a deleted site's certificate off the edge. */
     async removeSiteCertFromEdge(host: string) {
         if (process.env.WORDJS_EMBEDDED === '1') {
-            const siteCerts = require(path.resolve(__dirname, '../../../gateway/src/site-certs.js'));
+            const siteCerts = require('../../../gateway/src/site-certs.js');
             siteCerts.removeSiteCert(siteCerts.defaultSitesDir(), host);
             return { success: true, embedded: true };
         }

@@ -277,8 +277,10 @@ class PostgresDriver extends DatabaseDriverInterface {
 
     async run(sql: string, params: any[] = []) {
         try {
-            // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
-            let normalizedSql = this.normalizeSql(sql);
+            // Normalize SQL from SQLite style (?) to Postgres style ($1, $2). A SQLite-dialect CREATE TABLE
+            // sent through run() (a plugin's `db.run('CREATE TABLE …')`) is translated exactly as exec()
+            // translates it — the MySQL driver already did; here it failed on AUTOINCREMENT.
+            let normalizedSql = this.normalizeSql(translateSql(sql));
 
             // AUTO-INJECT 'RETURNING *' for INSERTs if missing so we can surface the generated id for
             // SQLite-style models. We keep RETURNING * (not RETURNING id) because not every table has
@@ -345,7 +347,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 return res.rows;
             },
             run: async (sql: string, params: any[] = []) => {
-                let normalizedSql = this.normalizeSql(sql);
+                let normalizedSql = this.normalizeSql(translateSql(sql));
                 // Mirror run(): auto-inject RETURNING * for INSERTs lacking it, so lastID works.
                 if (/^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
                     normalizedSql += ' RETURNING *';

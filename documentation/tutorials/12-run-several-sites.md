@@ -8,8 +8,9 @@ share nothing.
 **Time:** about 15 minutes.
 **You need:**
 
-- a WordJS site installed with the **`sqlite-native`** database, the default. Networks on Postgres and
-  MySQL are not available yet;
+- a WordJS site on the **`sqlite-native`** database (the default), **Postgres** or **MySQL**. On
+  Postgres and MySQL the database user must be allowed to create schemas (Postgres) or databases
+  (MySQL): each site gets its own;
 - shell access to the server;
 - a second domain name pointing at the same server.
 
@@ -100,9 +101,11 @@ Plugins and themes are installed once, on the main site, for the whole network.
 - **Suspend** on a site takes it offline without deleting anything. **Resume** brings it back.
 - In split and separate mode, the backend tells the gateway about the network's addresses by itself.
   In every mode, only DNS (and your proxy's `server_name`) needs the new name.
-- Backups, database migration and network management stay on the main site.
-  [multisite.md](../multisite.md) covers the limits of this version, the REST API and how to turn the
-  network off.
+- Each site has its own **certificate** (Admin → Network → Get certificate, or install your own), its
+  own **backups** (its Settings → Backups) and **real-time co-editing** in its editor.
+- Installing plugin and theme code, the database migration tool and network management are the
+  network's, on the main site. [multisite.md](../multisite.md) covers deleting a site, several backend
+  nodes, the REST API and how to turn the network off.
 
 ---
 *Tested on 2026-10-17 with WordJS 2.6.0 on a fresh monolith install (Debian 12, `sqlite-native`),

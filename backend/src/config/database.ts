@@ -361,13 +361,13 @@ async function ensureNamespace(engine: string, name: string): Promise<void> {
     try { await admin.pool.query(`CREATE SCHEMA IF NOT EXISTS ${qPg(name)}`); return; } catch (e: any) {
       const r = await admin.pool.query('SELECT 1 FROM information_schema.schemata WHERE schema_name = $1', [name]);
       if (r.rows.length) return;
-      throw new Error(`The Postgres schema "${name}" could not be created (${e && e.message}). Grant the WordJS user CREATE on the database, or create the schema for it.`);
+      throw new Error(`The Postgres schema "${name}" could not be created (${e && e.message}). Grant the WordJS user CREATE on the database, or create the schema for it.`, { cause: e });
     }
   }
   try { await admin.pool.query(`CREATE DATABASE IF NOT EXISTS ${qMy(name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`); return; } catch (e: any) {
     const [rows] = await admin.pool.query('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [name]);
     if (rows.length) return;
-    throw new Error(`The MySQL database ${name} could not be created (${e && e.message}). Grant the WordJS user CREATE, or create the database for it.`);
+    throw new Error(`The MySQL database ${name} could not be created (${e && e.message}). Grant the WordJS user CREATE, or create the database for it.`, { cause: e });
   }
 }
 

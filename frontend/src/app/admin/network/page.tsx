@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { networkApi, type NetworkPlugin, type NetworkQuotas, type NetworkSite } from "@/lib/api";
+import { networkApi, type NetworkPlugin, type NetworkQuotas, type NetworkSite, type NetworkSiteCertificate } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { formatServerTimestamp } from "@/lib/serverTimestamp";
@@ -51,6 +51,10 @@ export default function NetworkPage() {
     const [quotas, setQuotas] = useState<NetworkQuotas | null>(null);
     const [quotaDraft, setQuotaDraft] = useState<Record<string, string>>({});
     const [busyQuota, setBusyQuota] = useState<string | null>(null);
+    // Each site's own TLS certificate (served by SNI): its status, and the two ways to get one.
+    const [certs, setCerts] = useState<{ autoIssue: boolean; byId: Record<number, NetworkSiteCertificate> } | null>(null);
+    const [busyCert, setBusyCert] = useState<number | null>(null);
+    const [certUpload, setCertUpload] = useState<{ id: number; certPem: string; keyPem: string } | null>(null);
 
     const load = async () => {
         try {
@@ -63,6 +67,10 @@ export default function NetworkPage() {
             });
             setNetPlugins(plugins);
             setCeilingDraft(Object.fromEntries(plugins.map((p) => [p.slug, p.ceiling ?? p.requestedPermissions])));
+            try {
+                const c = await networkApi.certificates();
+                setCerts({ autoIssue: c.autoIssue, byId: Object.fromEntries(c.certificates.map((x) => [x.siteId, x])) });
+            } catch { setCerts(null); /* the rest of the screen still works */ }
         } catch (e: any) {
             addToast(e?.message || t("network.loadFailed"), "error");
         } finally {
@@ -127,6 +135,26 @@ export default function NetworkPage() {
             addToast(err?.message || t("network.deleteFailed"), "error");
         } finally {
             setBusyId(null);
+        }
+    };
+
+    /** Let's Encrypt (HTTP-01) for the site's address, or install the pair pasted under it. */
+    const certificateAction = async (site: NetworkSite, kind: "issue" | "install") => {
+        if (!actionPassword) {
+            addToast(t("network.passwordRequired"), "error");
+            return;
+        }
+        setBusyCert(site.id);
+        try {
+            if (kind === "issue") await networkApi.issueCertificate(site.id, actionPassword);
+            else if (certUpload && certUpload.id === site.id) await networkApi.installCertificate(site.id, certUpload.certPem, certUpload.keyPem, actionPassword);
+            addToast(t("network.certInstalled").replace("{host}", site.host), "success");
+            setCertUpload(null);
+            await load();
+        } catch (err: any) {
+            addToast(err?.message || t("network.certFailed"), "error");
+        } finally {
+            setBusyCert(null);
         }
     };
 
@@ -318,6 +346,38 @@ export default function NetworkPage() {
                                                     : q.effectiveQuota === null
                                                         ? t("network.quotaUsageUnlimited").replace("{used}", fmtBytes(q.used))
                                                         : t("network.quotaUsage").replace("{used}", fmtBytes(q.used)).replace("{quota}", fmtBytes(q.effectiveQuota))}
+                                            </div>
+                                        );
+                                    })()}
+                                    {!site.main && certs && (() => {
+                                        const c = certs.byId[site.id];
+                                        const expiring = c && c.installed && typeof c.daysLeft === "number" && c.daysLeft < 14;
+                                        return (
+                                            <div className="mt-3 text-xs" data-site-cert={site.id}>
+                                                <div className={`flex items-start gap-2 ${c && c.installed ? (expiring ? "text-amber-600 font-bold" : "text-gray-500") : "text-gray-500"}`}>
+                                                    <i className={`fa-solid ${c && c.installed ? "fa-lock" : "fa-lock-open"} mt-0.5`}></i>
+                                                    {c && c.installed
+                                                        ? t("network.certValid").replace("{date}", fmtDate(c.notAfter || "")).replace("{issuer}", c.issuer || "?")
+                                                        : t(certs.autoIssue ? "network.certPendingAuto" : "network.certNone")}
+                                                </div>
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                    <Button variant="secondary" size="sm" icon="fa-certificate" loading={busyCert === site.id && !certUpload} onClick={() => certificateAction(site, "issue")}>{t("network.certIssue")}</Button>
+                                                    {certUpload?.id !== site.id && (
+                                                        <Button variant="ghost" size="sm" icon="fa-upload" onClick={() => setCertUpload({ id: site.id, certPem: "", keyPem: "" })}>{t("network.certUpload")}</Button>
+                                                    )}
+                                                </div>
+                                                {certUpload?.id === site.id && (
+                                                    <div className="mt-2 grid gap-2 md:grid-cols-2" data-site-cert-upload={site.id}>
+                                                        <textarea className="w-full h-28 font-mono text-[11px] rounded-lg border border-gray-200 p-2" placeholder="-----BEGIN CERTIFICATE-----" aria-label={t("network.certPem")}
+                                                            value={certUpload.certPem} onChange={(e) => setCertUpload({ ...certUpload, certPem: e.target.value })} />
+                                                        <textarea className="w-full h-28 font-mono text-[11px] rounded-lg border border-gray-200 p-2" placeholder="-----BEGIN PRIVATE KEY-----" aria-label={t("network.certKey")}
+                                                            value={certUpload.keyPem} onChange={(e) => setCertUpload({ ...certUpload, keyPem: e.target.value })} autoComplete="off" />
+                                                        <div className="md:col-span-2 flex gap-2 justify-end">
+                                                            <Button variant="secondary" size="sm" onClick={() => setCertUpload(null)}>{t("common.cancel")}</Button>
+                                                            <Button variant="primary" size="sm" icon="fa-check" loading={busyCert === site.id} disabled={!certUpload.certPem || !certUpload.keyPem} onClick={() => certificateAction(site, "install")}>{t("network.certInstall")}</Button>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })()}

@@ -15,7 +15,7 @@
     "test:coverage:check": "c8 --check-coverage --lines 80 --branches 0 --functions 0 --statements 0 --reporter=text-summary --reporter=lcov --all --src src --exclude \"src/tests/**\" --exclude \"src/tests-integration/**\" --exclude \"src/**/*.d.ts\" npm test",
     "test:coverage:report": "c8 report --check-coverage --lines 80 --branches 0 --functions 0 --statements 0 --reporter=text-summary --reporter=lcov --all --src src --exclude \"src/tests/**\" --exclude \"src/tests-integration/**\" --exclude \"src/**/*.d.ts\"",
     "test:integration": "node ../scripts/test-with-flake-retry.mjs --test-force-exit -r ts-node/register src/tests-integration/*.test.ts",
-    "test:multinode": "node ../scripts/test-with-flake-retry.mjs --test-force-exit -r ts-node/register src/tests-integration/multinode-coherence.integration.ts",
+    "test:multinode": "node ../scripts/test-with-flake-retry.mjs --test-force-exit --test-concurrency=1 -r ts-node/register src/tests-integration/multinode-coherence.integration.ts src/tests-integration/multinode-network.integration.ts",
     "verify:f0": "node -r ts-node/register scripts/verify-f0-baseline.ts",
     "verify:f1": "node -r ts-node/register scripts/verify-f1-content-schema.ts",
     "generate:f2": "node -r ts-node/register scripts/generate-f2-contracts.ts",

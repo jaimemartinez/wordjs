@@ -341,15 +341,21 @@ describe('what stays the main site\'s', () => {
         assert.strictEqual((await bearer('get', `${API}/plugin/anything/x`, TWO, tokens.two)).status, 404);
     });
 
-    test('backups, certificates, the site-address screen and the installer writes are not reachable', async () => {
-        assert.strictEqual((await bearer('get', `${API}/backups`, TWO, tokens.two)).status, 404);
+    test("the main site's certificate screen, the site-address screen and the installer writes are not reachable", async () => {
+        // The site's own certificate is the network administrator's (Admin → Network); its backups are its own.
         assert.strictEqual((await bearer('get', `${API}/system/certs/config`, TWO, tokens.two)).status, 404);
         assert.strictEqual((await bearer('get', `${API}/site-address`, TWO, tokens.two)).status, 404);
         assert.strictEqual((await bearer('post', `${API}/setup/install`, TWO, tokens.two).send({})).status, 403);
     });
 
-    test('the database migration tool, like backups, is available on the main site only', async () => {
-        // A secondary site's administrator gets the same refusal as for /backups: the subtree is not there.
+    test("a site's backups are its own: listed on its address, never another site's", async () => {
+        const res = await bearer('get', `${API}/backups`, TWO, tokens.two);
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.ok(!JSON.stringify(res.body).includes('backup-'), "a new site has no archive, and never sees the main site's");
+    });
+
+    test('the database migration tool is available on the main site only', async () => {
+        // It moves the whole network (every site's database and the network store): not a site's tool.
         assert.strictEqual((await bearer('get', `${API}/db-migration/status`, TWO, tokens.two)).status, 404);
         assert.strictEqual((await bearer('post', `${API}/db-migration/migrate`, TWO, tokens.two).send({})).status, 404);
         assert.strictEqual((await bearer('post', `${API}/db-migration/cleanup`, TWO, tokens.two).send({})).status, 404);

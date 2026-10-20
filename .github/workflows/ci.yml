@@ -748,6 +748,12 @@ jobs:
     # shared infrastructure. Break the publish, the DB sharing, or the invalidation → node B never sees it
     # → the job goes red. It also `docker compose config`-validates the Dockerfile/compose stack.
     #
+    # The same job runs a 2-node multisite NETWORK (multinode-network.integration.ts): node B boots before
+    # any site exists, node A creates two sites, and node B must answer them (registry over the shared
+    # network store + the `wordjs:network-changed` bus), see a per-site setting change, receive the same
+    # site's collaboration operations and none of the twin site's, serve an ACME answer recorded on A, and
+    # follow a suspension and a deletion made on A.
+    #
     # This is the deliberately LIGHTER-but-real form the task allows: two app cores in one job sharing
     # DB+Redis. It does not stand up two gateway-fronted, mTLS-enrolled full stacks — the gateway is a
     # single, non-replicated node and the coherence bus lives entirely in the backend core, so replicating
