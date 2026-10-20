@@ -1,5 +1,6 @@
 /**
- * WordJS Plugin: Memberships — members-only content, free and paid tiers, Stripe subscriptions
+ * WordJS Plugin: Memberships — members-only content, free and paid tiers, paid memberships through a
+ * payment provider (Stripe, Mercado Pago or Wompi), complimentary memberships and newsletters
  * (isolated, sandbox-native).
  *
  * HOW IT PLUGS INTO CORE. Gating itself is core's (backend/src/core/content-access): an entry stores the
@@ -11,7 +12,7 @@
  *   · `content_access_grants` — the levels a signed-in account holds right now.
  * and it ships the Verso blocks: the PAYWALL (an access break: its defaultProps carry
  * `contentAccessBreak: true`, so core cuts the teaser there, and it draws the call-to-action) and the
- * member ACCOUNT box (plan, change tier, cancel / resume).
+ * member ACCOUNT box (plan, change tier, cancel / resume, automatic renewal, newsletters).
  *
  * MEMBERS ARE THE SITE'S OWN USER ACCOUNTS. Signing up is core's /register (with its e-mail verification,
  * rate limits and MFA); signing in is core's session. A sandboxed plugin cannot hash passwords (no crypto
@@ -19,25 +20,26 @@
  * sign-up on (the default), every signed-in account is a free member; paid and complimentary memberships
  * are rows in this plugin's table, keyed by user id.
  *
- * PAYMENTS: Stripe Checkout in `subscription` mode, TEST MODE ONLY in this version (a live key is refused
- * until the live flow has been verified end to end). Two paths reach the same idempotent activation:
- *   · the return leg (GET /me/confirm): the success URL carries the Checkout session id; the session is
- *     retrieved server-side with the secret key and must belong to the signed-in account;
- *   · the webhook (POST /stripe/webhook, a core `{ webhook: true }` route): the Stripe-Signature header is
- *     verified with HMAC-SHA256 over the raw body (wordjs.crypto.hmac) within a 5-minute tolerance, and
- *     each event id is processed once. Subscription updates, cancellations and failed payments arrive only
- *     this way.
- * Secrets (secret key, webhook signing secret) live in the plugin's OWN settings table, write-only from
- * the admin (absent = keep, '' = clear, value = replace) and are never echoed back.
+ * PAYMENTS go through ONE provider interface (lib/providers/index.js); the admin picks the provider.
+ * SANDBOX / TEST CREDENTIALS ONLY in this version. Each provider verifies its own webhooks (Stripe:
+ * Stripe-Signature HMAC; Mercado Pago: x-signature HMAC; Wompi: events-secret checksum), processes each
+ * event once, and writes memberships through upsertProviderMember below. Recurring models differ — see
+ * each provider file and documentation/memberships.md. Credentials live in the plugin's OWN settings
+ * table, write-only from the admin (absent = keep, '' = clear, value = replace), never echoed back.
  *
- * Money is integer cents throughout; prices come from the tier rows, never from the client.
- * Newsletter sending is out of scope (see the docs' follow-ups).
+ * Money is integer minor units throughout (cents; COP 20.000 = 2000000); prices come from the tier rows,
+ * never from the client. Newsletters live in lib/newsletter.js.
  */
+
+const { initNewsletter } = require('./lib/newsletter');
+const { createProviders, PROVIDER_IDS } = require('./lib/providers');
+let newsletter = null;
+let renewTimer = null;
 
 exports.metadata = {
     name: 'Memberships',
-    version: '1.0.0',
-    description: 'Members-only content: free and paid tiers, paywall block, Stripe subscriptions, complimentary memberships.',
+    version: '1.2.0',
+    description: 'Members-only content: free and paid tiers, paywall block, Stripe / Mercado Pago / Wompi payments, complimentary memberships, newsletters.',
     author: 'WordJS',
 };
 
@@ -47,30 +49,38 @@ const CONFIG_DEFAULTS = {
     currencySymbol: '$',
     // Every signed-in account counts as a free member (holds the `members` level).
     freeSignup: true,
+    // Which provider takes the money ('' = none). Existing installs keep Stripe.
+    paymentProvider: 'stripe',
+    // Newsletters (lib/newsletter.js): the editor field and the publish trigger, and the send rate.
+    newsletterEnabled: true,
+    newsletterRate: 60, // mails per minute
 };
 
 const LEVEL_MEMBERS = 'members';
 const LEVEL_PAID = 'paid';
 const TIER_LEVEL_PREFIX = 'tier:';
 
-const MIN_PRICE_CENTS = 100;            // 1.00 — Stripe's floor for most currencies
-const MAX_PRICE_CENTS = 100000000;      // 1,000,000.00
+const MIN_PRICE_CENTS = 100;            // 1.00 in the site currency
+const MAX_PRICE_CENTS = 100000000000;   // 1,000,000,000.00 (COP prices are large numbers)
 const INTERVALS = ['month', 'year'];
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// A paid membership whose period ended this long ago without a renewal webhook stops granting access
-// (a missed `customer.subscription.deleted` must not leave a lapsed account reading paid content forever).
+// A paid membership whose period ended this long ago without a renewal stops granting access (a missed
+// cancellation webhook must not leave a lapsed account reading paid content forever).
 const PERIOD_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
-// Stripe's own default tolerance for the signature timestamp.
-const WEBHOOK_TOLERANCE_S = 300;
-// Rate caps on the endpoints that call Stripe on a member's behalf.
-const STRIPE_CALLS_PER_USER = 10;
-const STRIPE_CALLS_WINDOW_MS = 60 * 1000;
+// Rate caps on the endpoints that call a provider on a member's behalf.
+const PROVIDER_CALLS_PER_USER = 10;
+const PROVIDER_CALLS_WINDOW_MS = 60 * 1000;
 const LIMITER_MAX_KEYS = 10000;
+const RENEW_TICK_MS = 10 * 60 * 1000;
 
-// Member states. `active`/`past_due` grant access (Stripe retries a failed renewal for days), the rest do not.
+// Member states. `active`/`past_due` grant access (the provider is still retrying a failed renewal), the
+// rest (incomplete, canceled, expired) do not.
 const ACCESS_STATUSES = ['active', 'past_due'];
+/** What a tier costs per month (a yearly price covers twelve): the order `tier:<slug>` levels rank in. */
+const monthlyRank = (t) => (Number(t && t.price_cents) || 0) / (t && t.billing_interval === 'year' ? 12 : 1);
+const PAID_SOURCES = ['stripe', 'mercadopago', 'wompi'];
 
 exports.init = async function (wordjs) {
     const { options, http, db, adminMenu, hooks } = wordjs;
@@ -102,38 +112,49 @@ exports.init = async function (wordjs) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER UNIQUE NOT NULL,
         tier_id INTEGER,
+        pending_tier_id INTEGER,
         status TEXT NOT NULL DEFAULT 'active',
         source TEXT NOT NULL DEFAULT 'stripe',
-        stripe_customer_id TEXT,
-        stripe_subscription_id TEXT,
+        provider_customer_id TEXT,
+        provider_subscription_id TEXT,
+        provider_payment_source TEXT,
         current_period_end TEXT,
         cancel_at_period_end INTEGER DEFAULT 0,
+        renew_attempts INTEGER DEFAULT 0,
+        provider_event_at INTEGER DEFAULT 0,
+        past_due_since TEXT,
         comped_until TEXT,
         note TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+    // `reference` is UNIQUE: a merchant-initiated charge is CLAIMED by inserting its reference first (Wompi renewals).
     await db.run(`CREATE TABLE IF NOT EXISTS ${T.checkouts} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         tier_id INTEGER NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'stripe',
+        kind TEXT NOT NULL DEFAULT 'subscription',
         session_id TEXT,
+        reference TEXT UNIQUE,
+        amount_cents INTEGER,
+        currency TEXT,
         status TEXT DEFAULT 'open',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
     await db.run(`CREATE TABLE IF NOT EXISTS ${T.events} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        stripe_event_id TEXT UNIQUE NOT NULL,
+        event_key TEXT UNIQUE NOT NULL,
         type TEXT,
         received_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
     await db.run(`CREATE TABLE IF NOT EXISTS ${T.settings} (name TEXT PRIMARY KEY, value TEXT)`);
     try {
-        await db.run(`CREATE INDEX IF NOT EXISTS ${P}idx_members_sub ON ${T.members} (stripe_subscription_id)`);
+        await db.run(`CREATE INDEX IF NOT EXISTS ${P}idx_members_sub ON ${T.members} (provider_subscription_id)`);
         await db.run(`CREATE INDEX IF NOT EXISTS ${P}idx_checkouts_session ON ${T.checkouts} (session_id)`);
     } catch (e) { /* index exists / unsupported — non-fatal */ }
 
-    // ---- plugin-private settings (Stripe secrets) ------------------------------------------------------
+    // ---- plugin-private settings (provider credentials) -------------------------------------------------
     const getSetting = async (name) => {
         const row = await db.get(`SELECT value FROM ${T.settings} WHERE name = ?`, [name]);
         return row ? row.value : '';
@@ -155,9 +176,16 @@ exports.init = async function (wordjs) {
     // Public callers never see a driver's error text (it names tables and constraints).
     const quietly = (what, handler) => async (req, res) => {
         try { await handler(req, res); } catch (e) {
+            if (e && e.publicMessage) return res.status(e.status || 400).json({ error: e.publicMessage });
             console.error(`[memberships] ${what} failed:`, e && e.message ? e.message : e);
-            res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+            res.status(e && e.code === 'provider_http' ? 502 : 500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
         }
+    };
+    const providerError = (status, publicMessage) => {
+        const e = new Error(publicMessage);
+        e.status = status;
+        e.publicMessage = publicMessage;
+        return e;
     };
 
     const makeLimiter = (max, windowMs) => {
@@ -176,7 +204,7 @@ exports.init = async function (wordjs) {
             return true;
         };
     };
-    const stripeCallAllowed = makeLimiter(STRIPE_CALLS_PER_USER, STRIPE_CALLS_WINDOW_MS);
+    const providerCallAllowed = makeLimiter(PROVIDER_CALLS_PER_USER, PROVIDER_CALLS_WINDOW_MS);
 
     const parseBenefits = (s) => String(s || '').split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 20);
 
@@ -193,16 +221,88 @@ exports.init = async function (wordjs) {
     const activeTiers = () => db.all(`SELECT * FROM ${T.tiers} WHERE is_active = 1 ORDER BY price_cents ASC, sort_order ASC, id ASC`);
     const tierById = (id) => db.get(`SELECT * FROM ${T.tiers} WHERE id = ?`, [id]);
     const memberByUser = (userId) => db.get(`SELECT * FROM ${T.members} WHERE user_id = ?`, [userId]);
+    const memberBySubscription = (provider, subId) =>
+        db.get(`SELECT * FROM ${T.members} WHERE source = ? AND provider_subscription_id = ?`, [provider, String(subId)]);
 
-    /** Does this membership row grant access right now? */
+    /**
+     * Does this membership row grant access right now?
+     *  · past due (the provider is collecting a failed payment): for the grace window from the moment it
+     *    became past due, not for the whole new period the provider already opened;
+     *  · the paid period plus the grace window — the grace covers a renewal the provider is still
+     *    collecting, so a prepaid Wompi period without automatic renewal (nothing to collect) has none.
+     */
     const memberHasAccess = (m, now = Date.now()) => {
         if (!m || !ACCESS_STATUSES.includes(m.status)) return false;
         if (m.source === 'comped') return !m.comped_until || Date.parse(m.comped_until) > now;
+        if (m.status === 'past_due' && m.past_due_since) {
+            const since = Date.parse(m.past_due_since);
+            if (Number.isFinite(since) && since + PERIOD_GRACE_MS < now) return false;
+        }
         if (m.current_period_end) {
             const end = Date.parse(m.current_period_end);
-            if (Number.isFinite(end) && end + PERIOD_GRACE_MS < now) return false;
+            const renews = !(m.source === 'wompi' && !String(m.provider_payment_source || '').startsWith('source:'));
+            if (Number.isFinite(end) && end + (renews ? PERIOD_GRACE_MS : 0) < now) return false;
         }
         return true;
+    };
+    /** When a status change starts (or ends) a past-due spell: the value for `past_due_since`. */
+    const pastDueSince = (previous, status) => {
+        if (status !== 'past_due') return null;
+        return previous && previous.status === 'past_due' && previous.past_due_since ? previous.past_due_since : nowIso();
+    };
+
+    // ---- the ONE writer of paid memberships (every provider uses it) ------------------------------------
+    const FIELD_COLUMNS = {
+        tier_id: 'tier_id', pending_tier_id: 'pending_tier_id', status: 'status',
+        customer_id: 'provider_customer_id', subscription_id: 'provider_subscription_id', payment_source: 'provider_payment_source',
+        current_period_end: 'current_period_end', cancel_at_period_end: 'cancel_at_period_end', renew_attempts: 'renew_attempts',
+        // The provider's own timestamp (unix seconds) of the newest event applied, so an older event that
+        // arrives late (providers do not deliver in order) never overwrites a newer state.
+        event_at: 'provider_event_at',
+        past_due_since: 'past_due_since',
+    };
+    /** Create or update the paid membership of `userId` from `provider` (undefined fields keep their value). */
+    const upsertProviderMember = async (userId, provider, input) => {
+        const existing = await memberByUser(userId);
+        const fields = { ...input };
+        if (fields.status !== undefined) fields.past_due_since = pastDueSince(existing, fields.status);
+        const sets = [];
+        const vals = [];
+        for (const [field, column] of Object.entries(FIELD_COLUMNS)) {
+            if (fields[field] === undefined) continue;
+            let v = fields[field];
+            if (field === 'cancel_at_period_end') v = v ? 1 : 0;
+            sets.push(`${column} = ?`);
+            vals.push(v);
+        }
+        if (existing) {
+            // Switching a membership to a provider clears what belonged to another one.
+            const switching = existing.source !== provider;
+            const extra = switching
+                ? `, comped_until = NULL${fields.customer_id === undefined ? ', provider_customer_id = NULL' : ''}${fields.subscription_id === undefined ? ', provider_subscription_id = NULL' : ''}${fields.payment_source === undefined ? ', provider_payment_source = NULL' : ''}${fields.event_at === undefined ? ', provider_event_at = 0' : ''}`
+                : '';
+            await db.run(`UPDATE ${T.members} SET source = ?${sets.length ? ', ' + sets.join(', ') : ''}${extra}, updated_at = ? WHERE id = ?`,
+                [provider, ...vals, nowIso(), existing.id]);
+        } else {
+            const cols = ['user_id', 'source', ...Object.entries(FIELD_COLUMNS).filter(([f]) => fields[f] !== undefined).map(([, c]) => c), 'updated_at'];
+            if (fields.status === undefined) { cols.splice(2, 0, 'status'); vals.unshift('active'); }
+            await db.run(`INSERT INTO ${T.members} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+                [userId, provider, ...vals, nowIso()]);
+        }
+        return memberByUser(userId);
+    };
+    /** A provider-reported state change, never reviving a canceled membership. */
+    const setMemberStatus = async (member, status) => {
+        const current = (await db.get(`SELECT * FROM ${T.members} WHERE id = ?`, [member.id])) || member;
+        return db.run(`UPDATE ${T.members} SET status = ?, past_due_since = ?, updated_at = ? WHERE id = ? AND status != 'canceled'`,
+            [status, pastDueSince(current, status), nowIso(), member.id]);
+    };
+
+    // Each provider event once (Stripe event id, Mercado Pago request id, Wompi transaction + status).
+    const seenEvent = async (key) => !!(await db.get(`SELECT id FROM ${T.events} WHERE event_key = ?`, [String(key).slice(0, 250)]));
+    const recordEvent = async (key, type) => {
+        try { await db.run(`INSERT INTO ${T.events} (event_key, type) VALUES (?, ?)`, [String(key).slice(0, 250), String(type || '').slice(0, 100)]); }
+        catch (e) { /* a concurrent delivery recorded it first — the work is idempotent */ }
     };
 
     /**
@@ -220,8 +320,11 @@ exports.init = async function (wordjs) {
             const tier = m.tier_id ? await tierById(m.tier_id) : null;
             if (tier && tier.price_cents > 0) {
                 levels.add(LEVEL_PAID);
-                const tiers = await db.all(`SELECT slug FROM ${T.tiers} WHERE price_cents <= ?`, [tier.price_cents]);
-                for (const t of tiers) levels.add(TIER_LEVEL_PREFIX + t.slug);
+                // Ranked by what the tier costs PER MONTH: a yearly plan's price covers twelve months, so a
+                // cheap yearly plan is not "above" a dearer monthly one just because its number is bigger.
+                const rank = monthlyRank(tier);
+                const tiers = await db.all(`SELECT slug, price_cents, billing_interval FROM ${T.tiers}`);
+                for (const t of tiers) if (monthlyRank(t) <= rank) levels.add(TIER_LEVEL_PREFIX + t.slug);
             }
         }
         return Array.from(levels);
@@ -251,199 +354,40 @@ exports.init = async function (wordjs) {
         ];
     });
 
-    // ---- Stripe --------------------------------------------------------------------------------------
-    /** Test-mode keys only in this version (see the header). */
-    const keyMode = (key) => {
-        const k = String(key || '');
-        if (/^(sk|rk)_test_/.test(k)) return 'test';
-        if (/^(sk|rk)_live_/.test(k)) return 'live';
-        return '';
-    };
-    const stripeKey = async () => {
-        const k = await getSetting('stripe_sk');
-        return keyMode(k) === 'test' ? k : '';
-    };
-
-    /** Form-encode a nested object the way Stripe expects (a[b][c]=v). */
-    const formEncode = (obj) => {
-        const params = new URLSearchParams();
-        const walk = (prefix, v) => {
-            if (v === undefined || v === null) return;
-            if (typeof v === 'object' && !Array.isArray(v)) {
-                for (const [k, sub] of Object.entries(v)) walk(prefix ? `${prefix}[${k}]` : k, sub);
-            } else if (Array.isArray(v)) {
-                v.forEach((sub, i) => walk(`${prefix}[${i}]`, sub));
-            } else {
-                params.append(prefix, String(v));
-            }
-        };
-        walk('', obj);
-        return params;
-    };
-
-    const stripeRequest = async (method, path, body) => {
-        const key = await stripeKey();
-        if (!key) { const e = new Error('Stripe is not configured'); e.code = 'no_stripe'; throw e; }
-        const res = await fetch('https://api.stripe.com' + path, {
-            method,
-            headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: body ? formEncode(body).toString() : undefined,
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            const msg = json && json.error && json.error.message ? json.error.message : ('HTTP ' + res.status);
-            const e = new Error(msg);
-            e.code = 'stripe_error';
-            throw e;
-        }
-        return json;
-    };
-
-    /** The Stripe product a tier bills under (created on first use, then reused). */
-    const ensureProduct = async (tier) => {
-        if (tier.stripe_product_id) return tier.stripe_product_id;
-        const product = await stripeRequest('POST', '/v1/products', {
-            name: tier.name,
-            metadata: { wordjs_tier_id: tier.id },
-        });
-        await db.run(`UPDATE ${T.tiers} SET stripe_product_id = ? WHERE id = ?`, [String(product.id).slice(0, 200), tier.id]);
-        return product.id;
-    };
-
-    const priceData = async (tier, cfg) => ({
-        currency: String(cfg.currencyCode || 'usd').toLowerCase(),
-        product: await ensureProduct(tier),
-        unit_amount: tier.price_cents,
-        recurring: { interval: tier.billing_interval },
+    // ---- payment providers ------------------------------------------------------------------------------
+    const providers = createProviders({
+        wordjs, db, T, getSetting, setSetting, getConfig, tierById, memberByUser, memberBySubscription,
+        upsertProviderMember, setMemberStatus, toInt, nowIso, isoFromUnix, recordEvent, seenEvent, providerError,
     });
-
-    /** A subscription's period end, wherever this API version puts it (top level or per item). */
-    const periodEndOf = (sub) => {
-        if (!sub) return null;
-        if (sub.current_period_end) return isoFromUnix(sub.current_period_end);
-        const item = sub.items && Array.isArray(sub.items.data) ? sub.items.data[0] : null;
-        return item && item.current_period_end ? isoFromUnix(item.current_period_end) : null;
-    };
-
-    const statusFromStripe = (s) => {
-        if (s === 'active' || s === 'trialing') return 'active';
-        if (s === 'past_due' || s === 'unpaid') return 'past_due';
-        if (s === 'incomplete') return 'incomplete';
-        return 'canceled'; // canceled, incomplete_expired, paused, anything new
+    /** The provider the admin chose, when it is ready (credentials present, test mode) and fits the currency. */
+    const activeProvider = async () => {
+        const cfg = await getConfig();
+        const p = providers.get(cfg.paymentProvider);
+        if (!p || !(await p.isReady())) return null;
+        if (p.currencies && !p.currencies.includes(String(cfg.currencyCode || '').toLowerCase())) return null;
+        return p;
     };
 
     /**
-     * Record (create or update) the paid membership of `userId` from a Stripe subscription — the one
-     * writer both the return leg and the webhook use, so they cannot disagree.
+     * The page to return to, on THIS site: the path and query of `pageUrl` when it is a page of this site,
+     * else the home page. A path that starts with `//` or `/\` is a network-path reference — resolved
+     * against the site it would name ANOTHER host — so leading slashes are collapsed, and the result must
+     * still be on the site's origin.
      */
-    const upsertStripeMember = async (userId, fields) => {
-        const existing = await memberByUser(userId);
-        const row = {
-            tier_id: fields.tier_id !== undefined ? fields.tier_id : (existing ? existing.tier_id : null),
-            status: fields.status || (existing ? existing.status : 'active'),
-            stripe_customer_id: fields.stripe_customer_id !== undefined ? fields.stripe_customer_id : (existing ? existing.stripe_customer_id : null),
-            stripe_subscription_id: fields.stripe_subscription_id !== undefined ? fields.stripe_subscription_id : (existing ? existing.stripe_subscription_id : null),
-            current_period_end: fields.current_period_end !== undefined ? fields.current_period_end : (existing ? existing.current_period_end : null),
-            cancel_at_period_end: fields.cancel_at_period_end !== undefined ? (fields.cancel_at_period_end ? 1 : 0) : (existing ? existing.cancel_at_period_end : 0),
-        };
-        if (existing) {
-            await db.run(
-                `UPDATE ${T.members} SET tier_id = ?, status = ?, source = 'stripe', stripe_customer_id = ?, stripe_subscription_id = ?,
-                 current_period_end = ?, cancel_at_period_end = ?, comped_until = NULL, updated_at = ? WHERE id = ?`,
-                [row.tier_id, row.status, row.stripe_customer_id, row.stripe_subscription_id, row.current_period_end, row.cancel_at_period_end, nowIso(), existing.id]
-            );
-        } else {
-            await db.run(
-                `INSERT INTO ${T.members} (user_id, tier_id, status, source, stripe_customer_id, stripe_subscription_id, current_period_end, cancel_at_period_end, updated_at)
-                 VALUES (?, ?, ?, 'stripe', ?, ?, ?, ?, ?)`,
-                [userId, row.tier_id, row.status, row.stripe_customer_id, row.stripe_subscription_id, row.current_period_end, row.cancel_at_period_end, nowIso()]
-            );
-        }
-        return memberByUser(userId);
-    };
-
-    /** Apply a Stripe subscription object to the membership it belongs to (by id, else by metadata). */
-    const applySubscription = async (sub) => {
-        if (!sub || !sub.id) return null;
-        let member = await db.get(`SELECT * FROM ${T.members} WHERE stripe_subscription_id = ?`, [String(sub.id)]);
-        const metaUser = sub.metadata ? toInt(sub.metadata.wordjs_user_id) : NaN;
-        if (!member && !Number.isInteger(metaUser)) return null; // not one of ours
-        const userId = member ? member.user_id : metaUser;
-        const metaTier = sub.metadata ? toInt(sub.metadata.wordjs_tier_id) : NaN;
-        const tierId = Number.isInteger(metaTier) && (await tierById(metaTier)) ? metaTier : undefined;
-        return upsertStripeMember(userId, {
-            tier_id: tierId,
-            status: statusFromStripe(sub.status),
-            stripe_customer_id: sub.customer ? String(sub.customer) : undefined,
-            stripe_subscription_id: String(sub.id),
-            current_period_end: periodEndOf(sub),
-            cancel_at_period_end: !!sub.cancel_at_period_end,
-        });
-    };
-
-    /** Activate from a completed Checkout session (shared by the return leg and the webhook). */
-    const applyCompletedSession = async (session, expectedUserId) => {
-        if (!session || session.mode !== 'subscription') return { ok: false, reason: 'not a subscription session' };
-        const meta = session.metadata || {};
-        const userId = toInt(meta.wordjs_user_id);
-        const tierId = toInt(meta.wordjs_tier_id);
-        if (!Number.isInteger(userId) || !Number.isInteger(tierId)) return { ok: false, reason: 'not one of ours' };
-        if (expectedUserId !== undefined && userId !== expectedUserId) return { ok: false, reason: 'session belongs to another account' };
-        if (session.status !== 'complete') return { ok: false, reason: 'checkout not complete' };
-        if (!(await tierById(tierId))) return { ok: false, reason: 'unknown tier' };
-        const sub = session.subscription && typeof session.subscription === 'object' ? session.subscription : null;
-        await upsertStripeMember(userId, {
-            tier_id: tierId,
-            status: sub ? statusFromStripe(sub.status) : (session.payment_status === 'paid' || session.payment_status === 'no_payment_required' ? 'active' : 'incomplete'),
-            stripe_customer_id: session.customer ? String(typeof session.customer === 'object' ? session.customer.id : session.customer) : undefined,
-            stripe_subscription_id: session.subscription ? String(sub ? sub.id : session.subscription) : undefined,
-            current_period_end: sub ? periodEndOf(sub) : undefined,
-            cancel_at_period_end: sub ? !!sub.cancel_at_period_end : undefined,
-        });
-        if (session.id) await db.run(`UPDATE ${T.checkouts} SET status = 'complete' WHERE session_id = ?`, [String(session.id)]);
-        return { ok: true, userId };
-    };
-
-    /**
-     * Verify a Stripe-Signature header (`t=<unix>,v1=<hex>[,v1=…]`) over the raw body: HMAC-SHA256 of
-     * `${t}.${rawBody}` under the endpoint's signing secret, compared in constant time against every v1,
-     * and the timestamp within the tolerance (a captured request cannot be replayed later).
-     */
-    const verifyStripeSignature = async (header, rawBody, secret, nowSec = Math.floor(Date.now() / 1000)) => {
-        if (!secret || typeof header !== 'string' || typeof rawBody !== 'string') return false;
-        let t = null;
-        const sigs = [];
-        for (const part of header.split(',')) {
-            const i = part.indexOf('=');
-            if (i < 1) continue;
-            const k = part.slice(0, i).trim();
-            const v = part.slice(i + 1).trim();
-            if (k === 't') t = v;
-            else if (k === 'v1' && /^[0-9a-f]{64}$/i.test(v)) sigs.push(v.toLowerCase());
-        }
-        const ts = Number(t);
-        if (!t || !Number.isInteger(ts) || !sigs.length) return false;
-        if (Math.abs(nowSec - ts) > WEBHOOK_TOLERANCE_S) return false;
-        const expected = await wordjs.crypto.hmac('sha256', secret, `${t}.${rawBody}`, 'hex');
-        let match = false;
-        for (const s of sigs) {
-            // Every candidate is compared (no early exit on the first match).
-            if (await wordjs.crypto.timingSafeEqual(s, expected)) match = true;
-        }
-        return match;
-    };
-
-    /** The page to return to, on THIS site: only the path and query of `pageUrl` are kept. */
     const returnUrl = async (pageUrl) => {
         const site = new URL(await wordjs.site.url());
         let path = '/';
+        let search = '';
         try {
-            const u = new URL(String(pageUrl || ''), site);
-            u.searchParams.delete('ms_session');
-            u.searchParams.delete('ms_cancel');
-            path = u.pathname + (u.search || '');
+            const u = new URL(String(pageUrl || '').slice(0, 2000), site);
+            if (u.origin === site.origin) {
+                for (const k of ['ms_session', 'ms_cancel', 'ms_provider', 'preapproval_id', 'id', 'env']) u.searchParams.delete(k);
+                path = u.pathname;
+                search = u.search || '';
+            }
         } catch (e) { /* keep '/' */ }
-        return new URL(path, site.origin);
+        const out = new URL('/' + path.replace(/^[\/\\]+/, '') + search, site.origin);
+        return out.origin === site.origin ? out : new URL('/', site.origin);
     };
 
     // ================================================================================================
@@ -453,12 +397,17 @@ exports.init = async function (wordjs) {
     http.route('get', '/public/tiers', quietly('tier list', async (req, res) => {
         const cfg = await getConfig();
         const tiers = await activeTiers();
+        const p = await activeProvider();
         res.json({
             tiers: tiers.map(publicTier),
             currencyCode: cfg.currencyCode,
             currencySymbol: cfg.currencySymbol,
             freeSignup: !!cfg.freeSignup,
-            stripeEnabled: !!(await stripeKey()),
+            paymentsEnabled: !!p,
+            provider: p ? p.id : null,
+            providerLabel: p ? p.label : null,
+            // Kept for blocks built against 1.0/1.1.
+            stripeEnabled: !!p,
         });
     }));
 
@@ -467,196 +416,200 @@ exports.init = async function (wordjs) {
         const userId = Number(req.user && req.user.id);
         const m = await memberByUser(userId);
         const tier = m && m.tier_id ? await tierById(m.tier_id) : null;
+        const pending = m && m.pending_tier_id ? await tierById(m.pending_tier_id) : null;
+        const provider = m ? providers.get(m.source) : null;
+        let autoRenew = null;
+        if (provider && provider.autoRenewStatus && memberHasAccess(m)) autoRenew = await provider.autoRenewStatus(m).catch(() => null);
         res.json({
             signedIn: true,
             member: m ? {
                 status: m.status,
                 source: m.source,
+                provider: PAID_SOURCES.includes(m.source) ? m.source : null,
                 active: memberHasAccess(m),
                 tier: tier ? publicTier(tier) : null,
+                pendingTier: pending ? publicTier(pending) : null,
                 currentPeriodEnd: m.current_period_end || null,
                 cancelAtPeriodEnd: !!m.cancel_at_period_end,
                 compedUntil: m.comped_until || null,
-                canManageBilling: m.source === 'stripe' && !!m.stripe_subscription_id && memberHasAccess(m),
+                canManageBilling: !!(provider && provider.manages(m) && memberHasAccess(m)),
+                canRenewNow: !!(provider && provider.allowsRepurchase && memberHasAccess(m)),
+                autoRenew,
             } : null,
             levels: await grantsForUser(userId),
         });
     }));
 
-    // Start a Stripe Checkout for a paid tier. The price is the tier row's; the client names a tier.
+    // Start paying for a tier with the active provider. The price is the tier row's; the client names a tier.
+    // One checkout at a time per account in this worker: a double click must not start two payments.
+    const checkoutsInFlight = new Set();
     http.route('post', '/checkout', { auth: true }, quietly('checkout', async (req, res) => {
         const userId = Number(req.user && req.user.id);
-        if (!stripeCallAllowed('u' + userId)) return res.status(429).json({ error: 'Demasiados intentos — espera un minuto.' });
+        if (checkoutsInFlight.has(userId)) return res.status(409).json({ error: 'Ya estamos preparando tu pago — espera un momento.' });
+        checkoutsInFlight.add(userId);
+        try {
+            await startCheckoutFor(req, res, userId);
+        } finally {
+            checkoutsInFlight.delete(userId);
+        }
+    }));
+    const startCheckoutFor = async (req, res, userId) => {
+        if (!providerCallAllowed('u' + userId)) return res.status(429).json({ error: 'Demasiados intentos — espera un minuto.' });
         const tierId = toInt(req.body && req.body.tier_id);
         const tier = Number.isInteger(tierId) ? await tierById(tierId) : null;
         if (!tier || !tier.is_active) return res.status(404).json({ error: 'Ese plan no existe o no está disponible.' });
-        if (!(await stripeKey())) return res.status(400).json({ error: 'El pago con tarjeta no está configurado.' });
+        const provider = await activeProvider();
+        if (!provider) return res.status(400).json({ error: 'El pago en línea no está configurado.' });
         const existing = await memberByUser(userId);
-        if (existing && existing.source === 'stripe' && existing.stripe_subscription_id && memberHasAccess(existing)) {
+        const existingProvider = existing ? providers.get(existing.source) : null;
+        // One live paid membership at a time: a second one (or one with another provider) would charge twice.
+        // Only a provider whose payments are prepaid periods (Wompi) takes another payment: the next period.
+        if (existing && existingProvider && existingProvider.manages(existing) && memberHasAccess(existing)
+            && !(existingProvider === provider && provider.allowsRepurchase)) {
             return res.status(409).json({ error: 'Ya tienes una suscripción activa — cambia de plan desde tu cuenta.' });
         }
         const cfg = await getConfig();
-        const back = await returnUrl(req.body && req.body.page_url);
-        const success = new URL(back.toString());
-        success.searchParams.set('ms_session', '{CHECKOUT_SESSION_ID}');
-        const cancel = new URL(back.toString());
-        cancel.searchParams.set('ms_cancel', '1');
-        const params = {
-            mode: 'subscription',
-            line_items: [{ price_data: await priceData(tier, cfg), quantity: 1 }],
-            // `{CHECKOUT_SESSION_ID}` must reach Stripe unencoded.
-            success_url: success.toString().replace(encodeURIComponent('{CHECKOUT_SESSION_ID}'), '{CHECKOUT_SESSION_ID}'),
-            cancel_url: cancel.toString(),
-            client_reference_id: String(userId),
-            metadata: { wordjs_user_id: userId, wordjs_tier_id: tier.id },
-            subscription_data: { metadata: { wordjs_user_id: userId, wordjs_tier_id: tier.id } },
-        };
-        if (existing && existing.stripe_customer_id) params.customer = existing.stripe_customer_id;
-        else if (req.user && req.user.userEmail && EMAIL_RE.test(req.user.userEmail)) params.customer_email = req.user.userEmail;
-        let session;
+        const email = req.user && req.user.userEmail && EMAIL_RE.test(req.user.userEmail) ? req.user.userEmail : '';
+        let out;
         try {
-            session = await stripeRequest('POST', '/v1/checkout/sessions', params);
+            out = await provider.startCheckout({ userId, email, tier, member: existing, backUrl: await returnUrl(req.body && req.body.page_url), cfg });
         } catch (e) {
-            console.warn('[memberships] Stripe checkout failed:', e && e.message ? e.message : e);
+            if (e && e.publicMessage) throw e;
+            console.warn(`[memberships] ${provider.id} checkout failed:`, e && e.message ? e.message : e);
             return res.status(502).json({ error: 'No se pudo iniciar el pago — inténtalo de nuevo.' });
         }
-        if (!session || !session.url || !session.id) return res.status(502).json({ error: 'Stripe no devolvió una URL de pago.' });
-        await db.run(`INSERT INTO ${T.checkouts} (user_id, tier_id, session_id) VALUES (?, ?, ?)`, [userId, tier.id, String(session.id).slice(0, 200)]);
-        res.json({ checkoutUrl: session.url });
-    }));
+        res.json({ checkoutUrl: out.url, provider: provider.id });
+    };
 
-    // Stripe return leg: retrieve the session server-side; it must be this account's (idempotent).
+    // The return leg: the provider re-reads the payment server-side; it must be this account's (idempotent).
     http.route('get', '/me/confirm', { auth: true }, quietly('checkout confirmation', async (req, res) => {
         const userId = Number(req.user && req.user.id);
-        const sessionId = String((req.query && req.query.session_id) || '').trim();
-        if (!/^cs_[A-Za-z0-9_]{1,200}$/.test(sessionId)) return res.status(400).json({ error: 'Sesión de pago inválida.' });
-        if (!stripeCallAllowed('u' + userId)) return res.status(429).json({ error: 'Demasiados intentos — espera un minuto.' });
-        const ours = await db.get(`SELECT * FROM ${T.checkouts} WHERE session_id = ? AND user_id = ?`, [sessionId, userId]);
-        if (!ours) return res.status(404).json({ error: 'Esa sesión de pago no es de tu cuenta.' });
-        let session;
+        const q = req.query || {};
+        const id = String(q.provider || (q.session_id ? 'stripe' : '') || '');
+        const provider = providers.get(id);
+        if (!provider) return res.status(400).json({ error: 'Pago inválido.' });
+        if (!providerCallAllowed('u' + userId)) return res.status(429).json({ error: 'Demasiados intentos — espera un minuto.' });
+        let r;
         try {
-            session = await stripeRequest('GET', `/v1/checkout/sessions/${encodeURIComponent(sessionId)}?expand[]=subscription`, null);
+            r = await provider.confirmReturn({ userId, query: q });
         } catch (e) {
-            console.warn('[memberships] Stripe session lookup failed:', e && e.message ? e.message : e);
+            if (e && e.publicMessage) throw e;
+            console.warn(`[memberships] ${provider.id} confirmation failed:`, e && e.message ? e.message : e);
             return res.status(502).json({ error: 'No se pudo verificar el pago — inténtalo en unos minutos.' });
         }
-        const r = await applyCompletedSession(session, userId);
-        if (!r.ok) return res.json({ active: false });
+        if (!r.handled) return res.status(400).json({ error: 'Pago inválido.' });
         const m = await memberByUser(userId);
-        res.json({ active: memberHasAccess(m) });
+        res.json({ active: !!(r.applied && memberHasAccess(m)) });
     }));
 
-    /** The account's live Stripe membership, or a reply explaining why there is none. */
+    /** The account's live paid membership and its provider, or a reply explaining why there is none. */
     const billingMember = async (req, res) => {
         const userId = Number(req.user && req.user.id);
         const m = await memberByUser(userId);
-        if (!m || m.source !== 'stripe' || !m.stripe_subscription_id || !memberHasAccess(m)) {
+        const provider = m ? providers.get(m.source) : null;
+        if (!m || !provider || !provider.manages(m) || !memberHasAccess(m)) {
             res.status(404).json({ error: 'No tienes una suscripción activa.' });
             return null;
         }
-        if (!stripeCallAllowed('u' + userId)) { res.status(429).json({ error: 'Demasiados intentos — espera un minuto.' }); return null; }
-        return m;
+        if (!providerCallAllowed('u' + userId)) { res.status(429).json({ error: 'Demasiados intentos — espera un minuto.' }); return null; }
+        return { m, provider };
     };
 
-    // Change to another paid tier: the subscription's single item moves to the new tier's price, prorated.
     http.route('post', '/me/change-tier', { auth: true }, quietly('tier change', async (req, res) => {
-        const m = await billingMember(req, res);
-        if (!m) return;
+        const b = await billingMember(req, res);
+        if (!b) return;
         const tierId = toInt(req.body && req.body.tier_id);
         const tier = Number.isInteger(tierId) ? await tierById(tierId) : null;
         if (!tier || !tier.is_active) return res.status(404).json({ error: 'Ese plan no existe o no está disponible.' });
-        if (tier.id === m.tier_id) return res.status(400).json({ error: 'Ya estás en ese plan.' });
-        const cfg = await getConfig();
-        let sub;
+        if (tier.id === b.m.tier_id) return res.status(400).json({ error: 'Ya estás en ese plan.' });
+        let r;
         try {
-            const current = await stripeRequest('GET', `/v1/subscriptions/${encodeURIComponent(m.stripe_subscription_id)}`, null);
-            const item = current && current.items && Array.isArray(current.items.data) ? current.items.data[0] : null;
-            if (!item) throw new Error('subscription has no item');
-            sub = await stripeRequest('POST', `/v1/subscriptions/${encodeURIComponent(m.stripe_subscription_id)}`, {
-                items: [{ id: item.id, price_data: await priceData(tier, cfg) }],
-                proration_behavior: 'create_prorations',
-                cancel_at_period_end: 'false',
-                metadata: { wordjs_user_id: m.user_id, wordjs_tier_id: tier.id },
-            });
+            r = await b.provider.changeTier(b.m, tier, await getConfig());
         } catch (e) {
-            console.warn('[memberships] Stripe tier change failed:', e && e.message ? e.message : e);
+            if (e && e.publicMessage) throw e;
+            console.warn(`[memberships] ${b.provider.id} tier change failed:`, e && e.message ? e.message : e);
             return res.status(502).json({ error: 'No se pudo cambiar de plan — inténtalo de nuevo.' });
         }
-        await applySubscription(sub);
-        res.json({ ok: true, tier: publicTier(tier) });
+        res.json({ ok: true, tier: publicTier(tier), effective: (r && r.effective) || 'now' });
     }));
 
     // Cancel at the end of the paid period (access continues until then), or undo that.
     const setCancelAtPeriodEnd = (flag) => quietly(flag ? 'cancel' : 'resume', async (req, res) => {
-        const m = await billingMember(req, res);
-        if (!m) return;
-        let sub;
+        const b = await billingMember(req, res);
+        if (!b) return;
         try {
-            sub = await stripeRequest('POST', `/v1/subscriptions/${encodeURIComponent(m.stripe_subscription_id)}`, {
-                cancel_at_period_end: flag ? 'true' : 'false',
-            });
+            await b.provider.setCancelAtPeriodEnd(b.m, flag);
         } catch (e) {
-            console.warn('[memberships] Stripe cancel/resume failed:', e && e.message ? e.message : e);
+            if (e && e.publicMessage) throw e;
+            console.warn(`[memberships] ${b.provider.id} cancel/resume failed:`, e && e.message ? e.message : e);
             return res.status(502).json({ error: 'No se pudo actualizar la suscripción — inténtalo de nuevo.' });
         }
-        await applySubscription(sub);
         res.json({ ok: true, cancelAtPeriodEnd: flag });
     });
     http.route('post', '/me/cancel', { auth: true }, setCancelAtPeriodEnd(true));
     http.route('post', '/me/resume', { auth: true }, setCancelAtPeriodEnd(false));
 
-    // ---- the Stripe webhook (core `{ webhook: true }`: raw body, no identity, CSRF-exempt) ------------
-    http.route('post', '/stripe/webhook', { webhook: true }, async (req, res) => {
-        try {
-            const secret = await getSetting('stripe_whsec');
-            const signature = req.headers && req.headers['stripe-signature'];
-            if (!secret) return res.status(400).json({ error: 'webhook signing secret not configured' });
-            if (!(await verifyStripeSignature(signature, req.rawBody, secret))) {
-                return res.status(400).json({ error: 'invalid signature' });
-            }
-            let event;
-            try { event = JSON.parse(req.rawBody); } catch (e) { return res.status(400).json({ error: 'invalid payload' }); }
-            if (!event || typeof event.id !== 'string' || typeof event.type !== 'string') return res.status(400).json({ error: 'invalid event' });
-            if (event.livemode === true) return res.status(400).json({ error: 'live events are not accepted by this version' });
-            // Each event once: Stripe retries until it gets a 2xx, and may deliver an event twice.
-            const seen = await db.get(`SELECT id FROM ${T.events} WHERE stripe_event_id = ?`, [event.id]);
-            if (seen) return res.json({ received: true, duplicate: true });
-            const obj = event.data && event.data.object;
-            switch (event.type) {
-                case 'checkout.session.completed':
-                    await applyCompletedSession(obj, undefined);
-                    break;
-                case 'customer.subscription.created':
-                case 'customer.subscription.updated':
-                case 'customer.subscription.deleted':
-                    await applySubscription(obj);
-                    break;
-                case 'invoice.payment_failed':
-                case 'invoice.paid': {
-                    const subId = obj && (obj.subscription
-                        || (obj.parent && obj.parent.subscription_details && obj.parent.subscription_details.subscription));
-                    if (subId) {
-                        const m = await db.get(`SELECT * FROM ${T.members} WHERE stripe_subscription_id = ?`, [String(subId)]);
-                        if (m) {
-                            const status = event.type === 'invoice.paid' ? 'active' : 'past_due';
-                            await db.run(`UPDATE ${T.members} SET status = ?, updated_at = ? WHERE id = ? AND status != 'canceled'`, [status, nowIso(), m.id]);
-                        }
-                    }
-                    break;
-                }
-                default:
-                    break; // not an event this plugin acts on — acknowledged so Stripe stops retrying
-            }
-            // Recorded AFTER it was applied: a failure above answers 500 and Stripe retries it.
+    // Wompi automatic renewal with Nequi (the member approves in the Nequi app).
+    // Each request makes Wompi push an approval prompt to a phone: a few per account per hour.
+    const nequiRequestAllowed = makeLimiter(3, 60 * 60 * 1000);
+    http.route('post', '/me/auto-renew/nequi', { auth: true }, quietly('nequi auto-renew', async (req, res) => {
+        const b = await billingMember(req, res);
+        if (!b) return;
+        if (!nequiRequestAllowed('n' + b.m.user_id)) return res.status(429).json({ error: 'Ya pediste varias aprobaciones de Nequi — espera una hora.' });
+        if (!b.provider.startNequi) return res.status(400).json({ error: 'La renovación automática con Nequi es de Wompi.' });
+        res.json(await b.provider.startNequi(b.m, String((req.body && req.body.phone) || '').replace(/\D/g, '')));
+    }));
+    http.route('post', '/me/auto-renew/stop', { auth: true }, quietly('auto-renew stop', async (req, res) => {
+        const b = await billingMember(req, res);
+        if (!b) return;
+        if (!b.provider.stopAutoRenew) return res.status(400).json({ error: 'Este proveedor renueva solo.' });
+        await b.provider.stopAutoRenew(b.m);
+        res.json({ ok: true });
+    }));
+
+    // ---- provider webhooks (core `{ webhook: true }`: raw body, no identity, CSRF-exempt) --------------
+    for (const p of providers.list) {
+        http.route('post', p.webhookPath, { webhook: true }, async (req, res) => {
             try {
-                await db.run(`INSERT INTO ${T.events} (stripe_event_id, type) VALUES (?, ?)`, [event.id.slice(0, 200), event.type.slice(0, 100)]);
-            } catch (e) { /* a concurrent delivery recorded it first — the work is idempotent */ }
-            res.json({ received: true });
-        } catch (e) {
-            console.error('[memberships] webhook failed:', e && e.message ? e.message : e);
-            res.status(500).json({ error: 'webhook processing failed' });
+                const out = await p.webhook(req);
+                res.status(out.status).json(out.body);
+            } catch (e) {
+                // A failure here answers 5xx: the provider retries and the (unrecorded) event is applied then.
+                console.error(`[memberships] ${p.id} webhook failed:`, e && e.message ? e.message : e);
+                res.status(500).json({ error: 'webhook processing failed' });
+            }
+        });
+    }
+
+    // ---- merchant-scheduled renewals (Wompi) and expiry ------------------------------------------------
+    // One run at a time in this worker (the timer and the admin's «process now» share it): a renewal must
+    // never be charged twice because two runs looked at the same due membership. Across workers, the
+    // providers claim each charge in the database first (Wompi: a unique reference per period).
+    let paymentsRun = null;
+    const processPayments = () => {
+        if (!paymentsRun) paymentsRun = runPayments().finally(() => { paymentsRun = null; });
+        return paymentsRun;
+    };
+    const runPayments = async () => {
+        const out = { renewed: 0, expired: 0 };
+        for (const p of providers.list) {
+            if (p.renewDue) {
+                const r = await p.renewDue();
+                out.renewed += (r && r.charged) || 0;
+            }
         }
-    });
+        // A paid membership whose period (plus grace) is over and that nothing renewed is expired.
+        const rows = await db.all(`SELECT * FROM ${T.members} WHERE status IN ('active', 'past_due') AND source != 'comped' AND current_period_end IS NOT NULL`);
+        for (const m of rows) {
+            if (!memberHasAccess(m)) {
+                await db.run(`UPDATE ${T.members} SET status = 'expired', updated_at = ? WHERE id = ? AND status IN ('active', 'past_due')`, [nowIso(), m.id]);
+                out.expired++;
+            }
+        }
+        return out;
+    };
+    renewTimer = setInterval(() => { processPayments().catch((e) => console.warn('[memberships] payments job:', e && e.message ? e.message : e)); }, RENEW_TICK_MS);
+    if (renewTimer && typeof renewTimer.unref === 'function') renewTimer.unref();
 
     // ================================================================================================
     // ADMIN ROUTES
@@ -746,6 +699,7 @@ exports.init = async function (wordjs) {
             active: memberHasAccess(m),
             current_period_end: m.current_period_end,
             cancel_at_period_end: !!m.cancel_at_period_end,
+            auto_renew: !!(m.provider_payment_source && String(m.provider_payment_source).startsWith('source:')),
             comped_until: m.comped_until,
             note: m.note || '',
             created_at: m.created_at,
@@ -778,12 +732,14 @@ exports.init = async function (wordjs) {
         }
         const note = String(body.note || '').trim().slice(0, 500);
         const existing = await memberByUser(Number(user.id));
-        if (existing && existing.source === 'stripe' && existing.stripe_subscription_id && memberHasAccess(existing)) {
+        const existingProvider = existing ? providers.get(existing.source) : null;
+        if (existing && existingProvider && existingProvider.manages(existing) && memberHasAccess(existing)) {
             return res.status(409).json({ error: 'Esta cuenta ya paga una suscripción: cancélala antes de regalarle un plan.' });
         }
         if (existing) {
             await db.run(
-                `UPDATE ${T.members} SET tier_id = ?, status = 'active', source = 'comped', comped_until = ?, note = ?, cancel_at_period_end = 0, updated_at = ? WHERE id = ?`,
+                `UPDATE ${T.members} SET tier_id = ?, pending_tier_id = NULL, status = 'active', source = 'comped', comped_until = ?, note = ?, cancel_at_period_end = 0,
+                 provider_subscription_id = NULL, provider_payment_source = NULL, updated_at = ? WHERE id = ?`,
                 [tier.id, until, note, nowIso(), existing.id]
             );
         } else {
@@ -795,31 +751,58 @@ exports.init = async function (wordjs) {
         res.json({ member: await adminMemberShape(await memberByUser(Number(user.id))) });
     });
 
-    // Revoke: a comped membership ends now; a paid one is cancelled at Stripe immediately.
+    // Revoke: a comped membership ends now; a paid one is cancelled at its provider immediately.
     http.route('post', '/members/:id/revoke', { auth: true, admin: true }, async (req, res) => {
         const id = toInt(req.params.id);
         const m = Number.isInteger(id) ? await db.get(`SELECT * FROM ${T.members} WHERE id = ?`, [id]) : null;
         if (!m) return res.status(404).json({ error: 'Miembro no encontrado.' });
-        if (m.source === 'stripe' && m.stripe_subscription_id && ACCESS_STATUSES.includes(m.status)) {
+        const provider = providers.get(m.source);
+        if (provider && provider.manages(m) && ACCESS_STATUSES.includes(m.status)) {
             try {
-                await stripeRequest('DELETE', `/v1/subscriptions/${encodeURIComponent(m.stripe_subscription_id)}`, null);
+                await provider.cancelNow(m);
             } catch (e) {
-                console.warn('[memberships] Stripe cancellation failed:', e && e.message ? e.message : e);
-                return res.status(502).json({ error: 'Stripe no canceló la suscripción — revisa la clave o inténtalo de nuevo.' });
+                console.warn(`[memberships] ${provider.id} cancellation failed:`, e && e.message ? e.message : e);
+                return res.status(502).json({ error: `${provider.label} no canceló la suscripción — revisa las credenciales o inténtalo de nuevo.` });
             }
         }
         await db.run(`UPDATE ${T.members} SET status = 'canceled', cancel_at_period_end = 0, updated_at = ? WHERE id = ?`, [nowIso(), id]);
         res.json({ member: await adminMemberShape(await db.get(`SELECT * FROM ${T.members} WHERE id = ?`, [id])) });
     });
 
+    // Run renewals and expiry now (the job does it every few minutes).
+    http.route('post', '/payments/process', { auth: true, admin: true }, async (req, res) => {
+        res.json(await processPayments());
+    });
+
+    /** Provider settings for the admin: which credentials are set (never their values) and the webhook URL. */
+    const providerSettings = async () => {
+        const site = String(await wordjs.site.url()).replace(/\/+$/, '');
+        const out = [];
+        for (const p of providers.list) {
+            const creds = [];
+            for (const c of p.credentials) {
+                const v = await getSetting(c.setting);
+                // Masked: only whether it is set — never the value or any part of it.
+                creds.push({ key: c.key, label: c.label, set: !!v });
+            }
+            out.push({
+                id: p.id, label: p.label, ready: await p.isReady(), mode: await p.mode(),
+                currencies: p.currencies, credentials: creds, webhookUrl: site + '/api/v1/plugin/memberships' + p.webhookPath,
+            });
+        }
+        return out;
+    };
+
     http.route('get', '/config', { auth: true, admin: true }, async (req, res) => {
         const cfg = await getConfig();
-        const sk = await getSetting('stripe_sk');
         const site = await wordjs.site.url();
+        const stripe = providers.get('stripe');
         res.json({
             ...cfg,
-            hasStripeKey: !!sk,
-            stripeMode: keyMode(sk),
+            providers: await providerSettings(),
+            // Kept for admin screens built against 1.0/1.1.
+            hasStripeKey: !!(await getSetting('stripe_sk')),
+            stripeMode: await stripe.mode(),
             hasWebhookSecret: !!(await getSetting('stripe_whsec')),
             webhookUrl: String(site).replace(/\/+$/, '') + '/api/v1/plugin/memberships/stripe/webhook',
         });
@@ -830,27 +813,63 @@ exports.init = async function (wordjs) {
         const next = { ...(await getConfig()) };
         if (typeof body.currencyCode === 'string') {
             const code = body.currencyCode.trim().toLowerCase();
-            if (!/^[a-z]{3}$/.test(code)) return res.status(400).json({ error: 'El código de moneda debe tener 3 letras (usd, eur, mxn…).' });
+            if (!/^[a-z]{3}$/.test(code)) return res.status(400).json({ error: 'El código de moneda debe tener 3 letras (cop, usd, eur…).' });
             next.currencyCode = code;
         }
         if (typeof body.currencySymbol === 'string') next.currencySymbol = body.currencySymbol.trim().slice(0, 8) || '$';
         if (typeof body.freeSignup === 'boolean') next.freeSignup = body.freeSignup;
-        if (typeof body.stripeKey === 'string') {
-            const k = body.stripeKey.trim();
-            if (k && keyMode(k) !== 'test') {
-                return res.status(400).json({ error: 'Esta versión solo acepta claves de PRUEBA de Stripe (sk_test_… o rk_test_…).' });
+        if (typeof body.newsletterEnabled === 'boolean') next.newsletterEnabled = body.newsletterEnabled;
+        if (body.newsletterRate !== undefined) {
+            const rate = toInt(body.newsletterRate);
+            if (!Number.isInteger(rate) || rate < 1 || rate > 600) return res.status(400).json({ error: 'El ritmo de envío debe estar entre 1 y 600 correos por minuto.' });
+            next.newsletterRate = rate;
+        }
+        if (body.paymentProvider !== undefined) {
+            const id = String(body.paymentProvider || '');
+            if (id && !PROVIDER_IDS.includes(id)) return res.status(400).json({ error: 'Proveedor de pagos desconocido.' });
+            next.paymentProvider = id;
+        }
+        const chosen = providers.get(next.paymentProvider);
+        if (chosen && chosen.currencies && !chosen.currencies.includes(String(next.currencyCode).toLowerCase())) {
+            return res.status(400).json({ error: `${chosen.label} solo cobra en ${chosen.currencies.join(', ').toUpperCase()}: cambia la moneda del sitio.` });
+        }
+        // Credentials: { credentials: { <provider>: { <key>: value } } }, plus the 1.0/1.1 Stripe aliases.
+        const writes = [];
+        const incoming = body.credentials && typeof body.credentials === 'object' ? { ...body.credentials } : {};
+        if (typeof body.stripeKey === 'string') incoming.stripe = { ...(incoming.stripe || {}), secretKey: body.stripeKey };
+        if (typeof body.webhookSecret === 'string') incoming.stripe = { ...(incoming.stripe || {}), webhookSecret: body.webhookSecret };
+        for (const [pid, values] of Object.entries(incoming)) {
+            const p = providers.get(pid);
+            if (!p || !values || typeof values !== 'object') continue;
+            for (const c of p.credentials) {
+                if (typeof values[c.key] !== 'string') continue;   // absent = keep
+                const v = values[c.key].trim();
+                if (v && !c.pattern.test(v)) return res.status(400).json({ error: c.error });
+                writes.push([c.setting, v]);                         // '' = clear, value = replace
+            }
+            // A provider whose test and live credentials share a format checks with the provider itself.
+            if (p.validateCredentials) {
+                try { await p.validateCredentials(values); } catch (e) {
+                    return res.status((e && e.status) || 400).json({ error: (e && e.publicMessage) || 'Credenciales no válidas.' });
+                }
             }
         }
-        if (typeof body.webhookSecret === 'string') {
-            const w = body.webhookSecret.trim();
-            if (w && !/^whsec_[A-Za-z0-9]+$/.test(w)) return res.status(400).json({ error: 'El secreto de firma del webhook empieza por whsec_.' });
-        }
         await options.set(OPT_CONFIG, next);
-        // Secrets: absent = keep, '' = clear, value = replace. Never echoed back.
-        if (typeof body.stripeKey === 'string') await setSetting('stripe_sk', body.stripeKey.trim());
-        if (typeof body.webhookSecret === 'string') await setSetting('stripe_whsec', body.webhookSecret.trim());
-        const sk = await getSetting('stripe_sk');
-        res.json({ ...next, hasStripeKey: !!sk, stripeMode: keyMode(sk), hasWebhookSecret: !!(await getSetting('stripe_whsec')) });
+        for (const [name, v] of writes) await setSetting(name, v);
+        const stripe = providers.get('stripe');
+        res.json({
+            ...next,
+            providers: await providerSettings(),
+            hasStripeKey: !!(await getSetting('stripe_sk')),
+            stripeMode: await stripe.mode(),
+            hasWebhookSecret: !!(await getSetting('stripe_whsec')),
+        });
+    });
+
+    // ---- newsletters ------------------------------------------------------------------------------
+    newsletter = await initNewsletter({
+        wordjs, db, P, getConfig, grantsForUser, getSetting, setSetting,
+        quietly: (what, handler) => quietly(what, handler),
     });
 
     adminMenu.add({
@@ -865,6 +884,8 @@ exports.init = async function (wordjs) {
 };
 
 exports.deactivate = function () {
-    // Nothing to tear down: no timers, no servers. Core keeps gated posts gated (fail closed) while the
-    // plugin is inactive; editors still read them in full.
+    // The newsletter queue and the payments job are the only timers; queued work stays in the tables and
+    // resumes on the next activation. Core keeps gated posts gated (fail closed) while the plugin is inactive.
+    if (newsletter) { newsletter.stop(); newsletter = null; }
+    if (renewTimer) { clearInterval(renewTimer); renewTimer = null; }
 };

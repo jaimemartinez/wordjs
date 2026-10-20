@@ -113,6 +113,20 @@ describe('a { webhook: true } route', () => {
         assert.deepStrictEqual(Object.keys(res.body.headers).sort(), ['content-type', 'x-probe-signature']);
     });
 
+    test('provider metadata headers are forwarded: checksums (Wompi) and x-request-id (Mercado Pago signs it)', async () => {
+        const body = '{"id":"evt_3"}';
+        const res = await (request(app) as any).post(hookUrl)
+            .set('Content-Type', 'application/json')
+            .set('X-Probe-Signature', sign(body))
+            .set('X-Event-Checksum', 'abc123')
+            .set('X-Request-Id', 'req-1')
+            .set('X-Forwarded-For', '10.0.0.1')
+            .send(body);
+        assert.strictEqual(res.status, 200);
+        assert.deepStrictEqual(Object.keys(res.body.headers).sort(), ['content-type', 'x-event-checksum', 'x-probe-signature', 'x-request-id']);
+        assert.strictEqual(res.body.headers['x-request-id'], 'req-1');
+    });
+
     test('webhook + auth, and a non-POST webhook, are not mounted; an ordinary POST keeps the CSRF gate', async () => {
         assert.strictEqual((await (request(app) as any).post(`/api/v1/plugin/${SLUG}/hook-auth`).send({})).status, 403,
             'not mounted, so not exempt: the CSRF gate answers first');
@@ -136,7 +150,7 @@ describe('a { webhook: true } route', () => {
     });
 });
 
-describe('wordjs.crypto.hmac / timingSafeEqual', () => {
+describe('wordjs.crypto.hmac / hash / timingSafeEqual', () => {
     const api = createPluginApi('wjs-hmac-probe');
 
     test('matches node\'s HMAC for every allowed digest and both encodings', () => {
@@ -151,6 +165,16 @@ describe('wordjs.crypto.hmac / timingSafeEqual', () => {
         assert.throws(() => api.crypto.hmac('sha256', '', 'x'), /invalid key/);
         assert.throws(() => api.crypto.hmac('sha256', 'k', 'x'.repeat(2 * 1024 * 1024 + 1)), /invalid data/);
         assert.throws(() => api.crypto.hmac('sha256', 'k', { toString: () => 'x' }), /invalid data/);
+    });
+
+    test("hash matches node's digest (Wompi integrity and event checksums) and refuses what hmac refuses", () => {
+        for (const algo of ['sha256', 'sha1', 'sha512']) {
+            assert.strictEqual(api.crypto.hash(algo, 'ref2000000COPsecret'), crypto.createHash(algo).update('ref2000000COPsecret', 'utf8').digest('hex'));
+        }
+        assert.strictEqual(api.crypto.hash('sha256', 'x', 'base64'), crypto.createHash('sha256').update('x').digest('base64'));
+        assert.throws(() => api.crypto.hash('md5', 'x'), /unsupported algorithm/);
+        assert.throws(() => api.crypto.hash('sha256', 'x'.repeat(2 * 1024 * 1024 + 1)), /invalid data/);
+        assert.throws(() => api.crypto.hash('sha256', { toString: () => 'x' }), /invalid data/);
     });
 
     test('timingSafeEqual compares strings of any length without throwing', () => {

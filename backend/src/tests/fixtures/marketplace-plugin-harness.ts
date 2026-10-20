@@ -65,6 +65,8 @@ export interface BootedPlugin {
     options: Map<string, any>;
     /** When set, every wordjs.mail() call throws this error (models "no provider configured"). */
     setMailFailure(err: Error | null): void;
+    /** What wordjs.mail() resolves to (the provider's verdict, e.g. mail-server's { delivered, failed }). */
+    setMailResult(fn: ((msg: MailMessage) => any) | null): void;
     /**
      * Run `hook` after every db.get / db.all / db.run statement has executed and before the plugin
      * receives its result (null removes it). Statements issued from inside the hook reach it too.
@@ -97,6 +99,8 @@ export interface BootOptions {
      * system, so core reads the plugin's filter). Without it they are recorded and ignored.
      */
     hooks?: { addFilter?: (hook: string, cb: (...a: any[]) => any, priority?: number) => void; addAction?: (hook: string, cb: (...a: any[]) => any, priority?: number) => void };
+    /** The posts bridge (`wordjs.posts.get`). Without it every lookup answers null. */
+    posts?: { get?: (id: any) => Promise<any> };
     /** The users bridge (`wordjs.users.*`). Without it every lookup answers null. */
     users?: Partial<Record<'findById' | 'findByEmail' | 'findByLogin' | 'search', (...a: any[]) => Promise<any>>>;
 }
@@ -184,6 +188,7 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
 
     const mails: MailMessage[] = [];
     let mailFailure: Error | null = null;
+    let mailResult: ((msg: MailMessage) => any) | null = null;
     const options = new Map<string, any>();
     const wordjs: any = {
         db,
@@ -195,7 +200,7 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
         mail: async (msg: MailMessage) => {
             if (mailFailure) throw mailFailure;
             mails.push(msg);
-            return {};
+            return mailResult ? mailResult(msg) : {};
         },
         options: {
             get: async (k: string, d: any) => (options.has(k) ? options.get(k) : d),
@@ -209,6 +214,10 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
                 const { createPluginApi } = require('../../core/plugin-api');
                 return createPluginApi(slug).crypto.hmac(algo, key, data, enc);
             },
+            hash: async (algo: string, data: string, enc?: string) => {
+                const { createPluginApi } = require('../../core/plugin-api');
+                return createPluginApi(slug).crypto.hash(algo, data, enc);
+            },
             timingSafeEqual: async (a: string, b: string) => {
                 const { createPluginApi } = require('../../core/plugin-api');
                 return createPluginApi(slug).crypto.timingSafeEqual(a, b);
@@ -218,6 +227,9 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
             addFilter: (h: string, cb: any, pr?: number) => { if (bootOpts.hooks && bootOpts.hooks.addFilter) bootOpts.hooks.addFilter(h, cb, pr); },
             addAction: (h: string, cb: any, pr?: number) => { if (bootOpts.hooks && bootOpts.hooks.addAction) bootOpts.hooks.addAction(h, cb, pr); },
             doAction: async () => undefined,
+        },
+        posts: {
+            get: async (id: any) => (bootOpts.posts && bootOpts.posts.get ? bootOpts.posts.get(id) : null),
         },
         users: {
             findById: async (...a: any[]) => (bootOpts.users && bootOpts.users.findById ? bootOpts.users.findById(...a) : null),
@@ -272,6 +284,7 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
     return {
         sdb, prefix, mails, options,
         setMailFailure(err) { mailFailure = err; },
+        setMailResult(fn) { mailResult = fn; },
         setStatementHook(hook) { statementHook = hook; },
         setPreStatementHook(hook) { preStatementHook = hook; },
         call,

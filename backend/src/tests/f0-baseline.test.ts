@@ -179,6 +179,7 @@ describe('F0 live REST characterization', () => {
             backups: '/api/v1/backups',
             dbMigration: '/api/v1/db-migration',
             contentAccess: '/api/v1/content-access',
+            editor: '/api/v1/editor',
         });
     });
 
