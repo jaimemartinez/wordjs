@@ -556,9 +556,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 The "Professional mail account" grant is no longer a core concept: mail-server **3.1.0** declares it as its
 account capability `mail_server_mailbox`, and schema migration `0019` moves every existing
 `professional_mailbox` value to it unchanged at boot. Update the plugin together with the core. A 3.0.x copy
-still installed keeps working (its mailboxes, menu and address lock are bridged onto the migrated grant),
-but the toggle on the user screen comes from 3.1.0's declaration, so granting or revoking a mailbox needs
-the update.
+still installed keeps working — its mailboxes, menu, address lock and its own user-form toggle are bridged
+onto the migrated grant, behind the same `edit_users` gate — until it is updated; the bridge
+(`core/legacy-account-flags.ts`) goes away in the next major.
 
 ### ⚠️ Upgrade note — Node.js 22 or newer is required
 

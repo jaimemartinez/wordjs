@@ -433,6 +433,11 @@ describe('the upgrade from the core-owned mailbox flag (core/legacy-account-flag
             const off = await as('usermgr', 'put', `/users/${U.pablo}`).send({ accountCapabilities: { [MAILBOX]: false } });
             assert.equal(off.status, 200);
             assert.equal(await metaValue(U.pablo, 'professional_mailbox'), '0', 'a revocation is mirrored too');
+
+            // With the plugin UPDATED (it declares the capability), the outdated toggle's field is inert.
+            const legacyField = await as('usermgr', 'put', `/users/${U.pablo}`).send({ professionalMailbox: true });
+            assert.equal(legacyField.status, 200);
+            assert.equal(await grantOf(U.pablo, MAILBOX), '0', 'the legacy field writes nothing once a declaration exists');
         } finally {
             await updateOption('active_plugins', [PROBE, ROGUE]);
         }
@@ -458,6 +463,21 @@ describe('the upgrade from the core-owned mailbox flag (core/legacy-account-flag
             const moved = await as('mallory', 'put', '/users/me').send({ email: 'mallory@outlook.com', currentPassword: PASSWORD });
             assert.equal(moved.status, 403, 'the mailbox still binds the address without a declaration saying so');
             assert.equal(moved.body.code, 'rest_mailbox_address_locked');
+
+            // Its own user-form toggle still writes the grant — through the SAME gate as the generic field.
+            const self = await as('pablo', 'put', `/users/${U.pablo}`).send({ professionalMailbox: true });
+            assert.equal(self.status, 403, 'the legacy field is never self-assignable either');
+            assert.equal(await grantOf(U.pablo, MAILBOX), '0');
+            const meSelf = await as('pablo', 'put', '/users/me').send({ professionalMailbox: true, displayName: 'P' });
+            assert.equal(meSelf.status, 200);
+            assert.equal(await grantOf(U.pablo, MAILBOX), '0', 'PUT /users/me ignores it');
+            const byManager = await as('usermgr', 'put', `/users/${U.pablo}`).send({ professionalMailbox: true });
+            assert.equal(byManager.status, 200);
+            assert.equal(await grantOf(U.pablo, MAILBOX), '1', 'an edit_users caller grants through the outdated toggle');
+            assert.equal(await metaValue(U.pablo, 'professional_mailbox'), '1', 'mirrored');
+            const revoke = await as('usermgr', 'put', `/users/${U.pablo}`).send({ professionalMailbox: false });
+            assert.equal(revoke.status, 200);
+            assert.equal(await grantOf(U.pablo, MAILBOX), '0', 'and revokes');
         } finally {
             unregisterAdminMenu(MAIL);
             await dbAsync.run('DELETE FROM user_meta WHERE user_id = ? AND meta_key = ?', [U.mallory, `account_capability:${MAILBOX}`]);

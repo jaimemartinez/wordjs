@@ -17,8 +17,8 @@
  *      disagree in the deny direction.
  *   3. AN OUTDATED PLUGIN. An install still running a mail plugin from before this release (no
  *      `accountCapabilities` declaration) keeps working: its routes still receive `hasProfessionalMailbox`,
- *      its menu item still carries `requiresProfessionalMailbox`, and the address lock still applies.
- *      Changing a grant needs the updated plugin (its declaration is what renders the toggle).
+ *      its menu item still carries `requiresProfessionalMailbox`, the address lock still applies, and its
+ *      own user-form toggle (`professionalMailbox`) still writes the grant, through the same edit_users gate.
  *
  * Every field here is confined to the plugin whose namespace owns the capability: no other plugin is told.
  */
@@ -27,6 +27,7 @@ const LEGACY_META_KEY = 'professional_mailbox';
 const LEGACY_CAPABILITY = 'mail_server_mailbox';
 const LEGACY_PROJECTION_FIELD = 'hasProfessionalMailbox';
 const LEGACY_MENU_FLAG = 'requiresProfessionalMailbox';
+const LEGACY_BODY_FIELD = 'professionalMailbox';
 
 /** Drop the legacy capability from `granted` when the legacy row exists and does not say granted. */
 function applyLegacyVeto(meta: Record<string, any>, granted: string[]): string[] {
@@ -51,6 +52,31 @@ function undeclared(): boolean {
 /** The capability still binds the address while an outdated plugin cannot declare `locksEmail` for it. */
 function legacyLockingCapabilities(): string[] {
     return undeclared() ? [LEGACY_CAPABILITY] : [];
+}
+
+/**
+ * The capability an outdated, ACTIVE mail plugin still lets an administrator write through its own toggle,
+ * or none. Only while no installed plugin declares it — once the plugin is updated, its declaration is the
+ * one way in.
+ */
+function legacyWritableCapabilities(activePluginIds: string[]): string[] {
+    if (!undeclared()) return [];
+    const ns = require('./plugin-roles');
+    return (activePluginIds || []).some((id) => ns.isInPluginNamespace(LEGACY_CAPABILITY, id)) ? [LEGACY_CAPABILITY] : [];
+}
+
+/**
+ * The `accountCapabilities` request input with the outdated toggle's field folded in: an outdated mail
+ * plugin's user-form toggle still sends `professionalMailbox`. Honoured only while the installed plugin is
+ * outdated (undeclared), never over an explicit `accountCapabilities` entry for the same capability, and it
+ * goes through the very same plan as the generic field — the `edit_users` gate, change-only, no-op resends.
+ */
+function withLegacyBodyField(body: any): any {
+    const input = body ? body.accountCapabilities : undefined;
+    if (!body || body[LEGACY_BODY_FIELD] === undefined || !undeclared()) return input;
+    if (input !== undefined && (input === null || typeof input !== 'object' || Array.isArray(input))) return input;
+    if (input && Object.prototype.hasOwnProperty.call(input, LEGACY_CAPABILITY)) return input;
+    return { ...(input || {}), [LEGACY_CAPABILITY]: body[LEGACY_BODY_FIELD] };
 }
 
 /** The legacy projection field, for the plugin owning the capability's namespace only. */
@@ -88,9 +114,12 @@ async function migrateLegacyFlags(ctx: MigrationCtx): Promise<number> {
 module.exports = {
     LEGACY_META_KEY,
     LEGACY_CAPABILITY,
+    LEGACY_BODY_FIELD,
     applyLegacyVeto,
     mirrorLegacyWrite,
     legacyLockingCapabilities,
+    legacyWritableCapabilities,
+    withLegacyBodyField,
     legacyProjectionFields,
     legacyMenuRequirement,
     migrateLegacyFlags,

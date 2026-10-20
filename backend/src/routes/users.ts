@@ -21,6 +21,8 @@ const { getRoles } = require('../core/roles');
 // only an `edit_users` caller may change (core/account-capabilities).
 const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/email-address');
 const accountCapabilities = require('../core/account-capabilities');
+// DEPRECATED: an outdated mail plugin's toggle field, folded into the same plan (core/legacy-account-flags.ts).
+const { withLegacyBodyField, LEGACY_BODY_FIELD } = require('../core/legacy-account-flags');
 const { recordAudit } = require('../core/audit');
 const { protectsNetworkAdmin, refuseNetworkAdminTarget } = require('../core/network-auth');
 const networkHandoff = require('../core/network-handoff');
@@ -96,6 +98,7 @@ const ACCOUNT_SECURITY_FIELDS: Record<string, SuppliedCriterion> = {
     personalEmail: 'presence',       // recovery-bearing (recoveryTarget PREFERS it); sink = `!== undefined`
     role: 'nonblank',                // privilege — the role guards below ignore a blank role
     accountCapabilities: 'presence', // the admin-owned per-account grants; blank/null = flagValue '0' = revoke
+    [LEGACY_BODY_FIELD]: 'presence', // DEPRECATED alias of one of them, written by an outdated plugin's toggle
 };
 
 /**
@@ -589,7 +592,7 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     }
 
     // Plugin-declared per-account grants (core/account-capabilities). Safe to apply: this route is `isAdmin`.
-    const capPlan = await accountCapabilities.planAccountCapabilityWrite(null, req.body.accountCapabilities);
+    const capPlan = await accountCapabilities.planAccountCapabilityWrite(null, withLegacyBodyField(req.body));
     if (capPlan.error) return res.status(400).json(capPlan.error);
 
     try {
@@ -1399,7 +1402,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // SINK CRITERION: 'presence' (see ACCOUNT_SECURITY_FIELDS). `flagValue` maps '' and null to '0', so a
     // blank value here is a REVOCATION of the grant, not "left alone" — which is why the headless gate
     // judges this field by presence and not by blankness. The plan holds the CHANGES only.
-    const capPlan = await accountCapabilities.planAccountCapabilityWrite(user, req.body.accountCapabilities);
+    const capPlan = await accountCapabilities.planAccountCapabilityWrite(user, withLegacyBodyField(req.body));
     if (Object.keys(capPlan.changes).length || capPlan.error) {
         if (!canEditUsers) {
             return res.status(403).json({

@@ -235,6 +235,10 @@ async function planAccountCapabilityWrite(target: any, input: any): Promise<{ ch
         return bad('accountCapabilities must be an object mapping a capability to true or false.');
     }
     const declared = new Set((await activeDeclarations()).map((d) => d.slug));
+    // DEPRECATED — the capability an outdated, active mail plugin still writes (core/legacy-account-flags.ts).
+    let active: string[] = [];
+    try { active = await require('./plugins').getActivePlugins(); } catch { active = []; }
+    for (const slug of require('./legacy-account-flags').legacyWritableCapabilities(active)) declared.add(slug);
     const current = new Set(target ? grantedAccountCapabilities(target) : []);
     const changes: Record<string, string> = {};
     for (const [slug, value] of Object.entries(input)) {
