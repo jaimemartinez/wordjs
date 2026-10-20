@@ -80,12 +80,23 @@ function mailHtml(html, base) {
         .replace(/\b(src|href)\s*=\s*'\/(?!\/)/gi, `$1='${base}/`);
 }
 
-const textOf = (html) => String(html || '')
-    .replace(/<\s*(br|\/p|\/h[1-6]|\/li|\/div)\s*>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+const TEXT_ENTITIES = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" };
+/**
+ * The plain-text part of a mail from its HTML. Tags are stripped until none is left (one pass over
+ * `<<b>script>` would leave `<script>`), then any bracket still standing goes too; entities are decoded in
+ * ONE pass, so `&amp;lt;` becomes the text `&lt;`, never `<`.
+ */
+const textOf = (html) => {
+    let s = String(html || '').replace(/<\s*(br|\/p|\/h[1-6]|\/li|\/div)\s*>/gi, '\n');
+    let previous;
+    do {
+        previous = s;
+        s = s.replace(/<[^<>]*>/g, '');
+    } while (s !== previous);
+    s = s.replace(/[<>]/g, '');
+    s = s.replace(/&(nbsp|amp|lt|gt|quot|#39);/g, (_, name) => TEXT_ENTITIES[name]);
+    return s.replace(/\n{3,}/g, '\n\n').trim();
+};
 
 /**
  * @param ctx { wordjs, db, P, getConfig, grantsForUser, getSetting, setSetting, quietly }
@@ -661,4 +672,4 @@ async function initNewsletter(ctx) {
     };
 }
 
-module.exports = { initNewsletter, teaserOf, AUDIENCES, META_KEY };
+module.exports = { initNewsletter, teaserOf, textOf, AUDIENCES, META_KEY };
