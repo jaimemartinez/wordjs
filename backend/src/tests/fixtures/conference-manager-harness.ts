@@ -19,7 +19,12 @@
  *   - `adminMenu.add` records the menu items; `crypto` is node's CSPRNG.
  * `reboot()` runs init() again on the SAME database (a restart), so boot-time migrations can be pinned.
  * `bootPlugin({ raw: p.raw })` boots a SECOND plugin process on the same database — another node of a
- * multi-node install: its own module instance, its own in-memory locks, the same tables.
+ * multi-node install: its own init() closure (every lock, map and cache of the plugin lives there), the same
+ * tables.
+ *
+ * The plugin's module is loaded ONCE per test process and every boot calls its `init()` again: index.js keeps
+ * no state at module level (only its requires and `metadata`; the server/ factories are per init too), and
+ * re-requiring an 8,700-line module per boot cost ~2.4 s under V8 coverage — most of a CI coverage shard.
  * `p.onSql(fn)` runs `await fn(sql, params, verb)` before every statement this instance sends (and before
  * each createTable, with sql = 'CREATE TABLE <name>'): a test pauses a request at an exact statement (to
  * interleave two writers deterministically) or makes one statement fail. `p.onSql(null)` removes it.
@@ -45,6 +50,13 @@ const bindable = (params: any[] | undefined) => (params || []).map(v => (v === u
 const typeMap = (col: string) => col.replace(/\bINT_PK\b/g, 'INTEGER PRIMARY KEY AUTOINCREMENT');
 
 export const ADMIN: HarnessUser = { id: 1, role: 'administrator', userLogin: 'boss', userEmail: 'boss@example.test', displayName: 'Boss' };
+
+let loadedPlugin: any = null;
+/** The plugin module, required once per process (see the header). */
+function pluginModule() {
+    if (!loadedPlugin) loadedPlugin = require(PLUGIN_PATH);
+    return loadedPlugin;
+}
 
 export type SqlHook = (sql: string, params: any[], verb: 'all' | 'get' | 'run' | 'batch' | 'create') => any;
 
@@ -150,9 +162,7 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
     async function init() {
         routes.length = 0;
         menu.length = 0;
-        const resolved = require.resolve(PLUGIN_PATH);
-        delete require.cache[resolved];
-        const plugin = require(resolved);
+        const plugin = pluginModule();
         const orig = { log: console.log, warn: console.warn, error: console.error };
         console.log = (...a: any[]) => { logs.push(['log', a.join(' ')]); };
         console.warn = (...a: any[]) => { logs.push(['warn', a.join(' ')]); };

@@ -12,6 +12,7 @@ or changes. The design, the isolation guarantees and the road ahead are in
 - [Creating a site](#creating-a-site)
 - [DNS, the gateway and TLS](#dns-the-gateway-and-tls)
 - [Suspending a site](#suspending-a-site)
+- [Opening a site as administrator](#opening-a-site-as-administrator)
 - [Deleting a site](#deleting-a-site)
 - [What the network manages on the main site](#what-the-network-manages-on-the-main-site)
 - [Backups](#backups)
@@ -42,8 +43,9 @@ A request is assigned to a site by the address it was sent to. An address no sit
 the main site.
 
 **Network administrators** are administrators of the main site that are listed as such. They see
-**Admin → Network**, where sites are created, suspended and resumed. A site's own administrators manage
-that site only and never learn that other sites exist.
+**Admin → Network**, where sites are created, suspended and resumed, and from which they can open any
+other site's admin through an audited, 30-minute handoff ([below](#opening-a-site-as-administrator)). A
+site's own administrators manage that site only and never learn that other sites exist.
 
 On the main site, what reaches the whole network is for network administrators only: installing,
 updating, packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the
@@ -192,6 +194,43 @@ The main site's workers, and those of a single-site install, never stop. On a ne
 to do something regularly on another site uses a scheduled event (which starts the site's workers when it
 is due), not a timer of its own: a timer stops with its worker.
 
+## Opening a site as administrator
+
+A network administrator's account belongs to the main site; on another site it means nothing. To work
+in another site's admin, use **Admin → Network → Open as administrator** on that site's row (type your
+password in the box above the list first). The browser goes to the site's own address and lands in its
+admin, under a violet banner that says who you are, which site you came from and when the session ends.
+
+- **One link, once, for a minute.** The main site re-checks your password and hands the browser a link
+  to `https://<site>/login/handoff`, carrying a token in the part of the address that is never sent to a
+  server. The token is signed with that site's own key, names you and the site's address, works once and
+  only within 60 seconds. Opening it on another site, on another address of the site or after it was
+  used is refused.
+- **A 30-minute session, marked as a handoff.** It cannot be extended by staying active, and it ends at
+  once if you stop being a network administrator. *Leave* on the banner signs you out of that site.
+- **Recorded on both sides.** The network's audit log (`GET /api/v1/network/audit`) records the link
+  being issued (`site.handoff.issued`), redeemed (`site.handoff.redeemed`) and refused
+  (`site.handoff.refused`, with the reason). The site's own audit log records `auth.network_handoff`
+  with your login, the main site's address, the IP and the end of the session, so the site's
+  administrators see every visit.
+- **Not on the main site** (administer it directly), **not on a suspended site**, and **never for an API
+  token or an agent**: only an interactive session can ask for the link.
+
+**The account it uses.** Everything done in an admin is attributed to an account of that site (a post's
+author, a revision, an upload, the actor of an audit row), and user ids repeat across a network, so your
+first handoff into a site creates one account there for you, named `network.<your login>` and shown as
+"<your login> (network administrator)" in the site's Users list. It is marked as a network administrator's
+handoff account and used by every later handoff of yours into that site. It has no password anyone knows
+and an address under the reserved `.invalid` domain, and it cannot be used any other way:
+
+- it cannot sign in with a password (the sign-in answers as for a wrong password);
+- the site's administrators cannot edit it or reset its second factor (`403 rest_network_handoff_account`),
+  and can cut its sessions or delete it — your next handoff creates it again;
+- a handoff session cannot create API tokens or AI agent connections, enrol a second factor or change its
+  own profile (`403 rest_network_handoff_session`): nothing it creates outlives the 30 minutes;
+- the site's two-factor policy does not apply to it (you signed in on the main site, under the main site's
+  policy); its role is set back to administrator on every handoff.
+
 ## Deleting a site
 
 Suspend the site first, then Admin → Network → Delete: type the site's slug to confirm (your password
@@ -321,16 +360,24 @@ wrong one is `403 rest_bad_current_password`.
 | `POST` | `/sites/:id/suspend` | `{ currentPassword }` | `{ site }`. `400 network_primary_site` for the main site, `404 network_site_not_found` |
 | `POST` | `/sites/:id/resume` | `{ currentPassword }` | `{ site }` |
 | `DELETE` | `/sites/:id` | `{ confirmSlug, currentPassword }` | `{ deleted: id }`. `409 network_site_active` unless suspended, `400 network_confirm_mismatch`, `400 network_primary_site` |
+| `POST` | `/sites/:id/handoff` | `{ currentPassword }` | `{ url, expiresAt }`: the one-time link into the site's admin ([above](#opening-a-site-as-administrator)). `400 network_primary_site`, `409 network_site_suspended`, `404 network_site_not_found` |
 | `GET` | `/certificates` | — | `{ autoIssue, certificates: [{ siteId, host, installed, notAfter, issuer, daysLeft }] }` — never a key |
 | `POST` | `/sites/:id/certificate` | `{ currentPassword }` | `{ certificate }`: issued now with Let's Encrypt (HTTP-01). `409 network_acme_unconfigured` / `network_acme_busy`, `502 network_acme_failed` |
 | `PUT` | `/sites/:id/certificate` | `{ certPem, keyPem, currentPassword }` | `{ certificate }`. `400 network_invalid_certificate` when the pair does not name the site's address, does not match or has expired |
-| `GET` | `/audit` | — (`?limit=` 1–500, default 100) | `{ entries }`, newest first: sites created, suspended, resumed and deleted, certificates, network administrators |
+| `GET` | `/audit` | — (`?limit=` 1–500, default 100) | `{ entries }`, newest first: sites created, suspended, resumed and deleted, certificates, network administrators, handoffs |
 | `GET` | `/plugins` | — | `{ plugins: [{ slug, name, version, requestedPermissions, ceiling }] }`; `ceiling: null` means not offered |
 | `PUT` | `/plugins/:slug/ceiling` | `{ tokens: ["scope:access" \| "network", …], currentPassword }` | `{ slug, ceiling }`. Offers the plugin to the sites up to that ceiling (replacing a previous one) and restarts its workers on the other sites. `400 network_invalid_ceiling` for a malformed token, `404 plugin_not_found` |
 | `DELETE` | `/plugins/:slug/ceiling` | `{ currentPassword }` | `{ slug, withdrawn, deactivatedOn }`. Stops offering it and deactivates it on every other site |
 | `GET` | `/quotas` | — | `{ defaultQuota, sites: [{ id, quota, effectiveQuota, used }] }` in bytes; `null` = none / no limit, `used: null` when a site's database cannot be read |
 | `PUT` | `/quotas/default` | `{ bytes, currentPassword }` | `{ defaultQuota }`. The quota of every site without its own; `bytes: null` removes it. `400 network_invalid_quota` for anything but a whole number of bytes |
 | `PUT` | `/sites/:id/quota` | `{ bytes, currentPassword }` | `{ id, quota, effectiveQuota }`. One site's own quota; `bytes: null` makes it follow the default again. `400 network_primary_site` for the main site |
+
+The link from `POST /sites/:id/handoff` is redeemed on the target site by `POST /api/v1/auth/handoff`
+with `{ token }` (the page at `/login/handoff` does it). It answers `{ user, handoff: { networkAdmin, from,
+expiresAt } }` and sets the session cookie, or `401` with `network_handoff_invalid`, `network_handoff_expired`,
+`network_handoff_used` (a replay) or `network_handoff_wrong_host`, `403 network_handoff_not_admin`, `503
+rest_site_suspended`; on the main site or a single site it is `404`. On that site, `GET /api/v1/auth/me`
+carries `handoff: { networkAdmin, from, expiresAt }` for as long as the session lasts.
 
 ## Turning it off
 

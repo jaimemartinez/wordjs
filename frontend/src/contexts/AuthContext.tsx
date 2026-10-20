@@ -29,6 +29,8 @@ interface User {
     mfa?: MfaStatus;
     /** Multisite only (GET /auth/me): is this the network's main site, and is the user a network administrator. */
     network?: { mainSite: boolean; networkAdmin: boolean };
+    /** Multisite only: a network administrator's handoff session into this site — who, from where, until when. */
+    handoff?: { networkAdmin: string; from: string; expiresAt: string };
 }
 
 interface LoginResult {

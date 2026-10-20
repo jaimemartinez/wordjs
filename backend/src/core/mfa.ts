@@ -288,6 +288,12 @@ function registeredEpoch(user: any): number {
 async function evaluate(user: any): Promise<{ required: boolean; enabled: boolean; enforced: boolean; withinGrace: boolean; graceDeadline: number | null }> {
     const userId = user && (typeof user === 'object' ? user.id : user);
     if (userId == null) return { required: false, enabled: false, enforced: false, withinGrace: false, graceDeadline: null };
+    // A network administrator's handoff account (core/network-handoff) never signs in by itself: the
+    // person behind it signed in on the main site, under the main site's policy, and its sessions last
+    // minutes. It cannot enrol (the handoff refuses it), so this site's policy does not apply to it.
+    if (typeof user === 'object' && require('./network-handoff').isHandoffAccount(user)) {
+        return { required: false, enabled: false, enforced: false, withinGrace: false, graceDeadline: null };
+    }
     const policy = await getPolicy();
     const enabled = await isEnabled(userId);
 
