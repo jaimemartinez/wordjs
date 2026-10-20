@@ -63,7 +63,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.1.0',
+    version: '3.1.1',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -486,7 +486,7 @@ async function maybeVacationAutoReply(user, senderEmail, origSubject) {
             subject,
             text: stripHtml(html),
             html,
-            identity: sendingIdentityOf(user),
+            identity: await sendingIdentityOf(user),
             userId: user.id,
             isAutoReply: true
         });
@@ -2079,12 +2079,44 @@ function isValidEmail(email) {
 // the identity produced rather than the one the caller passed.
 const SENDING_IDENTITY = Symbol('mail-server:sending-identity');
 
-/** Mint the sending identity OF AN ACCOUNT (the requester, or a row's resolved owner). */
-function sendingIdentityOf(user) {
-    const fromEmail = String((user && user.userEmail) || '').trim().toLowerCase();
-    if (!fromEmail) return null;
-    const name = (user && (user.displayName || user.username || user.userLogin)) || '';
-    return { [SENDING_IDENTITY]: true, fromEmail, fromName: String(name) };
+/**
+ * An ACCOUNT sends as its MAILBOX ADDRESS — mailboxAddressOf(), the very predicate delivery uses — and
+ * never as its account email when that is anywhere else. The route gate is the grant alone
+ * (hasCorporateMailbox), so an account an administrator gave a mailbox while its email is personal
+ * (someone@gmail.com), or one whose primary email moved off the domain, passes the gate yet has no
+ * address here: it used to send with that PERSONAL address in From (local copies, the Sent record, the
+ * relay path) or in Reply-To (direct-to-MX, after the alignment rewrite), so replies leaked to a private
+ * inbox. Such an account now gets this refusal instead — a clear one, never a quiet fallback.
+ */
+const NO_MAILBOX_ADDRESS = 'mail_no_mailbox_address';
+function noMailboxAddressError(mailDomain) {
+    const e = new Error(mailDomain
+        ? `This account has no address on the mail domain (${mailDomain}), so it cannot send mail from here. An administrator can give it one: Users → edit user → account email <name>@${mailDomain}.`
+        : 'This account has no address on the mail domain, so it cannot send mail from here.');
+    e.code = NO_MAILBOX_ADDRESS;
+    return e;
+}
+
+/** The token itself, from an address that is already known to be a mailbox address on our domain. */
+function identityFromMailboxAddress(address, name) {
+    return { [SENDING_IDENTITY]: true, fromEmail: String(address).trim().toLowerCase(), fromName: String(name || '') };
+}
+
+/**
+ * Mint the sending identity OF AN ACCOUNT (the requester, or a row's resolved owner): its mailbox address
+ * on the mail domain. Throws NO_MAILBOX_ADDRESS when the account has none — every caller is a send made
+ * on that account's behalf, which must not go out under any other address.
+ *
+ * The one exception keeps the catch-all working: an ADMINISTRATOR without a mailbox of their own still
+ * owns the site's catch-all inbox (see canUseMailSurface), and answers that mail AS THE SITE — null, the
+ * site identity every un-attributed message already uses — never as their own personal address.
+ */
+async function sendingIdentityOf(user, mailDomain) {
+    const domain = mailDomain || await getMailDomain().catch(() => '');
+    const address = mailboxAddressOf(user, domain);
+    if (!address && user && user.role === 'administrator') return null;
+    if (!address) throw noMailboxAddressError(domain);
+    return identityFromMailboxAddress(address, (user && (user.displayName || user.username || user.userLogin)) || '');
 }
 
 /**
@@ -2100,7 +2132,7 @@ async function sendingIdentityOfOwner(userId) {
     // NOT-A-DELIVERY-PATH: resolves the OWNER of an outbound row to use as its sending identity. It
     // turns no recipient address into an inbox and writes no row.
     const owner = await User.findById(uid).catch(() => null);
-    return owner ? sendingIdentityOf(owner) : null;
+    return owner ? await sendingIdentityOf(owner) : null;
 }
 
 // === LOCAL DELIVERY POLICY: quotas, block lists, filing rules, aliases, forwarding ================
@@ -2302,7 +2334,9 @@ async function forwardMessage({ via, viaName, to, from, fromName, subject, text,
             text,
             html,
             replyTo: from || undefined,
-            identity: sendingIdentityOf({ userEmail: via, displayName: viaName || label }),
+            // `via` is the address the message was DELIVERED to — a mailbox or alias on our domain — minted
+            // through the same mailbox rule as any account (and re-checked by sendMail before anything goes out).
+            identity: await sendingIdentityOf({ userEmail: via, displayName: viaName || label, accountCapabilities: [MAILBOX_CAPABILITY] }),
             attachments: attachments || [],
             noSentCopy: true,
             isForward: true,
@@ -2375,6 +2409,10 @@ async function sendMail(data) {
     // THE mail domain, from the same one expression every other site uses (see getMailDomain) — built
     // from the values this wave already fetched instead of paying two more RPCs per message.
     const mailDomain = resolveMailDomain(dkimDomain, siteDomain);
+    // THE CHOKE POINT for every user-identity send (webmail, queue, retry, vacation, forwards): the identity
+    // must be an address on the mail domain. An account's personal address can never become a From, a
+    // Reply-To, a stored Sent copy or a local copy's sender — see sendingIdentityOf.
+    if (identity && mailboxDomainOf(identity.fromEmail) !== mailDomain) throw noMailboxAddressError(mailDomain);
 
     // stripCRLF the resolved fromEmail/fromName too (covers the admin-configured option fallbacks).
     // The identity token is the ONLY way a user address gets here; with no token the message is the
@@ -2657,7 +2695,10 @@ async function sendMail(data) {
             wireFrom = (configured && String(configured.split('@')[1] || '').toLowerCase() === sendingDomain)
                 ? configured
                 : `postmaster@${sendingDomain}`;
-            if (!wireReplyTo) wireReplyTo = fromEmail;
+            // Only the SITE's own configured address may travel as Reply-To here. A user identity is on the
+            // mail domain by construction (the choke point above), so it never reaches this branch — and an
+            // account's off-domain address must never be handed to remote parties as where to reply.
+            if (!wireReplyTo && !identity) wireReplyTo = fromEmail;
             console.warn(`[MailServer] From '${fromEmail}' is not on the sending domain '${sendingDomain}' — sending as '${wireFrom}' with Reply-To '${wireReplyTo}' so DMARC/SPF align (remote servers reject unauthenticated cross-domain From).`);
         } else if (!relayConfigured && fromDomain && sendingDomain && fromDomain !== sendingDomain && !isPublicSendingDomain(sendingDomain)) {
             console.warn(`[MailServer] From '${fromEmail}' is off our sending domain, but '${sendingDomain}' is not a public mail domain (LAN host/IP/localhost) — keeping the original From. Set a DKIM domain or a real site URL for DMARC alignment.`);
@@ -2815,10 +2856,12 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
 async function sendBounce(data, failedList) {
     try {
         const fromEmail = (data.fromEmail || '').toLowerCase();
-        if (!fromEmail) return;
+        const ownerId = parseInt(data.userId, 10) || 0;
+        if (!fromEmail && !ownerId) return;
         // NOT-A-DELIVERY-PATH: resolves the SENDER to notify them that their own message bounced.
-        // Nothing is delivered to this account and no inbox row is written for it.
-        const user = await User.findByEmail(fromEmail);
+        // Nothing is delivered to this account and no inbox row is written for it. The owner id first:
+        // the From is the mailbox address, which need not be the account's lookup email.
+        const user = ownerId ? await User.findById(ownerId) : await User.findByEmail(fromEmail);
         if (!user || !user.id) return;
         const detail = failedList.map(f => `${f.recipient} (${f.error})`).join(', ');
         await wordjs.notify({
@@ -3196,8 +3239,28 @@ async function retryFailedDelivery(email, rateKey) {
             }
         };
     } catch (error) {
+        if (error && error.code === NO_MAILBOX_ADDRESS) {
+            // NOT-A-USER-PATH: a continuation of a route that already authorized this row (see above).
+            await Email.markFailed(email.id, email.delivery_attempts || 0, error.message).catch(() => null);
+            return { status: 403, body: { error: error.message, code: NO_MAILBOX_ADDRESS } };
+        }
         return { status: 500, body: { error: 'Retry failed: ' + error.message } };
     }
+}
+
+/** Tell a row's owner their queued message was not sent because their account has no mailbox address. */
+async function notifyNoMailboxAddress(email, err) {
+    const uid = parseInt(email && email.user_id, 10) || 0;
+    if (!(uid > 0)) return;
+    await wordjs.notify({
+        user_id: uid,
+        type: 'alert',
+        title: 'Email not sent',
+        message: `"${String(email.subject || '').slice(0, 120)}" was not sent: ${err.message}`,
+        icon: 'fa-exclamation-triangle',
+        color: 'red',
+        transports: ['db', 'sse']
+    });
 }
 
 exports.init = async function (bridge) {
@@ -3358,6 +3421,16 @@ exports.init = async function (bridge) {
                     });
                     console.log(`[MailServer] Scheduled email ${email.id} sent.`);
                 } catch (err) {
+                    if (err && err.code === NO_MAILBOX_ADDRESS) {
+                        // The owner has no address to send from (any more): never send it as anyone else. It
+                        // goes back to their Drafts, marked failed with the reason, and they are told.
+                        // NOT-A-USER-PATH: the scheduled-send queue's own row.
+                        await Email.cancelScheduled(email.id).catch(() => null);
+                        // NOT-A-USER-PATH: the same queue row, marked with the reason.
+                        await Email.markFailed(email.id, 0, err.message).catch(() => null);
+                        await notifyNoMailboxAddress(email, err).catch(() => null);
+                        continue;
+                    }
                     console.error(`[MailServer] Failed to send scheduled email ${email.id}:`, err);
                     // Optional: increment retry count or mark as failed
                 }
@@ -3418,6 +3491,13 @@ exports.init = async function (bridge) {
                         attachments: formattedAttachments
                     });
                 } catch (err) {
+                    if (err && err.code === NO_MAILBOX_ADDRESS) {
+                        // No address to send from: stop retrying (never send as anyone else) and say why.
+                        // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
+                        await Email.markFailed(email.id, email.delivery_attempts || 0, err.message).catch(() => null);
+                        await notifyNoMailboxAddress(email, err).catch(() => null);
+                        continue;
+                    }
                     console.error(`[MailServer] Failed to retry email ${email.id}:`, err);
                 }
             }
@@ -3831,7 +3911,9 @@ exports.init = async function (bridge) {
 
         try {
             const data = {
-                fromAddress: req.user.userEmail,
+                // The address this draft would be SENT from: the caller's mailbox address, never a personal
+                // account email ('' when the account has none — the send itself is then refused).
+                fromAddress: mailboxAddressOf(req.user, await getMailDomain().catch(() => '')),
                 fromName: req.user.displayName || req.user.userLogin,
                 toAddress: splitAddresses(to).join(', '),
                 ccAddress: splitAddresses(cc).join(', '),
@@ -3909,6 +3991,15 @@ exports.init = async function (bridge) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
+        // WHO this goes out as: the caller's mailbox address on the mail domain, and nothing else. An
+        // account that passes the gate on the grant but has no on-domain address (its email is personal)
+        // is refused here, visibly, before anything is queued or charged — see sendingIdentityOf.
+        let identity;
+        try { identity = await sendingIdentityOf(req.user); } catch (e) {
+            if (e && e.code === NO_MAILBOX_ADDRESS) return res.status(403).json({ error: e.message, code: NO_MAILBOX_ADDRESS });
+            throw e;
+        }
+
         // Normalize the composer's raw "a@x.com, b@y.com" strings into real address lists and
         // validate EVERY recipient up-front — a queued (undo-window / scheduled) send must fail HERE,
         // visibly, not minutes later inside the background queue. (This also fixes multi-recipient
@@ -3976,8 +4067,9 @@ exports.init = async function (bridge) {
 
             if (effectiveSchedule) {
                 const data = {
-                    fromAddress: req.user.userEmail,
-                    fromName: req.user.displayName || req.user.userLogin,
+                    // null = an administrator answering as the site (sendingIdentityOf); the queue resolves it again.
+                    fromAddress: identity ? identity.fromEmail : '',
+                    fromName: identity ? identity.fromName : (req.user.displayName || req.user.userLogin),
                     toAddress: toList.join(', '),
                     ccAddress: ccList.join(', '),
                     bccAddress: bccList.join(', '),
@@ -4023,7 +4115,7 @@ exports.init = async function (bridge) {
                 subject,
                 text: isHtml ? stripHtml(body) : body,
                 html: isHtml ? body : null,
-                identity: sendingIdentityOf(req.user),
+                identity,
                 parentId,
                 threadId,
                 userId: req.user.id,
@@ -4800,6 +4892,9 @@ exports.init = async function (bridge) {
                     role: u.role,
                     hasMailbox,
                     address: mailboxAddressOf(u, mailDomain) || null,
+                    // The grant without an address on the mail domain: this account can neither send (it has
+                    // no identity to send as) nor receive here — flagged so an administrator fixes its email.
+                    missingAddress: hasMailbox && !mailboxAddressOf(u, mailDomain),
                     ...use,
                     quotaOverride: override,
                     quotaMb,

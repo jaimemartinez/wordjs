@@ -551,9 +551,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   holds are removed; its id is never reused. See the upgrade notes in
   [multisite.md](documentation/multisite.md#upgrading-from-27).
 
-### ⚠️ Upgrade note — mail-server 3.1.0 with this release
+### ⚠️ Upgrade note — mail-server 3.1.1 with this release
 
-The "Professional mail account" grant is no longer a core concept: mail-server **3.1.0** declares it as its
+The "Professional mail account" grant is no longer a core concept: mail-server **3.1.1** declares it as its
 account capability `mail_server_mailbox`, and schema migration `0019` moves every existing
 `professional_mailbox` value to it unchanged at boot. Update the plugin together with the core. A 3.0.x copy
 still installed keeps working — its mailboxes, menu, address lock and its own user-form toggle are bridged
@@ -595,8 +595,8 @@ the boot error links there too.
   capabilities above; the user API now takes and returns `accountCapabilities`. `core/mailbox.ts` became
   `core/email-address.ts` (the address-shape rule and the self-service email-write rule — reserved site
   email domain, `locksEmail`); the error codes are unchanged. The deprecated fields are still served to a
-  mail-server older than 3.1.0 (`core/legacy-account-flags.ts`) and will be removed in the next major.
-- **mail-server 3.1.0: the mailbox grant is a declared account capability.** The plugin declares
+  mail-server older than 3.1.1 (`core/legacy-account-flags.ts`) and will be removed in the next major.
+- **mail-server 3.1.1: the mailbox grant is a declared account capability.** The plugin declares
   `mail_server_mailbox` (`locksEmail`, on by default for new accounts), gates its routes, delivery and menu
   on `accountCapabilities`, and its user-form extension now only keeps a mailbox holder's address on
   `<username>@<mail domain>` — the toggle itself is rendered by the core.
@@ -874,6 +874,17 @@ the boot error links there too.
 
 ### Fixed
 
+- **mail-server 3.1.1: an account sends as its mailbox address, never its personal email.** An account an
+  administrator gave a mailbox while its account email was a personal address (or one whose email later
+  moved off the mail domain) could still open the composer, and its mail went out with that personal
+  address — in From on local delivery, on the stored Sent copy and on the relay path, and in Reply-To on
+  direct-to-MX delivery, so replies reached the private inbox. The sending identity is now the account's
+  address on the mail domain, the same rule as delivery. Without one, sending is refused with a clear
+  message (`mail_no_mailbox_address`): from the composer, the scheduled queue (the message goes back to
+  Drafts and the owner is told), the retry queue and a manual retry. The address is never replaced by
+  another. Drafts store that address too, the alignment rewrite no longer puts an account's address in
+  Reply-To, and Server → Mailboxes flags an account that has the grant but no address on the domain. An
+  administrator without a mailbox of their own still answers catch-all mail, as the site.
 - **Multisite on Windows: a plugin's or a site's AppContainer profiles go with it.** Each (site, plugin)
   worker of a network runs under its own AppContainer profile. Deleting a plugin removed only the main
   site's; it now removes the profile (and the folder permissions given to it) of the plugin's worker on
