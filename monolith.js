@@ -16,13 +16,13 @@
  * Usage: node monolith.js [dev|prod]   (default: prod)
  */
 
-// Preflight: Next 16 + the native modules need Node >= 20.9. Failing here with a clear message
+// Preflight: WordJS needs Node >= 22 (graphql 17 and the native modules declare it; Node 20 is EOL). Failing here with a clear message
 // beats the cryptic EBADENGINE/native-binding crash a newcomer would otherwise hit mid-boot.
 (() => {
-    const [maj, min] = process.versions.node.split('.').map(Number);
-    if (maj < 20 || (maj === 20 && min < 9)) {
-        console.error(`\n✖ WordJS requires Node.js >= 20.9 — you are running ${process.versions.node}.`);
-        console.error('  Install Node 20 LTS or 22 LTS (https://nodejs.org) and try again.\n');
+    const maj = Number(process.versions.node.split('.')[0]);
+    if (maj < 22) {
+        console.error(`\n✖ WordJS requires Node.js >= 22 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 22 LTS or 24 LTS (https://nodejs.org) and try again.\n');
         process.exit(1);
     }
 })();

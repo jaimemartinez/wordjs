@@ -21,47 +21,42 @@ const os = require('node:os');
 const path = require('node:path');
 const tls = require('node:tls');
 const { spawn, spawnSync } = require('node:child_process');
-const forge = require('node-forge');
+const x509 = require('../../src/x509');
 
 const GATEWAY_ROOT = path.resolve(__dirname, '..', '..');
 
-// ─── Certificates (native RSA keys, node-forge for the X.509 structure) ─────────────────────────────
+// ─── Certificates (native RSA keys, src/x509 for the X.509 structure) ───────────────────────────────────
 
 function rsaKeys() {
-    const pair = crypto.generateKeyPairSync('rsa', {
-        modulusLength: 2048,
-        publicKeyEncoding: { type: 'spki', format: 'pem' },
-        privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
-    });
-    return { pem: pair.privateKey, privateKey: forge.pki.privateKeyFromPem(pair.privateKey), publicKey: forge.pki.publicKeyFromPem(pair.publicKey) };
+    const keys = x509.generateRsaKeyPair(2048);
+    return { pem: keys.privateKeyPem, privateKey: keys.privateKey, publicKey: keys.publicKey };
 }
 
 let serial = 1;
 function certificate(subjectCn, keys, issuer, extensions) {
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
     serial += 1;
-    cert.serialNumber = serial.toString(16).padStart(2, '0');
-    cert.validity.notBefore = new Date(Date.now() - 86400000);
-    cert.validity.notAfter = new Date(Date.now() + 86400000);
-    cert.setSubject([{ name: 'commonName', value: subjectCn }]);
-    cert.setIssuer(issuer ? issuer.cert.subject.attributes : [{ name: 'commonName', value: subjectCn }]);
-    if (extensions) cert.setExtensions(extensions);
-    cert.sign(issuer ? issuer.keys.privateKey : keys.privateKey, forge.md.sha256.create());
-    return cert;
+    return x509.createCertificate({
+        subject: [['CN', subjectCn]],
+        ...(issuer ? { issuerCertPem: issuer.pem } : {}),
+        publicKey: keys.publicKey,
+        signingKey: issuer ? issuer.keys.privateKey : keys.privateKey,
+        serialHex: serial.toString(16).padStart(2, '0'),
+        notBefore: new Date(Date.now() - 86400000),
+        notAfter: new Date(Date.now() + 86400000),
+        ...extensions,
+    });
 }
 
 function makeCa() {
     const keys = rsaKeys();
-    const cert = certificate('WordJS Test Cluster CA', keys, null, [{ name: 'basicConstraints', cA: true }]);
-    return { keys, cert, pem: forge.pki.certificateToPem(cert) };
+    const pem = certificate('WordJS Test Cluster CA', keys, null, { ca: true });
+    return { keys, pem };
 }
 
 /** A leaf signed by `ca` (or self-signed without one), valid for localhost and 127.0.0.1. */
 function makeLeaf(ca, cn) {
     const keys = rsaKeys();
-    const cert = certificate(cn, keys, ca, [{ name: 'subjectAltName', altNames: [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }] }]);
-    return { key: keys.pem, cert: forge.pki.certificateToPem(cert) };
+    return { key: keys.pem, cert: certificate(cn, keys, ca, { altNames: ['localhost', '127.0.0.1'] }) };
 }
 
 // ─── Small network helpers ──────────────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
   "version": "2.7.0",
   "license": "MIT",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.0.0"
   },
   "description": "Dynamic Service Gateway for WordJS",
   "main": "gateway/src/index.js",
@@ -58,7 +58,7 @@
   },
   "devDependencies": {
     "autocannon": "^8.0.0",
-    "puppeteer-core": "^25.13.0"
+    "puppeteer-core": "^25.14.0"
   },
   "overrides": {
     "shell-quote": "^1.11.0",
