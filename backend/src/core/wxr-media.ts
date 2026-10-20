@@ -17,20 +17,17 @@
  * already been audited, and a second, subtly weaker copy is how SSRF comes back.
  *
  * WHAT THE WRITE REUSES. The attachment ROW, its `_wp_attached_file` / `_wp_attachment_metadata` and its
- * alt text are created by models/Media.create() — the same function the upload route calls — so an
- * imported attachment is indistinguishable from an uploaded one to every reader. Only the BYTES are
- * written here, because the code that writes an upload's bytes lives inside routes/media.ts (multer's
- * diskStorage callbacks plus the sharp ladder) and is not callable from outside that file. What that
- * costs an import, and what would have to be extracted to change it, is in
- * documentation/wordpress-import.md.
+ * alt text are created by models/Media.create() — the same function the upload route calls — and so are
+ * the image's derivatives (core/media-derivatives: the size ladder plus WebP/AVIF, under the same encode
+ * budget), the SVG sanitizer (core/svg-sanitize) and the media offload (core/media-storage), so an
+ * imported attachment is indistinguishable from an uploaded one to every reader.
  *
  * WHAT IS REFUSED, AND WHY IT IS REFUSED HERE. The uploads directory is served by express.static, so a
  * stored `.html`/`.js`/`.php` is stored XSS/RCE on the migrated site — the WXR names both the path and
  * the MIME type and both come from a third party. So the extension must be on models/Media's own
  * allowlist, the resolved path must prove containment under the uploads root, and a bounded magic-byte
- * check must not contradict the declared type. `image/svg+xml` is refused outright: the upload route
- * sanitizes SVG with an explicit sanitize-html allowlist that is inlined in routes/media.ts, and storing
- * an UNSANITIZED SVG would be strictly worse than not importing it.
+ * check must not contradict the declared type. An `image/svg+xml` file is stored only after the upload
+ * route's own allowlist sanitizer (core/svg-sanitize) has run over it — never as the third party sent it.
  *
  * CONTAINMENT IS NOT UNIQUENESS — the other half of "where do the bytes go". The upload route makes a
  * collision IMPOSSIBLE by construction (multer appends a uuid slice to every stored name, which is what
@@ -146,13 +143,6 @@ function extensionMimeMap(): Map<string, string> {
     extensionMimes = map;
     return map;
 }
-
-/**
- * SVG is on the upload allowlist but reaches disk only after routes/media.ts runs it through an explicit
- * sanitize-html tag/attribute allowlist. That sanitizer is inlined in the route, so an importer cannot
- * call it — and an unsanitized SVG under a statically-served uploads directory is stored XSS. Refused.
- */
-const REFUSED_IMPORT_MIMES: Set<string> = new Set(['image/svg+xml']);
 
 /** Types whose binary signature must be confirmable (mirrors the upload route's `requiresSignature`). */
 function requiresSignature(mime: string): boolean {
@@ -653,6 +643,11 @@ class MediaImporter {
         const problem = await magicByteProblem(body, placed.mimeType);
         if (problem) return this.fail(url, problem);
 
+        // An SVG is markup a browser runs: it is stored only as the upload route's sanitizer leaves it.
+        if (placed.mimeType === 'image/svg+xml') {
+            body = Buffer.from(require('./svg-sanitize').sanitizeSvg(body.toString('utf8')), 'utf8');
+        }
+
         // MULTISITE STORAGE QUOTA: an import fills the media library exactly like the upload route, so it
         // stops at the same per-site quota (core/site-upload-quota; no quota on site 1 or a single site).
         const quota = require('./site-upload-quota');
@@ -674,18 +669,49 @@ class MediaImporter {
             return this.fail(url, `could not write ${placed.relativePath}: ${e?.message || e}`);
         }
 
-        const created = await this.createRecord(att, { ...placed, body }, url);
+        // The same derivatives an upload gets (thumbnail/medium/large, the width ladder, WebP/AVIF), written
+        // beside the file. Never throws: an image sharp cannot decode is still a working attachment.
+        const derived = await require('./media-derivatives').generateImageDerivatives(placed.absolutePath, placed.mimeType);
+        const uploadsRoot = require('./private-media').publicUploadsRoot();
+        const writtenFiles = (): string[] => {
+            try { return Media._deletableFiles(placed.relativePath, derived.sizes, derived.sources, uploadsRoot); }
+            catch { return [placed.absolutePath]; }
+        };
+
+        // MEDIA OFFLOAD, as the upload route does it: with an s3 store the original and every derivative go
+        // to the bucket BEFORE the row exists. A bucket that refuses fails this item (nothing is left on
+        // disk), because a file only this node holds is a broken image on every other node.
+        let offloaded = false;
+        const mediaStorage = require('./media-storage');
+        const store = mediaStorage.resolveMediaStorage();
+        if (store && store.driver === 's3') {
+            const files = writtenFiles();
+            try {
+                await mediaStorage.pushFiles(mediaStorage.getMediaStorage(store), uploadsRoot, files);
+                offloaded = true;
+            } catch (e: any) {
+                for (const f of files) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+                return this.fail(url, `the media storage bucket refused the file: ${e?.message || e}`);
+            }
+        }
+
+        const created = await this.createRecord(att, { ...placed, body, derived, offloaded }, url);
         quota.invalidateUsage();
         if (typeof created === 'string') {
             // A ROW IS THE ONLY THING THAT CAN EVER DELETE A FILE. Media._deletableFiles walks rows, so
             // bytes left under `uploads/` by a failed record write are unreachable forever — publicly
             // served by express.static, and re-created by every retry (a failure stamps no
-            // `_wxr_source_url`, which is exactly what makes the run resumable).
-            try { fs.unlinkSync(placed.absolutePath); } catch { /* best effort */ }
+            // `_wxr_source_url`, which is exactly what makes the run resumable). The derivatives too.
+            for (const f of writtenFiles()) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
             // The claim is NOT released: the in-content rewrite may already point at this path, and
             // handing it to a different attachment would put the wrong image behind a live URL. The
             // next run re-plans from the DB and the disk, where nothing holds it any more.
             return this.fail(url, created);
+        }
+
+        // The bucket holds them now; drop the local copies unless the store keeps them (upload route rule).
+        if (offloaded && !store.keepLocalCopy) {
+            for (const f of writtenFiles()) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
         }
 
         this.stats.downloaded++;
@@ -725,9 +751,6 @@ class MediaImporter {
 
         const declared = String(att.mimeType || '').trim().toLowerCase();
         const mimeType = declared && Media.isAllowedMimeType(declared) ? declared : byExtension;
-        if (REFUSED_IMPORT_MIMES.has(mimeType)) {
-            return `refused: ${mimeType} cannot be imported (its sanitizer lives in the upload route)`;
-        }
 
         const claimed = this.claimRelativePath(relative);
         if (typeof claimed === 'string') return claimed;
@@ -778,23 +801,18 @@ class MediaImporter {
      */
     private async createRecord(
         att: WxrAttachment,
-        placed: { relativePath: string; absolutePath: string; mimeType: string; body: Buffer } | null,
+        placed: {
+            relativePath: string; absolutePath: string; mimeType: string; body: Buffer;
+            derived: { width: number; height: number; sizes: Record<string, any>; sources: Record<string, any> };
+            offloaded: boolean;
+        } | null,
         url: string,
     ): Promise<number | string> {
         try {
-            let width = 0;
-            let height = 0;
-            if (placed && placed.mimeType.startsWith('image/')) {
-                // Best effort, and deliberately not fatal: a media library entry with 0x0 is still a
-                // working file, while a sharp that cannot decode one exotic image must not fail an import.
-                try {
-                    const sharp = require('sharp');
-                    const meta = await sharp(placed.body, { limitInputPixels: 40_000_000 }).metadata();
-                    const transposed = (meta.orientation || 1) >= 5;
-                    width = (transposed ? meta.height : meta.width) || 0;
-                    height = (transposed ? meta.width : meta.height) || 0;
-                } catch { /* dimensions stay 0 */ }
-            }
+            // Dimensions come from the derivative pass (0x0 for a file sharp cannot decode — still a
+            // working attachment, never a failed import).
+            const width = placed ? placed.derived.width || 0 : 0;
+            const height = placed ? placed.derived.height || 0 : 0;
 
             const relative = placed ? placed.relativePath : (safeAttachedFile(att.attachedFile) || '');
             // ONE mutation for the row, its metadata and the source stamp. Media.create() opens its own
@@ -811,8 +829,9 @@ class MediaImporter {
                     fileSize: placed ? placed.body.length : 0,
                     width,
                     height,
-                    sizes: {},
-                    sources: {},
+                    sizes: placed ? placed.derived.sizes : {},
+                    sources: placed ? placed.derived.sources : {},
+                    offloaded: placed ? placed.offloaded : false,
                     description: att.description,
                     caption: att.caption,
                     alt: att.alt,
