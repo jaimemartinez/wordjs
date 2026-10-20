@@ -1785,7 +1785,7 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'fs.read', 'fs.write',
     'mail', 'notify',
     'adminMenu.add', 'cron.schedule',
-    'crypto.randomToken', 'crypto.randomInt',
+    'crypto.randomToken', 'crypto.randomInt', 'crypto.hmac', 'crypto.timingSafeEqual',
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',
@@ -2806,7 +2806,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         // Everything the plugin registers in host-side state, tracked so we can fully tear it
         // down on unload/reload — otherwise a stale route/hook/shortcode would RPC a dead worker.
         const registeredShortcodes: string[] = [];                                  // shortcode tags
-        const registeredRoutes: Array<{ m: string; full: string; handler: any }> = []; // mounted Express routes
+        const registeredRoutes: Array<{ m: string; full: string; handler: any; webhook?: boolean }> = []; // mounted Express routes
         const registeredHooks: Array<{ hook: string; type: string; shim: (...args: any[]) => any }> = []; // hook/filter shims
         let providedMail = false;                                                   // did this plugin become the mail sender
         let mailProviderFn: ((m: any) => any) | null = null;                        // ...with this function, for its site only
@@ -3059,6 +3059,14 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 const { getApp } = require('./appRegistry');
                 const app = getApp();
                 if (!app) return;
+                // A WEBHOOK route (core/plugin-webhooks): POST only, CSRF-exempt, raw body forwarded — and
+                // therefore identity-free. Asking for a webhook that also authenticates is refused outright:
+                // the exemption is safe only because no ambient credential ever reaches the handler.
+                const isWebhook = !!(msg.opts && msg.opts.webhook);
+                if (isWebhook && (routeMethod !== 'post' || msg.opts.auth || msg.opts.admin || msg.opts.multipart)) {
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] rejected webhook route '${logSafe(routePath.slice(0, 80))}': a webhook is a plain POST with no auth/admin/multipart.`);
+                    return;
+                }
                 // Multisite: every site's worker of this plugin mounts the same path. Each mount answers only
                 // its own site's requests and passes the others on ('route' skips this mount's handlers, auth
                 // included), so a request reaches the worker of the site it was addressed to — or, when the
@@ -3097,7 +3105,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                     // (#2) Never hand the host's HttpOnly auth JWT (wordjs_token) to a plugin's handler —
                     // the authenticated identity is already provided via reqData.user, so the raw token is
                     // not needed. ALWAYS strip auth/session cookies before forwarding (no trust exemption).
-                    const fwdCookies = Object.fromEntries(Object.entries(req.cookies || {}).filter(([k]) => !HOST_AUTH_COOKIE_RE.test(k)));
+                    const fwdCookies = isWebhook ? {} : Object.fromEntries(Object.entries(req.cookies || {}).filter(([k]) => !HOST_AUTH_COOKIE_RE.test(k)));
                     // A STABLE, privacy-preserving per-client key so a plugin can rate-limit / dedup by caller
                     // WITHOUT ever seeing the raw IP: an HMAC of the caller's rate-limit identity (an IPv6
                     // client is its /64) under the install's secret — see core/client-ip pluginClientKey.
@@ -3106,7 +3114,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                         method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
                         clientKey,
                         cookies: fwdCookies,
-                        headers: { 'x-portal-token': req.headers['x-portal-token'] }, // selected non-sensitive headers
+                        // Selected non-sensitive headers; a webhook gets its provider's signature headers instead.
+                        headers: isWebhook ? require('./plugin-webhooks').webhookHeaders(req) : { 'x-portal-token': req.headers['x-portal-token'] },
+                        // The body exactly as received (express.json's verify hook keeps it for webhook paths only).
+                        ...(isWebhook ? { rawBody: typeof req.rawBody === 'string' ? req.rawBody : '' } : {}),
                         // Saved-upload metadata (multer) — the isolate gets the path/name, not the stream.
                         file: req.file ? { path: req.file.path, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size, filename: req.file.filename } : undefined,
                         // `hasProfessionalMailbox` is the ACTIVE CORPORATE MAILBOX grant
@@ -3115,7 +3126,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                         // re-deriving it from userEmail, which the account itself can write. Rebuilt per
                         // request from req.user, so revoking the grant denies the very next request.
                         // `pluginCapabilities` — see projectRouteUser.
-                        user: projectRouteUser(req.user, slug)
+                        user: isWebhook ? null : projectRouteUser(req.user, slug)
                     };
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
@@ -3207,9 +3218,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // appRegistry does not wrap this trusted host code. (No sandbox weakening: the child is
                 // unchanged, and callApi() at bridge time still runs in-context for permission checks.)
                 app[m](full, ...mw, finalHandler);
+                if (isWebhook) require('./plugin-webhooks').registerWebhookPath(full);
                 // Keep the HANDLER, not just the verb: teardown matches on handler identity because
                 // the verb is not reliably recoverable from the layer (see the teardown comment).
-                registeredRoutes.push({ m, full, handler: finalHandler });
+                registeredRoutes.push({ m, full, handler: finalHandler, webhook: isWebhook });
                 // A read route is also what the GraphQL bridge may resolve a declared field through: the
                 // same middleware (site gate, auth, admin) and handler, on the plugin's own router.
                 if ((m === 'get' || m === 'all') && !(msg.opts && msg.opts.multipart)) graphRouter.get(routePath, ...mw, finalHandler);
@@ -3367,6 +3379,11 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                     }
                 }
             } catch { /* */ }
+            // Webhook paths stop being CSRF-exempt / raw-body-captured with the route that needed it.
+            for (const r of registeredRoutes) {
+                // Cleared as it goes, so a second teardown (crash safety-net) does not unregister twice.
+                if (r.webhook) { r.webhook = false; try { require('./plugin-webhooks').unregisterWebhookPath(r.full); } catch { /* */ } }
+            }
             for (const { hook, type, shim } of registeredHooks) {
                 try { if (type === 'filter') hooks.removeFilter(hook, shim); else hooks.removeAction(hook, shim); } catch { /* */ }
             }

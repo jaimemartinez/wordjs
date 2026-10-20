@@ -60,6 +60,12 @@ export function serializeContentFallback(content: FallbackContentItem[]): string
             // Legacy/custom HTML block: emit its raw HTML verbatim so a legacy page's body
             // round-trips into `content` unchanged (sanitized once on save, server-side).
             html += props.html || '';
+        } else if (props && props.contentAccessBreak === true) {
+            // ACCESS BREAK (backend core/content-access): any block that declares `contentAccessBreak`
+            // in its defaultProps marks where a members-only entry's free teaser ends. The HTML body
+            // carries it as this <hr> — it survives the server-side sanitizer, a comment would not — so
+            // feeds and search cut the HTML at the same place the Verso tree is cut.
+            html += '<hr class="wjs-access-break" />';
         }
     });
     return html;

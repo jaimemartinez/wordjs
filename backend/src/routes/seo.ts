@@ -16,6 +16,7 @@ const { getOption } = require('../core/options');
 // alias, a forged Host) write that name into the sitemap, robots.txt and every feed.
 const { linkBase } = require('../core/site-address');
 const { generateSitemap, generateRobotsTxt, generateRssFeed } = require('../core/seo-helper');
+const { anonymousTeaserView, gatedPostSql } = require('../core/content-access');
 const {
     SITEMAP_MAX_URLS,
     SITEMAP_FETCH_CAP,
@@ -376,7 +377,7 @@ function sendFeed(res: Response, contentType: string, body: string) {
 router.get('/feed.xml', async (req: Request, res: Response) => {
     try {
         const channel = await feedChannel();
-        const posts = await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit });
+        const posts = await anonymousTeaserView(await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit }));
         // The self link is stated rather than left to the generator's default: that default is
         // `<siteUrl>/feed`, an address nothing has ever served, so this channel was the only one
         // pointing at a URL that 404s.
@@ -407,7 +408,7 @@ router.get('/feed.xml', async (req: Request, res: Response) => {
 router.get('/feed.atom', async (req: Request, res: Response) => {
     try {
         const channel = await feedChannel();
-        const posts = await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit });
+        const posts = await anonymousTeaserView(await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit }));
         const xml = generateAtomFeed(feedItems(posts, channel), {
             ...channel,
             selfUrl: publicSeoUrl(channel.siteUrl, 'feed.atom'),
@@ -438,7 +439,7 @@ router.get('/feed.atom', async (req: Request, res: Response) => {
 router.get('/feed.json', async (req: Request, res: Response) => {
     try {
         const channel = await feedChannel();
-        const posts = await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit });
+        const posts = await anonymousTeaserView(await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit }));
         const json = generateJsonFeed(feedItems(posts, channel), {
             ...channel,
             selfUrl: publicSeoUrl(channel.siteUrl, 'feed.json'),
@@ -462,7 +463,8 @@ router.get('/feed.json', async (req: Request, res: Response) => {
  */
 async function sendScopedRss(req: Request, res: Response, scope: { posts: any[]; name: string; link: string; selfPath: string }) {
     const channel = await feedChannel();
-    const xml = generateRssFeed(scope.posts, {
+    // Every scoped channel publishes a gated entry's teaser, never its body (core/content-access).
+    const xml = generateRssFeed(await anonymousTeaserView(scope.posts), {
         ...channel,
         title: `${channel.title} — ${scope.name}`,
         link: scope.link,
@@ -707,6 +709,8 @@ router.get('/comments/feed.xml', async (req: Request, res: Response) => {
             'JOIN posts p ON p.id = c.comment_post_id ' +
             "WHERE c.comment_approved = '1' AND p.post_status = 'publish' " +
             "AND p.post_type IN ('post', 'page') AND p.post_password = '' " +
+            // A members-only entry's discussion is part of what the membership unlocks.
+            `AND NOT ${gatedPostSql('p.id')} ` +
             "AND c.comment_type IN ('comment', '') " +
             'ORDER BY c.comment_date DESC LIMIT ?',
             [channel.limit],

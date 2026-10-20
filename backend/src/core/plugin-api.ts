@@ -25,6 +25,11 @@ const { hasProfessionalMailbox } = require('./mailbox');
 // SAFE host-mediated bridge (users projection, site info, mail provider) gated by a grant, or removed.
 // Safe projection for the `users` bridge — NEVER includes user_pass / tokens / meta. Accepts either a
 // core User instance (camelCase) or a raw row (snake_case).
+/** crypto.hmac: the digests a webhook signature uses. */
+const HMAC_ALGORITHMS: ReadonlySet<string> = new Set(['sha256', 'sha1', 'sha512']);
+/** crypto.hmac: the largest payload it signs (well above any provider's webhook body). */
+const HMAC_MAX_DATA = 2 * 1024 * 1024;
+
 function projectUser(u: any): any {
     if (!u) return null;
     return {
@@ -793,6 +798,29 @@ function createPluginApi(slug: string) {
                     throw new Error('crypto.randomInt: invalid range');
                 }
                 return require('crypto').randomInt(lo, hi); // uniform in [lo, hi)
+            },
+            // KEYED HASHING for signed webhooks (Stripe, GitHub, Slack… all sign the raw body with
+            // HMAC-SHA256). The static validator blocks require('crypto') in plugin code, so without this a
+            // plugin could not verify who sent a webhook and had to fall back to re-fetching every event.
+            // Pure computation over the caller's own inputs — no data access, no permission gate. The
+            // algorithm is an allowlist and the inputs are bounded (a body larger than the cap is not a
+            // webhook any provider sends).
+            hmac(algorithm: string, key: string, data: string, encoding: string = 'hex') {
+                const algo = String(algorithm || '').toLowerCase();
+                if (!HMAC_ALGORITHMS.has(algo)) throw new Error('crypto.hmac: unsupported algorithm');
+                if (typeof key !== 'string' || !key || key.length > 4096) throw new Error('crypto.hmac: invalid key');
+                if (typeof data !== 'string' || data.length > HMAC_MAX_DATA) throw new Error('crypto.hmac: invalid data');
+                const enc = encoding === 'base64' ? 'base64' : 'hex';
+                return require('crypto').createHmac(algo, key).update(data, 'utf8').digest(enc);
+            },
+            // Constant-time comparison of two strings (a received signature vs the computed one). Unequal
+            // lengths answer false without a short-circuit on content.
+            timingSafeEqual(a: string, b: string) {
+                if (typeof a !== 'string' || typeof b !== 'string' || a.length > 4096 || b.length > 4096) return false;
+                const ba = Buffer.from(a, 'utf8');
+                const bb = Buffer.from(b, 'utf8');
+                if (ba.length !== bb.length) return false;
+                return require('crypto').timingSafeEqual(ba, bb);
             },
         },
 

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { authApi, settingsApi } from "@/lib/api";
+import { currentReturnPath } from "@/lib/safeReturnPath";
 
 function LoginForm() {
     const [username, setUsername] = useState("");
@@ -17,12 +18,19 @@ function LoginForm() {
     // `users_can_register` on. It is a PUBLIC setting, so this reads without a session, and a failed
     // probe leaves the link hidden rather than advertising a form that would answer 403.
     const [registerAvailable, setRegisterAvailable] = useState(false);
+    // Sign-up keeps the visitor's `?redirect=` (set after mount: the server render has no query).
+    const [registerHref, setRegisterHref] = useState("/register");
     const { login, verifyMfa } = useAuth();
     const router = useRouter();
     // When the account has MFA on, the password step returns a challenge token and we switch to a
     // second view asking for the authenticator (or backup) code.
     const [mfaToken, setMfaToken] = useState<string | null>(null);
     const [mfaCode, setMfaCode] = useState("");
+
+    useEffect(() => {
+        const back = currentReturnPath();
+        if (back) setRegisterHref(`/register?redirect=${encodeURIComponent(back)}`);
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -45,7 +53,7 @@ function LoginForm() {
         if (result.mfaRequired && result.mfaToken) {
             setMfaToken(result.mfaToken); // password OK → ask for the second factor
         } else if (result.success) {
-            router.push("/admin");
+            router.push(currentReturnPath() || "/admin");
         } else {
             setError(result.error || "Invalid username or password");
         }
@@ -60,7 +68,7 @@ function LoginForm() {
         setLoading(true);
         const result = await verifyMfa(mfaToken, mfaCode.trim());
         if (result.success) {
-            router.push("/admin");
+            router.push(currentReturnPath() || "/admin");
         } else {
             setError(result.error || "Invalid authentication code");
         }
@@ -180,7 +188,7 @@ function LoginForm() {
                     {registerAvailable && (
                         <div className="text-center">
                             <span className="text-sm text-gray-500">¿No tienes cuenta? </span>
-                            <a href="/register" className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                            <a href={registerHref} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
                                 Crear una cuenta
                             </a>
                         </div>

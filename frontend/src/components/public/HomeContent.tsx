@@ -8,7 +8,8 @@
 import { Fragment } from "react";
 import PluginLoader from "@/components/PluginLoader";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import { publicUiStrings } from "@/lib/public/uiStrings";
+import { publicUiStrings, membersGateStrings } from "@/lib/public/uiStrings";
+import MembersOnlyGate from "./MembersOnlyGate";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
 
@@ -58,6 +59,35 @@ function renderContent(htmlContent: string) {
 }
 
 export default function HomeContent({ post, settings }: { post: Post; settings?: Record<string, string> | null }) {
+    // A members-only front page (backend core/content-access) arrives as its teaser, like any gated entry
+    // on this anonymous, cached render: MembersOnlyGate swaps in the full body for a member.
+    const access = post.access;
+    if (access && access.gated && !access.granted) {
+        const data = post.meta?._puck_data as any;
+        const verso = !!data;
+        const teaserEmpty = !String(post.content || '').trim() && !(Array.isArray(data?.content) && data.content.length > 0);
+        return (
+            <MembersOnlyGate
+                postId={post.id}
+                mode={verso ? 'verso' : 'html'}
+                htmlClassName="prose prose-lg max-w-none px-4"
+                ixPresets={settings?.wjs_ix_presets}
+                motion={settings?.wjs_motion}
+                ui={publicUiStrings(settings)}
+                strings={membersGateStrings(settings)}
+                showNotice={teaserEmpty}
+                commentsWhenGranted={false}
+            >
+                {verso ? (
+                    <div className="puck-content w-full">
+                        <ContentRenderer data={data} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} ui={publicUiStrings(settings)} />
+                    </div>
+                ) : (
+                    <div className="prose prose-lg max-w-none px-4">{renderContent(post.content)}</div>
+                )}
+            </MembersOnlyGate>
+        );
+    }
     if (post.meta?._puck_data) {
         return (
             <div className="puck-content w-full">

@@ -463,6 +463,9 @@ const wordjs = {
     crypto: {
         randomToken: (bytes) => callHost('crypto.randomToken', [bytes]),
         randomInt: (min, max) => callHost('crypto.randomInt', [min, max]),
+        // Keyed hashing for signed webhooks: hmac('sha256', secret, rawBody) → hex (or 'base64').
+        hmac: (algorithm, key, data, encoding) => callHost('crypto.hmac', [algorithm, key, data, encoding]),
+        timingSafeEqual: (a, b) => callHost('crypto.timingSafeEqual', [a, b]),
     },
 
     // Load a script/style from inside your plugin dir onto public pages (needs the 'assets' grant).

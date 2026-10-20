@@ -52,6 +52,8 @@ export interface CallOptions {
     clientKey?: string;
     headers?: Record<string, string>;
     cookies?: Record<string, string>;
+    /** What a `{ webhook: true }` route receives as `req.rawBody` (the exact bytes the sender signed). */
+    rawBody?: string;
 }
 
 export type StatementHook = (sql: string, params: any[]) => void | Promise<void>;
@@ -90,6 +92,13 @@ export interface BootOptions {
      * twin with an upper-case one.
      */
     caseInsensitiveText?: boolean;
+    /**
+     * Where the plugin's `wordjs.hooks.addFilter/addAction` registrations go (e.g. core's real hook
+     * system, so core reads the plugin's filter). Without it they are recorded and ignored.
+     */
+    hooks?: { addFilter?: (hook: string, cb: (...a: any[]) => any, priority?: number) => void; addAction?: (hook: string, cb: (...a: any[]) => any, priority?: number) => void };
+    /** The users bridge (`wordjs.users.*`). Without it every lookup answers null. */
+    users?: Partial<Record<'findById' | 'findByEmail' | 'findByLogin' | 'search', (...a: any[]) => Promise<any>>>;
 }
 
 // `INSERT INTO <table> (<cols>) SELECT ...` — the only statement shape the snapshot model rewrites.
@@ -195,6 +204,26 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
         crypto: {
             randomToken: async (n: number) => crypto.randomBytes(n).toString('hex'),
             randomInt: async (min: number, max: number) => crypto.randomInt(min, max),
+            // The host's bridge (core/plugin-api crypto.hmac / timingSafeEqual), same contract.
+            hmac: async (algo: string, key: string, data: string, enc?: string) => {
+                const { createPluginApi } = require('../../core/plugin-api');
+                return createPluginApi(slug).crypto.hmac(algo, key, data, enc);
+            },
+            timingSafeEqual: async (a: string, b: string) => {
+                const { createPluginApi } = require('../../core/plugin-api');
+                return createPluginApi(slug).crypto.timingSafeEqual(a, b);
+            },
+        },
+        hooks: {
+            addFilter: (h: string, cb: any, pr?: number) => { if (bootOpts.hooks && bootOpts.hooks.addFilter) bootOpts.hooks.addFilter(h, cb, pr); },
+            addAction: (h: string, cb: any, pr?: number) => { if (bootOpts.hooks && bootOpts.hooks.addAction) bootOpts.hooks.addAction(h, cb, pr); },
+            doAction: async () => undefined,
+        },
+        users: {
+            findById: async (...a: any[]) => (bootOpts.users && bootOpts.users.findById ? bootOpts.users.findById(...a) : null),
+            findByEmail: async (...a: any[]) => (bootOpts.users && bootOpts.users.findByEmail ? bootOpts.users.findByEmail(...a) : null),
+            findByLogin: async (...a: any[]) => (bootOpts.users && bootOpts.users.findByLogin ? bootOpts.users.findByLogin(...a) : null),
+            search: async (...a: any[]) => (bootOpts.users && bootOpts.users.search ? bootOpts.users.search(...a) : []),
         },
         site: { url: async () => 'http://site.test', domain: async () => 'site.test', adminEmail: async () => 'admin@site.test' },
     };
@@ -234,6 +263,7 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
                 body: o.body || {}, query: o.query || {}, params: o.params || {},
                 headers: o.headers || {}, cookies: o.cookies || {},
                 user: o.user || null, clientKey: o.clientKey === undefined ? 'client-default' : o.clientKey,
+                ...(o.rawBody !== undefined ? { rawBody: o.rawBody } : {}),
             };
             Promise.resolve(r.fn(req, res)).catch(reject);
         });

@@ -166,6 +166,20 @@ const POLICY_TABLE: Record<string, HookPolicy> = {
     'registered_content_type_schema': PUBLIC('carries a public content-type schema'),
     'registered_post_type': PUBLIC('carries a public post-type definition'),
     'registered_taxonomy': PUBLIC('carries a public taxonomy definition'),
+    // Members-only content (core/content-access). Answering either filter is being a level PROVIDER — what
+    // the grants filter returns unlocks gated bodies site-wide — so both take the explicit
+    // `content_access:provider` grant (users:read alone, or any plugin, must not be able to open every
+    // members-only entry). The grants filter also names the viewer (id + role), hence users:read too.
+    'content_access_levels': {
+        kind: 'data', requires: [['content_access', 'provider']],
+        why: 'offers access levels to the post editor (a members-only content provider)',
+        sanitize: (_slug, [value, ...rest]) => [Array.isArray(value) ? value.slice() : [], ...rest],
+    },
+    'content_access_grants': {
+        kind: 'data', requires: [['content_access', 'provider'], ['users', 'read']],
+        why: 'decides which members-only content the account reading the site may read (user id and role)',
+        sanitize: (_slug, [value, ctx, ...rest]) => [Array.isArray(value) ? value.slice() : [], { userId: ctx && ctx.userId, role: ctx && ctx.role }, ...rest],
+    },
 
     // ── data: other parties' data, gated on the matching read grant and minimized ──────────────────
     'updated_option': {
