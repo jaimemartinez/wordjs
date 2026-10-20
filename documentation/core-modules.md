@@ -210,7 +210,7 @@ post — receives the post's **teaser** (body, excerpt and Verso tree cut at the
 surface: `Post.toJSON` (REST, and GraphQL through it), the feeds (`routes/seo.ts`), search
 (`Post.buildWhere`, title-only match) and the post's comments (`routes/comments.ts`, `models/Comment.ts`,
 the comments feed). Levels are provided by plugins through the `content_access_levels` and
-`content_access_grants` filters (the bundled `memberships` plugin is one); an unknown level fails closed.
+`content_access_grants` filters — answering them takes the `content_access:provider` grant (the bundled `memberships` plugin is one); an unknown level fails closed.
 Full guide: [memberships.md](memberships.md).
 
 ---

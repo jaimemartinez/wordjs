@@ -492,9 +492,7 @@ class Post {
         const access = await contentAccess.accessFor(viewer, this, cachedMeta);
         const locked = access.gated && !access.granted;
         const bodySource = locked ? contentAccess.teaserHtml(this.postContent) : this.postContent;
-        if (access.gated && meta && meta._puck_data && typeof meta._puck_data === 'object') {
-            meta = { ...meta, _puck_data: locked ? contentAccess.teaserVersoData(meta._puck_data, access.level) : contentAccess.grantedVersoData(meta._puck_data, access.level) };
-        }
+        meta = contentAccess.projectGatedMeta(meta, access);
         if (!contentReadable && meta && Object.prototype.hasOwnProperty.call(meta, '_thumbnail_id')) {
             meta = { ...meta };
             delete meta._thumbnail_id;
@@ -1480,8 +1478,22 @@ class Post {
         // params sit between the WHERE params and LIMIT/OFFSET — exactly their `?` position in the SQL.
         const searchOrder = options.search ? Post._searchClauses(searchEngine, options.search, 'p.') : null;
         if (searchOrder && searchOrder.orderSql) {
-            sql += ` ORDER BY ${searchOrder.orderSql}, ${safeOrderBy} ${safeOrder}`;
-            params.push(...searchOrder.orderParams);
+            const visibleTo = options.searchProtectedVisibleTo;
+            if (visibleTo !== undefined && visibleTo !== null) {
+                // A members-only entry matches by its TITLE only (buildWhere), so it must not RANK by its
+                // body either: the engines score title and body together, and the order of the results
+                // would tell the searcher how often a word occurs in the withheld part. Such an entry gets
+                // the neutral score (0 sorts after every real match in all three engines), unless it is
+                // the searcher's own.
+                const m = /^(.*)\s(ASC|DESC)$/.exec(searchOrder.orderSql);
+                const scoreSql = m ? m[1] : searchOrder.orderSql;
+                const dir = m ? m[2] : 'DESC';
+                sql += ` ORDER BY CASE WHEN ${contentAccess.gatedPostSql('p.id')} AND p.author_id <> ? THEN 0 ELSE ${scoreSql} END ${dir}, ${safeOrderBy} ${safeOrder}`;
+                params.push(visibleTo, ...searchOrder.orderParams);
+            } else {
+                sql += ` ORDER BY ${searchOrder.orderSql}, ${safeOrderBy} ${safeOrder}`;
+                params.push(...searchOrder.orderParams);
+            }
         } else {
             sql += ` ORDER BY ${safeOrderBy} ${safeOrder}`;
         }

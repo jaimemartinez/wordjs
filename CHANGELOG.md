@@ -16,7 +16,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   RSS / Atom / JSON and taxonomy feeds, search (a gated post matches by title only) and the post's
   comments (not listed, fetchable, writable or in the comments feed). The excerpt is never derived from
   the withheld body. Levels come from two new filters, `content_access_levels` and
-  `content_access_grants`; an unknown level fails closed. Signed-in members get the full body in the
+  `content_access_grants`, which only a plugin holding the new **`content_access:provider`** grant may
+  answer; an unknown or malformed level fails closed. The page-builder tree is cut the same way on
+  `GET /posts/:id/meta`, files attached to a gated entry are listed and served only to who manages it, a
+  gated entry never ranks by its withheld body in search, and answers to a signed-in reader are sent
+  `Cache-Control: private`. Signed-in members get the full body in the
   browser, with their own session, so the cached HTML never carries it. See `documentation/memberships.md`.
 - **`memberships` plugin (1.0.0) in the marketplace catalog.** Free and paid tiers, a paywall block that
   ends a post's free teaser and shows the plans, a member account block (change tier, cancel / resume),

@@ -52,6 +52,11 @@
             "reason": "Save the non-secret membership configuration (currency, free sign-up policy)."
         },
         {
+            "scope": "content_access",
+            "access": "provider",
+            "reason": "Be the site's members-only content provider: tell the post editor which access levels exist (members, paid, each tier) and tell the site which levels a signed-in account holds."
+        },
+        {
             "scope": "users",
             "access": "read",
             "reason": "Tell the content-access filter which levels a signed-in account holds, and find an account by e-mail or login when the admin grants a complimentary membership."

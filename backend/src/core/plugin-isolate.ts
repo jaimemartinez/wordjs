@@ -3044,7 +3044,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // the exemption is safe only because no ambient credential ever reaches the handler.
                 const isWebhook = !!(msg.opts && msg.opts.webhook);
                 if (isWebhook && (routeMethod !== 'post' || msg.opts.auth || msg.opts.admin || msg.opts.multipart)) {
-                    console.warn(`[Isolate ${logSafe(slug)}] rejected webhook route '${logSafe(routePath.slice(0, 80))}': a webhook is a plain POST with no auth/admin/multipart.`);
+                    log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] rejected webhook route '${logSafe(routePath.slice(0, 80))}': a webhook is a plain POST with no auth/admin/multipart.`);
                     return;
                 }
                 // Multisite: every site's worker of this plugin mounts the same path. Each mount answers only

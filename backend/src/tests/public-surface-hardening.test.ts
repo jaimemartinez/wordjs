@@ -678,3 +678,26 @@ describe('GET /plugins/assets is never shared-cacheable (a revoked plugin\'s scr
         assert.strictEqual(re.test('/posts'), true, 'control: public content keeps its edge default');
     });
 });
+
+describe('a credentialed answer on a public content path is never shared-cacheable (members-only bodies)', () => {
+    before(async () => {
+        const database = require('../config/database');
+        await database.init({ driver: 'sqlite-native' });
+        await database.initializeDatabase();
+    });
+
+    it('with a session cookie or a bearer: private, revalidated, Vary on both credentials', async () => {
+        const anon = await request(app).get(`${API}/posts`);
+        assert.strictEqual(anon.status, 200, JSON.stringify(anon.body));
+        assert.match(String(anon.headers['cache-control'] || ''), /s-maxage/, 'control: anonymous keeps its edge default');
+        for (const [header, value] of [['Cookie', 'wordjs_token=not-a-session'], ['Authorization', 'Bearer not-a-token']]) {
+            const res = await request(app).get(`${API}/posts`).set(header, value);
+            const cc = String(res.headers['cache-control'] || '');
+            assert.match(cc, /\bprivate\b/, `${header}: Cache-Control: ${cc}`);
+            assert.doesNotMatch(cc, /\bpublic\b|s-maxage/, `${header}: a shared cache may hold it: ${cc}`);
+            const vary = String(res.headers.vary || '');
+            assert.match(vary, /Cookie/i, `${header}: Vary: ${vary}`);
+            assert.match(vary, /Authorization/i, `${header}: Vary: ${vary}`);
+        }
+    });
+});
