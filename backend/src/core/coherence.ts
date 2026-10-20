@@ -176,6 +176,9 @@ function handlePluginChange(msg: string): void {
     const plugins = require('./plugins');
     try {
         if (data.action === 'activate') {
+            // A site whose workers are stopped while it is idle loads its whole active set (this plugin
+            // included) on its next need: starting one worker now would leave it running unasked.
+            if (require('./site-workers').isAsleep(require('./site-context').currentSiteIdOrNull())) return;
             Promise.resolve(plugins.loadOnePlugin(data.slug)).catch((e: any) => log.warn({ err: e }, '[coherence] cross-node activate failed'));
         } else if (data.action === 'deactivate') {
             plugins.unloadOnePlugin(data.slug);
