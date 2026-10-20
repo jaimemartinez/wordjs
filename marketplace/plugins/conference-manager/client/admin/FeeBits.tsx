@@ -152,7 +152,7 @@ export function segmentKeyDown(e: any, keys: string[], current: string, onChange
     e.preventDefault();
     if (next !== current) onChange(next);
     const strip = e.currentTarget && e.currentTarget.parentElement;
-    const btn = strip && typeof strip.querySelector === 'function' ? strip.querySelector(`[${attr}="${String(next).replace(/"/g, '\\"')}"]`) : null;
+    const btn = strip && typeof strip.querySelector === 'function' ? strip.querySelector(`[${attr}="${String(next).replace(/["\\]/g, '\\$&')}"]`) : null;
     if (btn && typeof btn.focus === 'function') { try { btn.focus(); } catch { /* ignore */ } }
 }
 
