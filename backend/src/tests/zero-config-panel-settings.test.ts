@@ -6,7 +6,10 @@
  *   2. How many backups to keep (`backup_retention`) is a setting of Settings → Backups, validated.
  *   3. The ACME HTTP-01 listener port is set from Security → Auto-renewal, validated, kept when the form is
  *      saved, and re-bound at once (the monolith's hook) instead of after a restart.
- *   4. Security → Server: the reverse-proxy trust and the log level — password-confirmed, refused to an
+ *   4. Themes → New theme guarantees WCAG AA when the panel asks (enforceContrast): a theme whose text
+ *      does not read on its background is refused with the doctor's LOW_CONTRAST findings and nothing is
+ *      installed; a readable one is installed, and Check theme (the doctor) reports on it.
+ *   5. Security → Server: the reverse-proxy trust and the log level — password-confirmed, refused to an
  *      API token, only address-based trust values, written to wordjs-config.json, audited, followed by a
  *      restart.
  *
@@ -32,6 +35,10 @@ const MAIN_URL = 'http://localhost:3000';
 const MAIN = 'localhost:3000';
 const CONFIG_FILE = path.join(TMP_INSTALL, 'wordjs-config.json');
 fs.writeFileSync(CONFIG_FILE, JSON.stringify({ installedAt: '2026-01-01T00:00:00.000Z', dbDriver: 'sqlite-native', siteUrl: MAIN_URL }, null, 2));
+// The theme compiler and doctor read public/ from the working directory at load (theme-write-api.test.ts).
+fs.mkdirSync(path.join(TMP_INSTALL, 'public', 'css'), { recursive: true });
+fs.copyFileSync(path.join(__dirname, '..', '..', 'public', 'theme-tokens.json'), path.join(TMP_INSTALL, 'public', 'theme-tokens.json'));
+fs.copyFileSync(path.join(__dirname, '..', '..', 'public', 'css', 'wordjs-ui.css'), path.join(TMP_INSTALL, 'public', 'css', 'wordjs-ui.css'));
 process.chdir(TMP_INSTALL);
 const ENV_KEYS = ['WORDJS_ALLOWED_HOSTS', 'WORDJS_IP_HOSTS', 'WORDJS_DEV_ORIGINS', 'WORDJS_TRUST_PROXY', 'WORDJS_SUPERVISED', 'LOG_LEVEL'];
 const SAVED_ENV: Record<string, string | undefined> = {};
@@ -224,5 +231,35 @@ describe('Security → Server: reverse-proxy trust and log level', () => {
         assert.strictEqual(await restartCode(), restart.RESTART_EXIT_CODE);
         assert.strictEqual(fileConfig().trustProxy, undefined);
         assert.strictEqual(fileConfig().logging.level, undefined);
+    });
+});
+
+describe('Themes → New theme and Check theme', () => {
+    const seeds = { primary: '#1d4ed8', secondary: '#7e22ce', bg: '#ffffff', text: '#111827' };
+    test('enforceContrast refuses an unreadable theme with the doctor findings and installs nothing', async () => {
+        const res = await as('owner', 'post', `${API}/themes`).send({ slug: 'pale-ink', metadata: { name: 'Pale Ink' }, seeds: { ...seeds, text: '#d1d5db' }, enforceContrast: true });
+        assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+        assert.strictEqual(res.body.code, 'theme_low_contrast');
+        assert.ok(res.body.details.findings.some((f: any) => f.code === 'LOW_CONTRAST' && /body text/.test(f.message)), JSON.stringify(res.body.details));
+        assert.strictEqual(fs.existsSync(path.join(TMP_INSTALL, 'themes', 'pale-ink')), false, 'nothing was installed');
+        // Without the flag the API stays what it was (the CLI and existing clients are unchanged).
+        const loose = await as('owner', 'post', `${API}/themes`).send({ slug: 'pale-ink', metadata: { name: 'Pale Ink' }, seeds: { ...seeds, text: '#d1d5db' } });
+        assert.strictEqual(loose.status, 201, JSON.stringify(loose.body));
+    });
+
+    test('a readable theme with chosen fonts is installed, and Check theme reports on it', async () => {
+        const res = await as('owner', 'post', `${API}/themes`).send({
+            slug: 'forest-cafe', metadata: { name: 'Forest Cafe' }, seeds, enforceContrast: true,
+            tokens: { '--wjs-font-family-heading': 'Charter, "Bitstream Charter", Georgia, serif' },
+        });
+        assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+        const css = fs.readFileSync(path.join(TMP_INSTALL, 'themes', 'forest-cafe', 'style.css'), 'utf8');
+        assert.match(css, /--wjs-font-family-heading:\s*Charter/);
+        const doctor = await as('owner', 'get', `${API}/themes/forest-cafe/doctor`);
+        assert.strictEqual(doctor.status, 200);
+        assert.strictEqual(doctor.body.slug, 'forest-cafe');
+        assert.ok(!doctor.body.warnings.some((w: any) => w.code === 'LOW_CONTRAST'), JSON.stringify(doctor.body.warnings));
+        const pale = await as('owner', 'get', `${API}/themes/pale-ink/doctor`);
+        assert.ok(pale.body.warnings.some((w: any) => w.code === 'LOW_CONTRAST'), 'Check theme flags the unreadable one');
     });
 });

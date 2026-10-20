@@ -560,8 +560,16 @@ Four details worth knowing:
 
 The theme appears in **Admin → Themes** within a minute (the theme list is re-read every 60 seconds; no restart), where you activate it.
 
-**From the panel instead:** **Admin → Themes → New theme** asks for a name and the same four colours,
-shows them together, and creates the same declarative `theme.json` (`POST /api/v1/themes`).
+**From the panel instead:** **Admin → Themes → New theme** asks for a name, the same four colours and a
+heading and body font (system font stacks: nothing is downloaded), shows them together, and checks
+readability live: text on the background and the labels on both button colours must reach WCAG AA
+(4.5:1), and **Fix the colours that are hard to read** adjusts them. The server builds the same
+declarative `theme.json` (`POST /api/v1/themes` with `enforceContrast: true`) and installs it only when
+the theme doctor finds no `LOW_CONTRAST` pair on the built theme.
+
+**Checking a theme from the panel:** every theme card has **Check theme**, which runs the same doctor as
+`node backend/cli/wordjs.js doctor <slug>` (`GET /api/v1/themes/:slug/doctor`) and lists its errors,
+warnings (every pair below AA among them) and notes.
 
 ### 2. Edit `theme.json`, then rebuild
 

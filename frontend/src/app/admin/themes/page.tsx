@@ -7,6 +7,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import CreateThemeDialog from "./CreateThemeDialog";
+import ThemeCheckDialog from "./ThemeCheckDialog";
 
 export default function ThemesPage() {
     const { t, language } = useI18n();
@@ -15,6 +16,8 @@ export default function ThemesPage() {
     const [uploading, setUploading] = useState(false);
     // Themes → New theme: four seed colours, compiled by the server (the CLI's `create theme`, from the panel).
     const [creatingTheme, setCreatingTheme] = useState(false);
+    // Themes → Check theme: the doctor's report for one theme (the CLI's `doctor`, from the panel).
+    const [checkingTheme, setCheckingTheme] = useState<{ slug: string; name: string } | null>(null);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [restoring, setRestoring] = useState(false);
     const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -341,6 +344,7 @@ export default function ThemesPage() {
                     }
                 />
 
+                {checkingTheme && <ThemeCheckDialog slug={checkingTheme.slug} name={checkingTheme.name} onClose={() => setCheckingTheme(null)} />}
                 {creatingTheme && (
                     <CreateThemeDialog
                         onClose={() => setCreatingTheme(false)}
@@ -572,6 +576,16 @@ export default function ThemesPage() {
                                                 {t('themes.permissions.button')}
                                             </button>
                                         )}
+
+                                        <button
+                                            type="button"
+                                            onClick={() => setCheckingTheme({ slug: theme.slug, name: theme.name || theme.slug })}
+                                            className="w-full bg-white border border-gray-200 text-gray-600 font-bold py-2 rounded-xl hover:bg-gray-50 transition-all flex items-center justify-center gap-2 text-sm"
+                                            data-testid={`check-theme-${theme.slug}`}
+                                        >
+                                            <i className="fa-solid fa-stethoscope text-xs opacity-60" aria-hidden="true"></i>
+                                            {t('themes.check.button')}
+                                        </button>
 
                                         {!theme.active && (
                                             <div className="flex gap-2">
