@@ -110,7 +110,7 @@ function sanitizeWidgetSettings(widget: any, input: unknown): { ok: true; settin
     if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, error: '`settings` must be an object.' };
     const src = input as Record<string, unknown>;
     if (!widget || !Array.isArray(widget.fields)) {
-        let json = '';
+        let json: string;
         try { json = JSON.stringify(src); } catch { return { ok: false, error: '`settings` must be plain JSON.' }; }
         if (Buffer.byteLength(json) > MAX_FREEFORM_SETTINGS_BYTES) return { ok: false, error: '`settings` is too large.' };
         return { ok: true, settings: JSON.parse(json) };
