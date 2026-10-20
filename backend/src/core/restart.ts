@@ -107,7 +107,10 @@ function scheduleRestart(reason: string, opts: { delayMs?: number; exit?: (code:
     }
     if (pending) return mode;
     pending = { reason, at: new Date().toISOString() };
-    const exit = opts.exit || exitHandler || ((code: number) => process.exit(code));
+    // Under `node --test` (NODE_TEST_CONTEXT) a route that restarts must not end the test process: a test
+    // that wants to see the exit code installs a handler (setExitHandlerForTests); otherwise nothing exits.
+    const underTestRunner = !!process.env.NODE_TEST_CONTEXT;
+    const exit = opts.exit || exitHandler || (underTestRunner ? (() => { pending = null; }) : ((code: number) => process.exit(code)));
     const delay = typeof opts.delayMs === 'number' ? opts.delayMs : 750;
     log.info(`[restart] ${reason}: restarting (${mode}) in ${delay} ms.`);
     const t = setTimeout(() => {
@@ -119,7 +122,7 @@ function scheduleRestart(reason: string, opts: { delayMs?: number; exit?: (code:
         }
         exit(RESTART_EXIT_CODE);
     }, delay);
-    if (t && typeof t.unref === 'function' && (opts.exit || exitHandler)) t.unref();
+    if (t && typeof t.unref === 'function' && (opts.exit || exitHandler || underTestRunner)) t.unref();
     return mode;
 }
 
