@@ -145,7 +145,9 @@ class Client {
         let u: URL;
         try { u = new URL(url); } catch { throw new AcmeError(`The CA answered with an invalid URL ${JSON.stringify(String(url))}`); }
         if (u.origin !== this.origin) throw new AcmeError(`The CA answered with a URL outside its own origin (${u.origin}, expected ${this.origin})`);
-        return u.href;
+        // Rebuilt on the DIRECTORY's origin: only the path and query of what we were handed survive, so
+        // scheme, host, port and userinfo always come from the configured directory.
+        return new URL(`${u.pathname}${u.search}`, this.directoryUrl).href;
     }
 
     private async http(url: string, init: any): Promise<Response> {

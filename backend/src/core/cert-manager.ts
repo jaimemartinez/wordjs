@@ -206,12 +206,13 @@ class CertManager {
         // challenge URL does not exist — boulder answers "No such challenge".
         // The override is the directory a two-step DNS flow was minted at, round-tripped through the
         // browser — request input. It can only name a CA this method itself would have chosen.
-        const known = [acme.directory.letsencrypt.production, acme.directory.letsencrypt.staging];
-        if (directoryUrlOverride && !known.includes(directoryUrlOverride)) {
+        // What is assigned is always one of OUR constants, never the request's string.
+        const { production, staging } = acme.directory.letsencrypt;
+        if (directoryUrlOverride && directoryUrlOverride !== production && directoryUrlOverride !== staging) {
             throw new Error('This challenge names a certificate authority this site does not use. Start the certificate request again.');
         }
-        this.directoryUrl = directoryUrlOverride
-            || (useStaging ? acme.directory.letsencrypt.staging : acme.directory.letsencrypt.production);
+        const wantStaging = directoryUrlOverride ? directoryUrlOverride === staging : useStaging;
+        this.directoryUrl = wantStaging ? staging : production;
 
         // 1. Load or Generate Account Key
         let accountKey;
