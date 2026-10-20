@@ -579,6 +579,14 @@ the boot error links there too.
 
 ### Changed
 
+- **Settings ▸ Motions: the interaction presets screen is a motion library.** It explains what a preset is and how to
+  use one in three steps; shows the site's motions as cards with a live preview (the real compiler, played on a sample
+  card), a plain-language description («appears sliding up when it scrolls into view, its items one after another») and
+  the pages that use each, with links; offers templates and the included motions as starting points; and edits a motion
+  in a simple mode (effect, when, speed, delay, this block or its items one by one) with a preview that replays on every
+  change, the full step and timeline editor behind *Advanced*. Deleting a motion in use names the pages it leaves still.
+  Previews respect *reduce motion*. In Verso, the block's Motion panel opens with the same «Choose a motion» picker. The
+  presets, their storage and how pages compile them are unchanged.
 - **The admin works on a phone and a tablet.** Every core list (posts, pages, media, comments, users,
   categories, tags, audit log, form submissions, API tokens, backups, site addresses) renders through one
   responsive table: labelled cards on a phone, columns that wait for room on a tablet, row actions that never

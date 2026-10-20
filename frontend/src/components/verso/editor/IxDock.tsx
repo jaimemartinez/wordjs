@@ -32,7 +32,7 @@ import type { VersoEditorState } from "@/lib/verso/types";
 import type { IxCompileCtx } from "@/lib/verso/interactions";
 import { useStoreSlice } from "../render/context";
 import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
-import { DockTabs, PresetBar, type DockPane } from "./IxDockParts";
+import { DockTabs, MotionPicker, PresetBar, type DockPane } from "./IxDockParts";
 import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
 import InteractionsControl, { isTimed } from "../fields/InteractionsControl";
 import IxScrubberControl from "../fields/IxScrubberControl";
@@ -345,8 +345,10 @@ export function DockMotion({
                     ))}
                 </section>
             )}
+            <MotionPicker ix={ix} ixCtx={ixCtx} presetId={st.presetId} onChoose={(next) => onFieldChange("ix", next)} />
             <section className="rounded-xl border border-[var(--ed-outline-variant)] p-3" data-verso-dock-section="ix">
-                <PresetBar
+                {/* Linked: the picker above already says so. Unlinked: «save as preset» and «manage». */}
+                {!linked && <PresetBar
                     ix={ix}
                     linked={linked}
                     active={st.active}
@@ -354,7 +356,7 @@ export function DockMotion({
                     ixCtx={ixCtx}
                     language={language}
                     onLinked={(next) => onFieldChange("ix", next)}
-                />
+                />}
                 <InteractionsControl
                     key={`${node.id}:ix`}
                     value={ix}
