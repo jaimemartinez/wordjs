@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
+import { useI18n } from "@/contexts/I18nContext";
 
 interface CertInfo {
     commonName?: string;
@@ -22,6 +23,7 @@ interface SSLCertManagerProps {
 }
 
 export default function SSLCertManager({ domain: initialDomain, adminEmail: initialEmail }: SSLCertManagerProps) {
+    const { t } = useI18n();
     const [domain, setDomain] = useState(initialDomain || "");
     const [email, setEmail] = useState(initialEmail || "");
     const [method, setMethod] = useState<"http" | "dns" | "custom">("http");
@@ -53,12 +55,14 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 setSslEnabled(data.sslEnabled);
             } catch (e) {
                 console.error("Failed to load cert info:", e);
-                addLog("Failed to load certification info: " + (e as Error).message);
+                addLog(t('ssl.log.loadFailed').replace('{error}', () => (e as Error).message));
             } finally {
                 setLoading(false);
             }
         };
         loadCertInfo();
+        // `t` is recreated on every render; re-running the fetch for it would loop.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [status]);
 
     // Helper to read file content
@@ -73,14 +77,14 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
 
     const handleCustomUpload = async () => {
         if (!keyContent || !certContent) {
-            setError("Please upload both Private Key and Certificate files.");
+            setError(t('ssl.error.bothFiles'));
             return;
         }
 
         setStatus("loading");
         setLogs([]);
         setError("");
-        addLog("Uploading custom certificate...");
+        addLog(t('ssl.log.uploading'));
 
         try {
             await api<any>("/system/certs/upload-custom", {
@@ -88,14 +92,14 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 body: { key: keyContent, cert: certContent }
             });
 
-            addLog("Custom certificate installed successfully!");
+            addLog(t('ssl.log.customInstalled'));
             setStatus("success");
             // Clear inputs
             setKeyContent("");
             setCertContent("");
         } catch (e: any) {
             setError(e.message);
-            addLog("Error: " + e.message);
+            addLog(t('ssl.log.error').replace('{error}', () => e.message));
             setStatus("error");
         }
     };
@@ -109,7 +113,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
         setStatus("loading");
         setLogs([]);
         setError("");
-        addLog(`Starting provisioning for ${domain} via ${method.toUpperCase()}...`);
+        addLog(t('ssl.log.starting').replace('{domain}', () => domain).replace('{method}', () => method.toUpperCase()));
 
         try {
             if (method === "http") {
@@ -118,8 +122,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     body: { domain, email, staging: false }
                 });
 
-                addLog("Certificate provisioned successfully!");
-                addLog("Saved to: " + data.path);
+                addLog(t('ssl.log.provisioned'));
+                addLog(t('ssl.log.savedTo').replace('{path}', () => data.path));
                 setStatus("success");
             } else {
                 // DNS Step 1
@@ -128,20 +132,20 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     body: { domain, email, staging: false }
                 });
 
-                addLog("DNS Challenge Created. Please add the TXT record.");
+                addLog(t('ssl.log.dnsCreated'));
                 setDnsData(data);
                 setStatus("step1_dns");
             }
         } catch (e: any) {
             setError(e.message);
-            addLog("Error: " + e.message);
+            addLog(t('ssl.log.error').replace('{error}', () => e.message));
             setStatus("error");
         }
     };
 
     const handleDNSCheck = async () => {
         if (!dnsData) return;
-        addLog("Checking DNS propagation...");
+        addLog(t('ssl.log.checkingDns'));
         try {
             const data = await api<any>("/system/certs/dns-check", {
                 method: "POST",
@@ -149,13 +153,13 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             });
 
             if (data.passed) {
-                addLog("DNS Record Found! Proceeding to verification...");
+                addLog(t('ssl.log.dnsFound'));
                 handleDNSFinish();
             } else {
-                addLog("⚠️ DNS record not found yet. Please wait a moment and try again.");
+                addLog(t('ssl.log.dnsNotFound'));
             }
         } catch (e: any) {
-            addLog("Check Failed: " + e.message);
+            addLog(t('ssl.log.checkFailed').replace('{error}', () => e.message));
         }
     };
 
@@ -167,12 +171,12 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 body: { step1Data: dnsData, email, staging: false }
             });
 
-            addLog("Success! Certificate installed.");
+            addLog(t('ssl.log.installed'));
             setStatus("success");
             setDnsData(null);
         } catch (e: any) {
             setError(e.message);
-            addLog("Error: " + e.message);
+            addLog(t('ssl.log.error').replace('{error}', () => e.message));
             setStatus("step1_dns");
         }
     };
@@ -183,7 +187,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             {certInfo && certInfo.type === 'error' && (
                 <div className="p-4 bg-red-50 text-red-600 rounded-xl border border-red-100 flex items-center gap-2">
                     <i className="fa-solid fa-circle-exclamation"></i>
-                    <span className="font-medium text-sm">Certificate Error: {certInfo.error}</span>
+                    <span className="font-medium text-sm">{t('ssl.certError').replace('{error}', () => certInfo.error || '')}</span>
                 </div>
             )}
 
@@ -197,13 +201,13 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 <div className="flex items-center gap-3 pb-2 border-b border-blue-200/30">
                     <h4 className="text-sm font-bold text-blue-900 uppercase tracking-wider">
                         <i className="fa-solid fa-plus mr-2 text-blue-500"></i>
-                        Provision / Install Certificate
+                        {t('ssl.provisionTitle')}
                     </h4>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                        <label htmlFor="ssl-field-1" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Domain Name</label>
+                        <label htmlFor="ssl-field-1" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.domainName')}</label>
                         <input id="ssl-field-1"
                             type="text"
                             value={domain}
@@ -213,7 +217,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                         />
                     </div>
                     <div className="space-y-2">
-                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Email <span className="text-gray-300 font-normal">(for Let&apos;s Encrypt)</span></label>
+                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.email')} <span className="text-gray-300 font-normal">{t('ssl.forLetsEncrypt')}</span></label>
                         <input id="ssl-field-2"
                             type="email"
                             value={email}
@@ -226,7 +230,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             </div>
 
             <div className="space-y-4 pt-4">
-                <label htmlFor="ssl-field-3" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Validation Method</label>
+                <label htmlFor="ssl-field-3" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t('ssl.validationMethod')}</label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div
                         onClick={() => setMethod("http")}
@@ -236,9 +240,9 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-2">
-                            <h4 className={`font-bold ${method === "http" ? "text-blue-700 dark:text-blue-300" : "text-gray-900 dark:text-gray-200"}`}>HTTP-01 (Auto)</h4>
+                            <h4 className={`font-bold ${method === "http" ? "text-blue-700 dark:text-blue-300" : "text-gray-900 dark:text-gray-200"}`}>{t('ssl.method.httpTitle')}</h4>
                         </div>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Fastest. Requires port 80 open.</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">{t('ssl.method.httpDesc')}</p>
                     </div>
                     <div
                         onClick={() => setMethod("dns")}
@@ -248,9 +252,9 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-2">
-                            <h4 className={`font-bold ${method === "dns" ? "text-indigo-700 dark:text-indigo-300" : "text-gray-900 dark:text-gray-200"}`}>DNS-01 (Manual)</h4>
+                            <h4 className={`font-bold ${method === "dns" ? "text-indigo-700 dark:text-indigo-300" : "text-gray-900 dark:text-gray-200"}`}>{t('ssl.method.dnsTitle')}</h4>
                         </div>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">For firewalls / wildcards.</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">{t('ssl.method.dnsDesc')}</p>
                     </div>
                     <div
                         onClick={() => setMethod("custom")}
@@ -261,9 +265,9 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     >
                         <div className="flex items-center gap-3 mb-2">
                             <i className={`fa-solid fa-upload ${method === "custom" ? "text-emerald-600" : "text-gray-400"}`}></i>
-                            <h4 className={`font-bold ${method === "custom" ? "text-emerald-700 dark:text-emerald-300" : "text-gray-900 dark:text-gray-200"}`}>Custom Upload</h4>
+                            <h4 className={`font-bold ${method === "custom" ? "text-emerald-700 dark:text-emerald-300" : "text-gray-900 dark:text-gray-200"}`}>{t('ssl.method.customTitle')}</h4>
                         </div>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Upload existing .key/.pem.</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">{t('ssl.method.customDesc')}</p>
                     </div>
                 </div>
             </div>
@@ -272,15 +276,15 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             {method === "custom" && (
                 <div className="bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-800 rounded-2xl p-6 space-y-4 animate-in fade-in slide-in-bottom duration-300">
                     <h4 className="font-bold text-emerald-900 dark:text-emerald-300 flex items-center gap-2">
-                        <i className="fa-solid fa-file-arrow-up"></i> Upload Certificate Files
+                        <i className="fa-solid fa-file-arrow-up"></i> {t('ssl.upload.title')}
                     </h4>
                     <p className="text-sm text-emerald-800 dark:text-emerald-200/80">
-                        Please upload your <strong>Private Key</strong> and <strong>Certificate</strong> (PEM format).
+                        {t('ssl.upload.introBefore')} <strong>{t('ssl.upload.privateKey')}</strong> {t('ssl.upload.and')} <strong>{t('ssl.upload.certificate')}</strong> {t('ssl.upload.introAfter')}
                     </p>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">Private Key (.key / .pem)</label>
+                            <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">{t('ssl.upload.keyLabel')}</label>
                             <input id="ssl-field-3"
                                 type="file"
                                 accept=".key,.pem,.txt"
@@ -298,11 +302,11 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                                 hover:file:bg-emerald-200 dark:hover:file:bg-emerald-700
                                 cursor-pointer"
                             />
-                            {keyContent && <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>Key loaded</p>}
+                            {keyContent && <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.keyLoaded')}</p>}
                         </div>
 
                         <div className="space-y-2">
-                            <label htmlFor="ssl-field-4" className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">Certificate (.crt / .pem)</label>
+                            <label htmlFor="ssl-field-4" className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">{t('ssl.upload.certLabel')}</label>
                             <input id="ssl-field-4"
                                 type="file"
                                 accept=".crt,.pem,.txt"
@@ -320,7 +324,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                                 hover:file:bg-emerald-200 dark:hover:file:bg-emerald-700
                                 cursor-pointer"
                             />
-                            {certContent && <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>Certificate loaded</p>}
+                            {certContent && <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.certLoaded')}</p>}
                         </div>
                     </div>
                 </div>
@@ -338,20 +342,20 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             {/* DNS Instructions */}
             {status === "step1_dns" && dnsData && (
                 <div className="p-6 bg-blue-50 rounded-xl border border-blue-200 space-y-4">
-                    <h4 className="font-bold text-blue-900"><i className="fa-solid fa-circle-info mr-2"></i>DNS Action Required</h4>
-                    <p className="text-blue-800 text-sm">Please add the following TXT record to your DNS provider:</p>
+                    <h4 className="font-bold text-blue-900"><i className="fa-solid fa-circle-info mr-2"></i>{t('ssl.dns.actionRequired')}</h4>
+                    <p className="text-blue-800 text-sm">{t('ssl.dns.addRecord')}</p>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="bg-white p-3 rounded border">
-                            <span className="text-xs text-gray-500 block mb-1">Type</span>
+                            <span className="text-xs text-gray-500 block mb-1">{t('ssl.dns.type')}</span>
                             <code className="font-bold">TXT</code>
                         </div>
                         <div className="bg-white p-3 rounded border">
-                            <span className="text-xs text-gray-500 block mb-1">Host / Name</span>
+                            <span className="text-xs text-gray-500 block mb-1">{t('ssl.dns.host')}</span>
                             <code className="font-bold break-all select-all">{dnsData.txtRecord}</code>
                         </div>
                         <div className="md:col-span-2 bg-white p-3 rounded border">
-                            <span className="text-xs text-gray-500 block mb-1">Value / Content</span>
+                            <span className="text-xs text-gray-500 block mb-1">{t('ssl.dns.value')}</span>
                             <code className="font-bold break-all select-all">{dnsData.txtValue}</code>
                         </div>
                     </div>
@@ -362,7 +366,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                             className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
                         >
                             <i className="fa-solid fa-rotate-right mr-2"></i>
-                            Check Propagation
+                            {t('ssl.dns.checkPropagation')}
                         </button>
                     </div>
                 </div>
@@ -372,7 +376,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex items-start gap-3">
                     <i className="fa-solid fa-circle-exclamation mt-1"></i>
                     <div>
-                        <h4 className="font-bold">Provisioning Failed</h4>
+                        <h4 className="font-bold">{t('ssl.provisionFailed')}</h4>
                         <p>{error}</p>
                     </div>
                 </div>
@@ -389,9 +393,9 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                             }`}
                     >
                         {status === "loading" ? (
-                            <><i className="fa-solid fa-circle-notch fa-spin"></i> Processing...</>
+                            <><i className="fa-solid fa-circle-notch fa-spin"></i> {t('ssl.processing')}</>
                         ) : (
-                            "Start Provisioning"
+                            t('ssl.startProvisioning')
                         )}
                     </button>
                 )}
