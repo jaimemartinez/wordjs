@@ -178,7 +178,6 @@ function GatewayConfigForm() {
     useEffect(() => {
         setLoading(true);
         load();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const generateSelfSigned = async () => {

@@ -53,7 +53,7 @@ function clusterMode(nodes: unknown): 'split' | 'separate' {
  * the screen can explain it before the administrator types a password and a code (QA X1-06).
  */
 function sessionAddress(req: Request): { boundSession: boolean; mainAddress: string | null } {
-    let mainAddress: string | null = null;
+    let mainAddress: string | null;
     try { mainAddress = (siteHostPolicy.get().canonical || {}).origin || null; } catch { mainAddress = null; }
     return { boundSession: sessionBoundToSecondaryAddress(req) === true, mainAddress };
 }
