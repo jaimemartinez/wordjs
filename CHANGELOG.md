@@ -1125,6 +1125,15 @@ the boot error links there too.
   backend supervisor (`backend/server.js`) no longer gives up after five fast crashes: it backs off (1 s up to
   30 s) and keeps restarting. A deadlock victim is run again on MySQL (`ER_LOCK_DEADLOCK`) and Postgres
   (`40P01`) instead of failing the request, so concurrent meta writes on one post are no longer lost.
+- **A cancelled request no longer stops the server.** When a client closed its connection mid-request,
+  Node could report the abort (`Error: aborted`, `ECONNRESET`) as an uncaught exception, and WordJS exited:
+  in development every fresh install of the monolith died right after setup (its own cache purge gave up on
+  a page Next was still compiling), and a reload during a compile did the same. Every listener of the
+  monolith, the backend, the frontend server and the gateway workers now gives each request a permanent
+  handler for that error, and the last-resort crash handlers log a client abort instead of exiting (any other
+  uncaught exception still restarts the process).
+- **`npm run verify:f0` works on a multisite install.** It loaded the OpenAPI document outside any site
+  and stopped with `site_context_missing`; it now loads it as site 1, as the server does at boot.
 - **Switching the database engine from the panel works.** From a SQLite-native site, *Database migration*
   sent the SQLite search index (`CREATE VIRTUAL TABLE … fts5`) to the target and always failed; to
   PostgreSQL with an ordinary role it failed on `session_replication_role` ("current transaction is

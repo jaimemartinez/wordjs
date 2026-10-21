@@ -11,6 +11,7 @@ const {
     createReplicaUpgradeHandler,
     isGatewayPeer,
 } = require('./backend-proxy-target.js');
+const { installClientAbortGuard } = require('./client-abort.js');
 // The configured media/CDN origin joins img-src/media-src at response time (the build cannot know it).
 const { installMediaCsp } = require('./media-csp.js');
 const { frontendListenHost } = require('./local-gateway.js');
@@ -151,6 +152,8 @@ app.prepare().then(() => {
             installMediaCsp(res);
             dispatchGateway(req, res, parsedUrl);
         });
+        // A browser that cancels a request must not end the process (client-abort.js).
+        installClientAbortGuard(server);
         if (onUpgradeGateway) server.on('upgrade', onUpgradeGateway);
         server.listen(...listenArgs, (err) => {
             if (err) throw err;
@@ -165,6 +168,7 @@ app.prepare().then(() => {
             installMediaCsp(res);
             dispatchFrontDoor(req, res, parsedUrl);
         });
+        installClientAbortGuard(server);
         if (onUpgradeFrontDoor) server.on('upgrade', onUpgradeFrontDoor);
         server.listen(...listenArgs, (err) => {
             if (err) throw err;

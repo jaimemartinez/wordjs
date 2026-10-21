@@ -76,6 +76,8 @@ const BACKEND_PREFIXES = ['/api', '/public', '/uploads', '/themes', '/plugins', 
 // on-demand purge worked in monolith mode and silently 404'd in the other two. One list, three
 // dispatchers — gateway/test/dispatcher-parity.test.js walks all three and demands one verdict.
 const { isNextOwnedApiPath } = require('./frontend/backend-proxy-target.js');
+// A browser that cancels a request must not end the process: every listener below is guarded.
+const { installClientAbortGuard } = require('./frontend/client-abort.js');
 // The configured media/CDN origin joins the page CSP's img-src/media-src at response time.
 const { installMediaCsp } = require('./frontend/media-csp.js');
 const isBackendPath = (url) => {
@@ -324,7 +326,7 @@ function forwardUpgrade(sink) {
  */
 function createPublicServer({ ssl, requestListener, upgradeHandler, sink, logger }) {
     const log = logger || console;
-    const server = ssl ? require('https').createServer(ssl, requestListener) : require('http').createServer(requestListener);
+    const server = installClientAbortGuard(ssl ? require('https').createServer(ssl, requestListener) : require('http').createServer(requestListener));
     const emit = server.emit;
     server.emit = function emitWithOneUpgradeHandler(event, ...args) {
         if (event !== 'upgrade') return emit.call(this, event, ...args);
@@ -483,7 +485,7 @@ async function main() {
 
     // 5) Loopback-only HTTP listener for the frontend's server-side (SSR) API calls — keeps SSR on
     //    plain HTTP so self-signed TLS never blocks it. Not exposed (127.0.0.1).
-    http.createServer(backendApp).listen(LOOPBACK_PORT, '127.0.0.1', () => {
+    installClientAbortGuard(http.createServer(backendApp)).listen(LOOPBACK_PORT, '127.0.0.1', () => {
         console.log(`   ↳ internal SSR API: http://127.0.0.1:${LOOPBACK_PORT} (loopback only)`);
     });
 
@@ -505,12 +507,12 @@ async function main() {
             }
             acmeListener = { port, srv: null };
             if (!port) return;
-            const srv = http.createServer(createAcmeHandler({
+            const srv = installClientAbortGuard(http.createServer(createAcmeHandler({
                 challengeBase,
                 port: PUBLIC_PORT,
                 getPolicy: provider && typeof provider.get === 'function' ? () => provider.get() : () => null,
                 isInstalled,
-            }));
+            })));
             srv.on('error', (e) => console.warn(`[monolith] ACME HTTP-01 listener on :${port} failed: ${e.message}`));
             srv.listen(port, () => console.log(`   ↳ ACME HTTP-01 + HTTPS-redirect on :${port}`));
             acmeListener.srv = srv;

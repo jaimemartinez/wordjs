@@ -275,6 +275,11 @@ function installRuntimeBlameHandlers() {
             log.error({ err: error, slug: serving }, `[CrashGuard] Uncaught exception while serving plugin '${serving}' — contained, the process keeps running.`);
             return;
         }
+        // A browser that cancelled a request (core/client-abort) is not a crash: no blame, no exit.
+        if (require('./client-abort').isClientAbort(error)) {
+            log.warn({ err: error }, 'A client closed its connection mid-request (ignored)');
+            return;
+        }
         log.error({ err: error }, '💥 Uncaught Exception');
 
         const slug = extractPluginFromStack(error.stack);
