@@ -117,7 +117,7 @@ function AdminConnectionIssueScreen({ issue, onRetry }: { issue: ConnectionIssue
         <div className="flex h-dvh items-center justify-center bg-gray-100 p-4">
             <div role="alert" aria-live="polite" className="max-w-md w-full bg-white rounded-3xl border border-gray-100 shadow-xl p-8 text-center" data-testid="admin-connection-issue">
                 <div className="inline-flex w-14 h-14 shrink-0 rounded-2xl bg-amber-100 text-amber-600 items-center justify-center mb-4">
-                    <i className={`fa-solid ${limited ? "fa-hourglass-half" : "fa-plug-circle-xmark"} text-2xl`} aria-hidden="true"></i>
+                    <i className={`fa-solid ${limited ? "fa-clock" : "fa-triangle-exclamation"} text-2xl`} aria-hidden="true"></i>
                 </div>
                 <h1 className="text-xl font-black text-gray-900">{t(limited ? "admin.connection.limited.title" : "admin.connection.down.title")}</h1>
                 <p className="text-sm text-gray-500 mt-2">{t(limited ? "admin.connection.limited.body" : "admin.connection.down.body")}</p>

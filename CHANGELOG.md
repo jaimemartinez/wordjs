@@ -1056,12 +1056,16 @@ the boot error links there too.
   end to end in all three deployment modes:
   - *Media*: picking or dropping several files uploads every one of them (only the first was sent); a file
     the server refuses is listed with its reason (too large, refused type); UTF-8 file names keep their
-    accents in the title, and the stored file name folds them (`ñandú` → `nandu`).
+    accents in the title, and the stored file name folds them (`ñandú` → `nandu`). The upload size limit
+    is set in Settings → Media and applies on save (it was `wordjs-config.json` only); a refused upload
+    names the limit, and the media screen checks a file against it before sending it.
   - *Posts and pages*: «Delete» moves an entry to the trash, and the list now has a **Trash** tab with
     **Restore** (back to the status it had) and **Delete permanently**; `POST /posts/:id/restore` is the API.
     «Duplicate» carries categories, tags and SEO fields over, and opening the copy no longer gives it back the
     original's title and slug. The editor's Slug field shows the entry's slug, a published entry keeps its URL
     when its title changes, and an entry created or saved without a category lands in the default category.
+  - *Public site*: search shows the real number of results and pages through them; the «Latest posts»
+    front page pages at `/page/{n}`.
   - *Reusable symbols* can be saved again («Save block as symbol» always failed); a site where the symbol
     type had been registered as internal is corrected on the next save.
   - *Comments*: Approve / Unapprove appear, pending comments are highlighted, the Spam tab offers «Not spam»
@@ -1069,7 +1073,7 @@ the boot error links there too.
     lets an editor take an approval back. «Enable comments» and «Registered users only» now take effect on the
     public form and on `POST /comments`, and a signed-in visitor comments under their own name.
   - *Accounts*: «Sign out» ends this browser's session only; My Account → **Sessions** signs out everywhere.
-    A rate-limited (429) or unreachable server no longer looks like a sign-out: the admin says so and retries
+    A two-factor challenge completes one sign-in only. A rate-limited (429) or unreachable server no longer looks like a sign-out: the admin says so and retries
     on its own. The live notification stream is shared by every tab of a browser, backs off properly when
     refused, and past the per-user cap the server answers `429` with `Retry-After`.
   - *Users and roles*: the Team and Subscribers lists page, search and filter by role on the server (they
