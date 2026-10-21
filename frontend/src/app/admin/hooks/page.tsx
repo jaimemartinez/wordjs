@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { plural } from "@/lib/i18n";
 import LiveTimeline from "./LiveTimeline";
 
 type HookHandler = {
@@ -223,6 +224,7 @@ export default function HooksPage() {
                     <input
                         type="text"
                         placeholder={t('hooks.admin.searchPlaceholder')}
+                        aria-label={t('hooks.admin.searchPlaceholder')}
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
@@ -296,7 +298,7 @@ export default function HooksPage() {
                                             )}
                                         </div>
                                         <span className={`shrink-0 text-[11px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider border ${activeTab === 'actions' ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-pink-50 text-pink-700 border-pink-100'}`}>
-                                            {filteredData[hookName].length} {t('hooks.admin.handlers')}
+                                            {filteredData[hookName].length} {plural(t, 'hooks.admin.handlers', filteredData[hookName].length)}
                                         </span>
                                     </div>
 

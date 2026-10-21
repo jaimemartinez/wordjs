@@ -1177,6 +1177,7 @@ export default function VersoEditor({
                                             : []),
                                     ]}
                                     placeholder={trStr("Select an option", language)}
+                                    aria-label={trStr("Estado de publicación", language)}
                                     className="!h-9 !py-1 !px-2.5 !bg-[var(--ed-surface-container)] !border-[var(--ed-outline-variant)] !rounded-lg !text-[11px] min-w-[108px]"
                                 />
                             </div>

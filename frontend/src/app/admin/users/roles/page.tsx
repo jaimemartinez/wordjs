@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { plural } from "@/lib/i18n";
 // A role a plugin declared is shown as that plugin's, read-only (backend core/plugin-roles.ts).
 import { PluginRoleBadges, PluginRolePanel, canDeleteRole, isPluginRole } from "./PluginRole";
 
@@ -185,7 +186,7 @@ export default function RolesPage() {
                             </div>
                             <div className="mt-4 flex flex-wrap gap-1">
                                 <span className="text-[11px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full font-bold">
-                                    {role.capabilities.length} {t('roles.caps')}
+                                    {role.capabilities.length} {plural(t, 'roles.caps', role.capabilities.length)}
                                 </span>
                             </div>
                         </div>

@@ -190,7 +190,7 @@ export default function ChromeNavMobile({ items, collapse = "mobile" }: { items:
                 id={panelId}
                 inert={!open}
                 aria-hidden={!open}
-                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out${hideAbove}${touchSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "translate-x-0" : "translate-x-full rtl:-translate-x-full"}`}
+                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] transform transition-[transform,box-shadow] duration-300 ease-out${hideAbove}${touchSubmenus ? " pointer-coarse:max-lg:block" : ""} ${open ? "translate-x-0 shadow-2xl" : "translate-x-full rtl:-translate-x-full shadow-none"}`}
             >
                 <div className="p-6">
                     <button

@@ -44,6 +44,7 @@ export default function OffCanvasClient({
     breakpoint = "always",
     closeOnEsc = true,
     scrollLock = true,
+    closeLabel = "Close",
     children,
 }: {
     triggerLabel?: string;
@@ -52,6 +53,8 @@ export default function OffCanvasClient({
     breakpoint?: string;
     closeOnEsc?: boolean;
     scrollLock?: boolean;
+    /** Site-language name of the close button (lib/public/uiStrings). */
+    closeLabel?: string;
     children?: React.ReactNode;
 }) {
     const [open, setOpen] = useState(false);
@@ -141,7 +144,7 @@ export default function OffCanvasClient({
                         HIDE_ABOVE_BP[bp],
                     )}
                     onClick={() => setOpen(false)}
-                    aria-label="Cerrar"
+                    aria-label={closeLabel}
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

@@ -19,8 +19,13 @@ describe("BackToTopBlock — server-rendered control", () => {
 
     it("renders a real <button> with an accessible name (default label)", () => {
         const html = renderToStaticMarkup(<BackToTopBlock />);
-        expect(html).toMatch(/<button[^>]*aria-label="Arriba"/);
+        expect(html).toMatch(/<button[^>]*aria-label="Back to top"/);
         expect(html).toContain('type="button"');
+    });
+
+    it("with no label of its own, the name follows the SITE language (it was a fixed Spanish «Arriba»)", () => {
+        expect(renderToStaticMarkup(<BackToTopBlock label="" ui={{ backToTop: "Volver arriba" }} />)).toContain('aria-label="Volver arriba"');
+        expect(renderToStaticMarkup(<BackToTopBlock label="  " ui={{ backToTop: "Voltar ao topo" }} />)).toContain('aria-label="Voltar ao topo"');
     });
 
     it("a custom label becomes the aria-label", () => {

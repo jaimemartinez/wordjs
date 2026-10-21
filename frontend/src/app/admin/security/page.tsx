@@ -384,10 +384,10 @@ function GatewayConfigForm() {
             )}
 
             <div className="space-y-3">
-                <label className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('security.gateway.port')}</label>
+                <label htmlFor="security-gateway-port" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('security.gateway.port')}</label>
                 <div className="relative">
                     <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-bold">:</span>
-                    <input
+                    <input id="security-gateway-port"
                         type="number"
                         value={config.gatewayPort ?? 3000}
                         onChange={e => setConfig({ ...config, gatewayPort: e.target.value })}
@@ -584,8 +584,8 @@ function MfaPolicyForm() {
 
             <div className="flex flex-wrap items-end gap-4">
                 <div>
-                    <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('security.mfa.graceDays')}</label>
-                    <input
+                    <label htmlFor="security-mfa-grace-days" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('security.mfa.graceDays')}</label>
+                    <input id="security-mfa-grace-days"
                         type="number"
                         min={0}
                         value={graceDays}

@@ -77,7 +77,7 @@ export function clampPage(page: number, totalPages: number): number {
     return Math.min(max, positiveInt(page, 1));
 }
 
-/** The 1-based row range this page shows, for the "1–24 de 137" counter. Empty library → 0–0 of 0. */
+/** The 1-based row range this page shows, for the "1–24 of 137" counter. Empty library → 0–0 of 0. */
 export function pageRange(page: number, perPage: number, total: number): { from: number; to: number; total: number } {
     const size = positiveInt(perPage, 20);
     const count = Math.max(0, Math.floor(Number(total)) || 0);
@@ -229,7 +229,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                 <div className="flex items-center justify-between sm:justify-end gap-3">
                     {total > 0 && (
                         <span className="text-xs font-medium text-[var(--ed-on-surface-variant)] whitespace-nowrap" aria-live="polite">
-                            {range.from}–{range.to} de {range.total}
+                            {t('media.range').replace('{from}', String(range.from)).replace('{to}', String(range.to)).replace('{total}', String(range.total))}
                         </span>
                     )}
                     <button

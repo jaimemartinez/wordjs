@@ -327,6 +327,7 @@ export default function MenusPage() {
                                     value={newMenuName}
                                     onChange={e => setNewMenuName(e.target.value)}
                                     placeholder={t('menus.menuNamePlaceholder')}
+                                    aria-label={t('menus.createNewMenu')}
                                     className="flex-1 bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 text-sm font-bold text-gray-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all placeholder:font-normal"
                                     required
                                 />
@@ -358,6 +359,7 @@ export default function MenusPage() {
                                         value={customLink.url}
                                         onChange={e => setCustomLink({ ...customLink, url: e.target.value })}
                                         placeholder="https://"
+                                        aria-label={t('menus.url')}
                                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all"
                                     />
                                     <input
@@ -365,6 +367,7 @@ export default function MenusPage() {
                                         value={customLink.title}
                                         onChange={e => setCustomLink({ ...customLink, title: e.target.value })}
                                         placeholder={t('menus.linkTextPlaceholder')}
+                                        aria-label={t('menus.linkTextPlaceholder')}
                                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all"
                                     />
                                     <button

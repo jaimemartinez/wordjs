@@ -89,7 +89,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
 
     const handleDelete = async (ids: number[]) => {
         const msg = ids.length === 1 ? (t('posts.delete.message') || 'Delete this item?') : t('table.delete.many').replace('{n}', String(ids.length));
-        if (!await confirm(msg, t('posts.delete.title') || 'Confirm delete', true)) return;
+        if (!await confirm(msg, t('posts.delete.title') || 'Confirm delete', true, { confirmText: t('common.delete') })) return;
         setBusy(true);
         const failed: number[] = [];
         for (const id of ids) {
@@ -195,7 +195,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                             type="button"
                             aria-pressed={status === tab.key}
                             onClick={() => { setStatus(tab.key); setPage(1); }}
-                            className={`flex-1 sm:flex-none min-h-11 px-3 sm:px-4 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${status === tab.key ? 'bg-blue-600 text-white shadow' : 'text-gray-500 hover:text-gray-700'}`}
+                            className={`flex-auto sm:flex-none min-h-11 px-3 sm:px-4 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${status === tab.key ? 'bg-blue-600 text-white shadow' : 'text-gray-500 hover:text-gray-700'}`}
                         >
                             {t(tab.labelKey)}
                         </button>

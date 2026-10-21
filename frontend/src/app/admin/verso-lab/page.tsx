@@ -31,6 +31,7 @@
  * cualquier escala (la justificación completa, en viewport.ts).
  */
 import React from "react";
+import { useOptionalI18n } from "@/contexts/I18nContext";
 import {
     createEditor,
     type EditorHandle,
@@ -410,6 +411,7 @@ function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
 }
 
 export default function VersoLabPage() {
+    const i18n = useOptionalI18n();
     // true en dev; en producción null hasta leer la query (?lab=1) tras montar.
     const [allowed, setAllowed] = React.useState<boolean | null>(
         process.env.NODE_ENV !== "production" ? true : null,
@@ -425,10 +427,10 @@ export default function VersoLabPage() {
     }, []);
     if (allowed === null || fixture === null) return null;
     if (!allowed) {
+        const [before, after] = (i18n?.t("versoLab.disabled") ?? "Verso Lab is disabled in production. Add {param} to the URL to open the test bench.").split("{param}");
         return (
             <div className="p-8 text-sm text-[var(--ed-on-surface-variant,#6b6880)]">
-                Verso Lab está deshabilitado en producción. Añade <code>?lab=1</code> a la URL para
-                abrir el banco de pruebas.
+                {before}<code>?lab=1</code>{after}
             </div>
         );
     }

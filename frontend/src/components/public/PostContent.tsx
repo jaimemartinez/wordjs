@@ -95,7 +95,7 @@ export default function PostContent({ post, settings, category, showComments }: 
         ) : body
     );
     const pageHtmlClass = "wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
-    const postHtmlClass = "wjs-post-body wjs-content prose prose-lg mx-auto p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
+    const postHtmlClass = "wjs-post-body wjs-content prose prose-lg mx-auto p-[min(var(--wjs-card-pad,2rem),1rem)] sm:p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
 
     return (
         <div className="w-full">

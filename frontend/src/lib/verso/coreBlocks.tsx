@@ -1801,7 +1801,8 @@ export const coreBlockDefinitions: BlockDefinition[] = [
             showAfter: 400,
             position: "br",
             smoothScroll: true,
-            label: "Arriba",
+            // Empty: the button is named in the SITE's language at render (public.backToTop).
+            label: "",
             icon: "fa-arrow-up",
             css: {},
         },

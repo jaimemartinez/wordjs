@@ -18,6 +18,7 @@
  */
 import { useEffect, useState } from "react";
 import { bc, cx, safeCss } from "@/components/blocks/blockVars";
+import type { PublicUiStrings } from "@/lib/public/uiStrings";
 
 // Fixed offset from the block's chosen corner, as literal classes so Tailwind sees them. Logical
 // `start`/`end` keep the corner correct under RTL.
@@ -33,9 +34,10 @@ export default function BackToTopBlock({
     showAfter = 400,
     position = "br",
     smoothScroll = true,
-    label = "Arriba",
+    label,
     icon = "fa-arrow-up",
     css,
+    ui,
 }: {
     showAfter?: number;
     position?: string;
@@ -43,13 +45,27 @@ export default function BackToTopBlock({
     label?: string;
     icon?: string;
     css?: React.CSSProperties;
+    /** Site-language strings (lib/public/uiStrings), for the default accessible name. */
+    ui?: Pick<PublicUiStrings, "backToTop">;
 }) {
     const [visible, setVisible] = useState(false);
 
     useEffect(() => {
         const threshold = Math.max(0, Number(showAfter) || 0);
-        const onScroll = () => setVisible(window.scrollY > threshold);
-        onScroll(); // reflect the current position immediately (deep-linked / restored scroll)
+        // On a phone the button sits ON the text column (there is no margin beside it), so it shows
+        // only while the visitor scrolls back UP — when they are looking for the top — and steps aside
+        // while they read down. Wider screens keep it whenever they are past the threshold.
+        const narrow = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 767.98px)") : null;
+        let lastY = window.scrollY;
+        const onScroll = () => {
+            const y = window.scrollY;
+            const past = y > threshold;
+            if (!narrow?.matches) setVisible(past);
+            else if (!past) setVisible(false);
+            else if (Math.abs(y - lastY) > 4) setVisible(y < lastY);
+            lastY = y;
+        };
+        setVisible(window.scrollY > threshold && !narrow?.matches); // deep-linked / restored scroll
         window.addEventListener("scroll", onScroll, { passive: true });
         return () => window.removeEventListener("scroll", onScroll);
     }, [showAfter]);
@@ -64,7 +80,7 @@ export default function BackToTopBlock({
 
     const posClass = POSITION_CLASS[position === "bl" ? "bl" : "br"];
     const iconClass = typeof icon === "string" && ICON_TOKEN.test(icon.trim()) ? icon.trim() : "fa-arrow-up";
-    const accessibleLabel = typeof label === "string" && label.trim() ? label : "Arriba";
+    const accessibleLabel = typeof label === "string" && label.trim() ? label : (ui?.backToTop || "Back to top");
 
     return (
         <button

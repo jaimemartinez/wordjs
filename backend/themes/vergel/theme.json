@@ -1,10 +1,14 @@
 {
   "name": "Vergel",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "An organic portfolio — soft, rounded, airy and single-column. Sage green and blush on a pale garden white, Space Grotesk headings, pill buttons, floating cards and lots of air.",
   "translations": {
-    "es": { "description": "Un portafolio orgánico — suave, redondeado, aireado y a una columna. Verde salvia y rubor sobre un blanco de jardín pálido, títulos en Space Grotesk, botones píldora, tarjetas flotantes y mucho aire." },
-    "pt": { "description": "Um portfólio orgânico — suave, arredondado, arejado e em uma coluna. Verde-sálvia e rosado sobre um branco de jardim pálido, títulos em Space Grotesk, botões em pílula, cartões flutuantes e muito respiro." }
+    "es": {
+      "description": "Un portafolio orgánico — suave, redondeado, aireado y a una columna. Verde salvia y rubor sobre un blanco de jardín pálido, títulos en Space Grotesk, botones píldora, tarjetas flotantes y mucho aire."
+    },
+    "pt": {
+      "description": "Um portfólio orgânico — suave, arredondado, arejado e em uma coluna. Verde-sálvia e rosado sobre um branco de jardim pálido, títulos em Space Grotesk, botões em pílula, cartões flutuantes e muito respiro."
+    }
   },
   "author": "WordJS",
   "generator": "wordjs",

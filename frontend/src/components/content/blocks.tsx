@@ -56,7 +56,7 @@ import TocScrollSpy from "./TocScrollSpy";
 import { buildMenuTree, safeMenuHref, menuTargetRel, type ChromeMenuItem } from "@/lib/chromeData";
 import { parseLocale, isRtlLocale } from "@/lib/documentLanguage";
 
-export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
+export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css, ui }: any) {
     return (
         <div
             className={bc('audio-player')}
@@ -73,7 +73,7 @@ export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, ico
                 ...safeCss(css),
             }}
         >
-            <AudioTransport src={src} title={title} />
+            <AudioTransport src={src} title={title} ui={ui} />
         </div>
     );
 }
@@ -556,7 +556,7 @@ export function SiteLogoBlock({ mode = "both", linkToHome = true, maxHeight = 40
  * data wiring is needed for the common case. Emits `.wjs-offcanvas` and reuses the header's
  * `.wjs-header-mobile-overlay` / `.wjs-header-mobile-panel` hooks so themes style it.
  */
-export function OffCanvasBlock({ slot, triggerLabel = "Menú", triggerIcon = "fa-bars", side = "left", breakpoint = "always", closeOnEsc = true, scrollLock = true, css, isEditing }: any) {
+export function OffCanvasBlock({ slot, triggerLabel = "Menú", triggerIcon = "fa-bars", side = "left", breakpoint = "always", closeOnEsc = true, scrollLock = true, css, isEditing, ui }: any) {
     const sideSafe = side === "right" ? "right" : "left";
     const bpSafe = breakpoint === "md" || breakpoint === "lg" ? breakpoint : "always";
     // The slot arrives as a render function on BOTH surfaces (editor DropZone / public wrapper div).
@@ -571,6 +571,7 @@ export function OffCanvasBlock({ slot, triggerLabel = "Menú", triggerIcon = "fa
                 breakpoint={bpSafe}
                 closeOnEsc={closeOnEsc !== false}
                 scrollLock={scrollLock !== false}
+                closeLabel={ui?.close}
             >
                 {panelChildren}
                 {isEditing && !panelChildren ? (
@@ -1548,7 +1549,7 @@ export function CTABannerBlock({ title, subtitle, buttonText, buttonLink, varian
     );
 }
 
-export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: any) {
+export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css, ui }: any) {
     const vars = {
         ...blockVars('video', { aspect: aspectRatio, radius: unit(radius), bg }),
         ...safeCss(css),
@@ -1566,6 +1567,7 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
                 src={selfHostedSrc}
                 poster={sameOriginPath(poster) ?? ''}
                 vars={vars}
+                playLabel={ui?.mediaPlayVideo}
             />
         );
     }

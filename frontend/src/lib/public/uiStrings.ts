@@ -22,6 +22,15 @@ export interface PublicUiStrings {
     formSuccess: string;
     formError: string;
     formSubmit: string;
+    backToTop: string;
+    mediaPlay: string;
+    mediaPause: string;
+    mediaPosition: string;
+    /** "{now} of {total}" */
+    mediaPositionOf: string;
+    mediaDownloadAudio: string;
+    mediaPlayVideo: string;
+    close: string;
 }
 
 /** Catalogue language for a document language tag: its primary subtag when the catalogue has it, else English. */
@@ -39,6 +48,14 @@ export function publicUiStringsFor(lang: Language): PublicUiStrings {
         formSuccess: t("public.form.success", lang),
         formError: t("public.form.error", lang),
         formSubmit: t("public.form.submit", lang),
+        backToTop: t("public.backToTop", lang),
+        mediaPlay: t("public.media.play", lang),
+        mediaPause: t("public.media.pause", lang),
+        mediaPosition: t("public.media.position", lang),
+        mediaPositionOf: t("public.media.positionOf", lang),
+        mediaDownloadAudio: t("public.media.downloadAudio", lang),
+        mediaPlayVideo: t("public.media.playVideo", lang),
+        close: t("public.close", lang),
     };
 }
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { plural } from "@/lib/i18n";
 import { PageHeader, Button, Card } from "@/components/ui";
 
 /**
@@ -50,7 +51,10 @@ export default function SiteHealthPage() {
                             <i className={`fa-solid ${ICON[verdict as Status]} text-3xl`} aria-hidden="true"></i>
                             <div>
                                 <p className="font-bold text-gray-900">{t(`siteHealth.verdict.${verdict}`)}</p>
-                                <p className="text-sm text-gray-500">{t("siteHealth.counts").replace("{fail}", String(report!.summary.fail)).replace("{warn}", String(report!.summary.warn)).replace("{ok}", String(report!.summary.ok))}</p>
+                                <p className="text-sm text-gray-500">{t("siteHealth.counts")
+                                    .replace("{fail}", plural(t, "siteHealth.count.fail", report!.summary.fail).replace("{n}", String(report!.summary.fail)))
+                                    .replace("{warn}", plural(t, "siteHealth.count.warn", report!.summary.warn).replace("{n}", String(report!.summary.warn)))
+                                    .replace("{ok}", plural(t, "siteHealth.count.ok", report!.summary.ok).replace("{n}", String(report!.summary.ok)))}</p>
                             </div>
                         </div>
                     </Card>

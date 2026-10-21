@@ -13,7 +13,7 @@ export const fmtTime = (s: number): string => {
     return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 };
 
-const SelfHostedVideo = ({ src, poster, vars }: { src: string; poster: string; vars: React.CSSProperties }) => {
+const SelfHostedVideo = ({ src, poster, vars, playLabel }: { src: string; poster: string; vars: React.CSSProperties; playLabel?: string }) => {
     const ref = React.useRef<HTMLVideoElement | null>(null);
     const [started, setStarted] = useState(false);
     const [total, setTotal] = useState(NaN);
@@ -48,7 +48,7 @@ const SelfHostedVideo = ({ src, poster, vars }: { src: string; poster: string; v
                 onLoadedMetadata={(e) => setTotal(e.currentTarget.duration)}
             />
             {!started && (
-                <button type="button" className={bc('video-embed__cover')} onClick={start} aria-label="Reproducir el vídeo">
+                <button type="button" className={bc('video-embed__cover')} onClick={start} aria-label={playLabel || "Play the video"}>
                     <span className={bc('video-embed__scrim')} aria-hidden="true" />
                     <span className={bc('video-embed__play')} aria-hidden="true">
                         <i className="fa-solid fa-play"></i>

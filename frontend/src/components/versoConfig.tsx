@@ -5,6 +5,8 @@ import MediaPickerModal from "./MediaPickerModal";
 import ModernSelect from "./ModernSelect";
 import { categoriesApi, themesApi, Category } from "@/lib/api";
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
+import { useOptionalI18n } from "@/contexts/I18nContext";
+import { trStr, trFmt } from "@/lib/editorI18n";
 import { buildSrcSet, srcSetBelongsTo, rememberPickedMedia, getPickedMedia } from "@/lib/imageSrcset";
 
 
@@ -132,6 +134,8 @@ export const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
     columnCount: number;
 }) => {
     const [openAccordion, setOpenAccordion] = useState<number | null>(null);
+    // Its own JSX, so the panel's label translation never reaches it: the editor language, here.
+    const language = useOptionalI18n()?.language ?? getStoredLanguage();
 
     // Initialize styles array based on column count
     const styles = value || Array(columnCount).fill({}).map(() => ({
@@ -160,13 +164,13 @@ export const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                         className="w-full px-4 py-3 flex justify-between items-center bg-gray-50 hover:bg-gray-100 transition-colors"
                         onClick={() => setOpenAccordion(openAccordion === index ? null : index)}
                     >
-                        <span className="font-medium text-sm">Columna {index + 1}</span>
+                        <span className="font-medium text-sm">{trFmt("Columna {n}", language, { n: index + 1 })}</span>
                         <span className="text-gray-500">{openAccordion === index ? '▲' : '▼'}</span>
                     </button>
                     {openAccordion === index && (
                         <div className="p-4 space-y-3 bg-[var(--wjs-bg-surface,white)]">
                             <div>
-                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Color de fondo</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">{trStr("Color de fondo", language)}</label>
                                 <div className="flex gap-2">
                                     <input
                                         type="color"
@@ -184,7 +188,7 @@ export const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Padding</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">{trStr("Relleno", language)}</label>
                                 <input
                                     type="text"
                                     value={styles[index]?.padding || '16px'}
@@ -194,7 +198,7 @@ export const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 />
                             </div>
                             <div>
-                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Borde (ancho)</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">{trStr("Grosor del borde", language)}</label>
                                 <input
                                     type="text"
                                     value={styles[index]?.borderWidth || '0px'}
@@ -204,7 +208,7 @@ export const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 />
                             </div>
                             <div>
-                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Color de borde</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">{trStr("Color del borde", language)}</label>
                                 <div className="flex gap-2">
                                     <input
                                         type="color"
@@ -221,7 +225,7 @@ export const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Radio de borde</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">{trStr("Radio del borde", language)}</label>
                                 <input
                                     type="text"
                                     value={styles[index]?.borderRadius || '0px'}
@@ -2347,7 +2351,8 @@ const baseConfig: any = {
                 showAfter: 400,
                 position: "br",
                 smoothScroll: true,
-                label: "Arriba",
+                // Empty: the button is named in the SITE's language at render (public.backToTop).
+                label: "",
                 icon: "fa-arrow-up",
                 css: {}
             },

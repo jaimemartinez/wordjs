@@ -403,12 +403,12 @@ export default function SettingsPage() {
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div className="space-y-2">
-                                    <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                    <label htmlFor="settings-site-title" className="text-sm font-bold text-gray-700 flex items-center gap-2">
                                         {t('settings.site.title')}
                                     </label>
                                     <div className="relative group">
                                         <i className="fa-solid fa-signature absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
-                                        <input
+                                        <input id="settings-site-title"
                                             type="text"
                                             value={settings.blogname}
                                             onChange={(e) => setSettings({ ...settings, blogname: e.target.value })}
@@ -419,12 +419,12 @@ export default function SettingsPage() {
                                 </div>
 
                                 <div className="space-y-2">
-                                    <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                    <label htmlFor="settings-tagline" className="text-sm font-bold text-gray-700 flex items-center gap-2">
                                         {t('settings.tagline')}
                                     </label>
                                     <div className="relative group">
                                         <i className="fa-solid fa-quote-left absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
-                                        <input
+                                        <input id="settings-tagline"
                                             type="text"
                                             value={settings.blogdescription}
                                             onChange={(e) => setSettings({ ...settings, blogdescription: e.target.value })}
@@ -435,12 +435,12 @@ export default function SettingsPage() {
                                 </div>
 
                                 <div className="space-y-2 md:col-span-2">
-                                    <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                    <label htmlFor="settings-admin-email" className="text-sm font-bold text-gray-700 flex items-center gap-2">
                                         {t('settings.admin.email')}
                                     </label>
                                     <div className="relative group">
                                         <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
-                                        <input
+                                        <input id="settings-admin-email"
                                             type="email"
                                             value={settings.admin_email}
                                             onChange={(e) => setSettings({ ...settings, admin_email: e.target.value })}
@@ -507,8 +507,8 @@ export default function SettingsPage() {
                                 </div>
 
                                 <div className="space-y-2">
-                                    <label className="text-sm font-bold text-gray-700">{t('settings.posts.per.page')}</label>
-                                    <input
+                                    <label htmlFor="settings-posts-per-page" className="text-sm font-bold text-gray-700">{t('settings.posts.per.page')}</label>
+                                    <input id="settings-posts-per-page"
                                         type="number"
                                         value={settings.posts_per_page}
                                         onChange={(e) => setSettings({ ...settings, posts_per_page: e.target.value })}
@@ -579,9 +579,9 @@ export default function SettingsPage() {
                                             <i className="fa-solid fa-envelope-circle-check text-xl"></i>
                                         </div>
                                         <div>
-                                            <h4 className="text-sm font-bold text-gray-900">Verificar el correo al registrarse</h4>
+                                            <h4 className="text-sm font-bold text-gray-900">{t("settings.verifyEmail.title")}</h4>
                                             <p className="text-xs text-gray-500 mt-0.5">
-                                                Quien cree una cuenta deberá confirmar su dirección desde un enlace antes de poder iniciar sesión.
+                                                {t("settings.verifyEmail.hint")}
                                             </p>
                                         </div>
                                     </div>
@@ -589,7 +589,7 @@ export default function SettingsPage() {
                                         type="button"
                                         role="switch"
                                         aria-checked={settings.require_email_verification === "1"}
-                                        aria-label="Verificar el correo al registrarse"
+                                        aria-label={t("settings.verifyEmail.title")}
                                         onClick={() => setSettings({ ...settings, require_email_verification: settings.require_email_verification === "1" ? "0" : "1" })}
                                         className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${settings.require_email_verification === "1" ? 'bg-indigo-500' : 'bg-gray-200'}`}
                                     >

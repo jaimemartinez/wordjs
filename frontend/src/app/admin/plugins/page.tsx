@@ -1325,6 +1325,7 @@ export default function PluginsPage() {
                             value={searchInput}
                             onChange={(e) => setSearchInput(e.target.value)}
                             placeholder={t('plugins.marketplace.search')}
+                            aria-label={t('plugins.marketplace.search')}
                             className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-md focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-xs font-semibold placeholder-slate-400 shadow-sm"
                         />
                     </div>
