@@ -446,3 +446,12 @@ test('the upload size limit is set from the panel and applies at once; a refusal
     assert.strictEqual(reset.body.upload_max_size_mb, '');
     assert.strictEqual((await request(app).get(`${B}/settings`)).body.upload_max_bytes, config.uploads.maxFileSize || 10 * 1024 * 1024);
 });
+
+test('a missing optional theme template is logged as information, other 4xx as warnings', () => {
+    const { levelForStatus } = require('../middleware/request-context');
+    assert.strictEqual(levelForStatus(404, 'GET', '/themes/default/templates/single.json'), 'info');
+    assert.strictEqual(levelForStatus(404, 'GET', '/api/v1/posts/9'), 'warn');
+    assert.strictEqual(levelForStatus(404, 'POST', '/themes/x'), 'warn');
+    assert.strictEqual(levelForStatus(500, 'GET', '/themes/x'), 'error');
+    assert.strictEqual(levelForStatus(200), 'info');
+});

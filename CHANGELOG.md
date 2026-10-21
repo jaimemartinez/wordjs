@@ -1065,7 +1065,12 @@ the boot error links there too.
     original's title and slug. The editor's Slug field shows the entry's slug, a published entry keeps its URL
     when its title changes, and an entry created or saved without a category lands in the default category.
   - *Public site*: search shows the real number of results and pages through them; the «Latest posts»
-    front page pages at `/page/{n}`.
+    front page pages at `/page/{n}`. The editor and pages with plugin blocks no longer request a block
+    bundle from every active plugin: `GET /plugins/registry` says which plugins ship one (`component`),
+    which removes one 404 per plugin without blocks on every load. OpenGraph and JSON-LD dates are ISO 8601
+    (from the UTC time) and carry `article:modified_time` / `dateModified`; a site with no icon of its own
+    gets a bundled one instead of a `/favicon.ico` 404 on every page; a missing optional theme template is
+    logged as information, not as a warning on every render.
   - *Reusable symbols* can be saved again («Save block as symbol» always failed); a site where the symbol
     type had been registered as internal is corrected on the next save.
   - *Comments*: Approve / Unapprove appear, pending comments are highlighted, the Spam tab offers «Not spam»
@@ -1083,7 +1088,8 @@ the boot error links there too.
     granted from the Roles screen.
   - *Settings*: the sign-up default role cannot be one that runs the site, `posts_per_page` and
     `admin_email` are validated, a refused save shows the server's reason, the admin email no longer promises
-    a confirmation message that does not exist, and the dashboard counters show real totals.
+    a confirmation message that does not exist, the logo and icon are stored as site-relative paths (they
+    embedded the address the admin happened to use), and the dashboard counters show real totals.
 
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL

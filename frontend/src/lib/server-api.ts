@@ -1119,7 +1119,8 @@ export function buildPostMetadata(
             description,
             type: 'article',
             url: canonical,
-            ...(post.date ? { publishedTime: post.date } : {}),
+            ...(isoPostDate(post.dateGmt, post.date) ? { publishedTime: isoPostDate(post.dateGmt, post.date) } : {}),
+            ...(isoPostDate(post.modifiedGmt, post.modified) ? { modifiedTime: isoPostDate(post.modifiedGmt, post.modified) } : {}),
             ...(post.author?.displayName ? { authors: [post.author.displayName] } : {}),
             ...(images ? { images } : {}),
             ...(opts.siteName ? { siteName: opts.siteName } : {}),
@@ -1212,6 +1213,22 @@ export function buildWebSiteJsonLd(siteUrl: string, siteName: string, descriptio
     };
 }
 
+/**
+ * A post date as ISO 8601 with its zone, for OpenGraph and JSON-LD. The API's `date` is
+ * "2026-10-21 11:45:00" (server-local, no zone), which is not ISO 8601 and which readers guessed at;
+ * the UTC twin (`dateGmt` / `modifiedGmt`) is the exact instant. Undefined when neither parses.
+ */
+export function isoPostDate(gmt?: string | null, local?: string | null): string | undefined {
+    const pick = (value: string | null | undefined, utc: boolean): string | undefined => {
+        const s = typeof value === 'string' ? value.trim() : '';
+        if (!s || s.startsWith('0000-00-00')) return undefined;
+        const iso = s.replace(' ', 'T');
+        const d = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso) || !utc ? iso : `${iso}Z`);
+        return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+    };
+    return pick(gmt, true) ?? pick(local, false);
+}
+
 /** BlogPosting (posts) / WebPage (pages) schema for a single content item. */
 export function buildPostJsonLd(post: Post, siteUrl: string, siteName?: string, mediaBase?: string) {
     const url = `${siteUrl}/${post.slug || post.id}`;
@@ -1224,7 +1241,8 @@ export function buildPostJsonLd(post: Post, siteUrl: string, siteName?: string, 
         url,
         mainEntityOfPage: url,
         ...(description ? { description } : {}),
-        ...(post.date ? { datePublished: post.date } : {}),
+        ...(isoPostDate(post.dateGmt, post.date) ? { datePublished: isoPostDate(post.dateGmt, post.date) } : {}),
+        ...(isoPostDate(post.modifiedGmt, post.modified) ? { dateModified: isoPostDate(post.modifiedGmt, post.modified) } : {}),
         ...(post.author?.displayName ? { author: { '@type': 'Person', name: post.author.displayName } } : {}),
         ...(images?.length ? { image: images } : {}),
         ...(siteName ? { publisher: { '@type': 'Organization', name: siteName } } : {}),

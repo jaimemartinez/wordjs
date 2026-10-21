@@ -38,7 +38,9 @@ export async function rootMetadata(): Promise<Metadata> {
     const settings = await getSettings();
     const title = settings?.blogname || "WordJS";
     const description = settings?.blogdescription || "WordPress-like CMS";
-    const icon = settings?.site_icon || "/favicon.ico";
+    // The bundled mark when the site has no icon of its own: there is no /favicon.ico, so every page
+    // logged a 404 for it.
+    const icon = settings?.site_icon || "/favicon.svg";
 
     const meta: Metadata = {
         title: { default: title, template: `%s | ${title}` },

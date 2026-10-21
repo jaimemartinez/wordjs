@@ -225,3 +225,13 @@ describe("record seed over the collaboration room's document", () => {
         expect(withRecordSeed(room, undefined)).toBe(room);
     });
 });
+
+describe("SEO dates", () => {
+    it("REGRESSION: OpenGraph/JSON-LD dates are ISO 8601 instants from the UTC twin", async () => {
+        const { isoPostDate } = await import("@/lib/server-api");
+        expect(isoPostDate("2026-10-21 11:45:00", "2026-10-21 06:45:00")).toBe("2026-10-21T11:45:00.000Z");
+        expect(isoPostDate(undefined, "2026-10-21T06:45:00-05:00")).toBe("2026-10-21T11:45:00.000Z");
+        expect(isoPostDate("0000-00-00 00:00:00", "")).toBeUndefined();
+        expect(isoPostDate(null, null)).toBeUndefined();
+    });
+});

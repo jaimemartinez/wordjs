@@ -29,7 +29,7 @@ export async function generateMetadata(): Promise<Metadata> {
         await declareSiteFromRequest();
         const [root, settings] = await Promise.all([rootMetadata(), getSettings()]);
         const baseTitle = settings?.blogname || "WordJS";
-        const icon = settings?.site_icon ? `${settings.site_icon}?t=${Date.now()}` : "/favicon.ico";
+        const icon = settings?.site_icon ? `${settings.site_icon}?t=${Date.now()}` : "/favicon.svg";
 
         return {
             ...root,

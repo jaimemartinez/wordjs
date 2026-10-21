@@ -216,9 +216,9 @@ export default function SettingsPage() {
 
     const handleSelectMedia = (media: MediaItem) => {
         if (activePicker === "logo") {
-            setSettings({ ...settings, site_logo: media.guid });
+            setSettings({ ...settings, site_logo: media.sourceUrl || media.guid });
         } else if (activePicker === "icon") {
-            setSettings({ ...settings, site_icon: media.guid });
+            setSettings({ ...settings, site_icon: media.sourceUrl || media.guid });
         }
         setActivePicker(null);
     };

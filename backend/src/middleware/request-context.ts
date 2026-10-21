@@ -81,9 +81,16 @@ function pathOf(req: Request): { path: string; truncated: boolean } {
         : { path: withoutQuery, truncated: false };
 }
 
-/** 5xx is an error, 4xx a warning, everything else information. */
-function levelForStatus(status: number): string {
+/**
+ * 5xx is an error, 4xx a warning, everything else information — except a 404 for a theme file. The
+ * public renderer asks the active theme for each optional template in the hierarchy
+ * (`templates/single-post-<slug>.json`, `single.json`, `chrome/announcement.json`…) and a theme ships
+ * only some of them, so those misses are the expected answer: logged as warnings they were about half of
+ * all log lines on a quiet site.
+ */
+function levelForStatus(status: number, method = 'GET', path = ''): string {
     if (status >= 500) return 'error';
+    if (status === 404 && (method === 'GET' || method === 'HEAD') && path.startsWith('/themes/')) return 'info';
     if (status >= 400) return 'warn';
     return 'info';
 }
@@ -129,7 +136,7 @@ function requestContext(req: Request, res: Response, next: NextFunction): void {
         // a duplicate key, which every parser resolves differently (last-wins, first-wins, or reject).
         // An abort is logged at `warn` whatever `res.statusCode` happens to say: nothing was sent, so
         // the default 200 on an aborted response is not an outcome anyone should read as success.
-        requestLogger[aborted ? 'warn' : levelForStatus(status)]({
+        requestLogger[aborted ? 'warn' : levelForStatus(status, req.method, path)]({
             method: req.method,
             path,
             status,
@@ -148,6 +155,7 @@ function requestContext(req: Request, res: Response, next: NextFunction): void {
 
 module.exports = {
     requestContext,
+    levelForStatus,
     // Exported for its test: the accept/reject decision for an incoming id is the security-relevant
     // half of this file, and a test that drives it through a live server can only observe the header.
     isAcceptableRequestId: (value: string): boolean => REQUEST_ID_PATTERN.test(String(value)),

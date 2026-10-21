@@ -93,6 +93,8 @@ export interface ContentRecord {
     type: string;
     date: string;
     dateGmt?: string;
+    modified?: string;
+    modifiedGmt?: string;
     author: { id: number; displayName: string; slug: string };
     authorId?: number;
     commentStatus: string;
