@@ -250,7 +250,7 @@ describe('plugin supply chain', () => {
             await updateOption('active_plugins', []);
         });
 
-        it('the anonymous registry carries no manifest data — just what the hooks loader needs', async () => {
+        it('the anonymous registry carries no manifest data — just what the bundle loaders need (no block bundle built here: blocks false)', async () => {
             await updateOption('active_plugins', [UI, BACKEND_ONLY]);
             perms._setGrantsInMemory(UI, ['browser:script']);
             perms._setGrantsInMemory(BACKEND_ONLY, ['settings:read']);
@@ -258,8 +258,8 @@ describe('plugin supply chain', () => {
             assert.strictEqual(r.status, 200);
             const byId = Object.fromEntries(r.body.plugins.map((e: any) => [e.id, e]));
             // Not even the browser:script grant: that is for an admin-panel user (below).
-            assert.deepStrictEqual(byId[UI], { id: UI, path: `/plugins/${UI}`, frontend: { hooks: true } });
-            assert.deepStrictEqual(byId[BACKEND_ONLY], { id: BACKEND_ONLY, path: `/plugins/${BACKEND_ONLY}` });
+            assert.deepStrictEqual(byId[UI], { id: UI, path: `/plugins/${UI}`, frontend: { hooks: true }, blocks: false });
+            assert.deepStrictEqual(byId[BACKEND_ONLY], { id: BACKEND_ONLY, path: `/plugins/${BACKEND_ONLY}`, blocks: false });
             const text = JSON.stringify(r.body);
             for (const leak of ['version', 'permissions', 'settings', 'name', 'reason', 'client/', 'browser']) {
                 assert.ok(!text.includes(leak), `registry leaks "${leak}": ${text}`);
@@ -267,8 +267,8 @@ describe('plugin supply chain', () => {
             // The administrator's admin shell reads which active plugins are granted browser:script.
             const admin = await request(app).get('/api/v1/plugins/registry').set('Authorization', `Bearer ${adminToken}`);
             const adminById = Object.fromEntries(admin.body.plugins.map((e: any) => [e.id, e]));
-            assert.deepStrictEqual(adminById[UI], { id: UI, path: `/plugins/${UI}`, browser: true, frontend: { hooks: true } });
-            assert.deepStrictEqual(adminById[BACKEND_ONLY], { id: BACKEND_ONLY, path: `/plugins/${BACKEND_ONLY}`, browser: false });
+            assert.deepStrictEqual(adminById[UI], { id: UI, path: `/plugins/${UI}`, browser: true, frontend: { hooks: true }, blocks: false });
+            assert.deepStrictEqual(adminById[BACKEND_ONLY], { id: BACKEND_ONLY, path: `/plugins/${BACKEND_ONLY}`, browser: false, blocks: false });
             await updateOption('active_plugins', []);
         });
 

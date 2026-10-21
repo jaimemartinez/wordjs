@@ -45,7 +45,7 @@
  */
 import React, { useEffect, useState } from "react";
 import {
-  fetchActivePluginIds,
+  fetchBlockPluginIds,
   loadPluginBlockConfigs,
   injectBlockCssInto,
 } from "@/lib/pluginBundleLoader";
@@ -213,7 +213,7 @@ export interface VersoPluginBlocksResult {
 export async function loadVersoPluginBlocks(
   registry: BlockRegistry,
 ): Promise<VersoPluginBlocksResult> {
-  const ids = await fetchActivePluginIds();
+  const ids = await fetchBlockPluginIds();
   const perPlugin = await Promise.all(
     ids.map(async (id) => {
       try {

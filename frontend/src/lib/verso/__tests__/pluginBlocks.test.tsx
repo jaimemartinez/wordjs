@@ -349,3 +349,55 @@ describe("bloques estáticos (dev, generate-verso-plugin-registry.js)", () => {
         expect(registry.list()).toHaveLength(1); // upsert, no duplicado
     });
 });
+
+describe("S1-21 — only plugins that serve a block bundle are asked for one", () => {
+    function mockWithRegistry(active: string[], registry: unknown, bundles: Record<string, Response>): string[] {
+        const asked: string[] = [];
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(active);
+            if (String(url).startsWith("/api/v1/plugins/registry")) return jsonResponse(registry);
+            const m = String(url).match(/\/plugins\/([^/]+)\/bundle\?type=component/);
+            if (m) { asked.push(m[1]); return bundles[m[1]] || jsonResponse({}, 404); }
+            return jsonResponse({}, 404);
+        });
+        return asked;
+    }
+
+    it("skips the active plugins the registry says ship no block bundle", async () => {
+        installImportableBundleShim();
+        const asked = mockWithRegistry(
+            ["card-gallery", "analytics-tag", "mail-server", "cookie-consent"],
+            { plugins: [
+                { id: "card-gallery", path: "/plugins/card-gallery", blocks: true },
+                { id: "analytics-tag", path: "/plugins/analytics-tag", blocks: false },
+                { id: "mail-server", path: "/plugins/mail-server", blocks: false, frontend: { hooks: true } },
+                { id: "cookie-consent", path: "/plugins/cookie-consent", blocks: false },
+            ] },
+            { "card-gallery": textResponse(singleBlockBundle("s121-a")) },
+        );
+        const { loadVersoPluginBlocks, createBlockRegistry } = await freshModules();
+        const result = await loadVersoPluginBlocks(createBlockRegistry());
+        expect(asked).toEqual(["card-gallery"]);
+        expect(result.pluginIdsWithBlocks).toEqual(["card-gallery"]);
+    });
+
+    it("asks every active plugin when the registry is unavailable or does not state `blocks`", async () => {
+        installImportableBundleShim();
+        const asked = mockWithRegistry(
+            ["card-gallery", "analytics-tag"],
+            { plugins: [{ id: "card-gallery", path: "/plugins/card-gallery" }, { id: "analytics-tag", path: "/plugins/analytics-tag" }] },
+            { "card-gallery": textResponse(singleBlockBundle("s121-b")) },
+        );
+        const { loadVersoPluginBlocks, createBlockRegistry } = await freshModules();
+        await loadVersoPluginBlocks(createBlockRegistry());
+        expect(asked.sort()).toEqual(["analytics-tag", "card-gallery"]);
+    });
+
+    it("a plugin the registry does not list (activated after it was read) is still asked", async () => {
+        const { mayShipBlockBundle } = await import("@/lib/pluginBundleLoader");
+        expect(mayShipBlockBundle([{ id: "faq", blocks: false }], "polls")).toBe(true);
+        expect(mayShipBlockBundle(null, "polls")).toBe(true);
+        expect(mayShipBlockBundle([{ id: "faq", blocks: false }], "faq")).toBe(false);
+        expect(mayShipBlockBundle([{ id: "faq", blocks: true }], "faq")).toBe(true);
+    });
+});

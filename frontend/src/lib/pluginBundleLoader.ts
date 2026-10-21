@@ -573,7 +573,7 @@ let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 // `browser` ABSENT means the registry did not say (the caller is not signed in, or has no admin-panel
 // access): only an explicit `false` is ever read as "not granted".
 // `hooks` is `true` from the current backend; an older one sent the manifest's entry path (a string).
-type PluginRegistryEntry = { id?: string; path?: string; browser?: boolean; frontend?: { hooks?: string | boolean } | null };
+type PluginRegistryEntry = { id?: string; path?: string; browser?: boolean; blocks?: boolean; frontend?: { hooks?: string | boolean } | null };
 
 /**
  * The ACTUAL response shape of GET /plugins/registry is an OBJECT: backend/src/routes/plugins.ts ends
@@ -660,6 +660,34 @@ function mayShipHooksBundle(registry: PluginRegistryEntry[] | null, pluginId: st
     const entry = registryEntryFor(registry, pluginId);
     if (!entry || entry.frontend === null) return true;
     return entryDeclaresHooks(entry);
+}
+
+/**
+ * Is it worth asking this ACTIVE plugin for its editor-block bundle? The registry says, per plugin, whether
+ * GET /plugins/<id>/bundle?type=component serves one (`blocks`). Asking every active plugin cost a 404 and a
+ * console error per plugin without blocks on EVERY public page view and every editor mount. When the
+ * registry is unavailable, or comes from a backend that does not state `blocks`, the plugin is asked, as
+ * before — never fewer blocks, only fewer pointless requests.
+ */
+export function mayShipBlockBundle(registry: PluginRegistryEntry[] | null, pluginId: string): boolean {
+    if (!registry) return true;
+    const entry = registryEntryFor(registry, pluginId);
+    if (!entry || typeof entry.blocks !== 'boolean') return true;
+    return entry.blocks;
+}
+
+/**
+ * The active plugins to ask for an editor-block bundle: fetchActivePluginIds() filtered through the
+ * registry (mayShipBlockBundle). REJECTS exactly when fetchActivePluginIds() does; a registry failure only
+ * means "ask them all".
+ */
+export async function fetchBlockPluginIds(): Promise<string[]> {
+    if (typeof window === 'undefined') return [];
+    const [ids, registry] = await Promise.all([
+        fetchActivePluginIds(),
+        fetchPluginRegistry().catch(() => null),
+    ]);
+    return ids.filter((id) => mayShipBlockBundle(registry, id));
 }
 
 // The admin menu entries a signed-in user can see (GET /plugins/menus): { href, plugin } among others.

@@ -1158,8 +1158,8 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *   get:
  *     summary: Get public plugin registry (for frontend)
  *     description: >-
- *       No sign-in required. One entry per ACTIVE plugin carrying only what the admin shell's hooks loader
- *       needs to explain a missing hooks bundle — never the manifest (no name, version, author,
+ *       No sign-in required. One entry per ACTIVE plugin carrying only what the bundle loaders need: which
+ *       plugins serve an editor-block bundle, and what explains a missing hooks bundle — never the manifest (no name, version, author,
  *       permissions or dependencies), so the endpoint cannot be used to fingerprint the install. Whether a
  *       plugin's browser:script capability is granted (`browser`) is included only for a signed-in caller
  *       with admin-panel access (access_admin_panel); every other caller gets the entries without it.
@@ -1201,6 +1201,11 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *                         properties:
  *                           hooks:
  *                             type: boolean
+ *                       blocks:
+ *                         type: boolean
+ *                         description: >-
+ *                           Whether GET /plugins/{id}/bundle?type=component serves the plugin's editor-block
+ *                           bundle (active, browser:script granted and built). Block loaders ask only these.
  */
 /**
  * @swagger
@@ -1264,6 +1269,13 @@ router.get('/assets', asyncHandler(async (req: Request, res: Response) => {
     res.json(await getActiveAssets());
 }));
 
+/** Does the bundle route serve this plugin's editor-block bundle (dist/component.bundle.js)? */
+async function componentBundleServed(slug: string): Promise<boolean> {
+    const bundle = pluginFile(slug, 'dist', 'component.bundle.js');
+    if (!bundle || !fs.existsSync(bundle)) return false;
+    try { return await require('../core/plugin-serving').browserCodeServable(slug); } catch { return false; }
+}
+
 router.get('/registry', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     // ANONYMOUS endpoint, so it answers only what its one consumer needs — never the manifest.
     //
@@ -1314,6 +1326,12 @@ router.get('/registry', optionalAuth, asyncHandler(async (req: Request, res: Res
             entry.frontend = manifest.frontend.hooks ? { hooks: true } : {};
         }
         // (A readable manifest with no `frontend` key leaves the property ABSENT — "declares nothing".)
+        // `blocks`: would GET /plugins/<id>/bundle?type=component serve something? The public site and
+        // the editor asked EVERY active plugin for its block bundle, so each plugin without editor blocks
+        // cost a 404 and a console error on every page view (S1-21). This is the same answer that request
+        // gives (active + browser:script granted + built), so it tells an anonymous caller nothing the
+        // bundle URL does not already tell them.
+        entry.blocks = await componentBundleServed(plugin.slug);
         registry.push(entry);
     }
 
