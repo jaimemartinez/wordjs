@@ -4,6 +4,8 @@ import { useState } from "react";
 import { mfaApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
+import { apiErrorText } from "@/lib/apiErrorText";
 
 /**
  * ADMIN ESCAPE HATCH from a two-factor lockout — the client half of POST /users/:id/mfa/reset.
@@ -26,7 +28,8 @@ import { useModal } from "@/contexts/ModalContext";
  *     second factor with nothing but a cookie" power that route deliberately refuses.
  * The third gate — only an administrator may reset a PRIVILEGED account — is partly invisible from here
  * (a custom role can be privileged through its capabilities, which the users list does not expose), so
- * the obvious case is hidden and the rest is left to the server's 403, whose message is shown verbatim.
+ * the obvious case is hidden and the rest is left to the server's 403, shown in the admin's language
+ * (lib/apiErrorText: matched on the code, or on the exact English text for the generic `rest_forbidden`).
  */
 export default function UserMfaReset({ userId, username, targetRole, className = "mt-8 pt-6 border-t border-gray-100" }: {
     userId: number;
@@ -38,6 +41,8 @@ export default function UserMfaReset({ userId, username, targetRole, className =
     className?: string;
 }) {
     const { user, can } = useAuth();
+    const { t } = useI18n();
+    const withUser = (key: string) => t(key).split("{user}").join(username);
     const { alert, confirm } = useModal();
     const [busy, setBusy] = useState(false);
     const [wasReset, setWasReset] = useState(false);
@@ -49,20 +54,16 @@ export default function UserMfaReset({ userId, username, targetRole, className =
     const handleReset = async () => {
         // The confirmation NAMES the account: this screen is reachable with a user already loaded into a
         // form, and "are you sure?" on the wrong row silently disarms the wrong person's second factor.
-        const ok = await confirm(
-            `Reset two-factor authentication for @${username}? Their authenticator app and backup codes stop working immediately, and they sign in with their password alone until they enrol again.`,
-            "Reset two-factor authentication",
-            true
-        );
+        const ok = await confirm(withUser("userMfa.confirm"), t("userMfa.confirmTitle"), true);
         if (!ok) return;
         setBusy(true);
         try {
             await mfaApi.resetForUser(userId);
             setWasReset(true);
         } catch (e: any) {
-            // Show the server's own message: it distinguishes the refusals that matter (privileged
-            // target, self, an API token instead of a session) and inventing copy here would hide them.
-            await alert(e?.message || "Could not reset two-factor authentication.");
+            // The server's refusal, translated: it distinguishes the refusals that matter (privileged
+            // target, self, an API token instead of a session) and a generic line here would hide them.
+            await alert(apiErrorText(t, e, "userMfa.failed"));
         } finally {
             setBusy(false);
         }
@@ -70,27 +71,24 @@ export default function UserMfaReset({ userId, username, targetRole, className =
 
     return (
         <div className={className}>
-            <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">Two-Factor Authentication</h3>
+            <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("userMfa.title")}</h3>
             {wasReset ? (
                 // The users API does not report whether an account has 2FA enabled, so the only state this
                 // screen can honestly assert is the one it just caused. Say exactly that, and no more.
                 <p className="text-sm font-medium text-emerald-600">
                     <i className="fa-solid fa-shield-halved mr-2"></i>
-                    Two-factor authentication cleared for @{username}. They can sign in with their password and enrol again from their account page.
+                    {withUser("userMfa.done")}
                 </p>
             ) : (
                 <>
-                    <p className="text-[11px] text-gray-400 leading-relaxed mb-3">
-                        If @{username} lost their authenticator, clear their second factor so they can sign in with their
-                        password again and re-enrol. Their password is not changed.
-                    </p>
+                    <p className="text-[11px] text-gray-400 leading-relaxed mb-3">{withUser("userMfa.help")}</p>
                     <button
                         type="button"
                         onClick={handleReset}
                         disabled={busy}
                         className="px-6 py-3 border-2 border-red-100 text-red-600 rounded-2xl hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition-all disabled:opacity-50"
                     >
-                        {busy ? "Resetting…" : "Reset two-factor"}
+                        {busy ? t("userMfa.resetting") : t("userMfa.reset")}
                     </button>
                 </>
             )}

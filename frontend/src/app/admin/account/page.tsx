@@ -10,6 +10,7 @@ import MfaSetup from "@/components/MfaSetup";
 import { avatarInitial } from "@/lib/avatarInitial";
 import { roleDisplayName } from "@/lib/roleOptions";
 import { registerTranslations } from "@/lib/i18n";
+import { apiErrorText } from "@/lib/apiErrorText";
 
 // This screen's strings that the core catalogue lacks.
 registerTranslations({
@@ -80,8 +81,8 @@ export default function AccountPage() {
             // A sudo refusal is about the PASSWORD, not about the profile: saying "could not update
             // profile" while the real cause is the password field is how this screen looked broken.
             addToast(isBadCurrentPassword(err)
-                ? (err?.message || t('account.currentPassword'))
-                : (err?.message || t('account.profileError')), "error");
+                ? apiErrorText(t, err, 'account.currentPassword')
+                : apiErrorText(t, err, 'account.profileError'), "error");
         } finally {
             setSavingProfile(false);
         }
@@ -98,7 +99,7 @@ export default function AccountPage() {
             addToast(t('account.pwChanged'), "success");
             setTimeout(() => { logout(); router.replace("/login"); }, 900);
         } catch (err: any) {
-            addToast(err?.message || t('account.pwError'), "error");
+            addToast(apiErrorText(t, err, 'account.pwError'), "error");
             setChangingPw(false);
         }
     };
@@ -113,8 +114,8 @@ export default function AccountPage() {
             setTimeout(() => { logout(); router.replace("/login"); }, 900);
         } catch (err: any) {
             addToast(isBadCurrentPassword(err)
-                ? (err?.message || t('account.currentPassword'))
-                : (err?.message || t('account.sessions.error')), "error");
+                ? apiErrorText(t, err, 'account.currentPassword')
+                : apiErrorText(t, err, 'account.sessions.error'), "error");
             setEndingSessions(false);
         }
     };

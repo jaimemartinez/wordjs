@@ -26,6 +26,8 @@
  */
 
 /** The CLOSED set of things the screen can say. */
+import { t as translate } from "@/lib/i18n";
+
 export type VerifyStatus =
     | "missing"    // the link carried no usable uid/token
     | "verifying"  // POST in flight
@@ -145,61 +147,31 @@ export interface VerifyCopy {
  * 'invalid' names all THREE possible causes (expired / already used / nonexistent) because the backend
  * deliberately merges them into one answer, and pretending to know which one it is would be making it up.
  */
-export const VERIFY_COPY: Record<VerifyStatus, VerifyCopy> = {
-    verifying: {
-        icon: "fa-spinner fa-spin",
-        tone: "busy",
-        title: "Confirmando tu correo…",
-        body: "Estamos comprobando el enlace. Solo tarda un momento.",
-        action: null,
-    },
-    success: {
-        icon: "fa-circle-check",
-        tone: "ok",
-        title: "Correo confirmado",
-        body: "Tu dirección ha quedado verificada y tu cuenta ya está activa. Puedes iniciar sesión.",
-        action: "Ir al inicio de sesión",
-    },
-    already: {
-        icon: "fa-circle-check",
-        tone: "ok",
-        title: "Esta cuenta ya estaba confirmada",
-        body: "No hace falta hacer nada más: la dirección ya se había verificado. Puedes iniciar sesión.",
-        action: "Ir al inicio de sesión",
-    },
-    missing: {
-        icon: "fa-link-slash",
-        tone: "warn",
-        title: "Enlace incompleto",
-        body: "A esta dirección le faltan datos del enlace de confirmación. Ábrelo directamente desde el correo que recibiste, sin copiarlo a trozos.",
-        action: "Ir al inicio de sesión",
-    },
-    invalid: {
-        icon: "fa-triangle-exclamation",
-        tone: "warn",
-        title: "Este enlace ya no sirve",
-        body: "Puede haber caducado (dura 24 horas), haberse usado ya o no corresponder a ninguna cuenta. Si ya confirmaste tu correo antes, prueba a iniciar sesión; si no, pide a la administración del sitio un enlace nuevo.",
-        action: "Ir al inicio de sesión",
-    },
-    unavailable: {
-        icon: "fa-user-slash",
-        tone: "warn",
-        title: "Ese nombre o correo ya no está libre",
-        body: "El enlace era válido, pero mientras esperaba la confirmación otra cuenta ocupó ese nombre de usuario o esa dirección. No se ha creado nada: vuelve a registrarte con otro nombre de usuario.",
-        action: "Ir al inicio de sesión",
-    },
-    throttled: {
-        icon: "fa-hourglass-half",
-        tone: "warn",
-        title: "Demasiados intentos",
-        body: "Se han hecho muchas peticiones seguidas desde aquí. Espera unos minutos y vuelve a abrir el enlace del correo.",
-        action: "Ir al inicio de sesión",
-    },
-    error: {
-        icon: "fa-plug-circle-exclamation",
-        tone: "error",
-        title: "No hemos podido confirmarlo",
-        body: "No se ha podido contactar con el sitio. Comprueba tu conexión y vuelve a abrir el enlace en unos instantes.",
-        action: "Ir al inicio de sesión",
-    },
+/** Which catalogue keys (lib/i18n, `verify.*`) each state shows; the icon and tone are not copy. */
+const VERIFY_KEYS: Record<VerifyStatus, { icon: string; tone: VerifyTone; action: boolean }> = {
+    verifying: { icon: "fa-spinner fa-spin", tone: "busy", action: false },
+    success: { icon: "fa-circle-check", tone: "ok", action: true },
+    already: { icon: "fa-circle-check", tone: "ok", action: true },
+    missing: { icon: "fa-link-slash", tone: "warn", action: true },
+    invalid: { icon: "fa-triangle-exclamation", tone: "warn", action: true },
+    unavailable: { icon: "fa-user-slash", tone: "warn", action: true },
+    throttled: { icon: "fa-hourglass-half", tone: "warn", action: true },
+    error: { icon: "fa-plug-circle-exclamation", tone: "error", action: true },
 };
+
+/** A state's copy in the visitor's language (`t` from the I18n provider). */
+export function verifyCopy(status: VerifyStatus, t: (key: string) => string): VerifyCopy {
+    const k = VERIFY_KEYS[status];
+    return {
+        icon: k.icon,
+        tone: k.tone,
+        title: t(`verify.${status}.title`),
+        body: t(`verify.${status}.body`),
+        action: k.action ? t("auth.goToLogin") : null,
+    };
+}
+
+/** Every state's copy in Spanish — the table the tests read. */
+export const VERIFY_COPY: Record<VerifyStatus, VerifyCopy> = Object.fromEntries(
+    (Object.keys(VERIFY_KEYS) as VerifyStatus[]).map((status) => [status, verifyCopy(status, (key) => translate(key, "es"))]),
+) as Record<VerifyStatus, VerifyCopy>;

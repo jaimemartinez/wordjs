@@ -1,7 +1,8 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Language, getStoredLanguage, setStoredLanguage, t } from '@/lib/i18n';
+import { Language, getStoredLanguage, setStoredLanguage, syncLanguageCookie, t } from '@/lib/i18n';
+import { FALLBACK_ADMIN_LANGUAGE } from '@/lib/adminLanguage';
 
 interface I18nContextType {
     language: Language;
@@ -11,14 +12,20 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
-export function I18nProvider({ children }: { children: React.ReactNode }) {
-    // Initialize to the deterministic server default to avoid SSR hydration
-    // mismatches; the stored language is applied on mount below.
-    const [language, setLanguageState] = useState<Language>('es');
+/**
+ * @param initialLanguage what the server rendered with (lib/adminLanguage.server.ts: the cookie, else the
+ *        site's language). Starting from it keeps the first client render identical to the server's;
+ *        without it (a screen mounted with no server layout) the fallback applies until mount.
+ */
+export function I18nProvider({ children, initialLanguage }: { children: React.ReactNode; initialLanguage?: Language }) {
+    const [language, setLanguageState] = useState<Language>(initialLanguage ?? FALLBACK_ADMIN_LANGUAGE);
 
     useEffect(() => {
-        // Load language from localStorage on mount
-        setLanguageState(getStoredLanguage());
+        // A choice stored before the cookie existed lives only in localStorage: apply it, and write the
+        // cookie so the server renders it from the next request on.
+        const stored = getStoredLanguage();
+        setLanguageState(stored);
+        syncLanguageCookie(stored);
     }, []);
 
     const setLanguage = (lang: Language) => {

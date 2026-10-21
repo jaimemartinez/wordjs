@@ -36,6 +36,8 @@ interface User {
 interface LoginResult {
     success: boolean;
     error?: string;
+    /** The server's error as it came (code, English message, data): the screen translates it (lib/apiErrorText). */
+    apiError?: { code?: string; message?: string; data?: Record<string, unknown> };
     mfaRequired?: boolean; // password OK, but a second factor is needed
     mfaToken?: string;     // short-lived challenge to pass to verifyMfa()
 }
@@ -323,6 +325,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             // Surface the server-provided message (e.g. "account locked") when available.
             let error: string | undefined;
+            let apiError: LoginResult["apiError"];
             try {
                 const data = await res.json();
                 // Fresh install: every API call answers 503 setup_required — take the user to the
@@ -332,10 +335,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     return { success: false };
                 }
                 error = data?.message || data?.error;
+                apiError = { code: data?.code, message: data?.message, data: data?.data };
             } catch {
                 // Non-JSON error body — fall back to the generic message in the caller.
             }
-            return { success: false, error };
+            return { success: false, error, apiError };
         } catch (error) {
             console.error("Login error:", error);
             return { success: false };
@@ -356,8 +360,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return { success: true };
             }
             let error: string | undefined;
-            try { const d = await res.json(); error = d?.message || d?.error; } catch { /* non-JSON */ }
-            return { success: false, error };
+            let apiError: LoginResult["apiError"];
+            try { const d = await res.json(); error = d?.message || d?.error; apiError = { code: d?.code, message: d?.message, data: d?.data }; } catch { /* non-JSON */ }
+            return { success: false, error, apiError };
         } catch (error) {
             console.error("MFA verify error:", error);
             return { success: false };

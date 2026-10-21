@@ -71,8 +71,15 @@ export async function rootMetadata(): Promise<Metadata> {
 
 export default async function RootDocument({
     children,
+    uiLanguage,
 }: {
     children: React.ReactNode;
+    /**
+     * The admin and sign-in screens render in the ADMIN's language (lib/adminLanguage.server.ts), which
+     * can differ from the site's: `<html lang>` then follows the screen, not the site. Only an admin
+     * language code (es/en/pt) is ever passed here.
+     */
+    uiLanguage?: "es" | "en" | "pt";
 }) {
     // Emit the installed fonts' @font-face rules into the INITIAL SSR <head>, so a page whose blocks
     // reference a custom font (via block css.fontFamily or a Tiptap inline `font-family` span) paints
@@ -90,7 +97,9 @@ export default async function RootDocument({
     // fetch. resolveDocumentLanguage is fail-closed: an unparseable locale or an out-of-enum
     // direction yields en/ltr rather than reaching the attribute.
     const settings = await getSettings();
-    const { lang, dir } = resolveDocumentLanguage(settings);
+    const resolved = resolveDocumentLanguage(settings);
+    const lang = uiLanguage ?? resolved.lang;
+    const dir = uiLanguage ? "ltr" : resolved.dir; // every admin language is left-to-right
     // The configured main address, for the refused-address notice's one link. The same chain
     // rootMetadata uses for metadataBase: never the request host, which is the thing in question.
     const canonical = settings?.siteurl || settings?.home || null;

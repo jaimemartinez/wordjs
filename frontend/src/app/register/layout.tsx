@@ -1,12 +1,13 @@
-import { inter } from "../fonts";
-import RootDocument, { rootMetadata } from "../_root/RootDocument";
+import { rootMetadata } from "../_root/RootDocument";
+import { authDocument } from "../_root/AuthScreen";
 
 // A root layout (there is no app/layout.tsx — see _root/RootDocument.tsx): the document and its metadata.
 export const generateMetadata = rootMetadata;
 
-// Re-applies Inter to this standalone (non-public, non-admin) tree: the root <body> carries only
-// inter.variable, so without this wrapper the page would fall back to the browser default font.
-// Same wrapper as /login and /reset-password — the three public auth screens share one shell.
+// The sign-in screens' shared shell (_root/AuthScreen.tsx): Inter and the admin language provider. It
+// reads the request's language cookie, so the screen renders per request in the visitor's language.
+export const dynamic = "force-dynamic";
+
 export default async function RegisterLayout({ children }: { children: React.ReactNode }) {
-    return RootDocument({ children: <div className={inter.className}>{children}</div> });
+    return authDocument(children);
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import type { Language } from "@/lib/i18n";
 import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
@@ -277,15 +278,13 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                         <div className="inline-flex w-14 h-14 shrink-0 rounded-2xl bg-blue-600 text-white items-center justify-center mb-4 shadow-lg shadow-blue-500/30">
                             <i className="fa-solid fa-shield-halved text-2xl"></i>
                         </div>
-                        <h1 className="text-2xl font-black italic tracking-tight text-gray-900">Two-factor authentication required</h1>
-                        <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">
-                            Your role requires 2FA and the grace period has ended. Set it up now to regain access to the dashboard.
-                        </p>
+                        <h1 className="text-2xl font-black italic tracking-tight text-gray-900">{t("mfaGate.title")}</h1>
+                        <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">{t("mfaGate.body")}</p>
                     </div>
                     <MfaSetup onEnabled={refreshUser} />
                     <div className="text-center mt-6">
                         <button onClick={logout} className="text-sm text-gray-400 hover:text-blue-600 font-medium">
-                            <i className="fa-solid fa-arrow-right-from-bracket mr-1"></i> Sign out
+                            <i className="fa-solid fa-arrow-right-from-bracket mr-1"></i> {t("mfaGate.signOut")}
                         </button>
                     </div>
                 </div>
@@ -437,14 +436,17 @@ import { I18nProvider } from "@/contexts/I18nContext";
 
 export default function DashboardLayoutClient({
     children,
+    initialLanguage,
 }: {
     children: React.ReactNode;
+    /** The language the server rendered in (app/admin/layout.tsx → lib/adminLanguage.server.ts). */
+    initialLanguage?: Language;
 }) {
     // Dialogs portal out of app/admin/layout.tsx's `<div dir="ltr">`: they keep the admin's direction
     // (components/DialogLayer.tsx). Same value as that wrapper — change both together.
     return (
         <DialogDirectionContext.Provider value="ltr">
-            <I18nProvider>
+            <I18nProvider initialLanguage={initialLanguage}>
                 <AuthProvider>
                     <UnsavedChangesProvider>
                         <ToastProvider>

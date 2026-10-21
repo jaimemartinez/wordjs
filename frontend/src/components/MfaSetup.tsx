@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { Button } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
+import { apiErrorText } from "@/lib/apiErrorText";
 import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 /**
@@ -50,7 +51,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
 
     const loadStatus = async () => {
         try { setStatus(await mfaApi.status()); }
-        catch (e: any) { addToast(e?.message || t("mfa.loadFailed"), "error"); }
+        catch (e: any) { addToast(apiErrorText(t, e, "mfa.loadFailed"), "error"); }
         finally { setLoading(false); }
     };
     useEffect(() => { loadStatus(); }, []);
@@ -76,7 +77,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
             // A rejected password leaves nothing to keep: clear it so a retry re-types it rather than
             // silently re-sending a wrong one (every attempt counts against the account's lockout bucket).
             setEnrollPassword("");
-            addToast(err?.message || t("mfa.setupFailed"), "error");
+            addToast(apiErrorText(t, err, "mfa.setupFailed"), "error");
         }
         finally { setBusy(false); }
     };
@@ -102,7 +103,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                 setCode("");
                 setEnrollPassword("");
             }
-            addToast(err?.message || t("mfa.invalidCodeClock"), "error");
+            addToast(apiErrorText(t, err, "mfa.invalidCodeClock"), "error");
         }
         finally { setBusy(false); }
     };
@@ -117,7 +118,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
             await loadStatus();
         } catch (e: any) {
             if (manageStepUp.absorb(e)) addToast(t("stepUp.passwordHelp"), "info");
-            else addToast(e?.message || t("mfa.invalidCode"), "error");
+            else addToast(apiErrorText(t, e, "mfa.invalidCode"), "error");
         }
         finally { setBusy(false); }
     };
@@ -133,7 +134,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
             await loadStatus();
         } catch (e: any) {
             if (manageStepUp.absorb(e)) addToast(t("stepUp.passwordHelp"), "info");
-            else addToast(e?.message || t("mfa.invalidCode"), "error");
+            else addToast(apiErrorText(t, e, "mfa.invalidCode"), "error");
         }
         finally { setBusy(false); }
     };
@@ -141,17 +142,20 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
     const codeInput = "w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none font-mono tracking-widest text-center";
 
     return (
-        <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm">
-            <div className="flex items-center gap-3 mb-2">
+        // @container: the card sits in a narrow column of the account page at tablet widths (1024px), so its
+        // inner layout follows the CARD's width, not the window's.
+        <div className="@container bg-white border border-gray-100 rounded-3xl p-6 sm:p-8 shadow-sm">
+            {/* flex-wrap + min-w-0: the status pill drops under the title instead of pushing out of the card. */}
+            <div className="flex flex-wrap items-center gap-3 mb-2">
                 <div className="w-11 h-11 shrink-0 rounded-2xl bg-gradient-to-br from-indigo-50 to-blue-50 flex items-center justify-center text-indigo-600">
                     <i className="fa-solid fa-shield-halved"></i>
                 </div>
-                <div>
+                <div className="min-w-0 flex-[1_1_10rem]">
                     <h2 className="text-lg font-black italic tracking-tight text-gray-800">{t("mfa.title")}</h2>
                     <p className="text-xs text-gray-400">{t("mfa.subtitle")}</p>
                 </div>
                 {status && (
-                    <span className={`ml-auto text-[11px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${status.enabled ? "bg-emerald-50 text-emerald-600" : "bg-gray-100 text-gray-400"}`}>
+                    <span className={`ml-auto shrink-0 text-[11px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${status.enabled ? "bg-emerald-50 text-emerald-600" : "bg-gray-100 text-gray-400"}`}>
                         {status.enabled ? t("mfa.statusEnabled") : t("mfa.statusOff")}
                     </span>
                 )}
@@ -163,17 +167,20 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                 // ── enrollment: show the QR + secret, then verify a code ──
                 <form onSubmit={confirmEnroll} className="mt-6 space-y-5">
                     <p className="text-sm text-gray-500">{t("mfa.enrollInstructions")}</p>
-                    <div className="flex flex-col sm:flex-row gap-6 items-center">
+                    {/* Side by side only when the CARD is wide enough for the key and the code box to stay
+                        readable (@lg = 32rem); a window breakpoint split them at 1024px into a 7-line key
+                        and a box that showed two digits. */}
+                    <div className="flex flex-col @lg:flex-row gap-6 items-center">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={enroll.qr} alt={t("mfa.qrAlt")} width={180} height={180} className="rounded-xl border border-gray-100" />
-                        <div className="flex-1 w-full">
+                        <img src={enroll.qr} alt={t("mfa.qrAlt")} width={180} height={180} className="shrink-0 rounded-xl border border-gray-100" />
+                        <div className="flex-1 min-w-0 w-full">
                             <label htmlFor={manualKeyId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.manualKey")}</label>
                             <code id={manualKeyId} className="block break-all bg-gray-50 rounded-xl px-3 py-2 font-mono text-xs text-gray-600 mb-4">{enroll.secret}</code>
                             <label htmlFor={enrollCodeId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.codeLabel")}</label>
                             <input id={enrollCodeId} value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" className={codeInput} required />
                         </div>
                     </div>
-                    <div className="flex gap-3">
+                    <div className="flex flex-wrap gap-3">
                         <Button type="submit" icon="fa-check" loading={busy}>{t("mfa.verifyEnable")}</Button>
                         <Button type="button" variant="secondary" onClick={() => { setEnroll(null); setCode(""); setEnrollPassword(""); }}>{t("common.cancel")}</Button>
                     </div>

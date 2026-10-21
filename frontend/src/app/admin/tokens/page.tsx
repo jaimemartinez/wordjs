@@ -9,6 +9,7 @@ import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge, DataT
 import SecretRevealModal from "@/components/SecretRevealModal";
 import ApiAccessCard from "@/components/ApiAccessCard";
 import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
+import { apiErrorText } from "@/lib/apiErrorText";
 
 const fmtDate = (v: number | null | string | undefined) => {
     if (v == null) return "—";
@@ -53,7 +54,7 @@ export default function TokensPage() {
             const { tokens } = await tokensApi.list();
             setTokens(tokens);
         } catch (e: any) {
-            addToast(e?.message || t("tokens.loadFailed"), "error");
+            addToast(apiErrorText(t, e, "tokens.loadFailed"), "error");
         } finally {
             setLoading(false);
         }
@@ -98,7 +99,7 @@ export default function TokensPage() {
         } catch (e: any) {
             // Not a failure the user caused: ask for the code (or the password) instead of showing an error.
             if (stepUp.absorb(e)) addToast(e?.code === "rest_mfa_step_up_required" ? t("tokens.stepUpHelp") : t("stepUp.passwordHelp"), "info");
-            else addToast(e?.message || t("tokens.createFailed"), "error");
+            else addToast(apiErrorText(t, e, "tokens.createFailed"), "error");
         } finally {
             setCreating(false);
         }
@@ -111,7 +112,7 @@ export default function TokensPage() {
             addToast(t("tokens.revoked"), "success");
             await load();
         } catch (e: any) {
-            addToast(e?.message || t("tokens.revokeFailed"), "error");
+            addToast(apiErrorText(t, e, "tokens.revokeFailed"), "error");
         }
     };
 
@@ -123,7 +124,9 @@ export default function TokensPage() {
                 icon="fa-key"
             />
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Form and list side by side only from xl: at 1024px a third of the content area left the
+                "New token" form two or three words wide. */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
                 {/* Create */}
                 <Card variant="default" padding="lg" className="h-fit">
                     <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6 flex items-center gap-2">
@@ -199,7 +202,7 @@ export default function TokensPage() {
                 </Card>
 
                 {/* List */}
-                <div className="lg:col-span-2 min-w-0">
+                <div className="xl:col-span-2 min-w-0">
                     <Card variant="default" padding="none">
                         {loading ? (
                             <div className="p-20 text-center">
