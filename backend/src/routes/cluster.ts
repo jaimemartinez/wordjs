@@ -23,7 +23,8 @@ const express = require('express');
 const router = express.Router();
 const { authenticate, sessionOnly, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
+const log = require('../core/module-logger').moduleLogger('routes/cluster');
 const { requireSudoPassword } = require('./users');
 const { recordAudit } = require('../core/audit');
 
@@ -41,7 +42,9 @@ async function gateway(method: 'GET' | 'POST', urlPath: string, body: unknown): 
         try { parsed = JSON.parse(r.text); } catch { parsed = { error: r.text }; }
         return { status: r.status, body: parsed };
     } catch (e: any) {
-        return { status: 502, body: { code: 'cluster_gateway_unreachable', error: `The gateway could not be reached (${(e && e.message) || e}).` } };
+        // The cause stays in the log: a caught error's text is not the caller's (middleware/errorHandler).
+        log.warn(`[cluster] the gateway control channel failed: ${(e && e.message) || e}`);
+        return { status: 502, body: { code: 'cluster_gateway_unreachable', error: publicErrorText(e, 'The gateway could not be reached over the cluster control channel.') } };
     }
 }
 
