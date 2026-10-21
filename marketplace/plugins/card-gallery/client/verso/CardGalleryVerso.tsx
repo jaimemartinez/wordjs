@@ -258,7 +258,9 @@ export const versoComponentDef = {
     }
 };
 
-export default function CardGalleryVerso({ galleryId = "", elementId = "" }: CardGalleryVersoProps) {
+export default function CardGalleryVerso({ galleryId = "", elementId = "", isEditing = false, puck }: CardGalleryVersoProps & { isEditing?: boolean; puck?: any }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const [gallery, setGallery] = useState<Gallery | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -277,6 +279,8 @@ export default function CardGalleryVerso({ galleryId = "", elementId = "" }: Car
             .catch(() => setGallery(null))
             .finally(() => setLoading(false));
     }, [galleryId]);
+
+    if (!editing && (loading || !galleryId || !gallery || !gallery.cards || gallery.cards.length === 0)) return null;
 
     if (loading) {
         return (

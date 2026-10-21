@@ -26,7 +26,7 @@
 
 exports.metadata = {
     name: 'Restaurant Menu',
-    version: '2.0.2',
+    version: '2.0.3',
     description: 'Menú con modificadores, horarios, pedidos en mesa por QR, reservas, pago en línea (Stripe), cocina en vivo e informes.',
     author: 'WordJS',
 };
@@ -2340,6 +2340,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/restaurant',
         label: 'Restaurante',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Restaurant', es: 'Restaurante', pt: 'Restaurante' },
         icon: 'fa-utensils',
         order: 76,
         cap: 'manage_options',

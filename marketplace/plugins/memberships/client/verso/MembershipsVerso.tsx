@@ -264,7 +264,11 @@ function PaywallVerso({ title, message, showTiers, accessState, accessLevel, isE
     const offered = tiersFor(level, m.tiers);
     const signedIn = !!m.me;
     const holds = signedIn && Array.isArray(m.me.levels) && m.me.levels.includes(level);
-    const freeOpens = level === "members" && m.cfg && m.cfg.freeSignup;
+    // Offer only what can work here: no "Create account" while registration is closed, no "Subscribe"
+    // while no payment provider is set up (X4-10). Older servers don't send registrationOpen → open.
+    const canRegister = !(m.cfg && m.cfg.registrationOpen === false);
+    const canPay = !!(m.cfg && m.cfg.paymentsEnabled);
+    const freeOpens = level === "members" && m.cfg && m.cfg.freeSignup && canRegister;
 
     return (
         <section className="wjms-wall" aria-label="Contenido para miembros">
@@ -281,7 +285,7 @@ function PaywallVerso({ title, message, showTiers, accessState, accessLevel, isE
                     <>
                         {!signedIn && (
                             <div className="wjms-actions">
-                                {freeOpens || (m.cfg && m.cfg.freeSignup) ? (
+                                {canRegister && (freeOpens || (m.cfg && m.cfg.freeSignup) || canPay) ? (
                                     <a className="wjms-btn" href={authHref("/register")}>{freeOpens ? "Crear cuenta gratis" : "Crear cuenta"}</a>
                                 ) : null}
                                 <a className="wjms-btn wjms-btn-ghost" href={authHref("/login")}>Ya soy miembro — iniciar sesión</a>
@@ -291,9 +295,11 @@ function PaywallVerso({ title, message, showTiers, accessState, accessLevel, isE
                             <div className="wjms-tiers">
                                 {offered.map((t) => (
                                     <TierCard key={t.id} tier={t} symbol={symbol} action={
-                                        !signedIn ? (
-                                            <a className="wjms-btn" href={authHref("/register")}>Suscribirme</a>
-                                        ) : m.cfg && m.cfg.paymentsEnabled ? (
+                                        !canPay ? (
+                                            <span className="wjms-note">El pago en línea aún no está disponible.</span>
+                                        ) : !signedIn ? (
+                                            <a className="wjms-btn" href={authHref(canRegister ? "/register" : "/login")}>Suscribirme</a>
+                                        ) : canPay ? (
                                             <button type="button" className="wjms-btn" disabled={!!checkout.busy} onClick={() => checkout.start(t.id)}>
                                                 {checkout.busy === t.id ? "Abriendo el pago…" : "Suscribirme"}
                                             </button>
@@ -307,8 +313,8 @@ function PaywallVerso({ title, message, showTiers, accessState, accessLevel, isE
                         {signedIn && level === "members" && !freeOpens && offered.length === 0 && (
                             <p className="wjms-note">Tu cuenta todavía no tiene una membresía activa.</p>
                         )}
-                        {!signedIn && level !== "members" && offered.length > 0 && (
-                            <p className="wjms-note">Crea tu cuenta (o inicia sesión) y vuelve aquí para elegir un plan.</p>
+                        {!signedIn && level !== "members" && offered.length > 0 && canPay && (
+                            <p className="wjms-note">{canRegister ? "Crea tu cuenta (o inicia sesión) y vuelve aquí para elegir un plan." : "Inicia sesión y vuelve aquí para elegir un plan."}</p>
                         )}
                         {checkout.error ? <p className="wjms-error">{checkout.error}</p> : null}
                     </>

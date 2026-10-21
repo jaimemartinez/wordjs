@@ -19,7 +19,7 @@
 
 exports.metadata = {
     name: 'Analytics Tag',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Site-wide analytics tag (GA4, Plausible or Matomo) with cookie-consent gating',
     author: 'WordJS',
 };
@@ -151,6 +151,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/tracking',
         label: 'Analytics',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Analytics', es: 'Analítica', pt: 'Analytics' },
         icon: 'fa-chart-simple',
         order: 65,
         cap: 'manage_options',

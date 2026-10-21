@@ -24,7 +24,7 @@
 
 exports.metadata = {
     name: 'Donations',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Donation campaigns with goal thermometer, manual payment + optional Stripe Checkout, donor management and CSV export.',
     author: 'WordJS',
 };
@@ -785,6 +785,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/donations',
         label: 'Donaciones',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Donations', es: 'Donaciones', pt: 'Doações' },
         icon: 'fa-hand-holding-heart',
         order: 72,
         cap: 'manage_options',

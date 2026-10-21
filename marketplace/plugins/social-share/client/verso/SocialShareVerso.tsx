@@ -34,6 +34,7 @@ const STYLES = `
 .wjss-rounded { border-radius: 12px; }
 .wjss-square { border-radius: 0; }
 .wjss-label { font-size: 11px; line-height: 1.15; text-align: center; max-width: 76px; color: var(--wjs-color-text-muted, #6b7280); }
+.wjss-root { padding-inline: 1rem; }
 .wjss-empty { padding: 1rem; text-align: center; color: var(--wjs-color-text-muted, #6b7280); background: var(--wjs-bg-surface, #f9fafb); border: 1px dashed var(--wjs-border-subtle, #e5e7eb); border-radius: var(--wjs-radius, 0.5rem); font-size: .85rem; }
 `;
 
@@ -252,8 +253,10 @@ export const versoComponentDef = {
 
 export default function SocialShareVerso({
     title, facebook, x, whatsapp, linkedin, telegram, email, copyLink,
-    size, shape, showLabels, align, elementId,
+    size, shape, showLabels, align, elementId, isEditing, puck,
 }) {
+    // Setup hints are for the editor; visitors never see admin instructions.
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const [copied, setCopied] = useState(false);
     const timerRef = useRef(null);
 
@@ -295,8 +298,10 @@ export default function SocialShareVerso({
         if (shareUrl) window.open(shareUrl, "_blank", "noopener,width=600,height=500");
     };
 
+    if (active.length === 0 && !editing) return null;
+
     return (
-        <div id={elementId || undefined}>
+        <div id={elementId || undefined} className="wjss-root">
             <style dangerouslySetInnerHTML={{ __html: STYLES }} />
             {active.length === 0 ? (
                 <div className="wjss-empty">Selecciona al menos una red social para mostrar los botones de compartir.</div>

@@ -18,7 +18,7 @@
 
 exports.metadata = {
     name: 'Testimonials',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Managed testimonials with moderation, optional public submissions and a Verso display block (carousel/grid).',
     author: 'WordJS',
 };
@@ -268,6 +268,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/testimonials',
         label: 'Testimonios',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Testimonials', es: 'Testimonios', pt: 'Depoimentos' },
         icon: 'fa-star',
         order: 62,
         cap: 'manage_options',

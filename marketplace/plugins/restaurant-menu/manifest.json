@@ -1,7 +1,7 @@
 {
     "id": "restaurant-menu",
     "name": "Restaurant Menu",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "description": "Restaurante completo: menú por secciones con modificadores (tamaños/extras), alérgenos e i18n es/en, horarios de apertura, pedidos en línea y en mesa por código QR, reservas, pago en línea con Stripe, cocina en vivo e informes con CSV. Entrega por WhatsApp incluida.",
     "author": "WordJS",
     "isolated": true,

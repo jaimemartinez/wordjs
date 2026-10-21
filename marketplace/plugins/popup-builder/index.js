@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Popup Builder',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Site-wide popups with triggers, frequency capping, scheduling and stats',
     author: 'WordJS',
 };
@@ -301,6 +301,8 @@ exports.init = async function (wordjs) {
         await adminMenu.add({
             href: '/admin/plugin/popups',
             label: 'Popups',
+            // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+            labels: { en: 'Popups', es: 'Popups', pt: 'Pop-ups' },
             icon: 'fa-window-restore',
             order: 64,
             cap: 'manage_options',

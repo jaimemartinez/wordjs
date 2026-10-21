@@ -394,6 +394,15 @@ exports.init = async function (wordjs) {
     // PUBLIC ROUTES
     // ================================================================================================
 
+    // Whether visitors can create an account (Settings → General). The paywall only offers "Create account"
+    // when they can; otherwise it sent them to a "registration closed" page (X4-10).
+    const registrationOpen = async () => {
+        try {
+            const v = await options.get('users_can_register', 0);
+            return !!v && v !== '0' && v !== 'false';
+        } catch (e) { return true; }
+    };
+
     http.route('get', '/public/tiers', quietly('tier list', async (req, res) => {
         const cfg = await getConfig();
         const tiers = await activeTiers();
@@ -403,6 +412,7 @@ exports.init = async function (wordjs) {
             currencyCode: cfg.currencyCode,
             currencySymbol: cfg.currencySymbol,
             freeSignup: !!cfg.freeSignup,
+            registrationOpen: await registrationOpen(),
             paymentsEnabled: !!p,
             provider: p ? p.id : null,
             providerLabel: p ? p.label : null,
@@ -799,6 +809,7 @@ exports.init = async function (wordjs) {
         const stripe = providers.get('stripe');
         res.json({
             ...cfg,
+            registrationOpen: await registrationOpen(),
             providers: await providerSettings(),
             // Kept for admin screens built against 1.0/1.1.
             hasStripeKey: !!(await getSetting('stripe_sk')),
@@ -875,6 +886,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/memberships',
         label: 'Membresías',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Memberships', es: 'Membresías', pt: 'Assinaturas' },
         icon: 'fa-id-card',
         order: 73,
         cap: 'manage_options',

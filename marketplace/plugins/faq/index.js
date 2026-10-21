@@ -15,7 +15,7 @@
 
 exports.metadata = {
     name: 'FAQ',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'FAQ with categories + Verso accordion block with FAQPage JSON-LD rich-results markup',
     author: 'WordJS',
 };
@@ -206,6 +206,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/faq',
         label: 'FAQ',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'FAQ', es: 'Preguntas frecuentes', pt: 'Perguntas frequentes' },
         icon: 'fa-circle-question',
         order: 63,
         cap: 'manage_options',

@@ -177,7 +177,9 @@ export const versoComponentDef = {
     },
 };
 
-export default function DigitalDownloadsVerso({ productSlug, columns, elementId }) {
+export default function DigitalDownloadsVerso({ productSlug, columns, elementId, isEditing, puck }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const [data, setData] = useState(null); // null = loading; {products, currencySymbol} | false = failed
     const [banner, setBanner] = useState(null); // { token, status } from ?dl= or stored order
     // Purchase flow: null | { productId, stage: 'form' | 'done', result }
@@ -268,6 +270,9 @@ export default function DigitalDownloadsVerso({ productSlug, columns, elementId 
     const symbol = (data && data.currencySymbol) || "$";
     const products = (data && data.products) || [];
 
+    const nothingToSell = data === false || (data !== null && products.length === 0);
+    if (!editing && nothingToSell && !banner) return null;
+
     return (
         <div id={elementId || undefined} className="wjdd-wrap">
             <style dangerouslySetInnerHTML={{ __html: STYLES }} />
@@ -291,7 +296,7 @@ export default function DigitalDownloadsVerso({ productSlug, columns, elementId 
                 </div>
             )}
 
-            {data === null ? (
+            {nothingToSell && !editing ? null : data === null ? (
                 <div className="wjdd-empty">Cargando productos…</div>
             ) : data === false ? (
                 <div className="wjdd-empty">No se pudieron cargar los productos.</div>

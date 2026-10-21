@@ -555,6 +555,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/newsletter',
         label: 'Newsletter',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Newsletter', es: 'Newsletter', pt: 'Newsletter' },
         icon: 'fa-envelope-open-text',
         order: 57,
         cap: 'manage_options',

@@ -78,6 +78,8 @@ export default function ContactFormsAdminPage() {
     const [tab, setTab] = useState("forms"); // forms | inbox
     const [editing, setEditing] = useState(null); // null | draft object
     const [busy, setBusy] = useState(false);
+    // Save failure shown next to the button: the page-top flash is out of sight at the end of a long form (X4-14).
+    const [saveError, setSaveError] = useState("");
     const [message, setMessage] = useState("");
 
     const [filterFormId, setFilterFormId] = useState("");
@@ -160,6 +162,7 @@ export default function ContactFormsAdminPage() {
         }
         setBusy(true);
         setMessage("");
+        setSaveError("");
         try {
             const body = {
                 name: editing.name,
@@ -173,7 +176,12 @@ export default function ContactFormsAdminPage() {
             setMessage(`Formulario guardado (ID ${data.form.id}).`);
             loadForms();
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            const raw = String(err?.message || err || "").trim();
+            // A dropped connection surfaces as a bare TypeError ("Failed to fetch") or nothing at all.
+            const offline = !raw || /failed to fetch|networkerror|load failed|network/i.test(raw);
+            setSaveError(offline
+                ? "No se pudo guardar: no hay conexión con el servidor. Revisa la conexión y vuelve a intentarlo; el formulario sigue aquí."
+                : `Error al guardar: ${raw}`);
         } finally {
             setBusy(false);
         }
@@ -334,7 +342,7 @@ export default function ContactFormsAdminPage() {
                 <div>
                     {!editing && (
                         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                            <button type="button" className="cf-btn" onClick={() => { setMessage(""); setEditing(emptyDraft()); }}>
+                            <button type="button" className="cf-btn" onClick={() => { setMessage(""); setSaveError(""); setEditing(emptyDraft()); }}>
                                 <IconPlus /> Nuevo formulario
                             </button>
                         </div>
@@ -424,8 +432,11 @@ export default function ContactFormsAdminPage() {
                                     )}
                                 </div>
 
+                                {saveError && (
+                                    <div role="alert" className="cf-flash is-error" data-testid="cf-save-error" style={{ marginTop: "1.25rem", marginBottom: 0 }}>{saveError}</div>
+                                )}
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
-                                    <button type="button" className="cf-btn-ghost" onClick={() => setEditing(null)} disabled={busy}>Cancelar</button>
+                                    <button type="button" className="cf-btn-ghost" onClick={() => { setSaveError(""); setEditing(null); }} disabled={busy}>Cancelar</button>
                                     <button type="submit" className="cf-btn" disabled={busy}>{busy ? "Guardando…" : "Guardar formulario"}</button>
                                 </div>
                             </div>
@@ -459,7 +470,7 @@ export default function ContactFormsAdminPage() {
                                         </p>
                                     </div>
                                     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                                        <button type="button" className="cf-btn-ghost" onClick={() => { setMessage(""); setEditing({ id: f.id, name: f.name || "", notify_email: f.notify_email || "", success_message: f.success_message || "", fields: (f.fields || []).map((x) => ({ ...x })) }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                                        <button type="button" className="cf-btn-ghost" onClick={() => { setMessage(""); setSaveError(""); setEditing({ id: f.id, name: f.name || "", notify_email: f.notify_email || "", success_message: f.success_message || "", fields: (f.fields || []).map((x) => ({ ...x })) }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
                                             <IconPen /> Editar
                                         </button>
                                         <button type="button" className="cf-btn-ghost" onClick={() => { setFilterFormId(String(f.id)); setOffset(0); setTab("inbox"); }}>

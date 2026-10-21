@@ -16,7 +16,7 @@
 
 exports.metadata = {
     name: 'Events Calendar',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Admin-managed events + Verso block (upcoming list / monthly calendar grid)',
     author: 'WordJS',
 };
@@ -223,6 +223,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/events-calendar',
         label: 'Eventos',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Events', es: 'Eventos', pt: 'Eventos' },
         icon: 'fa-calendar-days',
         order: 57,
         cap: 'manage_options',

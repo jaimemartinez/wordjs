@@ -13,6 +13,7 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/bookings";
@@ -152,7 +153,10 @@ function ServiceModal({ service, onClose, onSaved }) {
         }
     };
 
-    return (
+    // Portalled to <body> (inside the plugin's scope class, so its styles still apply): rendered in place,
+    // the admin sidebar covered the modal's left edge and clipped its labels (X4-13).
+    const node = (
+        <div className="plugin-admin-bookings" style={{ background: "transparent", minHeight: 0 }}>
         <div className="cf-overlay" onClick={onClose}>
             <form
                 onSubmit={save}
@@ -235,7 +239,9 @@ function ServiceModal({ service, onClose, onSaved }) {
                 </div>
             </form>
         </div>
+        </div>
     );
+    return typeof document !== "undefined" && document.body ? createPortal(node, document.body) : node;
 }
 
 // ── main page ───────────────────────────────────────────────────────────────────────────────────

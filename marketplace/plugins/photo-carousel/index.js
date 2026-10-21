@@ -13,7 +13,7 @@
 
 exports.metadata = {
     name: 'Photo Carousel',
-    version: '2.1.0',
+    version: '2.1.1',
     description: 'Create and manage image carousels with admin UI',
     author: 'WordJS'
 };
@@ -176,6 +176,8 @@ exports.init = function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/carousels',
         label: 'Photo Carousel',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Photo Carousel', es: 'Carrusel de fotos', pt: 'Carrossel de fotos' },
         icon: 'fa-images',
         order: 50,
         cap: 'manage_carousels'

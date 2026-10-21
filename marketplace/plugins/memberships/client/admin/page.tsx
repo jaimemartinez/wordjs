@@ -195,8 +195,11 @@ export default function MembershipsAdminPage() {
             // Write-only: absent = keep, "" = clear, value = replace.
             const credentials = {};
             for (const p of cfg.providers || []) {
+                // Only the chosen provider's typed fields are sent: the others are hidden, and a value the
+                // server refused there (a live key) must not block saving after switching provider (X4-11).
+                const chosen = p.id === payload.paymentProvider;
                 for (const c of p.credentials) {
-                    const typed = ((creds[p.id] || {})[c.key] || "").trim();
+                    const typed = chosen ? ((creds[p.id] || {})[c.key] || "").trim() : "";
                     const wipe = !!(clear[p.id] || {})[c.key];
                     if (typed || wipe) (credentials[p.id] = credentials[p.id] || {})[c.key] = wipe ? "" : typed;
                 }
@@ -374,13 +377,23 @@ export default function MembershipsAdminPage() {
                                     Toda cuenta registrada es miembro gratuito (abre el nivel «Miembros»)
                                 </label>
                                 <p className="cf-help">El registro de cuentas lo controla Ajustes → General («Cualquiera puede registrarse»).</p>
+                                {cfg.registrationOpen === false ? (
+                                    <p className="cf-help" role="status" data-testid="ms-registration-closed" style={{ color: "#b45309" }}>
+                                        El registro está cerrado en este sitio: el muro de pago no ofrecerá «Crear cuenta» y solo las cuentas que ya existen pueden entrar o suscribirse. Ábrelo en <a href="/admin/settings">Ajustes → General</a> si quieres que se apunten visitantes nuevos.
+                                    </p>
+                                ) : null}
+                                {!cfg.paymentProvider && tiers.some((t) => Number(t.price_cents) > 0) ? (
+                                    <p className="cf-help" role="status" data-testid="ms-no-provider" style={{ color: "#b45309" }}>
+                                        Hay planes de pago pero ningún proveedor de pagos: el muro los muestra sin botón de pago hasta que elijas uno.
+                                    </p>
+                                ) : null}
                             </div>
                             <div>
                                 <label className="cf-check">
                                     <input type="checkbox" checked={cfg.newsletterEnabled !== false} onChange={(e) => setCfg({ ...cfg, newsletterEnabled: e.target.checked })} />
                                     Newsletters a los miembros
                                 </label>
-                                <p className="cf-help">Añade «Enviar por correo al publicar» al editor. Usa el proveedor de correo del sitio.</p>
+                                <p className="cf-help">Añade «Enviar por correo al publicar» al editor: la entrada llega a los miembros de su nivel. Usa el proveedor de correo del sitio. Es independiente del plugin Newsletter, que tiene su propia lista de suscriptores con doble confirmación.</p>
                             </div>
                             <div>
                                 <label className="cf-label" htmlFor="ms-cfg-rate">Ritmo de envío (correos por minuto)</label>

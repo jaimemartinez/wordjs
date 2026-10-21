@@ -49,7 +49,7 @@
         {
             "scope": "settings",
             "access": "read",
-            "reason": "Read the non-secret membership configuration and the site address (Stripe return URLs and the webhook URL shown to the admin)."
+            "reason": "Read the non-secret membership configuration, the site address (Stripe return URLs and the webhook URL shown to the admin) and whether visitors may register (the paywall only offers sign-up when they can)."
         },
         {
             "scope": "settings",

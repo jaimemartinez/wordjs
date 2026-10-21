@@ -1173,6 +1173,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/bookings',
         label: 'Reservas',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Bookings', es: 'Reservas', pt: 'Reservas' },
         icon: 'fa-calendar-check',
         order: 71,
         cap: 'manage_options',

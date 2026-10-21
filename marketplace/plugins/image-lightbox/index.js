@@ -15,7 +15,7 @@
 
 exports.metadata = {
     name: 'Image Lightbox',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Click-to-zoom lightbox for content images (dark overlay, captions, prev/next, keyboard)',
     author: 'WordJS',
 };
@@ -89,6 +89,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/lightbox',
         label: 'Lightbox de imágenes',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Image Lightbox', es: 'Lightbox de imágenes', pt: 'Lightbox de imagens' },
         icon: 'fa-expand',
         order: 66,
         cap: 'manage_options',

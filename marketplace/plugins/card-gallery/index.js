@@ -11,7 +11,7 @@
 // list read: two version numbers that disagree name two different builds of the same package.
 exports.metadata = {
     name: 'Card Gallery',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Manage multiple card galleries with promo cards (isolated)',
     author: 'WordJS'
 };
@@ -115,6 +115,8 @@ exports.init = function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/cards',
         label: 'Card Gallery',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Card Gallery', es: 'Galería de tarjetas', pt: 'Galeria de cartões' },
         icon: 'fa-images',
         order: 55,
         cap: 'manage_cards'

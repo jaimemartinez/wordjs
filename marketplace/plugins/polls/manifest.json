@@ -1,7 +1,7 @@
 {
     "id": "polls",
     "name": "Polls",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Encuestas al estilo WP-Polls: crea encuestas con opciones, controla cuándo se muestran los resultados y publícalas en cualquier página con el bloque Polls del editor visual (votación + barras de resultados animadas).",
     "author": "WordJS",
     "isolated": true,

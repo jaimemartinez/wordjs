@@ -3,6 +3,29 @@
 
 import { useEffect, useState, useRef } from "react";
 
+// Field for choosing a gallery by name (the galleries the admin page manages), instead of typing its id.
+const GalleryPicker = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
+    const [items, setItems] = useState<any[]>([]);
+    useEffect(() => {
+        fetch("/api/v1/plugin/video-gallery/galleries")
+            .then((r) => (r.ok ? r.json() : []))
+            .then((d) => setItems(Array.isArray(d) ? d : []))
+            .catch(() => setItems([]));
+    }, []);
+    return (
+        <select
+            value={value || "default"}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+        >
+            {items.length === 0 && <option value="default">default</option>}
+            {items.map((g) => (
+                <option key={g.id} value={g.id}>{g.name || g.id} ({g.videoCount || 0})</option>
+            ))}
+        </select>
+    );
+};
+
 // Embedded CSS to ensure it applies without build configuration issues
 const STYLES = `
 .video-gallery-section {
@@ -243,11 +266,13 @@ interface VideoGalleryVersoProps {
 }
 
 export const versoComponentDef = {
+    label: "Video Gallery",
     category: "Video Gallery",
     fields: {
         galleryId: {
-            type: "text" as const,
-            label: "Gallery ID (default: 'default')"
+            type: "custom" as const,
+            label: "Gallery",
+            render: (props: any) => <GalleryPicker value={props.value} onChange={props.onChange} />
         },
         title: {
             type: "text" as const,
@@ -279,7 +304,9 @@ export const versoComponentDef = {
     }
 };
 
-export default function VideoGalleryVerso({ galleryId = "default", title = "Videos", limit = 10, showDescription = false, elementId = "" }: VideoGalleryVersoProps) {
+export default function VideoGalleryVerso({ galleryId = "default", title = "Videos", limit = 10, showDescription = false, elementId = "", isEditing = false, puck }: VideoGalleryVersoProps & { isEditing?: boolean; puck?: any }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const [videos, setVideos] = useState<Video[]>([]);
     const [loading, setLoading] = useState(true);
     const carouselRef = useRef<HTMLDivElement>(null);
@@ -340,6 +367,8 @@ export default function VideoGalleryVerso({ galleryId = "default", title = "Vide
     };
 
     if (loading) {
+        // Visitors get nothing while it loads; the editor shows that it is loading.
+        if (!editing) return null;
         return (
             <div className="p-8 text-center bg-gray-50 border border-gray-200 rounded">
                 Cargando videos...
@@ -348,6 +377,8 @@ export default function VideoGalleryVerso({ galleryId = "default", title = "Vide
     }
 
     if (videos.length === 0) {
+        // An empty or unknown gallery is a setup hint for the editor, never text for visitors (S4-12).
+        if (!editing) return null;
         return (
             <div className="p-8 text-center bg-gray-50 border border-dashed border-gray-300 rounded">
                 <p className="mb-2 font-bold text-gray-500">Galeria: {galleryId}</p>

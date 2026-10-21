@@ -434,7 +434,9 @@ exports.init = async function (wordjs) {
     // ---- admin menu -------------------------------------------------------------------------------
     adminMenu.add({
         href: '/admin/plugin/contact-forms',
-        label: 'Formularios',
+        label: 'Formularios de contacto',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Contact forms', es: 'Formularios de contacto', pt: 'Formulários de contato' },
         icon: 'fa-envelope-open-text',
         order: 57,
         cap: 'manage_options',

@@ -5236,6 +5236,8 @@ exports.init = async function (bridge) {
     wordjs.adminMenu.add({
         href: '/admin/plugin/emails',
         label: 'Email Center',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Email Center', es: 'Centro de correo', pt: 'Central de e-mail' },
         icon: 'fa-envelope',
         order: 90,
         cap: 'access_admin_panel',

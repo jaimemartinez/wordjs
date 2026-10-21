@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Job Board',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Job listings + public applications with anti-spam + applications inbox',
     author: 'WordJS',
 };
@@ -623,6 +623,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/jobs',
         label: 'Empleos',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Jobs', es: 'Empleos', pt: 'Vagas' },
         icon: 'fa-briefcase',
         order: 75,
         cap: 'manage_options',

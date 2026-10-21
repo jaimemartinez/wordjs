@@ -16,7 +16,7 @@
 
 exports.metadata = {
     name: 'Invoices',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Invoice builder with public print-friendly token URLs, statuses and dashboard totals.',
     author: 'WordJS',
 };
@@ -521,6 +521,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/invoices',
         label: 'Facturas',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Invoices', es: 'Facturas', pt: 'Faturas' },
         icon: 'fa-file-invoice-dollar',
         order: 74,
         cap: 'manage_options',
