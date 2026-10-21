@@ -44,14 +44,14 @@ function BrowserScriptWarning({ title, body }: { title: string; body: string }) 
     );
 }
 
-// Runtime state → colour + label for the health dot.
+// Runtime state → colour + label (an i18n key) for the health dot.
 const RUNTIME_META: Record<string, { dot: string; label: string; text: string }> = {
-    running: { dot: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]', label: 'Running', text: 'text-emerald-600' },
-    restarting: { dot: 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]', label: 'Restarting', text: 'text-amber-600' },
-    crashed: { dot: 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]', label: 'Crashed', text: 'text-rose-600' },
-    'crash-looping': { dot: 'bg-rose-600 animate-pulse shadow-[0_0_8px_rgba(225,29,72,0.6)]', label: 'Crash-looping', text: 'text-rose-700' },
-    stopped: { dot: 'bg-slate-400', label: 'Stopped', text: 'text-slate-500' },
-    refused: { dot: 'bg-rose-600', label: 'Refused by the sandbox', text: 'text-rose-700' },
+    running: { dot: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]', label: 'plugins.runtime.running', text: 'text-emerald-600' },
+    restarting: { dot: 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]', label: 'plugins.runtime.restarting', text: 'text-amber-600' },
+    crashed: { dot: 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]', label: 'plugins.runtime.crashed', text: 'text-rose-600' },
+    'crash-looping': { dot: 'bg-rose-600 animate-pulse shadow-[0_0_8px_rgba(225,29,72,0.6)]', label: 'plugins.runtime.crashLooping', text: 'text-rose-700' },
+    stopped: { dot: 'bg-slate-400', label: 'plugins.runtime.stopped', text: 'text-slate-500' },
+    refused: { dot: 'bg-rose-600', label: 'plugins.runtime.refused', text: 'text-rose-700' },
 };
 
 function fmtMB(bytes?: number | null) {
@@ -100,13 +100,13 @@ export function brokenReasonText(plugin: Pick<Plugin, 'brokenReason'>, t: (key: 
  */
 export type SandboxRefusal = { message: string; mechanism: string; state: string; failure: string | null; action: string };
 
-export function sandboxRefusalFrom(error: unknown): SandboxRefusal | null {
+export function sandboxRefusalFrom(error: unknown, t: (key: string) => string = defaultLanguage): SandboxRefusal | null {
     const e = error as { code?: unknown; message?: unknown; details?: { sandbox?: Record<string, unknown> } } | null;
     if (!e || e.code !== 'sandbox_unavailable') return null;
     const s = (e.details && typeof e.details === 'object' && e.details.sandbox && typeof e.details.sandbox === 'object') ? e.details.sandbox : {};
     const text = (v: unknown, fallback: string) => (typeof v === 'string' && v.trim() ? v : fallback);
     return {
-        message: text(e.message, 'The plugin sandbox could not confine this plugin, so it was not started.'),
+        message: text(e.message, t('plugins.sandbox.fallbackMessage')),
         mechanism: text(s.mechanism, 'unknown'),
         state: text(s.state, 'unknown'),
         failure: typeof s.failure === 'string' && s.failure.trim() ? s.failure : null,
@@ -118,36 +118,40 @@ const SANDBOX_MECHANISM_LABEL: Record<string, string> = {
     landlock: 'Linux — Landlock + seccomp',
     appcontainer: 'Windows — AppContainer',
     seatbelt: 'macOS — Seatbelt',
-    none: 'none on this platform',
+    none: 'plugins.sandbox.mechanism.none',
 };
 
 export function SandboxRefusalPanel({ refusal }: { refusal: SandboxRefusal }) {
+    const t = useOptionalI18n()?.t ?? defaultLanguage;
+    // The endpoint and the section name sit inside the sentence, wherever the language puts them.
+    const [diagBefore, diagRest = ''] = t('plugins.sandbox.diagnosis').split('{endpoint}');
+    const [diagMiddle, diagAfter = ''] = diagRest.split('{section}');
     return (
         <div data-testid="sandbox-refusal" className="mb-4 space-y-4">
             <p className="text-xs text-slate-700 font-semibold leading-relaxed">{refusal.message}</p>
             <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
-                <dt className="font-extrabold uppercase tracking-wider text-slate-400">Sandbox</dt>
-                <dd className="font-semibold text-slate-700">{SANDBOX_MECHANISM_LABEL[refusal.mechanism] || refusal.mechanism}</dd>
-                <dt className="font-extrabold uppercase tracking-wider text-slate-400">State</dt>
+                <dt className="font-extrabold uppercase tracking-wider text-slate-400">{t('plugins.sandbox.label')}</dt>
+                <dd className="font-semibold text-slate-700">{t(SANDBOX_MECHANISM_LABEL[refusal.mechanism] || refusal.mechanism)}</dd>
+                <dt className="font-extrabold uppercase tracking-wider text-slate-400">{t('plugins.sandbox.state')}</dt>
                 <dd className="font-semibold text-slate-700">{refusal.state}</dd>
             </dl>
             {refusal.failure && (
                 <div>
-                    <h4 className="font-extrabold text-xs uppercase tracking-wider text-rose-800 mb-2">What the sandbox reported</h4>
+                    <h4 className="font-extrabold text-xs uppercase tracking-wider text-rose-800 mb-2">{t('plugins.sandbox.reported')}</h4>
                     <pre className="text-[11px] text-rose-800 bg-rose-50/50 border border-rose-100/50 rounded-xl px-3.5 py-2.5 font-mono whitespace-pre-wrap break-words">{refusal.failure}</pre>
                 </div>
             )}
             {refusal.action && (
                 <div>
-                    <h4 className="font-extrabold text-xs uppercase tracking-wider text-amber-800 mb-2">What to do (server operator)</h4>
+                    <h4 className="font-extrabold text-xs uppercase tracking-wider text-amber-800 mb-2">{t('plugins.sandbox.action')}</h4>
                     <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">{refusal.action}</p>
                 </div>
             )}
             <p className="text-[11px] text-slate-500 leading-relaxed p-3 bg-slate-50 border border-slate-100 rounded-2xl">
                 {refusal.state === 'active'
-                    ? 'The sandbox is working on this server but refused this launch; the server log names the step that failed.'
-                    : 'This is a server problem, not a problem with this plugin: no isolated plugin can start until the sandbox is active again.'}
-                {' '}The server&apos;s sandbox diagnosis is at <code className="font-mono">GET /api/v1/health/details</code> (the <code className="font-mono">sandbox</code> section) and in the server log.
+                    ? t('plugins.sandbox.activeHint')
+                    : t('plugins.sandbox.serverHint')}
+                {' '}{diagBefore}<code className="font-mono">GET /api/v1/health/details</code>{diagMiddle}<code className="font-mono">sandbox</code>{diagAfter}
             </p>
         </div>
     );
@@ -160,9 +164,9 @@ export function SandboxRefusalPanel({ refusal }: { refusal: SandboxRefusal }) {
  * isolated plugin" — on a host whose sandbox is down, that was every plugin after a restart. Same shape
  * as a 409's refusal, so the same panel renders it. Exported for the unit test.
  */
-export function runtimeSandboxRefusal(runtime: PluginRuntime | null | undefined): SandboxRefusal | null {
+export function runtimeSandboxRefusal(runtime: PluginRuntime | null | undefined, t: (key: string) => string = defaultLanguage): SandboxRefusal | null {
     if (!runtime || runtime.state !== 'refused') return null;
-    return sandboxRefusalFrom({ code: 'sandbox_unavailable', message: runtime.lastError || '', details: { sandbox: runtime.sandbox || {} } });
+    return sandboxRefusalFrom({ code: 'sandbox_unavailable', message: runtime.lastError || '', details: { sandbox: runtime.sandbox || {} } }, t);
 }
 
 /** Broken entries lead the grid: they are the ones blocking an install and needing a decision. */
@@ -178,15 +182,15 @@ export function partitionPlugins(plugins: Plugin[]): { broken: Plugin[]; healthy
  * route exists (`packable`, i.e. NODE_ENV=development); exported so the visibility rule is testable
  * without mounting the fetch-on-mount page.
  */
-export function PackPluginButton({ plugin, packing, onPack }: { plugin: Plugin; packing: boolean; onPack: (plugin: Plugin) => void }) {
+export function PackPluginButton({ plugin, packing, onPack, t = defaultLanguage }: { plugin: Plugin; packing: boolean; onPack: (plugin: Plugin) => void; t?: (key: string) => string }) {
     if (!plugin.packable) return null;
     return (
         <button
             onClick={() => onPack(plugin)}
             disabled={packing}
             className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm disabled:opacity-50 disabled:cursor-wait"
-            title="Build & download ZIP (dev mode)"
-            aria-label={`Build and download ${plugin.name} as a ZIP`}
+            title={t('plugins.pack.title')}
+            aria-label={t('plugins.pack.ariaLabel').replace('{name}', plugin.name)}
         >
             {packing ? <FaSyncAlt className="text-sm animate-spin" /> : <FaFileArchive className="text-sm" />}
         </button>
@@ -409,17 +413,17 @@ export default function PluginsPage() {
             setPermsModalPlugin(null);
             loadPlugins();
             refreshMenus();
-            addToast(res.message || `Permissions updated for "${permsModalPlugin.name}"`, "success");
+            addToast(res.message || t('plugins.permissions.updated').replace('{name}', permsModalPlugin.name), "success");
         } catch (error: any) {
             // 409 sandbox_unavailable: the grants WERE saved, but the sandbox refused the restart and the
             // plugin is now stopped. Say that, with the refusal, rather than "failed to update".
-            const sandbox = sandboxRefusalFrom(error);
+            const sandbox = sandboxRefusalFrom(error, t);
             if (sandbox) {
                 setPermsModalPlugin(null);
                 loadPlugins();
                 setRejection({ pluginName: permsModalPlugin.name, message: sandbox.message, sandbox });
             } else {
-                addToast("Failed to update permissions: " + (error.message || "Unknown error"), "error");
+                addToast(t('plugins.permissions.updateFailed') + ": " + (error.message || t('plugins.broken.unknownError')), "error");
             }
         } finally {
             setSavingPerms(false);
@@ -473,7 +477,7 @@ export default function PluginsPage() {
             }
         } catch (error: any) {
             console.error("Failed to toggle plugin:", error);
-            addToast("Failed to change plugin status: " + (error.message || "Unknown error"), "error");
+            addToast(t('plugins.status.changeFailed') + ": " + (error.message || t('plugins.broken.unknownError')), "error");
         }
     };
 
@@ -511,7 +515,7 @@ export default function PluginsPage() {
         } catch (error: any) {
             console.error("Failed to activate plugin:", error);
             const details = error && error.details;
-            const sandbox = sandboxRefusalFrom(error);
+            const sandbox = sandboxRefusalFrom(error, t);
             if (sandbox) {
                 // The SERVER's sandbox refused (409 sandbox_unavailable): say which sandbox, what it
                 // reported and what the operator can do, instead of a generic "failed".
@@ -528,7 +532,7 @@ export default function PluginsPage() {
                 });
             } else {
                 // Persistent toast (duration: 0) so user can read the security error
-                addToast("Activation failed: " + (error.message || "Unknown error"), "error", 0);
+                addToast(t('plugins.activation.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error", 0);
             }
         }
     };
@@ -545,19 +549,19 @@ export default function PluginsPage() {
             setPortConflictPrompt(null);
             // Tell the admin what ACTUALLY happened — the squatter may have vanished on its own.
             if (res.freed) {
-                addToast(`${res.label || conflict.occupant?.label || 'Service'} ${t('plugins.freeport.success')} ${plugin.name} ${t('plugins.freeport.success.post')} ${conflict.port}.`, "success");
+                addToast(`${res.label || conflict.occupant?.label || t('plugins.freeport.service')} ${t('plugins.freeport.success')} ${plugin.name} ${t('plugins.freeport.success.post')} ${conflict.port}.`, "success");
             } else {
                 addToast(`${t('plugins.freeport.already')} ${plugin.name} ${t('plugins.freeport.success.post')} ${conflict.port}.`, "success");
             }
         } catch (error: any) {
-            const sandbox = sandboxRefusalFrom(error);
+            const sandbox = sandboxRefusalFrom(error, t);
             if (sandbox) {
                 // The port was freed; the sandbox refused the restart that followed.
                 setPortConflictPrompt(null);
                 loadPlugins();
                 setRejection({ pluginName: plugin.name, message: sandbox.message, sandbox });
             } else {
-                addToast(`${t('plugins.freeport.error')} ${conflict.port}: ` + (error.message || "Unknown error"), "error", 0);
+                addToast(`${t('plugins.freeport.error')} ${conflict.port}: ` + (error.message || t('plugins.broken.unknownError')), "error", 0);
             }
         } finally {
             setFreeingPort(false);
@@ -577,11 +581,11 @@ export default function PluginsPage() {
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-            addToast(`Packed "${plugin.name}"`, "success");
+            addToast(t('plugins.pack.success').replace('{name}', plugin.name), "success");
         } catch (error: any) {
             const log = error?.details?.log;
             if (log) console.error(`pack:plugin ${plugin.slug}\n${log}`);
-            addToast("Build failed: " + (error.message || "Unknown error"), "error", 0);
+            addToast(t('plugins.pack.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error", 0);
         } finally {
             setPacking(prev => ({ ...prev, [plugin.slug]: false }));
         }
@@ -592,16 +596,16 @@ export default function PluginsPage() {
         setRestarting(prev => ({ ...prev, [plugin.slug]: true }));
         try {
             const res = await pluginsApi.reload(plugin.slug);
-            addToast(res.message || `Restarted "${plugin.name}"`, "success");
+            addToast(res.message || t('plugins.restart.success').replace('{name}', plugin.name), "success");
             loadPlugins();
         } catch (error: any) {
             console.error("Failed to restart plugin:", error);
-            const sandbox = sandboxRefusalFrom(error);
+            const sandbox = sandboxRefusalFrom(error, t);
             if (sandbox) {
                 loadPlugins();
                 setRejection({ pluginName: plugin.name, message: sandbox.message, sandbox });
             } else {
-                addToast("Restart failed: " + (error.message || "Unknown error"), "error");
+                addToast(t('plugins.restart.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error");
             }
         } finally {
             setRestarting(prev => ({ ...prev, [plugin.slug]: false }));
@@ -615,11 +619,11 @@ export default function PluginsPage() {
         setInstallingTheme(prev => ({ ...prev, [plugin.slug]: true }));
         try {
             const res = await pluginsApi.installTheme(plugin.slug, false);
-            addToast(res.message || `Theme "${res.slug}" installed`, "success");
+            addToast(res.message || t('plugins.theme.installedToast').replace('{slug}', res.slug), "success");
             loadPlugins();
             setThemeSwitchPrompt({ pluginName: plugin.name, themeSlug: res.slug });
         } catch (error: any) {
-            addToast("Theme install failed: " + (error.message || "Unknown error"), "error", 0);
+            addToast(t('plugins.theme.installFailed') + ": " + (error.message || t('plugins.broken.unknownError')), "error", 0);
         } finally {
             setInstallingTheme(prev => ({ ...prev, [plugin.slug]: false }));
         }
@@ -630,10 +634,10 @@ export default function PluginsPage() {
         setSwitchingTheme(true);
         try {
             await themesApi.activate(themeSwitchPrompt.themeSlug);
-            addToast(`Theme "${themeSwitchPrompt.themeSlug}" is now active`, "success");
+            addToast(t('plugins.theme.activeToast').replace('{slug}', themeSwitchPrompt.themeSlug), "success");
             setThemeSwitchPrompt(null);
         } catch (error: any) {
-            addToast("Theme switch failed: " + (error.message || "Unknown error"), "error", 0);
+            addToast(t('plugins.theme.switchFailed') + ": " + (error.message || t('plugins.broken.unknownError')), "error", 0);
         } finally {
             setSwitchingTheme(false);
         }
@@ -672,10 +676,10 @@ export default function PluginsPage() {
                 }
             }
         } catch (error: any) {
-            const sandbox = sandboxRefusalFrom(error);
+            const sandbox = sandboxRefusalFrom(error, t);
             loadPlugins();
             if (sandbox) setRejection({ pluginName: name, message: sandbox.message, sandbox });
-            else addToast(t('plugins.update.failed') + ": " + (error.message || "Unknown error"), "error", 0);
+            else addToast(t('plugins.update.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error", 0);
         }
     };
 
@@ -704,7 +708,7 @@ export default function PluginsPage() {
                 await offerPluginUpdate(file, error);
             } else {
                 console.error("Upload failed:", error);
-                addToast(t('plugins.upload.failed') + ": " + (error.message || "Unknown error"), "error");
+                addToast(t('plugins.upload.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error");
             }
         } finally {
             setUploading(false);
@@ -805,14 +809,21 @@ export default function PluginsPage() {
                             <div className="w-14 h-14 rounded-2xl bg-violet-50 border border-violet-100 flex items-center justify-center flex-shrink-0 text-violet-600 shadow-sm">
                                 <FaPalette className="text-xl" />
                             </div>
-                            <h3 className="text-xl font-extrabold text-slate-900">Theme installed</h3>
+                            <h3 className="text-xl font-extrabold text-slate-900">{t('plugins.theme.installed')}</h3>
                         </div>
                         <div className="mb-6 text-slate-500 leading-relaxed space-y-3.5 text-xs font-semibold">
                             <p>
-                                <strong className="text-slate-900 font-extrabold">{themeSwitchPrompt.pluginName}</strong>&apos;s theme is now installed as{' '}
-                                <code className="text-[11px] font-mono bg-violet-50 px-1 py-0.5 rounded">{themeSwitchPrompt.themeSlug}</code>.
+                                {(() => {
+                                    // The plugin's name and the theme's slug sit inside the sentence, wherever the language puts them.
+                                    const parts = t('plugins.theme.installedBody').split(/(\{name\}|\{slug\})/);
+                                    return parts.map((part, i) => part === '{name}'
+                                        ? <strong key={i} className="text-slate-900 font-extrabold">{themeSwitchPrompt.pluginName}</strong>
+                                        : part === '{slug}'
+                                            ? <code key={i} className="text-[11px] font-mono bg-violet-50 px-1 py-0.5 rounded">{themeSwitchPrompt.themeSlug}</code>
+                                            : part);
+                                })()}
                             </p>
-                            <p>Switch the site to this theme now? You can also do it later in Appearance → Themes.</p>
+                            <p>{t('plugins.theme.switchPrompt')}</p>
                         </div>
                         <div className="flex justify-end gap-3 pt-2">
                             <button
@@ -820,14 +831,14 @@ export default function PluginsPage() {
                                 disabled={switchingTheme}
                                 className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-50"
                             >
-                                Keep current theme
+                                {t('plugins.theme.keepCurrent')}
                             </button>
                             <button
                                 onClick={confirmThemeSwitch}
                                 disabled={switchingTheme}
                                 className="px-6 py-3 bg-violet-600 hover:bg-violet-700 text-white text-xs font-extrabold uppercase tracking-widest rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-violet-500/20 hover:scale-102 active:scale-98"
                             >
-                                {switchingTheme ? (<><FaSyncAlt className="animate-spin" /> Switching…</>) : (<><FaPalette /> Switch now</>)}
+                                {switchingTheme ? (<><FaSyncAlt className="animate-spin" /> {t('plugins.theme.switching')}</>) : (<><FaPalette /> {t('plugins.theme.switchNow')}</>)}
                             </button>
                         </div>
                     </div>
@@ -881,8 +892,8 @@ export default function PluginsPage() {
                                 onChange={(e) => setDropData(e.target.checked)}
                             />
                             <span className="text-xs text-slate-700 leading-normal font-semibold">
-                                <span className="font-extrabold text-rose-700 block mb-0.5">Also delete this plugin&apos;s data / tables</span>
-                                <span className="block text-[11px] text-slate-400/90 font-medium">This drops the plugin&apos;s database tables AND its data folder (keys, attachments). Cannot be undone. Leave off to keep both for a future reinstall.</span>
+                                <span className="font-extrabold text-rose-700 block mb-0.5">{t('plugins.delete.dropData')}</span>
+                                <span className="block text-[11px] text-slate-400/90 font-medium">{t('plugins.delete.dropDataHelp')}</span>
                             </span>
                         </label>
 
@@ -915,7 +926,7 @@ export default function PluginsPage() {
                                     <FaShieldAlt className="text-xl" />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-extrabold text-slate-900">{rejection.sandbox ? 'Plugin sandbox unavailable' : 'Activation blocked'}</h3>
+                                    <h3 className="text-lg font-extrabold text-slate-900">{rejection.sandbox ? t('plugins.sandbox.unavailableTitle') : t('plugins.activation.blocked')}</h3>
                                     <p className="text-xs text-slate-400 font-semibold mt-0.5">{rejection.pluginName}</p>
                                 </div>
                             </div>
@@ -926,7 +937,7 @@ export default function PluginsPage() {
                                 <div className="mb-6">
                                     <div className="flex items-center gap-2 mb-3 text-rose-800">
                                         <FaBan className="text-xs" />
-                                        <h4 className="font-extrabold text-xs uppercase tracking-wider">Blocked — this plugin uses forbidden code</h4>
+                                        <h4 className="font-extrabold text-xs uppercase tracking-wider">{t('plugins.rejection.forbiddenCode')}</h4>
                                     </div>
                                     <ul className="space-y-2">
                                         {rejection.dangerousCalls.map((d, i) => (
@@ -939,7 +950,7 @@ export default function PluginsPage() {
                                 <div className="mb-6">
                                     <div className="flex items-center gap-2 mb-3 text-amber-800">
                                         <FaExclamationTriangle className="text-xs" />
-                                        <h4 className="font-extrabold text-xs uppercase tracking-wider">Grant these permissions and retry</h4>
+                                        <h4 className="font-extrabold text-xs uppercase tracking-wider">{t('plugins.rejection.grantAndRetry')}</h4>
                                     </div>
                                     <ul className="space-y-2">
                                         {rejection.missingPermissions.map((m, i) => (
@@ -951,7 +962,7 @@ export default function PluginsPage() {
                             {!rejection.sandbox &&
                                 (!rejection.dangerousCalls || rejection.dangerousCalls.length === 0) &&
                                 (!rejection.missingPermissions || rejection.missingPermissions.length === 0) && (
-                                    <p className="text-xs text-slate-600 whitespace-pre-wrap mb-4 font-semibold leading-relaxed p-4 bg-slate-50 border border-slate-100 rounded-2xl">{rejection.message || 'Activation failed.'}</p>
+                                    <p className="text-xs text-slate-600 whitespace-pre-wrap mb-4 font-semibold leading-relaxed p-4 bg-slate-50 border border-slate-100 rounded-2xl">{rejection.message || t('plugins.activation.failed')}</p>
                                 )}
                         </div>
                         <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-slate-100 mt-2">
@@ -988,13 +999,13 @@ export default function PluginsPage() {
 
                         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar space-y-6">
                             <div>
-                                <p className="text-xs text-slate-600 font-semibold leading-relaxed">{detailPlugin.description || 'No description provided.'}</p>
+                                <p className="text-xs text-slate-600 font-semibold leading-relaxed">{detailPlugin.description || t('plugins.noDescription')}</p>
                                 {(detailPlugin.author || detailPlugin.homepage) && (
                                     <div className="mt-4 space-y-2 text-xs font-semibold text-slate-500 bg-slate-50 border border-slate-100 rounded-2xl p-4 shadow-sm">
-                                        {detailPlugin.author && <div><span className="font-extrabold text-slate-400">Author: </span><span className="text-slate-700">{detailPlugin.author}</span></div>}
+                                        {detailPlugin.author && <div><span className="font-extrabold text-slate-400">{t('plugins.author')}: </span><span className="text-slate-700">{detailPlugin.author}</span></div>}
                                         {detailPlugin.homepage && (
                                             <div className="flex items-center gap-1">
-                                                <span className="font-extrabold text-slate-400">Homepage: </span>
+                                                <span className="font-extrabold text-slate-400">{t('plugins.homepage')}: </span>
                                                 <a href={detailPlugin.homepage} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-700 hover:underline truncate">{detailPlugin.homepage}</a>
                                             </div>
                                         )}
@@ -1005,7 +1016,7 @@ export default function PluginsPage() {
                             {/* Runtime health */}
                             {detailPlugin.active && (
                                 <div>
-                                    <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2.5">Runtime health</h4>
+                                    <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2.5">{t('plugins.runtime.health')}</h4>
                                     {detailPlugin.runtime ? (
                                         <div className="rounded-2xl border border-slate-200/60 bg-slate-50/50 p-4 space-y-3 shadow-inner">
                                             {(() => {
@@ -1014,7 +1025,7 @@ export default function PluginsPage() {
                                                 return (
                                                     <>
                                                         <div className="flex items-center gap-2">
-                                                            <span className={`w-2 h-2 rounded-full relative flex`} title={rm.label}>
+                                                            <span className={`w-2 h-2 rounded-full relative flex`} title={t(rm.label)}>
                                                                 {rm.dot.includes('bg-emerald-500') && (
                                                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                                                 )}
@@ -1026,18 +1037,18 @@ export default function PluginsPage() {
                                                                 )}
                                                                 <span className={`relative inline-flex rounded-full h-2 w-2 ${rm.dot.split(' ')[0]}`} />
                                                             </span>
-                                                            <span className={`text-xs font-extrabold uppercase tracking-wide ${rm.text}`}>{rm.label}</span>
+                                                            <span className={`text-xs font-extrabold uppercase tracking-wide ${rm.text}`}>{t(rm.label)}</span>
                                                             {detailPlugin.runtime.pid != null && <span className="text-[11px] text-slate-400 font-mono ml-auto">pid {detailPlugin.runtime.pid}</span>}
                                                         </div>
                                                         <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-slate-500 font-semibold">
                                                             {rss && <span>RSS: <span className="text-slate-700">{rss}</span></span>}
-                                                            {!!detailPlugin.runtime.restarts && <span>restarts: <span className="text-slate-700">{detailPlugin.runtime.restarts}</span></span>}
-                                                            {detailPlugin.runtime.lastExitCode != null && <span>last exit: <span className="text-slate-700">{detailPlugin.runtime.lastExitCode}</span></span>}
+                                                            {!!detailPlugin.runtime.restarts && <span>{t('plugins.runtime.restarts')}: <span className="text-slate-700">{detailPlugin.runtime.restarts}</span></span>}
+                                                            {detailPlugin.runtime.lastExitCode != null && <span>{t('plugins.runtime.lastExit')}: <span className="text-slate-700">{detailPlugin.runtime.lastExitCode}</span></span>}
                                                         </div>
                                                         {(() => {
                                                             // Refused by the SANDBOX: which sandbox, what it reported and what
                                                             // the operator can do — not just the error string.
-                                                            const refusal = runtimeSandboxRefusal(detailPlugin.runtime);
+                                                            const refusal = runtimeSandboxRefusal(detailPlugin.runtime, t);
                                                             if (refusal) return <SandboxRefusalPanel refusal={refusal} />;
                                                             return detailPlugin.runtime.lastError ? (
                                                                 <p className="text-[11px] font-mono text-rose-600 bg-rose-50/50 border border-rose-100 rounded-xl p-2.5 break-words font-semibold">{detailPlugin.runtime.lastError}</p>
@@ -1051,11 +1062,11 @@ export default function PluginsPage() {
                                                 disabled={!!restarting[detailPlugin.slug]}
                                                 className="mt-1 inline-flex items-center gap-2 text-xs font-extrabold uppercase tracking-widest px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-all hover:scale-102 active:scale-98 shadow-sm cursor-pointer"
                                             >
-                                                <FaSyncAlt className={restarting[detailPlugin.slug] ? 'animate-spin' : ''} /> Reload
+                                                <FaSyncAlt className={restarting[detailPlugin.slug] ? 'animate-spin' : ''} /> {t('plugins.runtime.reload')}
                                             </button>
                                         </div>
                                     ) : (
-                                        <p className="text-[11px] font-semibold text-slate-400 bg-slate-50 border border-slate-100 rounded-xl p-3.5">No live runtime data: no process has been started for this plugin. The server log says why.</p>
+                                        <p className="text-[11px] font-semibold text-slate-400 bg-slate-50 border border-slate-100 rounded-xl p-3.5">{t('plugins.runtime.noData')}</p>
                                     )}
                                 </div>
                             )}
@@ -1310,7 +1321,7 @@ export default function PluginsPage() {
                             type="text"
                             value={searchInput}
                             onChange={(e) => setSearchInput(e.target.value)}
-                            placeholder="Search plugins…"
+                            placeholder={t('plugins.marketplace.search')}
                             className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-md focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-xs font-semibold placeholder-slate-400 shadow-sm"
                         />
                     </div>
@@ -1339,13 +1350,13 @@ export default function PluginsPage() {
                     <EmptyState
                         icon="fa-box-open"
                         title={t('plugins.no.plugins.found')}
-                        description="Get started by uploading your first plugin using the button above."
+                        description={t('plugins.empty.description')}
                     />
                 ) : visiblePlugins.length === 0 ? (
                     <EmptyState
                         icon="fa-search"
-                        title="No plugins match your filters"
-                        description="Try a different search term or status filter."
+                        title={t('plugins.noMatch.title')}
+                        description={t('plugins.noMatch.description')}
                     />
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -1383,24 +1394,24 @@ export default function PluginsPage() {
                                         <button
                                             onClick={() => setDetailPlugin(plugin)}
                                             className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm"
-                                            title="Details"
+                                            title={t('plugins.details')}
                                         >
                                             <FaInfoCircle className="text-sm" />
                                         </button>
-                                        {!codeLocked && <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />}
+                                        {!codeLocked && <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} t={t} />}
                                         {!plugin.active && !codeLocked && (
                                             <>
                                                 <button
                                                     onClick={() => pluginsApi.download(plugin.slug)}
                                                     className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm"
-                                                    title="Download Source"
+                                                    title={t('plugins.downloadSource')}
                                                 >
                                                     <FaDownload className="text-sm" />
                                                 </button>
                                                 <button
                                                     onClick={() => initiateDelete(plugin)}
                                                     className="p-2 rounded-xl bg-rose-50 border border-rose-100 text-rose-500 hover:bg-rose-100 hover:border-rose-200 hover:scale-105 active:scale-95 transition-all shadow-sm"
-                                                    title="Delete Plugin"
+                                                    title={t('plugins.delete.title')}
                                                 >
                                                     <FaTrash className="text-sm" />
                                                 </button>
@@ -1413,7 +1424,7 @@ export default function PluginsPage() {
                                     {plugin.name}
                                 </h3>
                                 <p className="text-slate-500 text-xs mb-4 h-9 line-clamp-2 leading-relaxed font-medium">
-                                    {plugin.description || "No description provided."}
+                                    {plugin.description || t('plugins.noDescription')}
                                 </p>
 
                                 {/* Runtime health (rank 1) — only for active plugins with runtime data */}
@@ -1421,7 +1432,7 @@ export default function PluginsPage() {
                                     <div className="mb-4 rounded-[16px] border border-slate-100 bg-slate-50/50 backdrop-blur-sm px-4 py-3 shadow-[inset_0_2px_4px_rgba(0,0,0,0.01)]">
                                         <div className="flex items-center justify-between gap-2">
                                             <div className="flex items-center gap-2 min-w-0">
-                                                <span className={`w-2 h-2 rounded-full shrink-0 relative flex`} title={rm.label}>
+                                                <span className={`w-2 h-2 rounded-full shrink-0 relative flex`} title={t(rm.label)}>
                                                     {rm.dot.includes('bg-emerald-500') && (
                                                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                                     )}
@@ -1433,7 +1444,7 @@ export default function PluginsPage() {
                                                     )}
                                                     <span className={`relative inline-flex rounded-full h-2 w-2 ${rm.dot.split(' ')[0]}`} />
                                                 </span>
-                                                <span className={`text-[11px] font-extrabold tracking-wide uppercase ${rm.text}`}>{rm.label}</span>
+                                                <span className={`text-[11px] font-extrabold tracking-wide uppercase ${rm.text}`}>{t(rm.label)}</span>
                                                 <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium">
                                                     {rss && (
                                                         <>
@@ -1444,7 +1455,7 @@ export default function PluginsPage() {
                                                     {!!plugin.runtime?.restarts && (
                                                         <>
                                                             <span>•</span>
-                                                            <span>{plugin.runtime.restarts} restarts</span>
+                                                            <span>{t('plugins.runtime.restartsCount').replace('{count}', String(plugin.runtime.restarts))}</span>
                                                         </>
                                                     )}
                                                 </div>
@@ -1452,7 +1463,7 @@ export default function PluginsPage() {
                                             <button
                                                 onClick={() => handleRestart(plugin)}
                                                 disabled={!!restarting[plugin.slug]}
-                                                title="Restart plugin"
+                                                title={t('plugins.runtime.restartTitle')}
                                                 className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-200/60 hover:text-slate-700 disabled:opacity-50 transition-all hover:scale-105 active:scale-95 border border-transparent hover:border-slate-200/50 shadow-sm"
                                             >
                                                 <FaSyncAlt className={`text-[11px] ${restarting[plugin.slug] ? 'animate-spin' : ''}`} />
@@ -1466,7 +1477,7 @@ export default function PluginsPage() {
                                                 onClick={() => setDetailPlugin(plugin)}
                                                 className="mt-2 text-[11px] font-extrabold uppercase tracking-wider text-rose-700 hover:underline"
                                             >
-                                                Why, and what to do
+                                                {t('plugins.runtime.whyRefused')}
                                             </button>
                                         )}
                                     </div>
@@ -1500,7 +1511,7 @@ export default function PluginsPage() {
                                         </span>
                                         {!(siteScoped && !plugin.offered) && <button
                                             onClick={() => openPermissions(plugin)}
-                                            title="Manage what this plugin can access (per-permission grants)"
+                                            title={t('plugins.permissions.manageHint')}
                                             className="text-[11px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-blue-50 hover:text-blue-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95"
                                         >
                                             <FaSlidersH className="text-[11px]" /> {t('plugins.permissions.manage')}
@@ -1510,15 +1521,15 @@ export default function PluginsPage() {
                                                 onClick={() => handleInstallTheme(plugin)}
                                                 disabled={plugin.themeInstalled || !!installingTheme[plugin.slug]}
                                                 title={plugin.themeInstalled
-                                                    ? "This plugin's theme is already installed (manage it in Appearance → Themes)"
-                                                    : "Install this plugin's theme"}
+                                                    ? t('plugins.theme.alreadyInstalledHint')
+                                                    : t('plugins.theme.installHint')}
                                                 className="text-[11px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-violet-50 hover:text-violet-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100 disabled:hover:bg-slate-50 disabled:hover:text-slate-500"
                                             >
                                                 {installingTheme[plugin.slug]
-                                                    ? (<><FaSyncAlt className="text-[11px] animate-spin" /> Installing…</>)
+                                                    ? (<><FaSyncAlt className="text-[11px] animate-spin" /> {t('plugins.theme.installing')}</>)
                                                     : plugin.themeInstalled
-                                                        ? (<><FaCheck className="text-[11px]" /> Theme installed</>)
-                                                        : (<><FaPalette className="text-[11px]" /> Install theme</>)}
+                                                        ? (<><FaCheck className="text-[11px]" /> {t('plugins.theme.installed')}</>)
+                                                        : (<><FaPalette className="text-[11px]" /> {t('plugins.theme.install')}</>)}
                                             </button>
                                         )}
                                     </div>
