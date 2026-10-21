@@ -653,6 +653,7 @@ function readAliases(list, canonical, warnings) {
  * siteAliases), an address that is already site 1's is refused, and a malformed entry is left out.
  */
 const MAX_NETWORK_SITES = 5000;
+const MAX_SITE_ALIASES = 20;
 
 function readNetworkSites(list, canonical, aliases, warnings) {
     const sites = new Map();
@@ -684,10 +685,33 @@ function readNetworkSites(list, canonical, aliases, warnings) {
             warnings.push(`networkSites[${i}]: ${site.hostname} is listed for two sites; the first entry is used.`);
             return;
         }
-        sites.set(site.hostname, Object.freeze(Object.assign({}, site, {
-            siteId: id,
-            status: item.status === 'suspended' ? 'suspended' : 'active',
-        })));
+        const status = item.status === 'suspended' ? 'suspended' : 'active';
+        sites.set(site.hostname, Object.freeze(Object.assign({}, site, { siteId: id, status })));
+        // The site's other addresses (www twin, an old domain kept during a move): host names answered
+        // with the main address's scheme and port, for the same site. Links keep naming the main address.
+        if (item.aliases !== undefined && !Array.isArray(item.aliases)) {
+            warnings.push(`networkSites[${i}].aliases is not a list; ignored.`);
+            return;
+        }
+        (item.aliases || []).slice(0, MAX_SITE_ALIASES).forEach((name, j) => {
+            const host = typeof name === 'string' ? parseHost(name) : null;
+            const alias = host && host.port === null && host.kind === 'dns'
+                ? parseSiteUrl(site.scheme + '://' + serialize({ hostname: host.hostname, port: site.port }))
+                : null;
+            if (!alias) {
+                warnings.push(`networkSites[${i}].aliases[${j}]: ${quote(name)} is not a host name; ignored.`);
+                return;
+            }
+            if ((canonical && alias.hostname === canonical.hostname) || aliases.has(alias.hostname)) {
+                warnings.push(`networkSites[${i}].aliases[${j}]: ${alias.hostname} is an address of the main site; ignored.`);
+                return;
+            }
+            if (sites.has(alias.hostname)) {
+                warnings.push(`networkSites[${i}].aliases[${j}]: ${alias.hostname} is listed twice; the first entry is used.`);
+                return;
+            }
+            sites.set(alias.hostname, Object.freeze(Object.assign({}, alias, { siteId: id, status, aliasOf: site.origin })));
+        });
     });
     return sites;
 }

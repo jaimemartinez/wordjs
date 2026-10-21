@@ -100,7 +100,7 @@ function mainSiteIsLocal(): boolean {
  * accepted while the main site is local too (mainSiteIsLocal), and only then: on a public install it
  * would be an address nobody but the server itself can open.
  */
-function assertHostAvailable(url: string): { url: string; hostname: string } {
+function assertHostAvailable(url: string, exceptSiteId: number | null = null): { url: string; hostname: string } {
     const hostPolicy = require('./host-policy');
     const parsed = hostPolicy.parseSiteUrl(url);
     if (!parsed) throw codedError('network_invalid_url', 'The site address must be http(s)://host[:port], with no path.');
@@ -114,10 +114,77 @@ function assertHostAvailable(url: string): { url: string; hostname: string } {
     }
     const policy = require('../middleware/auth').siteHostPolicy.get();
     const verdict = hostPolicy.classify(hostPolicy.parseHost(parsed.hostname), policy);
-    if (verdict.cls === 'canonical' || verdict.cls === 'alias' || verdict.cls === 'env') {
+    // An address of the very site being changed is its own to keep.
+    const ownAddress = exceptSiteId !== null && verdict.reason === 'site' && verdict.entry && verdict.entry.siteId === exceptSiteId;
+    if (!ownAddress && (verdict.cls === 'canonical' || verdict.cls === 'alias' || verdict.cls === 'env')) {
         throw codedError('network_host_taken', 'This address already belongs to a site of the network.', 409);
     }
     return { url: parsed.origin, hostname: parsed.hostname };
+}
+
+const MAX_SITE_ALIASES = 20;
+
+/**
+ * Move a site (not site 1) to another address, and/or give it other host names (the www twin, the old
+ * domain kept while visitors move). QA X1-09: after creation nothing could change either — moving a site
+ * from staging to production meant deleting it and recreating it. Every name is checked exactly as at
+ * creation; the site's own `siteurl`/`home` follow the main address, a certificate kept for the old main
+ * address is dropped (it names a host the site no longer answers), and the edge hears the new addresses.
+ * Other host names are answered with the main address's scheme and port; links keep naming the main one.
+ */
+async function changeSiteAddress(id: number, input: { url: unknown; aliases?: unknown; actorUserId?: number | null }) {
+    if (!siteContext.multisiteEnabled()) throw codedError('network_disabled', 'Multisite is not enabled on this install.', 409);
+    if (id === siteContext.PRIMARY_SITE_ID) {
+        throw codedError('network_primary_site', 'The main site\'s address is changed in Settings → Site address.');
+    }
+    const site = network.getSite(id);
+    if (!site) throw codedError('network_site_not_found', 'No such site.', 404);
+    const address = assertHostAvailable(String(input.url ?? ''), id);
+    const hostPolicy = require('./host-policy');
+    const main = hostPolicy.parseSiteUrl(address.url);
+
+    let rawAliases: unknown[] = [];
+    if (input.aliases !== undefined && input.aliases !== null) {
+        if (!Array.isArray(input.aliases)) throw codedError('network_invalid_alias', 'The other addresses must be a list of host names.');
+        rawAliases = input.aliases;
+    }
+    if (rawAliases.length > MAX_SITE_ALIASES) throw codedError('network_invalid_alias', `A site can have at most ${MAX_SITE_ALIASES} other addresses.`);
+    const aliases: string[] = [];
+    for (const raw of rawAliases) {
+        const text = String(raw ?? '').trim().toLowerCase();
+        if (!text) continue;
+        // A host name, or a URL of which only the host counts: other addresses share the main one's scheme and port.
+        let host = text;
+        if (text.includes('://')) {
+            const asUrl = hostPolicy.parseSiteUrl(text);
+            if (!asUrl) throw codedError('network_invalid_alias', `"${text.slice(0, 80)}" is not a host name.`);
+            host = asUrl.hostname;
+        }
+        const p = hostPolicy.parseHost(host);
+        if (!p || p.port !== null) throw codedError('network_invalid_alias', `"${host.slice(0, 80)}" is not a host name (no port, no path).`);
+        const checked = assertHostAvailable(`${main.scheme}://${p.hostname}${main.port ? `:${main.port}` : ''}`, id);
+        if (checked.hostname === address.hostname || aliases.includes(checked.hostname)) continue;
+        aliases.push(checked.hostname);
+    }
+
+    const before = { url: site.mainUrl, host: site.mainHost, aliases: network.siteAliases(id) };
+    const updated = await network.setSiteAddresses(id, { url: address.url, hostname: address.hostname, aliases });
+    if (before.url !== address.url) {
+        await siteContext.runWithSite(id, async () => {
+            await prepareSite(id);
+            const options = require('./options');
+            await options.updateOption('siteurl', address.url);
+            await options.updateOption('home', address.url);
+        });
+    }
+    if (before.host !== address.hostname) {
+        try { await require('./site-certs').forgetSiteCertificates(id, before.host); } catch (e: any) {
+            log.warn(`[multisite] site ${id}: the certificate of its old address could not be removed (${e && e.message})`);
+        }
+    }
+    await network.audit('site.address_changed', { actor: input.actorUserId ?? null, siteId: id, detail: { from: before, to: { url: address.url, aliases } } });
+    afterRegistryChange();
+    return updated;
 }
 
 type CreateSiteInput = {
@@ -378,6 +445,7 @@ module.exports = {
     prepareSite,
     resetPreparedSites,
     createSite,
+    changeSiteAddress,
     setSiteStatus,
     deleteSite,
     retireSiteWorkers,

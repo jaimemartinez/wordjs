@@ -202,6 +202,37 @@ async function checkBackground(): Promise<HealthCheck[]> {
     return out;
 }
 
+/**
+ * The gateway and the servers behind it (split and separate modes; nothing to report in a monolith).
+ * QA X1-03/X1-04: the panel never said that the gateway served another protocol than its switch, and a
+ * frontend node that stopped answering left the panel all green while visitors got an error page.
+ */
+async function checkEdge(): Promise<HealthCheck[]> {
+    if (process.env.WORDJS_MODE === 'mono' || process.env.WORDJS_EMBEDDED === '1') return [];
+    const certManager = require('./cert-manager');
+    const out: HealthCheck[] = [];
+    const info = await withTimeout<any>(Promise.resolve(certManager.getConfig()).catch(() => null), 3000, null);
+    if (info && !info.error && (info.serving === 'http' || info.serving === 'https')) {
+        const servesHttps = info.serving === 'https';
+        out.push(info.sslEnabled === servesHttps
+            ? { id: 'security.edge', group: 'security', status: 'ok', title: 'Gateway protocol', message: `The gateway serves ${servesHttps ? 'HTTPS' : 'plain HTTP'}, as configured.` }
+            : { id: 'security.edge', group: 'security', status: 'warn', title: 'Gateway protocol', message: info.sslEnabled ? 'HTTPS is switched on, but the gateway serves plain HTTP: it has no certificate to serve.' : 'HTTPS is switched off, but the gateway still serves HTTPS.', fix: { href: '/admin/security', label: 'Security' } });
+    }
+    let nodes: any[] | null = null;
+    try {
+        const r = await withTimeout<any>(certManager.gatewayControlRequest('GET', '/cluster', null, 2500).catch(() => null), 3000, null);
+        if (r && r.status === 200) nodes = (JSON.parse(r.text) || {}).nodes || null;
+    } catch { nodes = null; }
+    if (Array.isArray(nodes) && nodes.length) {
+        const down = nodes.filter((n) => n && n.status === 'down');
+        const label = (n: any) => `${n.role === 'frontend' ? 'frontend' : n.role === 'backend' ? 'backend' : 'server'} ${String(n.url || '').replace(/^https?:\/\//, '')}`;
+        out.push(down.length
+            ? { id: 'background.cluster', group: 'background', status: 'fail', title: 'Servers', message: `${down.length} of ${nodes.length} server(s) do not answer the gateway: ${down.map(label).join(', ')}. Visitors whose requests need ${down.length === 1 ? 'it' : 'them'} get a "back in a moment" page until ${down.length === 1 ? 'it is' : 'they are'} running again.`, fix: { href: '/admin/cluster', label: 'Servers' } }
+            : { id: 'background.cluster', group: 'background', status: 'ok', title: 'Servers', message: `All ${nodes.length} server(s) behind the gateway answer.` });
+    }
+    return out;
+}
+
 /** Every check, in screen order. `req` lets the proxy check judge the request that asked. */
 async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary: Record<HealthStatus, number>; at: string; host: string }> {
     const groups = await Promise.all([
@@ -214,6 +245,7 @@ async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary
         safe('security.tls', 'security', 'HTTPS', checkTls),
         safe('security.proxy', 'security', 'Reverse proxy', () => checkProxy(req)),
         safe('background.cron', 'background', 'Scheduled tasks', checkBackground),
+        safe('background.cluster', 'background', 'Servers', checkEdge),
     ]);
     const checks = groups.flat();
     const summary: Record<HealthStatus, number> = { ok: 0, warn: 0, fail: 0, info: 0 };
@@ -221,4 +253,4 @@ async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary
     return { checks, summary, at: new Date().toISOString(), host: os.hostname() };
 }
 
-module.exports = { runSiteHealth, checkProxy, checkDisk };
+module.exports = { runSiteHealth, checkProxy, checkDisk, checkEdge };

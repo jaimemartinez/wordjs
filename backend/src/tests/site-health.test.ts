@@ -141,6 +141,48 @@ describe('Site Health', () => {
         assert.strictEqual(byId(await as('owner').set('X-Forwarded-For', '203.0.113.9'), 'security.proxy').status, 'ok');
     });
 
+    test('the gateway protocol and the servers behind it (QA X1-03, X1-04)', async () => {
+        const certManager = require('../core/cert-manager');
+        const realGet = certManager.getConfig;
+        const realControl = certManager.gatewayControlRequest;
+        let info: any = { sslEnabled: true, serving: 'http', certInfo: { type: 'none' } };
+        let cluster: any = { initialized: true, nodes: [{ url: 'https://192.0.2.183:3001', role: 'backend', status: 'up' }, { url: 'https://192.0.2.184:3001', role: 'frontend', status: 'down', latencyMs: null }] };
+        certManager.getConfig = async () => info;
+        certManager.gatewayControlRequest = async (method: string, p: string) => {
+            assert.strictEqual(`${method} ${p}`, 'GET /cluster');
+            return { status: 200, text: JSON.stringify(cluster) };
+        };
+        try {
+            let res = await as('owner');
+            const edge = byId(res, 'security.edge');
+            assert.strictEqual(edge.status, 'warn', JSON.stringify(edge));
+            assert.strictEqual(edge.fix.href, '/admin/security');
+            const servers = byId(res, 'background.cluster');
+            assert.strictEqual(servers.status, 'fail', JSON.stringify(servers));
+            assert.match(servers.message, /frontend 192\.0\.2\.184:3001/);
+            assert.strictEqual(servers.fix.href, '/admin/cluster');
+
+            info = { sslEnabled: false, serving: 'http' };
+            cluster = { initialized: true, nodes: [{ url: 'https://192.0.2.183:3001', role: 'backend', status: 'up' }] };
+            res = await as('owner');
+            assert.strictEqual(byId(res, 'security.edge').status, 'ok');
+            assert.strictEqual(byId(res, 'background.cluster').status, 'ok');
+
+            // A monolith has no gateway of its own to report on.
+            process.env.WORDJS_EMBEDDED = '1';
+            try {
+                res = await as('owner');
+                assert.strictEqual(byId(res, 'security.edge'), undefined);
+                assert.strictEqual(byId(res, 'background.cluster'), undefined);
+            } finally {
+                delete process.env.WORDJS_EMBEDDED;
+            }
+        } finally {
+            certManager.getConfig = realGet;
+            certManager.gatewayControlRequest = realControl;
+        }
+    });
+
     test('a process nothing would restart is a warning; a supervised one is fine', async () => {
         const manual = byId(await as('owner'), 'background.restart');
         if (require('../core/restart').restartMode() === 'manual') assert.strictEqual(manual.status, 'warn');

@@ -733,6 +733,30 @@ export function isBadCurrentPassword(error: unknown): boolean {
         && (error as { code?: string }).code === "rest_bad_current_password";
 }
 
+/**
+ * A write to accounts refused because this session was started at an address other than the main one
+ * (rest_account_bound_session): the main address to sign in at, or "" when the server did not name one.
+ * null for any other error. QA S4-02: the user screens showed only "Failed to save user".
+ */
+export function accountBoundSessionAddress(error: unknown): string | null {
+    if (!error || typeof error !== "object" || (error as { code?: string }).code !== "rest_account_bound_session") return null;
+    const main = (error as { data?: { mainAddress?: unknown } }).data?.mainAddress;
+    return typeof main === "string" ? main : "";
+}
+
+/** The alert text for a refused user save: the bound-session explanation when that is why, else the server's words. */
+export function userSaveErrorText(error: unknown, t: (key: string) => string): string {
+    const main = accountBoundSessionAddress(error);
+    if (main !== null) {
+        return main
+            ? t("user.edit.boundSession").replace("{url}", () => main)
+            : t("user.edit.boundSessionNoUrl");
+    }
+    const message = (error as { message?: string })?.message;
+    if (isBadCurrentPassword(error)) return message || t("user.edit.saveError");
+    return message ? `${t("user.edit.saveError")}: ${message}` : t("user.edit.saveError");
+}
+
 export const usersApi = {
     list: () => apiGet<User[]>("/users"),
     get: (id: number) => apiGet<User>(`/users/${id}`),
@@ -1669,6 +1693,8 @@ export interface NetworkSite {
     host: string;
     status: "active" | "suspended";
     main: boolean;
+    /** The site's other host names (answered for it, with its main address's scheme and port). */
+    aliases?: string[];
     createdAt: string;
     updatedAt: string;
 }
@@ -1751,6 +1777,9 @@ export const networkApi = {
     create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+    /** Move a site to another address and/or replace its other host names. */
+    changeAddress: (id: number, url: string, aliases: string[], currentPassword: string) =>
+        apiPut<{ site: NetworkSite }>(`/network/sites/${id}/address`, { url, aliases, currentPassword }),
     /** Open a site's admin as administrator: a one-time URL on the site's address, valid for a minute. */
     handoff: (id: number, currentPassword: string) => apiPost<{ url: string; expiresAt: string }>(`/network/sites/${id}/handoff`, { currentPassword }),
     /** Delete a suspended site and everything it holds (confirmSlug repeats its slug). */

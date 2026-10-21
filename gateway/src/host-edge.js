@@ -585,6 +585,9 @@ const PUSH_ENV_KEYS = Object.freeze(['WORDJS_ALLOWED_HOSTS', 'WORDJS_IP_HOSTS', 
 const MAX_ALIASES = 256;
 const MAX_URL = 2048;
 const MAX_NETWORK_SITES = 5000;
+// Same bound as host-policy readNetworkSites; a host name is at most 253 characters (+ a trailing dot).
+const MAX_SITE_ALIASES = 20;
+const MAX_HOST = 254;
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -670,6 +673,17 @@ function sanitizePolicyPush(body) {
                 if (typeof s.id !== 'number' || !Number.isSafeInteger(s.id) || s.id < 2) return { ok: false, error: `config.networkSites[${i}].id must be a site id` };
                 if (!boundedString(s.url, MAX_URL)) return { ok: false, error: `config.networkSites[${i}].url must be a string` };
                 if (s.status !== 'active' && s.status !== 'suspended') return { ok: false, error: `config.networkSites[${i}].status must be active or suspended` };
+                // The site's other host names (Network → Sites → Change address): bounded strings only;
+                // host-policy readNetworkSites parses each one and drops what is not a host name.
+                if (s.aliases !== undefined && s.aliases !== null) {
+                    if (!Array.isArray(s.aliases) || s.aliases.length > MAX_SITE_ALIASES || !s.aliases.every((a) => boundedString(a, MAX_HOST))) {
+                        return { ok: false, error: `config.networkSites[${i}].aliases must be a list of at most ${MAX_SITE_ALIASES} host names` };
+                    }
+                    if (s.aliases.length) {
+                        sites.push({ id: s.id, url: s.url, status: s.status, aliases: s.aliases.slice() });
+                        continue;
+                    }
+                }
                 sites.push({ id: s.id, url: s.url, status: s.status });
             }
             config.networkSites = sites;

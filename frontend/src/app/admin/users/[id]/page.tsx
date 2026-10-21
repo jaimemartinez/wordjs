@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, isBadCurrentPassword } from "@/lib/api";
+import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, userSaveErrorText } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import ModernSelect from "@/components/ModernSelect";
 import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
@@ -101,10 +101,7 @@ export default function UserEditorPage() {
             // Show WHAT went wrong. Swallowing the backend code behind one generic string is how a 403
             // "current password is incorrect" reached the operator as "could not save the user", with no
             // hint that a field was missing.
-            const message = (error as { message?: string })?.message;
-            await alert(isBadCurrentPassword(error)
-                ? (message || t('user.edit.saveError'))
-                : (message ? `${t('user.edit.saveError')}: ${message}` : t('user.edit.saveError')));
+            await alert(userSaveErrorText(error, t));
         } finally {
             setSaving(false);
         }

@@ -209,10 +209,12 @@ function sessionBoundToSecondaryAddress(req: Request): boolean {
  */
 function refuseBoundSession(req: Request, res: Response, params?: string[]): boolean {
     if (!sessionBoundToSecondaryAddress(req)) return false;
+    // Name the main address, so the screen can say where to sign in instead of "could not save" (QA S4-02).
+    const canonical = siteHostPolicy.get().canonical;
     res.status(403).json({
         code: 'rest_account_bound_session',
         message: 'Accounts, roles, the two-factor policy and the registration settings can only be changed from a session started at the main address.',
-        data: { status: 403, ...(params && params.length ? { params } : {}) }
+        data: { status: 403, ...(canonical ? { mainAddress: canonical.origin } : {}), ...(params && params.length ? { params } : {}) }
     });
     return true;
 }

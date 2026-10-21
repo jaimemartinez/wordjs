@@ -279,6 +279,8 @@ function publicSite(site: any) {
         host: site.mainHost,
         status: site.status,
         main: site.id === siteContext.PRIMARY_SITE_ID,
+        // The site's other host names (PUT /network/sites/:id/address); the main site's are its own screen's.
+        aliases: site.id === siteContext.PRIMARY_SITE_ID ? [] : require('../core/network').siteAliases(site.id),
         createdAt: site.createdAt,
         updatedAt: site.updatedAt,
     };
@@ -377,6 +379,71 @@ router.post('/sites', asyncHandler(async (req: Request, res: Response) => {
             actorUserId: Number(req.user.id),
         });
         res.status(201).json({ site: publicSite(site) });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
+/**
+ * @swagger
+ * /network/sites/{id}/address:
+ *   put:
+ *     summary: Change a site's address and its other addresses
+ *     description: >-
+ *       Moves a site (not the main site, whose address is Settings → Site address) to another main
+ *       address and/or replaces its other host names (the www twin, an old domain kept while visitors
+ *       move). Each name is checked as at creation. Other host names are answered with the main address's
+ *       scheme and port; links keep naming the main address. The site's own siteurl/home follow, a
+ *       certificate kept for the old main address is removed, and the gateway hears the new addresses.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [url, currentPassword]
+ *             properties:
+ *               url:
+ *                 type: string
+ *                 example: https://blog.example.com
+ *               aliases:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: [www.blog.example.com]
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ site: NetworkSite }"
+ *       400:
+ *         description: An invalid address (network_invalid_url, network_invalid_alias), the main site (network_primary_site), or a wrong currentPassword
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: Not a network administrator
+ *       404:
+ *         description: No such site (network_site_not_found)
+ *       409:
+ *         description: An address another site answers (network_host_taken)
+ */
+router.put('/sites/:id/address', asyncHandler(async (req: Request, res: Response) => {
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const id = siteIdParam(req.params.id);
+    if (id === null) return res.status(404).json({ code: 'network_site_not_found', message: 'No such site.', data: { status: 404 } });
+    const b = req.body || {};
+    try {
+        const site = await require('../core/network-sites').changeSiteAddress(id, { url: b.url, aliases: b.aliases, actorUserId: Number(req.user.id) });
+        return res.json({ site: publicSite(site) });
     } catch (e: any) {
         return sendError(res, e);
     }

@@ -11,6 +11,7 @@ or changes. The design, the isolation guarantees and the road ahead are in
 - [Turning it on](#turning-it-on)
 - [Creating a site](#creating-a-site)
 - [DNS, the gateway and TLS](#dns-the-gateway-and-tls)
+- [Changing a site's address](#changing-a-sites-address)
 - [Suspending a site](#suspending-a-site)
 - [Opening a site as administrator](#opening-a-site-as-administrator)
 - [Deleting a site](#deleting-a-site)
@@ -180,6 +181,16 @@ Point the new name at the server the main site runs on, exactly as you did for t
   to answers it; the gateway's own port-80 listener (`acme.http01Port`) redirects a token it does not
   hold to HTTPS, where the backends answer it. You can also terminate TLS in a reverse proxy in front of
   WordJS instead.
+
+## Changing a site's address
+
+Admin → Network → **Change address** (your password confirms it) moves a site to another main address and sets its other
+addresses: host names such as the `www.` twin, or the old domain kept while visitors move. Each name is checked as at
+creation (a DNS name no other site and not the main site answers). The other names are answered with the main
+address's scheme and port, for the same site; links, feeds and emails keep naming the main address. The site's own
+`siteurl`/`home` follow the main address, the certificate kept for the old main address is removed (get one for the new
+address with **Get certificate**), and the gateway hears the new addresses at once. The main site's address is changed in
+Settings → Site address. On a site of the network, that screen points its administrators here.
 
 ## Suspending a site
 
@@ -405,6 +416,7 @@ wrong one is `403 rest_bad_current_password`.
 | `DELETE` | `/admins/:id` | `{ currentPassword }` | `{ administrators }`. `409 network_last_admin`, `404 network_admin_not_found` |
 | `GET` | `/sites` | — | `{ sites: [{ id, slug, url, host, status, main, createdAt, updatedAt }], localAddresses }`, the main site first; `localAddresses` is true when a new site may use a `*.localhost` address |
 | `POST` | `/sites` | `{ slug, url, title, adminUsername, adminEmail, adminPassword, currentPassword }` | `201 { site }`. `400` for an invalid field (`network_invalid_url`, `network_invalid_slug`, `network_invalid_title`, `network_invalid_admin`, `network_weak_password`), `409 network_host_taken` / `network_slug_taken` |
+| `PUT` | `/sites/:id/address` | `{ url, aliases?, currentPassword }` | `{ site }` with `aliases`. `400 network_invalid_url` / `network_invalid_alias`, `400 network_primary_site`, `404 network_site_not_found`, `409 network_host_taken` |
 | `POST` | `/sites/:id/suspend` | `{ currentPassword }` | `{ site }`. `400 network_primary_site` for the main site, `404 network_site_not_found` |
 | `POST` | `/sites/:id/resume` | `{ currentPassword }` | `{ site }` |
 | `DELETE` | `/sites/:id` | `{ confirmSlug, currentPassword }` | `{ deleted: id }`. `409 network_site_active` unless suspended, `400 network_confirm_mismatch`, `400 network_primary_site` |

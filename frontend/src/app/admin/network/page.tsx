@@ -65,6 +65,9 @@ export default function NetworkPage() {
     const [certs, setCerts] = useState<{ autoIssue: boolean; byId: Record<number, NetworkSiteCertificate> } | null>(null);
     const [busyCert, setBusyCert] = useState<number | null>(null);
     const [certUpload, setCertUpload] = useState<{ id: number; certPem: string; keyPem: string } | null>(null);
+    // The site whose address is being changed, with the draft (main address + other host names, one per line).
+    const [addressEdit, setAddressEdit] = useState<{ id: number; url: string; aliases: string } | null>(null);
+    const [busyAddress, setBusyAddress] = useState<number | null>(null);
 
     const load = async () => {
         try {
@@ -195,6 +198,27 @@ export default function NetworkPage() {
             addToast(err?.message || t("network.openAsAdminFailed"), "error");
             setBusyId(null);
             setOpening(false);
+        }
+    };
+
+    /** Move the site to another address and/or replace its other host names (QA X1-09). */
+    const saveAddress = async (site: NetworkSite) => {
+        if (!addressEdit || addressEdit.id !== site.id) return;
+        if (!actionPassword) {
+            addToast(t("network.passwordRequired"), "error");
+            return;
+        }
+        setBusyAddress(site.id);
+        try {
+            const aliases = addressEdit.aliases.split(/[\s,]+/).map((a) => a.trim()).filter(Boolean);
+            const { site: moved } = await networkApi.changeAddress(site.id, addressEdit.url.trim(), aliases, actionPassword);
+            addToast(t("network.addressSaved").replace("{host}", moved.host), "success");
+            setAddressEdit(null);
+            await load();
+        } catch (err: any) {
+            addToast(err?.message || t("network.addressFailed"), "error");
+        } finally {
+            setBusyAddress(null);
         }
     };
 
@@ -390,6 +414,25 @@ export default function NetworkPage() {
                                         <span className="mx-2">·</span>
                                         {t("network.createdAt")} {fmtDate(site.createdAt)}
                                     </div>
+                                    {!site.main && site.aliases && site.aliases.length > 0 && (
+                                        <div className="text-xs text-gray-500 mt-1 break-all" data-site-aliases={site.id}>
+                                            {t("network.otherAddresses")}: {site.aliases.join(", ")}
+                                        </div>
+                                    )}
+                                    {!site.main && addressEdit?.id === site.id && (
+                                        <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3 grid gap-3" data-site-address-edit={site.id}>
+                                            <Input label={t("network.addressMain")} icon="fa-globe" value={addressEdit.url} onChange={(e) => setAddressEdit({ ...addressEdit, url: e.target.value })} autoComplete="off" />
+                                            <label className="block text-xs font-bold text-gray-600">
+                                                {t("network.addressOthers")}
+                                                <textarea className="mt-1 w-full h-20 font-mono text-xs rounded-lg border border-gray-200 p-2 bg-white text-gray-800" placeholder="www.example.com" value={addressEdit.aliases} onChange={(e) => setAddressEdit({ ...addressEdit, aliases: e.target.value })} autoComplete="off" />
+                                            </label>
+                                            <p className="text-xs text-gray-500">{t("network.addressHint")}</p>
+                                            <div className="flex flex-wrap gap-2 justify-end">
+                                                <Button variant="secondary" size="sm" onClick={() => setAddressEdit(null)}>{t("common.cancel")}</Button>
+                                                <Button variant="primary" size="sm" icon="fa-check" loading={busyAddress === site.id} disabled={!addressEdit.url.trim()} onClick={() => saveAddress(site)} data-save-address={site.id}>{t("network.addressSave")}</Button>
+                                            </div>
+                                        </div>
+                                    )}
                                     {(() => {
                                         const q = quotaFor(site.id);
                                         if (!q) return null;
@@ -447,6 +490,9 @@ export default function NetworkPage() {
                                 </div>
                                 {!site.main && (
                                     <div className="sm:shrink-0 flex flex-col items-stretch sm:items-end gap-2">
+                                        {addressEdit?.id !== site.id && (
+                                            <Button variant="ghost" icon="fa-globe" onClick={() => setAddressEdit({ id: site.id, url: site.url, aliases: (site.aliases || []).join("\n") })} data-change-address={site.id}>{t("network.changeAddress")}</Button>
+                                        )}
                                         {site.status === "active" ? (
                                             <>
                                                 <Button variant="primary" icon="fa-right-to-bracket" loading={busyId === site.id && opening} onClick={() => openAsAdmin(site)} title={t("network.openAsAdminHint")} data-open-as-admin={site.id}>{t("network.openAsAdmin")}</Button>

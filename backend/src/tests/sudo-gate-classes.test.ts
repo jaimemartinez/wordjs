@@ -100,7 +100,7 @@ const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSe
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
 const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorUpdate'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
-const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
+const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkAddress', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
 const CEILING_DOOR_PERSONAS = ['doorMfaDisable', 'doorMfaBackup', 'doorTokenStepUp', 'doorAgentCreate', 'doorAgentGrant'];
 
@@ -850,6 +850,14 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw })),
             alsoExpect: (r: any) => r.status === 400 && r.body.code === 'network_invalid_title',
+        },
+        // Changing a site's address (QA X1-09): the password first; a site that does not exist is then a
+        // 404 and no address is changed.
+        {
+            site: 'network.ts PUT /sites/:id/address', name: 'PUT /network/sites/:id/address', persona: 'doorNetworkAddress',
+            send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/sites/999/address`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, url: 'http://door-probe.example.com' })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
         },
         ...(['suspend', 'resume'] as const).map((what) => ({
             site: `network.ts POST /sites/:id/${what}`, name: `POST /network/sites/:id/${what}`,

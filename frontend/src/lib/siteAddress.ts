@@ -809,6 +809,18 @@ export function canManageSiteAddress(user: { role?: unknown; network?: { mainSit
     return !network || (network.mainSite && network.networkAdmin);
 }
 
+/**
+ * Why an ADMINISTRATOR cannot manage the address here, as the i18n key the screen shows — or null for
+ * anyone else (who gets the plain "administrators only"). QA X1-09: an administrator of a network site
+ * was told "Only administrators can manage the site address", which is what they are; a site's address
+ * belongs to the network administrator (Network → Sites → Change address, on the main site).
+ */
+export type SiteAddressRefusal = "siteAddress.adminOnly" | "siteAddress.networkAdminOnlySite" | "siteAddress.networkAdminOnlyMain";
+export function siteAddressRefusalKey(user: { role?: unknown; network?: { mainSite: boolean; networkAdmin: boolean } } | null | undefined): Exclude<SiteAddressRefusal, "siteAddress.adminOnly"> | null {
+    if (user?.role !== "administrator" || !user.network) return null;
+    return user.network.mainSite ? "siteAddress.networkAdminOnlyMain" : "siteAddress.networkAdminOnlySite";
+}
+
 /** Where the retired /migration page sends a visitor: administrators to the settings screen, others home. */
 export function migrationRedirectTarget(user: { role?: unknown } | null): string {
     return canManageSiteAddress(user) ? SITE_ADDRESS_SETTINGS_PATH : "/";

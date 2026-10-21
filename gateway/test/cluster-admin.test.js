@@ -20,7 +20,7 @@ function registryOf(entries) {
 
 test('describeNodes groups routes by node, with its role and the health sweep verdict', () => {
     const registry = registryOf([
-        ['/api', ['https://10.0.0.2:4000', 'https://10.0.0.3:4000'], { 'https://10.0.0.2:4000': { status: 'Healthy', latency: 12 }, 'https://10.0.0.3:4000': { status: 'Failing', lastError: 'ECONNREFUSED' } }],
+        ['/api', ['https://10.0.0.2:4000', 'https://10.0.0.3:4000'], { 'https://10.0.0.2:4000': { status: 'Healthy', latency: 12 }, 'https://10.0.0.3:4000': { status: 'Failing', lastError: 'ECONNREFUSED', latency: 46 } }],
         ['/uploads', ['https://10.0.0.2:4000'], { 'https://10.0.0.2:4000': { status: 'Healthy', latency: 9 } }],
         ['/', ['https://10.0.0.9:3001'], {}],
     ]);
@@ -33,6 +33,9 @@ test('describeNodes groups routes by node, with its role and the health sweep ve
     ]);
     assert.deepStrictEqual(nodes[0].routes.sort(), ['/api', '/uploads']);
     assert.strictEqual(nodes[1].lastError, 'ECONNREFUSED');
+    // A down node shows no latency: the one measured while it was up is stale (QA X1-04).
+    assert.strictEqual(nodes[1].latencyMs, null);
+    assert.strictEqual(nodes[0].latencyMs, 9);
 });
 
 test('removeNode takes the node out of every route; the removed store keeps it out until its host is re-admitted', () => {
