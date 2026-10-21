@@ -78,7 +78,7 @@ const Segmented = ({ value, onChange, options }: any) => {
                 title={tr(o.label)}
                 className={`flex-1 py-1 rounded text-[10px] font-bold transition-all flex items-center justify-center ${
                     (value || "") === o.value
-                        ? "bg-[var(--ed-primary)] text-white shadow-sm"
+                        ? "bg-[var(--ed-primary-solid)] text-white shadow-sm"
                         : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                 }`}
             >

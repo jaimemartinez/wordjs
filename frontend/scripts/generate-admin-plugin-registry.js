@@ -166,6 +166,7 @@ import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { createRemotePluginComponent } from "@/lib/pluginBundleLoader";
+import { useI18n } from "@/contexts/I18nContext";
 
 const PLUGIN_ADMIN_PAGES: Record<string, () => Promise<any>> = {
 ${imports}
@@ -187,26 +188,29 @@ const adminStyleEndpoint = (id: string) => \`/api/v1/plugins/\${encodeURICompone
 type AdminStyle = { style: string | null; theme: Record<string, string> | null; stylesheet: boolean };
 
 function LoadingFallback() {
+    const { t } = useI18n();
     return (
         <div className="p-8 flex items-center justify-center">
             <div className="text-center">
                 <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4 font-black"></div>
-                <p className="text-gray-500">Loading plugin...</p>
+                <p className="text-gray-500">{t("plugins.page.loading")}</p>
             </div>
         </div>
     );
 }
 
 function PluginNotFound({ slug }: { slug: string }) {
+    const { t } = useI18n();
+    const [before, after] = t("plugins.page.notInstalled").split("{slug}");
     return (
         <div className="p-8 text-center">
             <div className="text-6xl mb-4">🔌</div>
-            <h1 className="text-2xl font-bold text-gray-800 mb-2">Plugin Not Found</h1>
+            <h1 className="text-2xl font-bold text-gray-800 mb-2">{t("plugins.page.notFound")}</h1>
             <p className="text-gray-600 mb-4">
-                The plugin <code className="bg-gray-100 px-2 py-1 rounded">{slug}</code> is not installed.
+                {before}<code className="bg-gray-100 px-2 py-1 rounded">{slug}</code>{after}
             </p>
             <a href="/admin/plugins" className="text-blue-600 hover:underline font-bold">
-                ← Back to Plugins
+                {t("plugins.page.back")}
             </a>
         </div>
     );

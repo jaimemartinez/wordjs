@@ -50,6 +50,8 @@ class Theme {
   translations: Record<string, { description?: string }> | null;
   /** How many permissions the theme's functions.js declares (theme.json `permissions`): 0 = none to grant. */
   declaredPermissions: number;
+  /** The chrome compositions the theme ships (chrome/<part>.json): the editor canvas asks only for these. */
+  chrome: string[];
 
   constructor(data: any) {
     this.name = data.name;
@@ -66,6 +68,7 @@ class Theme {
     this.layout = (data.layout && typeof data.layout === 'object') ? data.layout : null;
     this.translations = themeTranslations(data.translations);
     this.declaredPermissions = Number.isInteger(data.declaredPermissions) ? data.declaredPermissions : 0;
+    this.chrome = Array.isArray(data.chrome) ? data.chrome : [];
   }
 
   /**
@@ -196,6 +199,8 @@ function scanThemes() {
       records.push({
         ...metadata,
         declaredPermissions: (require('./theme-declaration').themeDeclaredPermissions(themeDir) || []).length,
+        // Which site-chrome parts the theme composes. Three existsSync per theme, inside the memoized scan.
+        chrome: ['header', 'footer', 'announcement'].filter((part) => fs.existsSync(path.join(themeDir, 'chrome', `${part}.json`))),
         slug: entry.name,
         path: themeDir,
         templatePath: path.join(themeDir, 'templates')
@@ -450,6 +455,7 @@ async function getAllThemes() {
     screenshot: theme.screenshot,
     layout: theme.layout,
     declaredPermissions: theme.declaredPermissions,
+    chrome: theme.chrome,
     active: theme.slug === current
   }));
 }

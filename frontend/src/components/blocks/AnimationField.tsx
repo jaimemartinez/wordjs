@@ -94,7 +94,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                                     onClick={() => onChange({ ...anim, duration: d.value })}
                                     className={`flex-1 py-1 rounded text-[11px] font-medium transition ${
                                         selected
-                                            ? "bg-[var(--ed-primary)] text-white shadow-sm"
+                                            ? "bg-[var(--ed-primary-solid)] text-white shadow-sm"
                                             : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                                     }`}
                                 >

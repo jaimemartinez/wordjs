@@ -156,6 +156,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                     disabled={disabled}
                     aria-haspopup="listbox"
                     aria-expanded={isOpen}
+                    data-modern-select=""
                     className={`
                         w-full flex items-center justify-between bg-gray-50 border-2 border-gray-100 text-gray-700 py-2.5 px-4 rounded-xl
                         focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50
@@ -177,6 +178,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                     <div
                         ref={dropdownRef}
                         data-dropdown-side={coords.side}
+                        data-modern-select-menu=""
                         style={{
                             position: 'fixed',
                             left: coords.left,
@@ -185,7 +187,9 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                             bottom: coords.bottom,
                             zIndex: ADMIN_Z.popover,
                         }}
-                        className="bg-white/95 backdrop-blur-xl border border-gray-100 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in duration-150"
+                        // Opened from the Verso editor, the menu (portalled out of it) joins the editor's
+                        // palette: in its dark mode a white list hung off a dark panel.
+                        className={`bg-white/95 backdrop-blur-xl border border-gray-100 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in duration-150${containerRef.current?.closest('.verso-container, .verso-editor-ui') ? ' verso-editor-ui' : ''}`}
                     >
                         <div ref={listRef} className="py-1 overflow-y-auto overscroll-contain custom-scrollbar" style={{ maxHeight: coords.maxHeight }} role="listbox">
                             {options.length === 0 ? (

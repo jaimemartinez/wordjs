@@ -548,3 +548,36 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--ed-primary-fixed) transparent;
 }
+
+/* ── ModernSelect inside the editor ─────────────────────────────────────────────────────────────────
+ * ModernSelect is the admin's (light) dropdown. In the editor it takes the editor's palette, so in the
+ * dark scheme it is not a white box (the page-template picker) and its label is not gray-700 on a dark
+ * fill (the status picker, 1.46:1). Unlayered, so these beat the component's Tailwind utilities. The
+ * menu is portalled to <body>; ModernSelect tags it .verso-editor-ui when opened from the editor. */
+.verso-container [data-modern-select],
+.verso-editor-ui [data-modern-select] {
+  background-color: var(--ed-surface-container);
+  border-color: var(--ed-outline-variant);
+  color: var(--ed-on-surface);
+}
+.verso-container [data-modern-select]:hover,
+.verso-editor-ui [data-modern-select]:hover {
+  background-color: var(--ed-surface-container-high);
+}
+.verso-container [data-modern-select] .fa-chevron-down,
+.verso-editor-ui [data-modern-select] .fa-chevron-down {
+  color: var(--ed-on-surface-variant);
+}
+[data-modern-select-menu].verso-editor-ui {
+  background-color: var(--ed-surface-container-lowest);
+  border-color: var(--ed-outline-variant);
+  color: var(--ed-on-surface);
+}
+[data-modern-select-menu].verso-editor-ui [role="option"] {
+  color: var(--ed-on-surface-variant);
+}
+[data-modern-select-menu].verso-editor-ui [role="option"]:hover,
+[data-modern-select-menu].verso-editor-ui [role="option"][aria-selected="true"] {
+  background-color: var(--ed-surface-container-high);
+  color: var(--ed-on-surface);
+}

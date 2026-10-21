@@ -8,6 +8,86 @@ import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useOptionalAuth } from "@/contexts/AuthContext";
 import { PageHeader, Button, Card, EmptyState, Input } from "@/components/ui";
+import { registerTranslations } from "@/lib/i18n";
+
+/*
+ * The requirement checklist in the panel's language. The server (backend core/network-setup) words each
+ * requirement in English; these are its exact sentences, keyed `networkSetup.req.<id>.<variant>`, with
+ * {placeholders} for the parts it fills in. A message is translated only when it matches one of them
+ * word for word, so a sentence the server words differently is shown as it came, never mistranslated.
+ */
+const REQUIREMENTS_EN: Record<string, string> = {
+    "networkSetup.req.installed.ok": "The site is installed.",
+    "networkSetup.req.installed.missing": "Finish the install wizard first.",
+    "networkSetup.req.driver.legacy": "This site runs on the older SQLite engine (sqlite-legacy), which cannot hold a network. Move it to the current SQLite engine first: it takes a minute, keeps a copy of the old database, and restarts WordJS by itself.",
+    "networkSetup.req.driver.problem": "The database cannot hold a network: {problem}.",
+    "networkSetup.req.driver.ok": "The database engine ({driver}) can hold a network.",
+    "networkSetup.req.db_create.preCreated": "The network's database space already exists.",
+    "networkSetup.req.db_create.ok": "The database user may create each site's own space.",
+    "networkSetup.req.db_create.postgres": "The database user may not create schemas in its database, and each site needs one. Ask whoever manages the database server to run the command below (or to create the schemas wordjs_network and wordjs_site_<id> for it).",
+    "networkSetup.req.db_create.mysql": "The database user may not create databases, and each site needs one. Ask whoever manages the database server to run the command below (or to create the databases for it).",
+    "networkSetup.req.site_address.ok": "The main site's address is {url}.",
+    "networkSetup.req.site_address.missing": "The main site has no valid main address yet. Set it in Settings → Site address.",
+    "networkSetup.req.restart.manual": "WordJS cannot restart itself the way it was started here. The change is saved, but you will need to restart WordJS once to apply it.",
+    "networkSetup.req.restart.ok": "WordJS restarts itself to apply the change (a few seconds).",
+};
+
+registerTranslations({
+    es: {
+        "networkSetup.req.installed.ok": "El sitio está instalado.",
+        "networkSetup.req.installed.missing": "Termina primero el asistente de instalación.",
+        "networkSetup.req.driver.legacy": "Este sitio usa el motor SQLite antiguo (sqlite-legacy), que no admite una red. Pásalo primero al motor SQLite actual: tarda un minuto, guarda una copia de la base de datos antigua y WordJS se reinicia solo.",
+        "networkSetup.req.driver.problem": "La base de datos no admite una red: {problem}.",
+        "networkSetup.req.driver.ok": "El motor de base de datos ({driver}) admite una red.",
+        "networkSetup.req.db_create.preCreated": "El espacio de la red en la base de datos ya existe.",
+        "networkSetup.req.db_create.ok": "El usuario de la base de datos puede crear el espacio propio de cada sitio.",
+        "networkSetup.req.db_create.postgres": "El usuario de la base de datos no puede crear esquemas en su base de datos, y cada sitio necesita uno. Pide a quien administre el servidor de base de datos que ejecute el comando de abajo (o que cree para él los esquemas wordjs_network y wordjs_site_<id>).",
+        "networkSetup.req.db_create.mysql": "El usuario de la base de datos no puede crear bases de datos, y cada sitio necesita una. Pide a quien administre el servidor de base de datos que ejecute el comando de abajo (o que cree para él las bases de datos).",
+        "networkSetup.req.site_address.ok": "La dirección del sitio principal es {url}.",
+        "networkSetup.req.site_address.missing": "El sitio principal todavía no tiene una dirección principal válida. Configúrala en Configuración → Dirección del sitio.",
+        "networkSetup.req.restart.manual": "WordJS no puede reiniciarse solo tal y como se ha arrancado aquí. El cambio se guarda, pero tendrás que reiniciar WordJS una vez para aplicarlo.",
+        "networkSetup.req.restart.ok": "WordJS se reinicia solo para aplicar el cambio (unos segundos).",
+    },
+    en: REQUIREMENTS_EN,
+    pt: {
+        "networkSetup.req.installed.ok": "O site está instalado.",
+        "networkSetup.req.installed.missing": "Conclua primeiro o assistente de instalação.",
+        "networkSetup.req.driver.legacy": "Este site usa o mecanismo SQLite antigo (sqlite-legacy), que não comporta uma rede. Mude primeiro para o mecanismo SQLite atual: leva um minuto, guarda uma cópia do banco de dados antigo e o WordJS reinicia sozinho.",
+        "networkSetup.req.driver.problem": "O banco de dados não comporta uma rede: {problem}.",
+        "networkSetup.req.driver.ok": "O mecanismo de banco de dados ({driver}) comporta uma rede.",
+        "networkSetup.req.db_create.preCreated": "O espaço da rede no banco de dados já existe.",
+        "networkSetup.req.db_create.ok": "O usuário do banco de dados pode criar o espaço próprio de cada site.",
+        "networkSetup.req.db_create.postgres": "O usuário do banco de dados não pode criar schemas no seu banco de dados, e cada site precisa de um. Peça a quem administra o servidor de banco de dados para executar o comando abaixo (ou para criar os schemas wordjs_network e wordjs_site_<id> para ele).",
+        "networkSetup.req.db_create.mysql": "O usuário do banco de dados não pode criar bancos de dados, e cada site precisa de um. Peça a quem administra o servidor de banco de dados para executar o comando abaixo (ou para criar os bancos de dados para ele).",
+        "networkSetup.req.site_address.ok": "O endereço do site principal é {url}.",
+        "networkSetup.req.site_address.missing": "O site principal ainda não tem um endereço principal válido. Defina-o em Configurações → Endereço do site.",
+        "networkSetup.req.restart.manual": "O WordJS não consegue reiniciar sozinho da forma como foi iniciado aqui. A alteração fica salva, mas você precisará reiniciar o WordJS uma vez para aplicá-la.",
+        "networkSetup.req.restart.ok": "O WordJS reinicia sozinho para aplicar a alteração (alguns segundos).",
+    },
+});
+
+/** Each English sentence as an anchored pattern whose groups are its {placeholders}, in order. */
+const REQUIREMENT_PATTERNS = Object.entries(REQUIREMENTS_EN).map(([key, en]) => {
+    const names: string[] = [];
+    const source = en.split(/\{(\w+)\}/).map((part, i) => {
+        if (i % 2) { names.push(part); return "([\\s\\S]+?)"; }
+        return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("");
+    return { key, id: key.split(".")[2], names, re: new RegExp(`^${source}$`) };
+});
+
+/** A requirement's message in the panel's language when it is one of the server's known sentences. */
+function requirementText(t: (key: string) => string, id: string, message: string): string {
+    for (const p of REQUIREMENT_PATTERNS) {
+        if (p.id !== id) continue;
+        const m = p.re.exec(message);
+        if (!m) continue;
+        const s = t(p.key);
+        if (s === p.key) return message;
+        return p.names.reduce((out, name, i) => out.split(`{${name}}`).join(m[i + 1]), s);
+    }
+    return message;
+}
 
 /**
  * Settings → Network (multisite), zero config: everything `npm run network -- enable|disable` did, plus the
@@ -307,7 +387,7 @@ export default function NetworkSettingsPage() {
         <li key={r.id} data-requirement={r.id} data-ok={r.ok ? "1" : "0"} className="flex items-start gap-3 py-4">
             <i className={`fa-solid ${r.ok ? "fa-circle-check text-green-500" : r.blocking ? "fa-circle-xmark text-red-500" : "fa-circle-info text-amber-500"} mt-0.5`} aria-hidden="true"></i>
             <div className="min-w-0 flex-1">
-                <p className="text-sm text-gray-800">{r.message}</p>
+                <p className="text-sm text-gray-800">{requirementText(t, r.id, r.message)}</p>
                 {!r.ok && r.fix?.action === "migrate_sqlite_native" && (
                     <div className="mt-3">
                         <Button icon="fa-database" onClick={migrate} data-testid="network-setup-migrate">{t("networkSetup.migrateButton")}</Button>

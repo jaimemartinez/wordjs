@@ -8,6 +8,20 @@ import { useI18n } from "@/contexts/I18nContext";
 import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, isBadCurrentPassword } from "@/lib/api";
 import MfaSetup from "@/components/MfaSetup";
 import { roleDisplayName } from "@/lib/roleOptions";
+import { registerTranslations } from "@/lib/i18n";
+
+// This screen's strings that the core catalogue lacks.
+registerTranslations({
+    es: {
+        "account.email": "Correo electrónico",
+    },
+    en: {
+        "account.email": "Email",
+    },
+    pt: {
+        "account.email": "E-mail",
+    },
+});
 
 // Self-service account page — reachable by EVERY logged-in user (cap 'read'), including subscribers
 // who have no access to the admin Users editor. Lets any user update their profile + personal/recovery
@@ -125,7 +139,7 @@ export default function AccountPage() {
                                 <p className="text-sm font-medium text-gray-700 break-words">@{user?.username}</p>
                             </div>
                             <div>
-                                <p className={labelCls}>Email</p>
+                                <p className={labelCls}>{t('account.email')}</p>
                                 <p className="text-sm font-medium text-gray-700 break-words">{user?.email}</p>
                             </div>
                         </div>

@@ -36,8 +36,20 @@ describe('PublicLayoutShell — stylesheets', () => {
     });
 
     it('the Verso canvas renders the shell without its stylesheets', () => {
-        const src = fs.readFileSync(path.resolve(__dirname, '../../verso/editor/VersoEditor.tsx'), 'utf8');
-        expect(src).toMatch(/<PublicLayoutShell stylesheets=\{false\}>/);
-        expect(src).not.toMatch(/<PublicLayoutShell>/);
+        const editor = fs.readFileSync(path.resolve(__dirname, '../../verso/editor/VersoEditor.tsx'), 'utf8');
+        expect(editor).toMatch(/<CanvasPublicShell>/);
+        expect(editor).not.toMatch(/<PublicLayoutShell/);
+        const canvas = fs.readFileSync(path.resolve(__dirname, '../../verso/canvas/CanvasPublicShell.tsx'), 'utf8');
+        expect(canvas).toMatch(/<PublicLayoutShell stylesheets=\{false\}/);
+    });
+
+    it('the canvas and the public layout build the chrome slots with the SAME function', () => {
+        // The canvas showed the built-in footer while the site showed the theme's composed one.
+        const canvas = fs.readFileSync(path.resolve(__dirname, '../../verso/canvas/CanvasPublicShell.tsx'), 'utf8');
+        const layout = fs.readFileSync(path.resolve(__dirname, '../../../app/(public)/_chrome/PublicLayout.tsx'), 'utf8');
+        for (const src of [canvas, layout]) {
+            expect(src).toMatch(/buildChromeSlots\(\{/);
+            expect(src).toMatch(/resolveEffectiveChrome\(\{ siteRaw: settings\??\.site_chrome_footer/);
+        }
     });
 });

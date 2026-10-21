@@ -100,10 +100,17 @@ function AdminLoadingScreen() {
 
 export function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     const { user, isLoading, logout, can, refreshUser } = useAuth();
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const { pluginMenus, isLoading: menusLoading } = useMenu();
     const router = useRouter();
     const pathname = usePathname();
+    // The admin is read in the ADMIN's language, not the site's: <html lang> said en-US while every
+    // label was Spanish, so a screen reader spoke Spanish with an English voice. The canvas frame keeps
+    // the site's (it renders site content).
+    useEffect(() => {
+        if ((pathname ?? "").startsWith("/admin/canvas-frame")) return;
+        document.documentElement.lang = language;
+    }, [language, pathname]);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
 

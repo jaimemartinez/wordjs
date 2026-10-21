@@ -85,7 +85,7 @@ import { useStoreSlice, type VersoComponentMap } from "../render/context";
 import { nodeKeyFromTarget } from "../render/nodeKey";
 import FrameController from "../canvas/FrameController";
 import VersoThemeTemplate from "../canvas/VersoThemeTemplate";
-import PublicLayoutShell from "@/components/public/PublicLayoutShell";
+import CanvasPublicShell from "@/components/verso/canvas/CanvasPublicShell";
 import { useAreaSize } from "../canvas/ViewportControls";
 import { DEVICE_WIDTHS, type DeviceKind } from "../canvas/viewport";
 import { GeometryStore } from "../overlay/GeometryStore";
@@ -1548,7 +1548,7 @@ export default function VersoEditor({
                                                 jamás entra en _puck_data). Sin esto el canvas no enseñaba
                                                 header/footer y los espaciados del contenedor público
                                                 divergían (defecto reportado por el usuario). */}
-                                            <PublicLayoutShell stylesheets={false}>
+                                            <CanvasPublicShell>
                                                 <VersoThemeTemplate handle={handle} kind={templateKind} postType={templatePostType}>
                                                     <EditorRenderer
                                                         handle={handle}
@@ -1559,7 +1559,7 @@ export default function VersoEditor({
                                                         collabLive={collabLive}
                                                     />
                                                 </VersoThemeTemplate>
-                                            </PublicLayoutShell>
+                                            </CanvasPublicShell>
                                         </FrameController>
                                     </div>
                                 </div>
