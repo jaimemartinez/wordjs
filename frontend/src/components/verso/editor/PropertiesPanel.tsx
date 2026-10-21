@@ -258,7 +258,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                                         {s.key === "content" && isContainer && (
                                             <p className="flex items-start gap-2 rounded-lg bg-[var(--ed-surface-container-low)] px-3 py-2 text-[12px] leading-5 text-[var(--ed-on-surface-variant)]">
                                                 <MSym name="info" size={16} className="shrink-0 mt-0.5" />
-                                                {trStr("Arrastra bloques dentro de este contenedor en el lienzo.", language)}
+                                                {trStr("Arrastra bloques dentro de este contenedor en el lienzo, o tócalos en la biblioteca con el contenedor seleccionado.", language)}
                                             </p>
                                         )}
                                         {visibleParts[s.key].map(([key, field]) => (

@@ -102,21 +102,50 @@ interface ControlProps<F extends VersoField> extends Omit<VersoFieldControlProps
   field: F;
 }
 
+/**
+ * A text prop that holds a COLOUR, by its key: `bg`, `color`, `accent`, `…Color`, `…Bg`. Those were a bare
+ * text box ("Background (empty = theme)") with no way to pick a colour (QA M1-08). They stay text — a
+ * colour may be a theme token (`var(--wjs-…)`), a gradient or empty (= the theme's) — and get a swatch
+ * next to them that writes a #hex.
+ */
+export const COLOR_PROP_KEY = /^(bg|color|accent)$|(Color|Bg)$/;
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
 function TextControl(props: ControlProps<TextVersoField>) {
   const { field, value, onChange, readOnly } = props;
   const { tr } = useEditorTr();
   const id = useId();
+  const text = asInputString(value);
+  const isColor = !!props.name && COLOR_PROP_KEY.test(props.name);
+  const label = tr(labelTextOf(props));
+  const input = (
+    <input
+      id={id}
+      type="text"
+      className={INPUT_CLS}
+      value={text}
+      placeholder={field.placeholder ? tr(field.placeholder) : undefined}
+      readOnly={readOnly}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
   return (
-    <FieldShell id={id} label={tr(labelTextOf(props))}>
-      <input
-        id={id}
-        type="text"
-        className={INPUT_CLS}
-        value={asInputString(value)}
-        placeholder={field.placeholder ? tr(field.placeholder) : undefined}
-        readOnly={readOnly}
-        onChange={(e) => onChange(e.target.value)}
-      />
+    <FieldShell id={id} label={label}>
+      {isColor ? (
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            aria-label={label}
+            data-color-swatch=""
+            className="h-9 w-9 shrink-0 cursor-pointer rounded border border-[var(--ed-outline-variant)] bg-transparent p-0.5"
+            value={HEX_COLOR.test(text) ? text : "#000000"}
+            disabled={readOnly}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          {input}
+        </div>
+      ) : input}
     </FieldShell>
   );
 }

@@ -256,7 +256,9 @@ export const ColumnDistributionControl = ({ value, onChange }: {
     const { columnCount, widths } = distribution;
 
     // Colors for each column section
-    const colors = ['#f97316', '#22c55e', '#3b82f6']; // orange, green, blue
+    // Three steps of the editor's own accent (it was orange / green / blue, a palette the editor uses nowhere
+    // else): each column stays distinguishable and the control matches the light and dark editor themes.
+    const colors = ['var(--ed-primary-solid, #5146d8)', 'var(--ed-primary-container, #e2dfff)', 'var(--ed-outline, #787686)'];
 
     // Handle column count change
     const handleColumnCountChange = (newCount: number) => {
@@ -524,7 +526,7 @@ const baseConfig: any = {
                 color: { type: "text", label: "Color del texto (vacío = tema)" },
                 size: { type: "text", label: "Tamaño (p. ej. 18 o 1.125rem)" },
                 leading: { type: "text", label: "Interlineado (p. ej. 1.8)" },
-                measure: { type: "text", label: "Ancho de línea máx. (p. ej. 680)" },
+                measure: { type: "text", label: "Ancho de línea máx. (px, p. ej. 680)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -587,7 +589,7 @@ const baseConfig: any = {
                     }
                 },
                 alt: { type: "text", label: "Texto alternativo (SEO / accesibilidad)" },
-                radius: { type: "text", label: "Redondeo (p. ej. 16)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 16)" },
                 shadow: { type: "text", label: "Sombra CSS (vacío = tema)" },
                 width: { type: "text", label: "Ancho (p. ej. 480 o 60%)" },
                 fit: {
@@ -702,10 +704,10 @@ const baseConfig: any = {
                 "col-0": { type: "slot" },
                 "col-1": { type: "slot" },
                 "col-2": { type: "slot" },
-                gap: { type: "text", label: "Separación (p. ej. 24)" },
-                minHeight: { type: "text", label: "Altura mínima (p. ej. 320)" },
+                gap: { type: "text", label: "Separación (px, p. ej. 24)" },
+                minHeight: { type: "text", label: "Altura mínima (px, p. ej. 320)" },
                 bg: { type: "text", label: "Fondo (vacío = tema)" },
-                radius: { type: "text", label: "Redondeo (p. ej. 16)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 16)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -807,13 +809,13 @@ const baseConfig: any = {
                 bg: { type: "text", label: "Fondo (vacío = tema)" },
                 color: { type: "text", label: "Color del texto (vacío = tema)" },
                 borderColor: { type: "text", label: "Color del borde" },
-                radius: { type: "text", label: "Redondeo (p. ej. 24)" },
-                pad: { type: "text", label: "Relleno (p. ej. 40)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 24)" },
+                pad: { type: "text", label: "Relleno (px, p. ej. 40)" },
                 shadow: { type: "text", label: "Sombra CSS" },
-                iconSize: { type: "text", label: "Tamaño del icono (p. ej. 64)" },
+                iconSize: { type: "text", label: "Tamaño del icono (px, p. ej. 64)" },
                 iconBg: { type: "text", label: "Fondo del icono" },
                 iconColor: { type: "text", label: "Color del icono" },
-                titleSize: { type: "text", label: "Tamaño del título (p. ej. 28)" },
+                titleSize: { type: "text", label: "Tamaño del título (px, p. ej. 28)" },
                 titleWeight: {
                     type: "select",
                     label: "Grosor del título",
@@ -867,9 +869,9 @@ const baseConfig: any = {
                     ]
                 },
                 color: { type: "text", label: "Color (vacío = tema)" },
-                width: { type: "text", label: "Grosor (p. ej. 2)" },
+                width: { type: "text", label: "Grosor (px, p. ej. 2)" },
                 length: { type: "text", label: "Ancho (p. ej. 120 o 40%)" },
-                gap: { type: "text", label: "Separación vertical (p. ej. 64)" },
+                gap: { type: "text", label: "Separación vertical (px, p. ej. 64)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -919,9 +921,9 @@ const baseConfig: any = {
                 bg: { type: "text", label: "Fondo (vacío = tema)" },
                 color: { type: "text", label: "Color del texto (vacío = tema)" },
                 radius: { type: "text", label: "Redondeo (p. ej. 999 para píldora)" },
-                padY: { type: "text", label: "Relleno vertical (p. ej. 14)" },
-                padX: { type: "text", label: "Relleno horizontal (p. ej. 32)" },
-                size: { type: "text", label: "Tamaño de letra (p. ej. 15)" },
+                padY: { type: "text", label: "Relleno vertical (px, p. ej. 14)" },
+                padX: { type: "text", label: "Relleno horizontal (px, p. ej. 32)" },
+                size: { type: "text", label: "Tamaño de letra (px, p. ej. 15)" },
                 weight: {
                     type: "select",
                     label: "Grosor",
@@ -1177,7 +1179,7 @@ const baseConfig: any = {
                 },
                 bg: { type: "text", label: "Fondo (vacío = tema)" },
                 borderColor: { type: "text", label: "Color del borde" },
-                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 12)" },
                 pad: { type: "text", label: "Relleno de la cabecera (p. ej. 16px 20px)" },
                 headerBg: { type: "text", label: "Fondo de la cabecera" },
                 headerColor: { type: "text", label: "Color de la cabecera" },
@@ -1219,11 +1221,11 @@ const baseConfig: any = {
                 color: { type: "text", label: "Color de las pestañas (vacío = tema)" },
                 activeColor: { type: "text", label: "Color de la pestaña activa" },
                 borderColor: { type: "text", label: "Color de la línea" },
-                borderWidth: { type: "text", label: "Grosor de la línea (p. ej. 2)" },
+                borderWidth: { type: "text", label: "Grosor de la línea (px, p. ej. 2)" },
                 tabPad: { type: "text", label: "Relleno de la pestaña (p. ej. 12px 24px)" },
                 panelBg: { type: "text", label: "Fondo del panel" },
-                panelPad: { type: "text", label: "Relleno del panel (p. ej. 24)" },
-                panelRadius: { type: "text", label: "Redondeo del panel (p. ej. 12)" },
+                panelPad: { type: "text", label: "Relleno del panel (px, p. ej. 24)" },
+                panelRadius: { type: "text", label: "Redondeo del panel (px, p. ej. 12)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1264,7 +1266,7 @@ const baseConfig: any = {
                         { label: "1:1", value: "100%" },
                     ]
                 },
-                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 12)" },
                 bg: { type: "text", label: "Fondo mientras carga (vacío = tema)" },
                 css: {
                     type: "custom",
@@ -1295,9 +1297,9 @@ const baseConfig: any = {
                 title: { type: "text", label: "Track Title" },
                 bg: { type: "text", label: "Fondo (vacío = tema)" },
                 borderColor: { type: "text", label: "Color del borde" },
-                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
-                pad: { type: "text", label: "Relleno (p. ej. 24)" },
-                iconSize: { type: "text", label: "Tamaño del icono (p. ej. 48)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 12)" },
+                pad: { type: "text", label: "Relleno (px, p. ej. 24)" },
+                iconSize: { type: "text", label: "Tamaño del icono (px, p. ej. 48)" },
                 iconBg: { type: "text", label: "Fondo del icono" },
                 iconColor: { type: "text", label: "Color del icono" },
                 css: {
@@ -1341,10 +1343,10 @@ const baseConfig: any = {
                 },
                 accent: { type: "text", label: "Color de acento (plan destacado)" },
                 bg: { type: "text", label: "Fondo de los planes" },
-                pad: { type: "text", label: "Relleno (p. ej. 48)" },
-                radius: { type: "text", label: "Redondeo (p. ej. 24)" },
-                gap: { type: "text", label: "Separación (p. ej. 32)" },
-                priceSize: { type: "text", label: "Tamaño del precio (p. ej. 56)" },
+                pad: { type: "text", label: "Relleno (px, p. ej. 48)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 24)" },
+                gap: { type: "text", label: "Separación (px, p. ej. 32)" },
+                priceSize: { type: "text", label: "Tamaño del precio (px, p. ej. 56)" },
                 highlightScale: { type: "text", label: "Escala del destacado (p. ej. 1.08; 1 = sin escalar)" },
                 css: {
                     type: "custom",
@@ -1375,11 +1377,11 @@ const baseConfig: any = {
                 role: { type: "text", label: "Role / Company" },
                 avatar: { type: "text", label: "Avatar URL" },
                 bg: { type: "text", label: "Fondo (vacío = tema)" },
-                pad: { type: "text", label: "Relleno (p. ej. 48)" },
-                radius: { type: "text", label: "Redondeo (p. ej. 24)" },
-                quoteSize: { type: "text", label: "Tamaño de la cita (p. ej. 24)" },
+                pad: { type: "text", label: "Relleno (px, p. ej. 48)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 24)" },
+                quoteSize: { type: "text", label: "Tamaño de la cita (px, p. ej. 24)" },
                 accent: { type: "text", label: "Color de acento (comillas y avatar)" },
-                avatarSize: { type: "text", label: "Tamaño del avatar (p. ej. 72)" },
+                avatarSize: { type: "text", label: "Tamaño del avatar (px, p. ej. 72)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1423,8 +1425,8 @@ const baseConfig: any = {
                 bg: { type: "text", label: "Fondo o degradado (vacío = variante)" },
                 color: { type: "text", label: "Color del texto" },
                 pad: { type: "text", label: "Relleno (p. ej. 80px 40px)" },
-                radius: { type: "text", label: "Redondeo (p. ej. 32)" },
-                titleSize: { type: "text", label: "Tamaño del título (p. ej. 48)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 32)" },
+                titleSize: { type: "text", label: "Tamaño del título (px, p. ej. 48)" },
                 buttonBg: { type: "text", label: "Fondo del botón" },
                 buttonColor: { type: "text", label: "Color del botón" },
                 css: {
@@ -1465,12 +1467,12 @@ const baseConfig: any = {
                         { label: "4", value: "4" },
                     ]
                 },
-                gap: { type: "text", label: "Separación (p. ej. 24)" },
+                gap: { type: "text", label: "Separación (px, p. ej. 24)" },
                 bg: { type: "text", label: "Fondo de las tarjetas (vacío = tema)" },
                 borderColor: { type: "text", label: "Color del borde" },
-                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
-                pad: { type: "text", label: "Relleno (p. ej. 24)" },
-                thumbHeight: { type: "text", label: "Alto de la miniatura (p. ej. 160)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 12)" },
+                pad: { type: "text", label: "Relleno (px, p. ej. 24)" },
+                thumbHeight: { type: "text", label: "Alto de la miniatura (px, p. ej. 160)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1541,10 +1543,10 @@ const baseConfig: any = {
                         { label: "3", value: "3" },
                     ]
                 },
-                gap: { type: "text", label: "Separación (p. ej. 20)" },
+                gap: { type: "text", label: "Separación (px, p. ej. 20)" },
                 bg: { type: "text", label: "Fondo de las tarjetas (vacío = tema)" },
                 borderColor: { type: "text", label: "Color de las líneas" },
-                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                radius: { type: "text", label: "Redondeo (px, p. ej. 12)" },
                 linkColor: { type: "text", label: "Color de los enlaces" },
                 headingColor: { type: "text", label: "Color del título" },
                 css: {
@@ -1600,10 +1602,10 @@ const baseConfig: any = {
                 },
                 inputBg: { type: "text", label: "Fondo del campo (vacío = tema)" },
                 inputBorderColor: { type: "text", label: "Color del borde del campo" },
-                inputRadius: { type: "text", label: "Redondeo del campo (p. ej. 8)" },
+                inputRadius: { type: "text", label: "Redondeo del campo (px, p. ej. 8)" },
                 buttonBg: { type: "text", label: "Fondo del botón" },
                 buttonColor: { type: "text", label: "Color del botón" },
-                buttonRadius: { type: "text", label: "Redondeo del botón (p. ej. 8)" },
+                buttonRadius: { type: "text", label: "Redondeo del botón (px, p. ej. 8)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1717,8 +1719,8 @@ const baseConfig: any = {
                 overlayColor: { type: "text", label: "Color de la capa (vacío = negro)" },
                 gradientFrom: { type: "text", label: "Degradado — desde (sin imagen)" },
                 gradientTo: { type: "text", label: "Degradado — hasta" },
-                gradientAngle: { type: "text", label: "Degradado — ángulo (p. ej. 135)" },
-                titleSize: { type: "text", label: "Tamaño del titular (p. ej. 72)" },
+                gradientAngle: { type: "text", label: "Degradado — ángulo (grados, p. ej. 135)" },
+                titleSize: { type: "text", label: "Tamaño del titular (px, p. ej. 72)" },
                 titleWeight: {
                     type: "select",
                     label: "Grosor del titular",
@@ -1730,10 +1732,10 @@ const baseConfig: any = {
                     ],
                 },
                 titleTracking: { type: "text", label: "Espaciado del titular (p. ej. -2)" },
-                subtitleSize: { type: "text", label: "Tamaño del subtítulo (p. ej. 22)" },
+                subtitleSize: { type: "text", label: "Tamaño del subtítulo (px, p. ej. 22)" },
                 color: { type: "text", label: "Color del texto (vacío = blanco)" },
                 pad: { type: "text", label: "Relleno (p. ej. 96 o 96px 24px)" },
-                measure: { type: "text", label: "Ancho del contenido (p. ej. 900)" },
+                measure: { type: "text", label: "Ancho del contenido (px, p. ej. 900)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -1776,7 +1778,7 @@ const baseConfig: any = {
                     ]
                 },
                 accent: { type: "text", label: "Color de acento (barra / comillas)" },
-                size: { type: "text", label: "Tamaño del texto (p. ej. 24)" },
+                size: { type: "text", label: "Tamaño del texto (px, p. ej. 24)" },
                 color: { type: "text", label: "Color del texto" },
                 quoteStyle: {
                     type: "select",
@@ -1869,8 +1871,8 @@ const baseConfig: any = {
                         { label: "3", value: "3" },
                     ]
                 },
-                gap: { type: "text", label: "Separación (p. ej. 40)" },
-                iconSize: { type: "text", label: "Tamaño del icono (p. ej. 56)" },
+                gap: { type: "text", label: "Separación (px, p. ej. 40)" },
+                iconSize: { type: "text", label: "Tamaño del icono (px, p. ej. 56)" },
                 iconBg: { type: "text", label: "Fondo del icono" },
                 iconColor: { type: "text", label: "Color del icono" },
                 css: {
@@ -1928,12 +1930,12 @@ const baseConfig: any = {
                         { label: "Derecha", value: "flex-end" },
                     ]
                 },
-                size: { type: "text", label: "Tamaño (p. ej. 52)" },
+                size: { type: "text", label: "Tamaño (px, p. ej. 52)" },
                 radius: { type: "text", label: "Redondeo (p. ej. 12; vacío = círculo)" },
                 bg: { type: "text", label: "Fondo" },
                 color: { type: "text", label: "Color del icono" },
                 hoverBg: { type: "text", label: "Fondo al pasar el ratón" },
-                gap: { type: "text", label: "Separación (p. ej. 16)" },
+                gap: { type: "text", label: "Separación (px, p. ej. 16)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1967,8 +1969,8 @@ const baseConfig: any = {
                         label: { type: "text", label: "Etiqueta" }
                     }
                 },
-                gap: { type: "text", label: "Separación (p. ej. 40)" },
-                valueSize: { type: "text", label: "Tamaño de la cifra (p. ej. 56)" },
+                gap: { type: "text", label: "Separación (px, p. ej. 40)" },
+                valueSize: { type: "text", label: "Tamaño de la cifra (px, p. ej. 56)" },
                 valueColor: { type: "text", label: "Color de la cifra" },
                 labelColor: { type: "text", label: "Color de la etiqueta" },
                 labelTransform: {

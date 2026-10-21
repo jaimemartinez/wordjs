@@ -73,9 +73,18 @@ const registry = {
             : undefined,
 } as unknown as BlockRegistry;
 
-function dockFor(state: unknown) {
+// The dock opens on a selection only for an author who left it open (QA M1-08: it used to open on
+// every click and take half the canvas). These tests are about its OPEN contents, so they set that.
+function withDockPreference<T>(pref: string | null, fn: () => T): T {
+    const g = globalThis as { localStorage?: unknown };
+    const before = g.localStorage;
+    g.localStorage = { getItem: (k: string) => (k === "verso_motion_dock" ? pref : null), setItem: () => {} };
+    try { return fn(); } finally { g.localStorage = before; }
+}
+
+function dockFor(state: unknown, pref: string | null = "open") {
     const handle = { __state: state, transact: () => true } as never;
-    return renderToStaticMarkup(<IxDock handle={handle} registry={registry} />);
+    return withDockPreference(pref, () => renderToStaticMarkup(<IxDock handle={handle} registry={registry} />));
 }
 
 const stateWith = (props: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
@@ -93,6 +102,14 @@ const IX = {
 };
 
 describe("IxDock — anatomía de editor de vídeo", () => {
+    it("selecting a block does NOT open the dock by itself: only an author who left it open gets it open", () => {
+        const collapsed = dockFor(stateWith({ ix: IX }), null);
+        expect(collapsed).toContain('data-verso-dock="block"');
+        expect(collapsed).toContain('aria-expanded="false"');
+        expect(collapsed).not.toContain('data-field="anim"');
+        expect(dockFor(stateWith({ ix: IX }), "open")).toContain('aria-expanded="true"');
+    });
+
     it("con interacción: inspector en modo stage + transporte + línea de tiempo protagonista", () => {
         const html = dockFor(stateWith({ ix: IX }));
         expect(html).toContain('data-verso-dock="block"');

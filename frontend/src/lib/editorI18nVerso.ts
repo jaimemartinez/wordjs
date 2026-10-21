@@ -266,7 +266,7 @@ export const VERSO_CHROME_STRINGS: Tri[] = [
     { es: "La edición colaborativa está desactivada en este editor.", en: "Collaborative editing is turned off in this editor.", pt: "A edição colaborativa está desativada neste editor." },
     { es: "Conectando", en: "Connecting", pt: "Conectando" },
     { es: "Abriendo la sesión colaborativa…", en: "Opening the collaborative session…", pt: "Abrindo a sessão colaborativa…" },
-    { es: "En vivo", en: "Live", pt: "Ao vivo" },
+    { es: "Conectado", en: "Connected", pt: "Conectado" },
     { es: "Sesión colaborativa activa: los cambios se reparten al instante.", en: "Collaborative session active: changes are shared instantly.", pt: "Sessão colaborativa ativa: as alterações são compartilhadas na hora." },
     { es: "Limitada", en: "Limited", pt: "Limitada" },
     { es: "La sesión es muy larga y el registro de cambios se ha llenado: guarda y recarga la página para poder reconectar sin perder nada.", en: "The session is very long and the change log is full: save and reload the page to reconnect without losing anything.", pt: "A sessão está muito longa e o registro de alterações encheu: salve e recarregue a página para reconectar sem perder nada." },

@@ -460,9 +460,13 @@ export default function VersoEditor({
             const doc = handle.getDoc();
             const selected = handle.getState().selection.nodeId;
             const node = selected ? doc.nodes[selected] : undefined;
-            const parentId = node ? node.parentId : ROOT_ID;
-            const slotKey = node ? node.slotKey : ROOT_SLOT;
-            const index = node ? node.index + 1 : doc.rootChildren.length;
+            // A selected CONTAINER with an empty zone receives the block INSIDE it: an empty Section or
+            // column could only be filled by dragging, which on a phone or tablet is the one gesture
+            // nothing offers (QA M1-08). With every zone filled, the block goes after it, as before.
+            const emptyZone = node ? Object.keys(node.slots || {}).find((k) => (node.slots[k] || []).length === 0) : undefined;
+            const parentId = node ? (emptyZone ? node.id : node.parentId) : ROOT_ID;
+            const slotKey = node ? (emptyZone ?? node.slotKey) : ROOT_SLOT;
+            const index = node ? (emptyZone ? 0 : node.index + 1) : doc.rootChildren.length;
             if (handle.transact((tx) => tx.insertNode(item, parentId, slotKey, index), { label: `Insertar ${type}` })) {
                 handle.select(id);
             }

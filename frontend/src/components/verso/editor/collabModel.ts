@@ -112,7 +112,9 @@ const STATUS_VIEWS: Record<CollabStatus, StatusView> = {
     },
     live: {
         icon: "cloud_done",
-        text: "En vivo",
+        // "Conectado", no "En vivo": la píldora va junto al estado de publicación y "Live" en un
+        // BORRADOR se leía como "publicado" (QA M1-08 / S1-19). Lo que dice es que la coedición está activa.
+        text: "Conectado",
         detail: "Sesión colaborativa activa: los cambios se reparten al instante.",
         tone: "live",
         announce: true,
