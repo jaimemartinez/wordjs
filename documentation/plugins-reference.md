@@ -677,43 +677,30 @@ runs as core, never in the plugin sandbox.) See **[Database](database.md)**.
 
 ---
 
-## 7. Hello World 👋
-**ID:** `hello-world` | **Version:** 1.1.0
+## 7. Hello World 👋 — example, not shipped
+**ID:** `hello-world` | **Version:** 1.1.0 | **Location:** `documentation/examples/plugins/hello-world/`
 
 A reference implementation for developers. Registers a `[hello]` shortcode through the bridge (`[hello]`
 or `[hello name="Ada"]` in a post renders a greeting; no permissions), and ships its own `node:test`
 file (`tests/hello-world.test.js`) that you run yourself — WordJS never executes a plugin's tests.
+
+It is **not** installed: the core ships `backend/plugins/` empty, so a fresh install lists no plugin. To try
+it, copy the folder to `backend/plugins/hello-world/` (or call `POST /api/v1/plugins/sample`, which writes
+the same plugin there) and activate it from **Plugins**.
 
 *   **Purpose:** Development / Education.
 *   **Sandbox:** isolated (like every plugin).
 
 ---
 
-## 8. Test Schema 🧪
-**ID:** `test-schema` | **Version:** 1.0.0
-
-A test fixture for backup integrity: on the `init` action it creates `wjp_test_schema_custom` through
-the bridge (`wordjs.db.createTable` with a name built from `wordjs.db.tablePrefix`, then `db.get` /
-`db.run`) and inserts one known row. Its manifest declares `{ "scope": "database", "access": "admin" }`
-and also carries `main` and `active`, which the runtime ignores (see
-[plugins.md §14](plugins.md)). `database:admin` is not in the manifest vocabulary, so the upload and the
-marketplace gate would reject this manifest; the plugin loads only because it ships on disk in
-`backend/plugins/`, and the grant it can receive confers no more than `database:read` + `write`, still
-confined to its own prefix. Do not copy its manifest.
-
-*   **Purpose:** Test fixture.
-*   **Sandbox:** isolated (like every plugin).
-
----
-
-## 9. YouTube Videos 🎥
+## 8. YouTube Videos 🎥
 **ID:** `youtube-videos` | **Version:** 1.0.3
 
 Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a carousel block
 with title filtering and a video-count limit. Works **keyless** out of the box via the channel RSS
 feed (latest 15 videos); add a YouTube Data API v3 key for the full upload history.
 
-*   **Distribution:** first-party **marketplace** plugin (installed via the Marketplace catalog in §10) — not bundled with core.
+*   **Distribution:** first-party **marketplace** plugin (installed via the Marketplace catalog in §9) — not bundled with core.
 *   **Routes:** `GET /`, `GET /status`, `POST /refresh`, `POST /settings` (namespaced under `/api/v1/plugin/youtube-videos/*`)
 *   **Verso block:** `client/verso/YoutubeVideosVerso.tsx` (registry key `YoutubeVideos`) — carousel with title filter + count limit
 *   **Admin page:** `/admin/plugin/youtube`
@@ -722,7 +709,7 @@ feed (latest 15 videos); add a YouTube Data API v3 key for the full upload histo
 
 ---
 
-## 10. Plugin Marketplace 🛒
+## 9. Plugin Marketplace 🛒
 
 Beyond the plugins above, WordJS ships a **Marketplace** of first-party plugins distributed
 **outside** the core build (the Photo Carousel, Card Gallery, Video Gallery, Mail Server, Conference

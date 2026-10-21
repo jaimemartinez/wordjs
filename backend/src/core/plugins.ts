@@ -3030,8 +3030,8 @@ async function getAllPlugins() {
  *
  * It used to write an in-process plugin that require()d core's hooks and filtered `the_content` — no
  * manifest (so not a plugin the list could show), a require the sandbox refuses, and a hook core never
- * applies. It now writes the same isolated sample the repository ships: a [hello] shortcode through the
- * bridge, no permissions.
+ * applies. It now writes the isolated example kept in documentation/examples/plugins/hello-world/ (the core
+ * ships no plugin): a [hello] shortcode through the bridge, no permissions.
  */
 function createSamplePlugin() {
     const sampleDir = path.join(PLUGINS_DIR, 'hello-world');

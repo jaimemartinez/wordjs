@@ -373,9 +373,9 @@ describe('CLASS: every guard that compares a query value to a string refuses the
             decided: 'whether the admin sees a fresh plugin index or a cached one' },
         { where: 'GET /marketplace/themes/catalog', persona: 'admin', path: '/marketplace/themes/catalog?refresh=1&refresh=1', field: 'refresh',
             decided: 'whether the admin sees a fresh theme index or a cached one' },
-        { where: 'GET /plugins/:slug/bundle', persona: 'anon', path: '/plugins/hello-world/bundle?type=admin&type=admin', field: 'type',
+        { where: 'GET /plugins/:slug/bundle', persona: 'anon', path: '/plugins/wjs-qpp-probe/bundle?type=admin&type=admin', field: 'type',
             decided: 'which compiled bundle is served' },
-        { where: 'GET /plugins/:slug/bundle/css', persona: 'anon', path: '/plugins/hello-world/bundle/css?type=admin&type=admin', field: 'type',
+        { where: 'GET /plugins/:slug/bundle/css', persona: 'anon', path: '/plugins/wjs-qpp-probe/bundle/css?type=admin&type=admin', field: 'type',
             decided: 'which compiled stylesheet is served' },
         { where: 'GET /analytics/stats', persona: 'admin', path: '/analytics/stats?period=weekly&period=weekly', field: 'period',
             decided: 'whether the numbers cover 7 days or 30' },
@@ -471,7 +471,7 @@ describe('CLASS: the refused parameters are load-bearing, and the honest spellin
         assert.strictEqual((await anon('get', '/taxonomies?rest=true')).status, 200);
         assert.strictEqual((await as('admin', 'get', '/marketplace/catalog?refresh=1')).status, 200);
         // An unknown plugin is a 404 — the point is that it got PAST the bundle-type guard.
-        const bundle = await anon('get', '/plugins/hello-world/bundle?type=admin');
+        const bundle = await anon('get', '/plugins/wjs-qpp-probe/bundle?type=admin');
         assert.ok(bundle.status === 200 || bundle.status === 404,
             `a single ?type=admin must reach the file lookup, got ${bundle.status}`);
     });

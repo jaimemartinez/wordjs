@@ -947,6 +947,13 @@ the boot error links there too.
 
 ### Removed
 
+- **No plugin ships with the core any more.** A fresh install listed two plugins nobody installed: the
+  *Hello World* sample and *Test Schema*, a test fixture that created a table when activated. `backend/plugins/`
+  now ships empty — in a checkout, the release bundle and the Docker image — and the packager drops anything
+  committed under it. *Hello World* moved to `documentation/examples/plugins/hello-world/` (copy it into
+  `backend/plugins/`, or call `POST /api/v1/plugins/sample`); tests write the plugins they need. An existing
+  site keeps whichever of the two it already has on disk; delete the folder to remove it.
+
 - **`backend/src/models/Email.ts`** — an unused copy of the mail plugin's store (the plugin has its own in
   `lib/email-store.js`), together with the `uploads/mail-attachments` directory it created at load and the
   `backend/cli/debug-inbox.js` script that used it.

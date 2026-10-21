@@ -117,8 +117,9 @@ A few conventions keep the project coherent and reviewable:
     bridge. `manifest.json` declares the entry, `"isolated": true`, the requested `permissions`,
     the admin page and any `frontend.versoComponents`; routes, hooks and admin menu items are
     registered at runtime from `index.js` (`http.route(...)`, `adminMenu.add(...)`). Scaffold the
-    full pattern with `node backend/cli/wordjs.js create plugin <slug>`, or copy a bundled example
-    like `hello-world` or `test-schema`.
+    full pattern with `node backend/cli/wordjs.js create plugin <slug>`, or copy the example in
+    `documentation/examples/plugins/hello-world/`. The core ships no plugin: never commit one under
+    `backend/plugins/` (a guard test refuses it) — publish it through `marketplace/plugins/` instead.
   - If you find yourself editing `backend/src/core/*` to change how one site looks or behaves, that's
     usually a sign it belongs in a theme or plugin instead.
 - **A fix must not regress working behavior.** Include a test or a clear reproduction, and check that

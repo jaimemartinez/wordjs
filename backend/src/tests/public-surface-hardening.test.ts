@@ -163,9 +163,16 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
             const r = await asActiveProbe(() => request(app).get(p), ['browser:script']);
             assert.strictEqual(r.status, 404, `${p} must not be served (got ${r.status})`);
         }
-        // hello-world is a plugin shipped in-tree: proves the rule is not probe-specific.
-        const h = await request(app).get('/plugins/hello-world/manifest.json');
-        assert.strictEqual(h.status, 404);
+        // A second, plain on-disk plugin (inactive, no grants): proves the rule is not probe-specific.
+        const otherDir = path.join(PLUGINS_ROOT, 'wjs-surface-other');
+        fs.mkdirSync(otherDir, { recursive: true });
+        fs.writeFileSync(path.join(otherDir, 'manifest.json'), JSON.stringify({ name: 'Other', version: '1.0.0', isolated: true, permissions: [] }));
+        try {
+            const h = await request(app).get('/plugins/wjs-surface-other/manifest.json');
+            assert.strictEqual(h.status, 404);
+        } finally {
+            fs.rmSync(otherDir, { recursive: true, force: true });
+        }
     });
 
     it('the fixed files are revalidated on every load (no-cache + ETag); other assets keep 1 h', async () => {
@@ -471,7 +478,7 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
         // assets.enqueueScript/Style. Before #3 `src` could name any file in the plugin dir — which,
         // since the dir is writable with no grant, made the registry itself the exfiltration channel.
         const { enqueue } = require('../core/plugin-assets');
-        const rejects = ['index.js', 'data/secret.txt', 'leak.txt', 'public/probe.html', '../hello-world/index.js', '/etc/passwd', 'https://evil.example/x.js'];
+        const rejects = ['index.js', 'data/secret.txt', 'leak.txt', 'public/probe.html', '../other-plugin/index.js', '/etc/passwd', 'https://evil.example/x.js'];
         for (const src of rejects) {
             await assert.rejects(
                 () => enqueue(PROBE, 'style', { handle: 'h', src }),
