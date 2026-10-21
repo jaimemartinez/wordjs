@@ -41,11 +41,24 @@ function assertThemeOptionWritable(name: string): void {
  * Get an option value
  * Equivalent to get_option()
  */
+/**
+ * Is the site installed? Remembered once true (an installed site does not become uninstalled while the
+ * process runs), so only the reads before installation pay for the config-file check.
+ */
+let installedSeen = false;
+function siteInstalled(): boolean {
+    if (installedSeen) return true;
+    try { installedSeen = !!require('./configManager').isInstalled(); } catch { installedSeen = true; }
+    return installedSeen;
+}
+
 async function getOption(name: string, defaultValue: any = null) {
     // Only verify if we are in a plugin context
     verifyPermission('settings', 'read');
 
     return runWithContext(null, async () => {
+        // Which read failed decides how loud the failure is (see the catch below).
+        let stage: 'cache' | 'db' = 'cache';
         try {
             // 1. Try Cache first.
             // Values are stored wrapped as { v: value } so that a real cached
@@ -61,6 +74,7 @@ async function getOption(name: string, defaultValue: any = null) {
             }
 
             // 2. Fallback to DB
+            stage = 'db';
             const row = await dbAsync.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
 
             if (!row) {
@@ -87,13 +101,15 @@ async function getOption(name: string, defaultValue: any = null) {
             // A constant format string: the name can come from a request (a widget id, a setting
             // key), and inside the format position its '%s' would consume the next argument. The
             // values go in as arguments, each reduced to one line.
-            // Before installation there is no database at all: every request that reads an option (the
-            // MFA policy, settings, menus) failed here and wrote an error line, alarming whoever is
-            // installing. Not installed, the default IS the answer.
-            let installed = true;
-            try { installed = require('./configManager').isInstalled(); } catch { /* keep logging */ }
-            if (installed) log.error({ option: logSafe(name), err: e }, 'Error getting option');
-            else log.debug({ option: logSafe(name) }, 'Option read before installation; using the default');
+            // Before installation there is no database: every request that read an option (the MFA
+            // policy, settings, menus) failed on the missing connection and wrote an error line,
+            // alarming whoever was installing. That one case is debug; every other failure — the
+            // cache, or the database of an installed site — stays an error.
+            if (stage === 'db' && !siteInstalled()) {
+                log.debug({ option: logSafe(name) }, 'Option read before installation; using the default');
+            } else {
+                log.error({ option: logSafe(name), err: e }, 'Error getting option');
+            }
             return defaultValue;
         }
     });

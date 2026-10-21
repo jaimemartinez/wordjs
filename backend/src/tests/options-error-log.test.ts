@@ -53,3 +53,20 @@ test('an option name with a format directive and a line break is logged literall
         'the name keeps its %s and loses its line break');
     assert.strictEqual(records[0].err.message, 'cache unavailable', 'the error text is not consumed');
 });
+
+test('before installation a read that reaches the missing database is not an error line', async () => {
+    // No database here, and the installer has not run (stubbed: the checkout may hold a config file). The
+    // cache answers (a miss), the database read then fails — every request used to log that as an error.
+    const configManager = require('../core/configManager');
+    const realIsInstalled = configManager.isInstalled;
+    configManager.isInstalled = () => false;
+    let captured: { result: any; records: any[] };
+    try {
+        captured = await captureLog(() => getOption('mfa_policy', 'fallback'));
+    } finally {
+        configManager.isInstalled = realIsInstalled;
+    }
+    assert.strictEqual(captured.result, 'fallback');
+    const errors = captured.records.filter((r) => r.mod === 'core/options' && r.level === 'error');
+    assert.deepStrictEqual(errors, [], 'no error record before installation');
+});
