@@ -235,3 +235,13 @@ describe("SEO dates", () => {
         expect(isoPostDate(null, null)).toBeUndefined();
     });
 });
+
+describe("featured image picker", () => {
+    it("REGRESSION: the featured-image field asks the picker for images only", async () => {
+        const { withRecordRootFields } = await import("@/lib/editorRootFields");
+        const fields = withRecordRootFields({ title: { type: "text", label: "Title" } as never });
+        const featured = fields.featuredImage as { type: string; initialFilters?: Record<string, unknown> };
+        expect(featured.type).toBe("external");
+        expect(featured.initialFilters).toEqual({ mimeType: "image" });
+    });
+});

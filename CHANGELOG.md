@@ -1061,7 +1061,8 @@ the boot error links there too.
     names the limit, and the media screen checks a file against it before sending it.
   - *Posts and pages*: «Delete» moves an entry to the trash, and the list now has a **Trash** tab with
     **Restore** (back to the status it had) and **Delete permanently**; `POST /posts/:id/restore` is the API.
-    «Duplicate» carries categories, tags and SEO fields over, and opening the copy no longer gives it back the
+    The featured-image, logo and icon pickers list images only (they offered PDFs and videos), and the
+    picker's counter follows the admin language. «Duplicate» carries categories, tags and SEO fields over, and opening the copy no longer gives it back the
     original's title and slug. The editor's Slug field shows the entry's slug, a published entry keeps its URL
     when its title changes, and an entry created or saved without a category lands in the default category.
   - *Public site*: search shows the real number of results and pages through them; the «Latest posts»

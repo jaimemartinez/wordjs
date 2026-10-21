@@ -24,12 +24,14 @@ interface MediaPickerModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSelect: (item: MediaItem) => void;
+    /** Only this MIME family or type, e.g. "image" (see MediaLibrarySelector). */
+    mimeType?: string;
 }
 
 // Focusable descendants for the Tab trap (standard dialog set; -1 tabindex is skipped).
 const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPickerModalProps) {
+export default function MediaPickerModal({ isOpen, onClose, onSelect, mimeType }: MediaPickerModalProps) {
     const { t } = useI18n();
     const panelRef = useRef<HTMLDivElement>(null);
     const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -118,6 +120,7 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
 
                 <div className="flex-1 min-h-0 overflow-hidden p-0 sm:p-4">
                     <MediaLibrarySelector
+                        mimeType={mimeType}
                         onSelect={(item) => {
                             onSelect(item);
                             onClose();

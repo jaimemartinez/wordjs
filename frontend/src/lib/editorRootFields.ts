@@ -296,6 +296,8 @@ const featuredImageField: VersoField = {
     // El picker se INYECTA (VersoEditor pasa MediaPickerModal como renderExternalPicker), así que
     // ExternalControl nunca llama a fetchList; el contrato del tipo la exige igualmente.
     fetchList: async () => null,
+    // Images only: the picker offered the PDF and the WebM too (VersoEditor passes this to it).
+    initialFilters: { mimeType: "image" },
     mapProp: (item: unknown) => toFeaturedMediaRef(item),
     getItemSummary: (item: unknown) => featuredMediaSummary(item),
 };

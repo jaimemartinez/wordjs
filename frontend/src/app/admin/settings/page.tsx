@@ -810,6 +810,8 @@ export default function SettingsPage() {
                 isOpen={activePicker !== null}
                 onClose={() => setActivePicker(null)}
                 onSelect={handleSelectMedia}
+                // The logo and the icon are images.
+                mimeType="image"
             />
         </div>
     );

@@ -820,10 +820,12 @@ export default function VersoEditor({
     // registrando el MediaItem completo (rememberPickedMedia) para que el srcSet se derive igual
     // que en el legacy; field.mapProp lo aplica el propio control al seleccionar.
     const renderExternalPicker = useCallback<RenderExternalPicker>(
-        ({ onSelect, close }) => (
+        ({ field, onSelect, close }) => (
             <MediaPickerModal
                 isOpen
                 onClose={close}
+                // A field may restrict the kind of file (the featured image: images only).
+                mimeType={typeof field.initialFilters?.mimeType === "string" ? field.initialFilters.mimeType : undefined}
                 onSelect={(item) => {
                     rememberPickedMedia(item);
                     onSelect(item);
