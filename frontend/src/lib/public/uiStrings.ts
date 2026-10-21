@@ -47,6 +47,24 @@ export function publicUiStrings(settings: Record<string, unknown> | null | undef
     return publicUiStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
 }
 
+/** The built-in footer's two column headings (components/public/Footer). */
+export interface FooterStrings {
+    quickLinks: string;
+    connect: string;
+}
+
+export function footerStringsFor(lang: Language): FooterStrings {
+    return {
+        quickLinks: t("public.footer.quickLinks", lang),
+        connect: t("public.footer.connect", lang),
+    };
+}
+
+/** Footer headings for a site, from its settings (`WPLANG`; nothing configured → English). */
+export function footerStrings(settings: Record<string, unknown> | null | undefined): FooterStrings {
+    return footerStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
+}
+
 /** The members-only notice (core/content-access): shown where a gated entry's teaser ends. */
 export interface MembersGateStrings {
     title: string;

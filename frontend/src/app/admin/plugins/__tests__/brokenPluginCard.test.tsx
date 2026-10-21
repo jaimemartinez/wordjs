@@ -3,6 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Plugin } from "@/lib/api";
 import { BrokenPluginCard, PackPluginButton, brokenReasonText, partitionPlugins } from "../page";
+import { t as translate } from "@/lib/i18n";
 
 /**
  * THE "INSTALACIÓN INCOMPLETA" CARD.
@@ -117,7 +118,7 @@ describe("PackPluginButton (dev-mode build & download ZIP)", () => {
 
     it("renders for a packable plugin and is disabled while its pack runs", () => {
         const idle = render(<PackPluginButton plugin={healthy({ packable: true })} packing={false} onPack={() => {}} />);
-        expect(idle).toContain("Build and download Real One as a ZIP");
+        expect(idle).toContain(translate("plugins.pack.ariaLabel").replace("{name}", "Real One"));
         expect(idle).not.toContain("disabled=\"\"");
         expect(render(<PackPluginButton plugin={healthy({ packable: true })} packing={true} onPack={() => {}} />)).toContain("disabled=\"\"");
     });

@@ -17,12 +17,14 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { defaultIxSpec } from "@/components/verso/editor/ixPanelModel";
 import type { IxSpec } from "@/lib/verso/interactions";
+import { I18nProvider } from "@/contexts/I18nContext";
 import PresetEditor from "../PresetEditor";
 
 const noop = () => undefined;
 
 function render(draft: IxSpec = defaultIxSpec(), extra: { id?: string | null; error?: string | null } = {}) {
   return renderToStaticMarkup(
+    <I18nProvider>
     <PresetEditor
       draft={draft}
       name="Titular en cascada"
@@ -33,7 +35,8 @@ function render(draft: IxSpec = defaultIxSpec(), extra: { id?: string | null; er
       onDraft={noop}
       onSave={noop}
       onCancel={noop}
-    />,
+    />
+    </I18nProvider>,
   );
 }
 

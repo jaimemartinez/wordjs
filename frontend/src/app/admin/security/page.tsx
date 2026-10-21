@@ -38,10 +38,10 @@ export default function SecurityPage() {
                         <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-2xl shadow-sm">
                             <i className="fa-solid fa-shield-halved text-blue-600 dark:text-blue-400"></i>
                         </div>
-                        Security Center
+                        {t('security.title')}
                     </h1>
                     <p className="text-gray-600 dark:text-gray-300 text-lg max-w-2xl">
-                        Manage your site&apos;s SSL certificates, encryption protocols, and gateway configuration to ensure maximum security.
+                        {t('security.intro')}
                     </p>
                 </div>
 
@@ -54,7 +54,7 @@ export default function SecurityPage() {
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-lock text-emerald-500 text-xl"></i>
-                                SSL / HTTPS Configuration
+                                {t('security.ssl.title')}
                             </h2>
                         </div>
                         <div className="p-8 md:p-10 space-y-8 bg-white/40 dark:bg-black/20">
@@ -65,9 +65,9 @@ export default function SecurityPage() {
                                         <i className="fa-solid fa-certificate"></i>
                                     </div>
                                     <div>
-                                        <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-1">Certificate Management</h3>
+                                        <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-1">{t('security.certManagement.title')}</h3>
                                         <p className="text-sm text-gray-600 dark:text-gray-400">
-                                            Provision a free Let&apos;s Encrypt certificate automatically, manually verify via DNS, or upload your own custom certificate files.
+                                            {t('security.certManagement.description')}
                                         </p>
                                     </div>
                                 </div>
@@ -83,7 +83,7 @@ export default function SecurityPage() {
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-arrows-rotate text-amber-500 text-xl"></i>
-                                Automatic Certificate Renewal
+                                {t('security.autoRenewal.title')}
                             </h2>
                         </div>
                         <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
@@ -96,7 +96,7 @@ export default function SecurityPage() {
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-server text-indigo-500 text-xl"></i>
-                                Gateway Configuration
+                                {t('security.gateway.title')}
                             </h2>
                         </div>
                         <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
@@ -124,7 +124,7 @@ export default function SecurityPage() {
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-shield-halved text-emerald-500 text-xl"></i>
-                                Two-Factor Enforcement
+                                {t('security.mfa.title')}
                             </h2>
                         </div>
                         <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
@@ -146,6 +146,7 @@ function GatewayConfigForm() {
     const [config, setConfig] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const { t } = useI18n();
 
     const { alert } = useModal();
     const router = useRouter();
@@ -188,7 +189,7 @@ function GatewayConfigForm() {
             // site-address screen, which opens the change dialog prefilled (SPEC §6, REDTEAM R1).
             await afterGatewayConfigSave(saved, { alert, navigate: (href) => router.push(href) });
         } catch (e: any) {
-            await alert('Failed to save settings: ' + e.message);
+            await alert(t('security.gateway.saveFailed').replace('{error}', () => e.message));
         } finally {
             setSaving(false);
         }
@@ -197,7 +198,7 @@ function GatewayConfigForm() {
     if (loading || !config) return (
         <div className="text-center py-12">
             <i className="fa-solid fa-circle-notch fa-spin text-3xl text-indigo-500 mb-4"></i>
-            <p className="text-gray-500 font-medium">Loading Gateway Configuration...</p>
+            <p className="text-gray-500 font-medium">{t('security.gateway.loading')}</p>
         </div>
     );
 
@@ -206,9 +207,9 @@ function GatewayConfigForm() {
             <div className="p-6 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl border border-red-100 dark:border-red-800 flex items-start gap-4">
                 <i className="fa-solid fa-triangle-exclamation text-2xl mt-1"></i>
                 <div>
-                    <h3 className="font-bold text-lg mb-1">Error Loading Configuration</h3>
+                    <h3 className="font-bold text-lg mb-1">{t('security.gateway.loadError')}</h3>
                     <p className="text-sm opacity-90">{config.error}</p>
-                    <button onClick={() => window.location.reload()} className="text-sm font-bold underline mt-3 hover:text-red-800 dark:hover:text-red-300">Retry Connection</button>
+                    <button onClick={() => window.location.reload()} className="text-sm font-bold underline mt-3 hover:text-red-800 dark:hover:text-red-300">{t('security.gateway.retry')}</button>
                 </div>
             </div>
         );
@@ -225,26 +226,25 @@ function GatewayConfigForm() {
                 <div className="p-5 bg-indigo-50/70 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 flex items-start gap-4">
                     <i className="fa-solid fa-circle-info text-xl text-indigo-500 mt-0.5"></i>
                     <div className="text-sm text-indigo-900/90 dark:text-indigo-200">
-                        <h3 className="font-bold text-base mb-1">Monolith mode</h3>
+                        <h3 className="font-bold text-base mb-1">{t('security.monolith.title')}</h3>
                         <p className="opacity-90 leading-relaxed">
-                            One process serves the whole site, so there&apos;s no separate gateway to configure here.
-                            The port and TLS are set at startup (the <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">PORT</code> and{" "}
-                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">WORDJS_HTTP</code> env vars, or{" "}
-                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">gateway-config.json</code>) and take effect on restart. Live changes and ACME are available in split / gateway deployments.
+                            {t('security.monolith.intro')} <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">PORT</code> {t('security.monolith.and')}{" "}
+                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">WORDJS_HTTP</code> {t('security.monolith.envVarsOr')}{" "}
+                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">gateway-config.json</code>{t('security.monolith.outro')}
                         </p>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-2xl border border-gray-100 dark:border-gray-700">
-                        <span className="block text-xs uppercase tracking-wider text-gray-400 font-bold mb-1">Public Port</span>
+                        <span className="block text-xs uppercase tracking-wider text-gray-400 font-bold mb-1">{t('security.gateway.publicPort')}</span>
                         <span className="font-mono font-bold text-gray-800 dark:text-gray-200 text-lg">:{config.gatewayPort ?? 3000}</span>
                     </div>
                     <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-2xl border border-gray-100 dark:border-gray-700 flex items-center justify-between">
                         <div>
                             <span className="block text-xs uppercase tracking-wider text-gray-400 font-bold mb-1">TLS</span>
                             <span className={`font-bold ${config.sslEnabled ? 'text-emerald-600' : 'text-gray-500'}`}>
-                                {config.sslEnabled ? 'HTTPS enabled' : 'HTTP (no TLS)'}
+                                {config.sslEnabled ? t('security.gateway.httpsEnabled') : t('security.gateway.httpNoTls')}
                             </span>
                         </div>
                         <i className={`fa-solid ${config.sslEnabled ? 'fa-lock text-emerald-500' : 'fa-lock-open text-gray-400'} text-xl`}></i>
@@ -253,31 +253,31 @@ function GatewayConfigForm() {
 
                 <div className="bg-gradient-to-br from-indigo-50/80 to-purple-50/80 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 p-6 shadow-sm">
                     <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 mb-4 flex items-center gap-2 uppercase tracking-wide">
-                        <i className="fa-solid fa-certificate"></i> Current Active Certificate
+                        <i className="fa-solid fa-certificate"></i> {t('security.cert.current')}
                     </h4>
                     {ci.commonName ? (
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 text-sm">
                             <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Domain</span>
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.domain')}</span>
                                 <span className="font-bold text-gray-800 dark:text-gray-200 truncate block" title={ci.commonName}>{ci.commonName}</span>
                             </div>
                             <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Issuer</span>
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.issuer')}</span>
                                 <span className="font-medium text-gray-700 dark:text-gray-300 truncate block" title={ci.issuer}>{ci.issuer}</span>
                             </div>
                             <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Expiry</span>
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.expiry')}</span>
                                 <span className={`font-bold ${ci.validTo && new Date(ci.validTo) < new Date() ? 'text-red-600' : 'text-emerald-600'}`}>
                                     {ci.validTo ? new Date(ci.validTo).toLocaleDateString() : '-'}
                                 </span>
                             </div>
                             <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Type</span>
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.type')}</span>
                                 <span className={`font-bold capitalize ${ci.type === 'letsencrypt' ? 'text-blue-600' : 'text-gray-700 dark:text-gray-300'}`}>{ci.type}</span>
                             </div>
                         </div>
                     ) : (
-                        <p className="text-gray-500 dark:text-gray-400 font-medium italic">{ci.message || 'No certificate details available.'}</p>
+                        <p className="text-gray-500 dark:text-gray-400 font-medium italic">{ci.message || t('security.cert.noDetails')}</p>
                     )}
                 </div>
             </div>
@@ -289,45 +289,45 @@ function GatewayConfigForm() {
             {config.certInfo && (
                 <div className="md:col-span-2 bg-gradient-to-br from-indigo-50/80 to-purple-50/80 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 p-6 shadow-sm">
                     <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 mb-4 flex items-center gap-2 uppercase tracking-wide">
-                        <i className="fa-solid fa-certificate"></i> Current Active Certificate
+                        <i className="fa-solid fa-certificate"></i> {t('security.cert.current')}
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 text-sm">
                         {config.certInfo.error ? (
-                            <div className="col-span-4 text-red-500 font-medium bg-red-50 p-4 rounded-xl border border-red-100">Error: {config.certInfo.error}</div>
+                            <div className="col-span-4 text-red-500 font-medium bg-red-50 p-4 rounded-xl border border-red-100">{t('ssl.log.error').replace('{error}', () => config.certInfo.error)}</div>
                         ) : config.certInfo.message ? (
                             <div className="col-span-4 text-gray-500 font-medium italic">{config.certInfo.message}</div>
                         ) : config.certInfo.commonName ? (
                             <>
                                 <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Domain</span>
+                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.domain')}</span>
                                     <span className="font-bold text-gray-800 dark:text-gray-200 truncate block" title={config.certInfo.commonName}>{config.certInfo.commonName}</span>
                                 </div>
                                 <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Issuer</span>
+                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.issuer')}</span>
                                     <span className="font-medium text-gray-700 dark:text-gray-300 truncate block" title={config.certInfo.issuer}>{config.certInfo.issuer}</span>
                                 </div>
                                 <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Expiry</span>
+                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.expiry')}</span>
                                     <span className={`font-bold ${config.certInfo.validTo && new Date(config.certInfo.validTo) < new Date() ? 'text-red-600' : 'text-emerald-600'}`}>
                                         {config.certInfo.validTo ? new Date(config.certInfo.validTo).toLocaleDateString() : '-'}
                                     </span>
                                 </div>
                                 <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
-                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Type</span>
+                                    <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.type')}</span>
                                     <span className={`font-bold capitalize ${config.certInfo.type === 'letsencrypt' ? 'text-blue-600' : 'text-gray-700 dark:text-gray-300'}`}>
                                         {config.certInfo.type}
                                     </span>
                                 </div>
                             </>
                         ) : (
-                            <div className="col-span-4 text-gray-400 italic text-center py-2">No active certificate details found</div>
+                            <div className="col-span-4 text-gray-400 italic text-center py-2">{t('security.cert.noActiveDetails')}</div>
                         )}
                     </div>
                 </div>
             )}
 
             <div className="space-y-3">
-                <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Gateway Port</label>
+                <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t('security.gateway.port')}</label>
                 <div className="relative">
                     <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-bold">:</span>
                     <input
@@ -338,7 +338,7 @@ function GatewayConfigForm() {
                         placeholder="3000"
                     />
                 </div>
-                <p className="text-xs text-gray-500 ml-1">Default: 3000. Changing this requires a gateway restart.</p>
+                <p className="text-xs text-gray-500 ml-1">{t('security.gateway.portHint')}</p>
             </div>
 
             <div className="p-6 bg-emerald-50 dark:bg-emerald-900/10 rounded-2xl border border-emerald-100 dark:border-emerald-800 flex items-center justify-between gap-6 group hover:bg-emerald-100/50 dark:hover:bg-emerald-900/20 transition-all cursor-pointer shadow-sm" onClick={() => setConfig({ ...config, sslEnabled: !config.sslEnabled })}>
@@ -347,8 +347,8 @@ function GatewayConfigForm() {
                         <i className={`fa-solid ${config.sslEnabled ? 'fa-lock' : 'fa-lock-open'} text-xl`}></i>
                     </div>
                     <div>
-                        <h4 className="text-base font-bold text-gray-900 dark:text-white">Enable SSL / HTTPS</h4>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Force secure connections globally.</p>
+                        <h4 className="text-base font-bold text-gray-900 dark:text-white">{t('security.gateway.enableSsl')}</h4>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t('security.gateway.enableSslHint')}</p>
                     </div>
                 </div>
                 <div
@@ -368,11 +368,11 @@ function GatewayConfigForm() {
                 >
                     {saving ? (
                         <span className="flex items-center gap-2">
-                            <i className="fa-solid fa-circle-notch fa-spin"></i> Saving...
+                            <i className="fa-solid fa-circle-notch fa-spin"></i> {t('settings.saving')}
                         </span>
                     ) : (
                         <span className="flex items-center gap-2">
-                            <i className="fa-solid fa-floppy-disk"></i> Save Configuration
+                            <i className="fa-solid fa-floppy-disk"></i> {t('security.gateway.save')}
                         </span>
                     )}
                 </button>
@@ -389,6 +389,7 @@ import { useToast } from "@/contexts/ToastContext";
 function MfaPolicyForm() {
     const { addToast } = useToast();
     const { user } = useAuth();
+    const { t } = useI18n();
     const [roles, setRoles] = useState<Record<string, Role>>({});
     const [required, setRequired] = useState<string[]>([]);
     const [graceDays, setGraceDays] = useState(7);
@@ -414,7 +415,7 @@ function MfaPolicyForm() {
                 setSavedEnforceTokens(policy.enforceForApiTokens === true);
                 setExposure(tokenExposure ?? null);
             } catch (e: any) {
-                addToast(e?.message || "Failed to load the MFA policy", "error");
+                addToast(e?.message || t('security.mfa.loadFailed'), "error");
             } finally {
                 setLoading(false);
             }
@@ -437,9 +438,9 @@ function MfaPolicyForm() {
             setSavedRoles(policy.requiredRoles);
             setSavedEnforceTokens(policy.enforceForApiTokens === true);
             setExposure(tokenExposure ?? null);
-            addToast(policy.requiredRoles.length ? "Two-factor enforcement updated" : "Two-factor enforcement disabled", "success");
+            addToast(policy.requiredRoles.length ? t('security.mfa.updated') : t('security.mfa.disabled'), "success");
         } catch (e: any) {
-            addToast(e?.message || "Failed to save the MFA policy", "error");
+            addToast(e?.message || t('security.mfa.saveFailed'), "error");
         } finally {
             setSaving(false);
         }
@@ -452,14 +453,12 @@ function MfaPolicyForm() {
     const tokensExempt = savedRoles.length > 0 && !savedEnforceTokens;
     const exposed = exposure?.unenrolledOwnerTokens ?? 0;
 
-    if (loading) return <p className="text-gray-500 font-medium">Loading policy…</p>;
+    if (loading) return <p className="text-gray-500 font-medium">{t('security.mfa.loading')}</p>;
 
     return (
         <div className="space-y-6">
             <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
-                Require members of the selected roles to enable two-factor authentication. They get a grace
-                window to enrol, after which they&apos;re blocked from the dashboard until 2FA is on. Leave all
-                roles unchecked to turn enforcement off.
+                {t('security.mfa.intro')}
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -493,15 +492,10 @@ function MfaPolicyForm() {
                     className="mt-0.5 w-4 h-4 accent-emerald-600"
                 />
                 <span>
-                    <span className="block font-bold text-gray-800 dark:text-gray-100">Also enforce for personal API tokens</span>
+                    <span className="block font-bold text-gray-800 dark:text-gray-100">{t('security.mfa.enforceTokens')}</span>
                     <span className="block text-[11px] text-gray-400 mt-0.5">
-                        Starts on for a new site; a site upgraded from an earlier version keeps it off, so existing integrations
-                        keep working. While it is off, a <code>Bearer wjt_…</code> token
-                        keeps working even when its owner&apos;s role requires 2FA and the owner never enrolled — for example a token
-                        created before this policy, or before the owner&apos;s role changed. Turning it on blocks those tokens once
-                        the grace period ends; a token can&apos;t answer a 2FA challenge, so the fix is for its owner to enrol (or
-                        for the token to be revoked). Either way, new tokens for a selected role can only be created by an
-                        enrolled user who signed in with 2FA or confirms a current code.
+                        {t('security.mfa.enforceTokensHelpBefore')} <code>Bearer wjt_…</code>{" "}
+                        {t('security.mfa.enforceTokensHelpAfter')}
                     </span>
                 </span>
             </label>
@@ -514,25 +508,26 @@ function MfaPolicyForm() {
                 >
                     <i className="fa-solid fa-key mt-0.5"></i>
                     <span>
-                        <strong>API tokens are exempt from this policy.</strong>{" "}
+                        <strong>{t('security.mfa.tokensExempt')}</strong>{" "}
                         {exposed > 0 ? (
                             <>
-                                {exposed === 1 ? "1 active token belongs" : `${exposed} active tokens belong`} to{" "}
-                                {exposure!.unenrolledOwners === 1 ? "a user" : `${exposure!.unenrolledOwners} users`} in a
-                                role that requires 2FA who {exposure!.unenrolledOwners === 1 ? "hasn't" : "haven't"} enrolled, and{" "}
-                                {exposed === 1 ? "it keeps" : "they keep"} working without a second factor.
+                                {t(exposed === 1
+                                    ? (exposure!.unenrolledOwners === 1 ? 'security.mfa.exposure.oneTokenOneOwner' : 'security.mfa.exposure.oneTokenManyOwners')
+                                    : (exposure!.unenrolledOwners === 1 ? 'security.mfa.exposure.manyTokensOneOwner' : 'security.mfa.exposure.manyTokensManyOwners'))
+                                    .replace('{tokens}', () => String(exposed))
+                                    .replace('{owners}', () => String(exposure!.unenrolledOwners))}
                             </>
                         ) : (
-                            <>No active token currently belongs to an un-enrolled user in a required role, but tokens are not checked if that changes.</>
+                            <>{t('security.mfa.noExposure')}</>
                         )}{" "}
-                        Turn on &ldquo;Also enforce for personal API tokens&rdquo; to block them after the grace period, or revoke them.
+                        {t('security.mfa.turnOnHint').replace('{option}', () => t('security.mfa.enforceTokens'))}
                     </span>
                 </div>
             )}
 
             <div className="flex flex-wrap items-end gap-4">
                 <div>
-                    <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">Grace period (days)</label>
+                    <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('security.mfa.graceDays')}</label>
                     <input
                         type="number"
                         min={0}
@@ -540,14 +535,14 @@ function MfaPolicyForm() {
                         onChange={(e) => setGraceDays(Math.max(0, Number(e.target.value)))}
                         className="w-40 px-4 py-3 bg-white/60 dark:bg-black/20 border-2 border-gray-200 dark:border-gray-700 rounded-2xl focus:ring-4 focus:ring-emerald-100 focus:border-emerald-500 outline-none font-bold"
                     />
-                    <p className="text-[11px] text-gray-400 mt-1.5">0 = enforce immediately.</p>
+                    <p className="text-[11px] text-gray-400 mt-1.5">{t('security.mfa.graceHint')}</p>
                 </div>
                 <button
                     onClick={save}
                     disabled={saving}
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-500/25 transition-all disabled:opacity-50"
                 >
-                    {saving ? "Saving…" : "Save policy"}
+                    {saving ? t('common.saving') : t('security.mfa.save')}
                 </button>
             </div>
 
@@ -555,9 +550,8 @@ function MfaPolicyForm() {
                 <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-2xl px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
                     <i className="fa-solid fa-triangle-exclamation mt-0.5"></i>
                     <span>
-                        Your role (<strong>{roles[user!.role]?.name || user!.role}</strong>) is selected and you don&apos;t have 2FA enabled.
-                        Once the grace period ends you&apos;ll be required to enrol before using the dashboard.{" "}
-                        <Link href="/admin/account" className="font-bold underline underline-offset-2">Enable it now</Link>.
+                        {t('security.mfa.selfRiskBefore')}<strong>{roles[user!.role]?.name || user!.role}</strong>{t('security.mfa.selfRiskAfter')}{" "}
+                        <Link href="/admin/account" className="font-bold underline underline-offset-2">{t('security.mfa.enableNow')}</Link>.
                     </span>
                 </div>
             )}

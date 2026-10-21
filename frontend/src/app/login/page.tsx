@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { authApi, settingsApi } from "@/lib/api";
 import { currentReturnPath } from "@/lib/safeReturnPath";
-import { getStoredLanguage, t } from "@/lib/i18n";
+import { I18nProvider, useI18n } from "@/contexts/I18nContext";
 
 function LoginForm() {
     const [username, setUsername] = useState("");
@@ -22,6 +22,7 @@ function LoginForm() {
     // Sign-up keeps the visitor's `?redirect=` (set after mount: the server render has no query).
     const [registerHref, setRegisterHref] = useState("/register");
     const { login, verifyMfa } = useAuth();
+    const { t } = useI18n();
     const router = useRouter();
     // When the account has MFA on, the password step returns a challenge token and we switch to a
     // second view asking for the authenticator (or backup) code.
@@ -56,7 +57,7 @@ function LoginForm() {
         } else if (result.success) {
             router.push(currentReturnPath() || "/admin");
         } else {
-            setError(result.error || "Invalid username or password");
+            setError(result.error || t('login.invalidCredentials'));
         }
 
         setLoading(false);
@@ -71,7 +72,7 @@ function LoginForm() {
         if (result.success) {
             router.push(currentReturnPath() || "/admin");
         } else {
-            setError(result.error || "Invalid authentication code");
+            setError(result.error || t('mfa.invalidCode'));
         }
         setLoading(false);
     };
@@ -84,17 +85,17 @@ function LoginForm() {
                         <i className="fa-solid fa-rocket text-blue-600"></i>
                         WordJS
                     </h1>
-                    <p className="text-gray-500 mt-2">Admin Dashboard</p>
+                    <p className="text-gray-500 mt-2">{t('login.subtitle')}</p>
                 </div>
 
                 {mfaToken ? (
                     <form onSubmit={handleMfaSubmit} className="space-y-6">
                         <div className="text-center">
                             <i className="fa-solid fa-shield-halved text-blue-600 text-2xl mb-2"></i>
-                            <p className="text-sm text-gray-500">Enter the 6-digit code from your authenticator app, or a backup code.</p>
+                            <p className="text-sm text-gray-500">{t('login.mfaPrompt')}</p>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Authentication code</label>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">{t('login.mfaCode')}</label>
                             <input
                                 type="text"
                                 inputMode="numeric"
@@ -115,35 +116,35 @@ function LoginForm() {
                             disabled={loading}
                             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
                         >
-                            {loading ? "Verifying..." : "Verify"}
+                            {loading ? t('login.verifying') : t('login.verify')}
                         </button>
                         <button
                             type="button"
                             onClick={() => { setMfaToken(null); setMfaCode(""); setError(""); }}
                             className="w-full text-sm text-gray-500 hover:text-blue-600"
                         >
-                            &larr; Back to sign in
+                            &larr; {t('login.backToSignIn')}
                         </button>
                     </form>
                 ) : (
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Username
+                            {t('users.username')}
                         </label>
                         <input
                             type="text"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                            placeholder="Enter username"
+                            placeholder={t('login.usernamePlaceholder')}
                             required
                         />
                     </div>
 
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Password
+                            {t('users.password')}
                         </label>
                         <div className="relative">
                             <input
@@ -151,16 +152,14 @@ function LoginForm() {
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 pr-12"
-                                placeholder="Enter password"
+                                placeholder={t('login.passwordPlaceholder')}
                                 required
                             />
                             <button
                                 type="button"
                                 onClick={() => setShowPassword(!showPassword)}
-                                aria-label={t(showPassword ? 'login.hidePassword' : 'login.showPassword', getStoredLanguage())}
+                                aria-label={t(showPassword ? 'login.hidePassword' : 'login.showPassword')}
                                 aria-pressed={showPassword}
-                                // The stored admin language is read in the browser only: the server's guess may differ.
-                                suppressHydrationWarning
                                 className="absolute inset-y-0 right-0 w-11 flex items-center justify-center rounded-r-lg text-gray-400 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-blue-500"
                             >
                                 <i className={`fa-solid ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`} aria-hidden="true"></i>
@@ -179,22 +178,22 @@ function LoginForm() {
                         disabled={loading}
                         className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
                     >
-                        {loading ? "Logging in..." : "Login"}
+                        {loading ? t('login.signingIn') : t('login.signIn')}
                     </button>
 
                     {resetAvailable && (
                         <div className="text-center">
                             <a href="/reset-password" className="text-sm text-blue-600 hover:text-blue-700 font-medium">
-                                Forgot your password?
+                                {t('login.forgotPassword')}
                             </a>
                         </div>
                     )}
 
                     {registerAvailable && (
                         <div className="text-center">
-                            <span className="text-sm text-gray-500">¿No tienes cuenta? </span>
+                            <span className="text-sm text-gray-500">{t('login.noAccount')} </span>
                             <a href={registerHref} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
-                                Crear una cuenta
+                                {t('login.createAccount')}
                             </a>
                         </div>
                     )}
@@ -203,7 +202,7 @@ function LoginForm() {
 
                 <div className="mt-6 text-center">
                     <a href="/" className="inline-flex items-center min-h-11 text-sm text-gray-500 hover:text-blue-600">
-                        &larr; Back to Home
+                        &larr; {t('login.backToHome')}
                     </a>
                 </div>
             </div>
@@ -213,8 +212,10 @@ function LoginForm() {
 
 export default function LoginPage() {
     return (
-        <AuthProvider>
-            <LoginForm />
-        </AuthProvider>
+        <I18nProvider>
+            <AuthProvider>
+                <LoginForm />
+            </AuthProvider>
+        </I18nProvider>
     );
 }
