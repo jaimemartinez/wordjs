@@ -8,6 +8,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Change a network site's address from the panel.** Admin → Network → *Change address* moves a site to
+  another main address and sets its other host names (the `www.` twin, an old domain kept during a move),
+  checked as at creation; the site's own address options follow, the certificate of the old address is
+  removed and the gateway answers the new names at once (`PUT /api/v1/network/sites/:id/address`). Moving a
+  site from staging to production no longer means deleting and recreating it.
+- **Admin → Servers says more.** The gateway itself is listed with the protocol it serves and when its
+  identity and the cluster CA expire; each node shows when its certificate expires; outstanding join tokens
+  show their role, pinned address and expiry; a three-machine cluster is reported as *separate*.
+- **Site Health checks the gateway and the servers behind it**: the protocol the gateway serves against its
+  HTTPS switch, and any node that stopped answering.
 - **Header & footer editor, out of beta.** Admin → *Header & footer* (`/admin/chrome`) now covers
   everything the built-in header and footer did, and more: a mobile hamburger that can collapse on
   phones, phones and tablets, or always; a sticky header and a header that is **transparent over the
@@ -972,6 +982,33 @@ the boot error links there too.
   TCP connection but the TLS upgrade on that same connection was judged again without its port and refused.
   A TLS layer over an already-connected socket is no longer re-judged.
 
+- **The gateway's HTTPS switch means what it says.** Every gateway worker served HTTPS as soon as a
+  certificate was stored, even with HTTPS switched off, so the panel could not turn it off and showed HTTP
+  while HTTPS was served. A site-address change no longer turns HTTPS on at the next restart, and installing
+  a certificate stores it without switching protocols. Admin → Security shows the protocol the gateway
+  actually serves, no longer generates a certificate (and switches the gateway to HTTPS) just by being
+  opened, asks before changing the protocol, and offers a self-signed certificate as an explicit button.
+  Switching HTTPS off on the gateway's own address moves the main address to `http://` with it, so the
+  panel stays reachable.
+- **Separate mode follows the panel.** A frontend node on another machine now keeps its site address, the
+  gateway's protocol and port, and its server-side API address in step with the gateway on its own
+  (`GET /edge-info`, every 30 s): changing the main address or the HTTPS switch no longer leaves the public
+  site answering 500 until three machines are edited by hand. On one machine, the frontend restarts itself
+  when the gateway next to it changes protocol or certificate.
+- **The gateway keeps what the installer wrote.** Its first certificate upload or TLS change after the
+  install wizard no longer erases the gateway secret, the site address and the mTLS paths from
+  `gateway-config.json`, and the panel now receives the answer to a TLS change.
+- **A visitor whose page cannot be served sees a page.** When the service behind a page is starting or
+  down, browsers get a small "back in a moment" page (503 with `Retry-After`) instead of raw JSON; API
+  clients keep the JSON body.
+- **A split backend waits quietly for its certificates before install** instead of retrying `/register`
+  against the gateway's public port every few seconds.
+- **Address-bound refusals explain themselves.** A user save or a Servers action refused because the
+  session was started at a secondary address now names the main address to sign in at; on a network site,
+  Settings → Site address points to the network administrator; Network warns about an `https://` site the
+  gateway serves over plain HTTP, asks before removing a network administrator, clears the action password
+  after each action, and the two-factor field on the login screen is labelled for assistive technology. A
+  join token's role, TTL and address are checked before the two-factor code is spent on it.
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
   certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes
