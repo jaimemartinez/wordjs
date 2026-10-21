@@ -144,6 +144,7 @@ router.use('/system/certs', multisiteGuards.mainSiteOnly);
 // The reverse-proxy trust and the log level are the process's, so the whole network's.
 router.use('/system/server', multisiteGuards.mainSiteOnly);
 router.use('/health/details', multisiteGuards.mainSiteOnly);
+router.use('/health/site', multisiteGuards.mainSiteOnly);
 router.use('/hooks', multisiteGuards.mainSiteOnly);
 // On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
 // administrator of the main site (the plugin and theme guards above apply the same rule to code changes).

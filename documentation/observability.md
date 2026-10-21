@@ -22,6 +22,24 @@ Key files: `backend/src/core/logger.ts`, `backend/src/middleware/request-context
 
 ---
 
+
+## Site Health (the admin screen)
+
+**Admin → Site Health** runs the installation's diagnostics and says, in plain words, what is fine and
+what needs attention, each with a link to the screen that fixes it (`GET /api/v1/health/site`,
+administrators, the main site on a network; read-only):
+
+| Group | Checks |
+|---|---|
+| Versions | WordJS and Node.js (22 or later) |
+| Files and disk | uploads, data, plugins and themes writable; `wordjs-config.json` writable; not running as root; free disk space (warning under 2 GB, failure under 512 MB) |
+| Database | the database answers; the engine (`sqlite-legacy` links to the move to `sqlite-native`) |
+| Email | a transport for password resets and notifications (Settings → Email); SPF and DMARC records for the site email's domain |
+| HTTPS and proxy | HTTPS on a public address, certificate expiry and self-signed certificates (Security); a request that came through an untrusted proxy on this machine (Security → Server) |
+| Background work | the scheduler, plugin isolation, undelivered content events, the page-cache purge, and whether WordJS can restart itself |
+
+`GET /api/v1/health/details` (below) stays the raw, machine-oriented view of the same probes.
+
 ## Logging
 
 ### Format
