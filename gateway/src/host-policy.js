@@ -710,7 +710,7 @@ function readNetworkSites(list, canonical, aliases, warnings) {
                 warnings.push(`networkSites[${i}].aliases[${j}]: ${alias.hostname} is listed twice; the first entry is used.`);
                 return;
             }
-            sites.set(alias.hostname, Object.freeze(Object.assign({}, alias, { siteId: id, status, aliasOf: site.origin })));
+            sites.set(alias.hostname, Object.freeze(Object.assign({}, alias, { siteId: id, status, aliasOf: site.origin, mainHostname: site.hostname })));
         });
     });
     return sites;

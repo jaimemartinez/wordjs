@@ -467,7 +467,16 @@ if (cluster.isPrimary) {
                     timeout: 5000,
                     httpsAgent: isHttps ? healthAgent : null,
                     validateStatus: (status) => status < 500 // Accept 4xx as "alive" if path missing
-                }).then(() => ({ ok: true, latency: Date.now() - start }),
+                }).then((res) => {
+                    // The certificate the node answered with: when it expires, for Admin → Servers (QA
+                    // X1-08). Read here as well as at /register, so a node that registered before this
+                    // gateway last started still shows it.
+                    try {
+                        const peer = isHttps && res && res.request && res.request.socket && res.request.socket.getPeerCertificate();
+                        if (peer && peer.valid_to) nodeCertExpiry.set(url, new Date(peer.valid_to).toISOString());
+                    } catch { /* not a TLS socket */ }
+                    return { ok: true, latency: Date.now() - start };
+                },
                         (e) => ({ ok: false, error: e })));
             }
             return inflight.get(url);

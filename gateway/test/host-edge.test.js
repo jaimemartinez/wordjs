@@ -555,7 +555,7 @@ describe('a redirect alias', () => {
 describe('multisite: the other sites of the network', () => {
     const state = {
         policy: sitePolicy({ config: { networkSites: [
-            { id: 2, url: 'https://two.example.org', status: 'active' },
+            { id: 2, url: 'https://two.example.org', status: 'active', aliases: ['www.two.example.org'] },
             { id: 3, url: 'https://three.example.org', status: 'suspended' },
         ] } }),
     };
@@ -565,6 +565,12 @@ describe('multisite: the other sites of the network', () => {
 
     it('answers another site of the network and names it upstream, for the frontend', async () => {
         const r = await s.get('two.example.org', '/hello');
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
+    });
+
+    it('names an alias of a site by the site\'s MAIN hostname upstream (QA X1-09)', async () => {
+        const r = await s.get('www.two.example.org', '/hello');
         assert.strictEqual(r.status, 200);
         assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
     });

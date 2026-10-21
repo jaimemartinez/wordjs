@@ -384,7 +384,9 @@ function createHostEdge(opts) {
         const siteEntry = verdict.entry && typeof verdict.entry.siteId === 'number' ? verdict.entry : null;
         if (siteEntry) {
             if (siteEntry.status === 'suspended') return { action: 'suspended' };
-            req[SITE] = { siteId: siteEntry.siteId, host: siteEntry.hostname };
+            // Another address of the site names the site by its MAIN hostname: that is the frontend's site tree
+            // and what the backend answers as (X-WordJS-Site-Host), so an alias renders the site, not "no answer".
+            req[SITE] = { siteId: siteEntry.siteId, host: siteEntry.mainHostname || siteEntry.hostname };
         }
         if (verdict.cls === 'alias' && verdict.entry && verdict.entry.mode === 'redirect'
             && (req.method === 'GET' || req.method === 'HEAD') && !isApiPath(p)) {

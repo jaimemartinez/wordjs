@@ -72,6 +72,8 @@ export interface NetworkSiteEntry extends SiteUrl {
     status: 'active' | 'suspended';
     /** Set on another address of the site (`networkSites[].aliases`): the site's main origin. */
     aliasOf?: string;
+    /** Set with aliasOf: the site's main hostname. */
+    mainHostname?: string;
 }
 
 export type HostClass = 'canonical' | 'alias' | 'env' | 'loopback' | 'ip' | 'dev' | 'unknown';
