@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 type MonitorEvent = {
     timestamp: number;
@@ -12,6 +13,7 @@ type MonitorEvent = {
 
 export default function LiveTimeline() {
     const { user } = useAuth();
+    const { t } = useI18n();
     const [events, setEvents] = useState<MonitorEvent[]>([]);
     const [isConnected, setIsConnected] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
@@ -102,23 +104,23 @@ export default function LiveTimeline() {
                 <div className="flex flex-wrap items-center gap-4 gap-y-2">
                     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider transition-colors ${isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'}`}>
                         <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
-                        {isConnected ? 'Live Connection' : 'Disconnected'}
+                        {isConnected ? t('hooks.timeline.live') : t('hooks.timeline.disconnected')}
                     </div>
-                    <span className="text-slate-400 font-medium">Buffer: {events.length}/100 events</span>
+                    <span className="text-slate-400 font-medium">{t('hooks.timeline.buffer').replace('{count}', String(events.length)).replace('{max}', '100')}</span>
                 </div>
                 <div className="flex gap-2">
                     <button
                         onClick={() => setEvents([])}
                         className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-colors flex items-center gap-2 font-bold hover:text-white"
-                        title="Clear console"
+                        title={t('hooks.timeline.clearTitle')}
                     >
-                        <i className="fa-solid fa-trash-can"></i> Clear
+                        <i className="fa-solid fa-trash-can"></i> {t('hooks.timeline.clear')}
                     </button>
                     <button
                         onClick={() => setIsPaused(!isPaused)}
                         className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 font-bold ${isPaused ? 'bg-amber-500 text-slate-900 shadow-lg shadow-amber-500/20' : 'bg-slate-700 text-slate-300 hover:bg-slate-600 hover:text-white'}`}
                     >
-                        {isPaused ? <><i className="fa-solid fa-play"></i> Resume</> : <><i className="fa-solid fa-pause"></i> Pause</>}
+                        {isPaused ? <><i className="fa-solid fa-play"></i> {t('hooks.timeline.resume')}</> : <><i className="fa-solid fa-pause"></i> {t('hooks.timeline.pause')}</>}
                     </button>
                 </div>
             </div>
@@ -128,8 +130,8 @@ export default function LiveTimeline() {
                 {events.length === 0 && (
                     <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-4">
                         <i className="fa-solid fa-wave-square text-4xl opacity-20"></i>
-                        <p className="italic">Waiting for system events...</p>
-                        <p className="text-[11px] bg-slate-800 px-3 py-1 rounded-full text-slate-500">Perform actions in another tab to see them here</p>
+                        <p className="italic">{t('hooks.timeline.waiting')}</p>
+                        <p className="text-[11px] bg-slate-800 px-3 py-1 rounded-full text-slate-500">{t('hooks.timeline.emptyHint')}</p>
                     </div>
                 )}
                 {events.map((ev, i) => (
@@ -143,7 +145,7 @@ export default function LiveTimeline() {
                         </span>
 
                         <div className="flex-1 min-w-0 break-all font-medium text-slate-300">
-                            <span className={`${ev.type === 'action' ? 'text-blue-300' : 'text-pink-300'} mr-2 hover:underline cursor-pointer`} title="Filter by this hook">{ev.hook}</span>
+                            <span className={`${ev.type === 'action' ? 'text-blue-300' : 'text-pink-300'} mr-2 hover:underline cursor-pointer`} title={t('hooks.timeline.filterByHook')}>{ev.hook}</span>
                             <span className="text-slate-500">
                                 {ev.args.map(a => {
                                     if (typeof a === 'string') return `"${a}"`;
