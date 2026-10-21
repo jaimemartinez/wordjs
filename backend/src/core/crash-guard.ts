@@ -232,12 +232,49 @@ function blamePlugin(slug: string, error: any) {
 }
 
 /**
+ * The plugin the HOST was serving when an uncaught exception escaped, or null (FALLOS 113).
+ *
+ * Plugins run in their own isolated process, so in the host the only code that ever runs inside
+ * runWithContext(slug) is the host itself answering that plugin's bridged call. An exception that escapes
+ * from there is a fault of one plugin's request — a refused connection, a failed query, a callback of a
+ * library the bridge drove — never of the host as a whole, and taking every site down with it is exactly
+ * the outage the isolation exists to prevent. Such an error is CONTAINED: logged with the plugin's name,
+ * and the process keeps serving; the request that hit it fails by its own RPC deadline. Anything thrown
+ * outside a plugin's context keeps the fail-fast semantics below.
+ *
+ * Inside the isolated child (where the context IS the plugin) this never contains: the child's own
+ * handlers decide, and a dying child is restarted by the host.
+ */
+function pluginScopedUncaught(): string | null {
+    if ((globalThis as any).__WORDJS_ISOLATED__) return null;
+    try { return require('./plugin-context').getCurrentPlugin() || null; } catch { return null; }
+}
+
+/**
+ * Exit the host process, always as the host. The uncaught-exception path runs in the async context of the
+ * code that threw; when that context named a plugin, the sandbox's process-control guard refused the exit
+ * itself, the handler threw inside Node's fatal-exception path, and Node aborted with exit code 7 instead
+ * of the clean exit 1 the supervisor expects (FALLOS 113). Never reachable by plugin code: crash-guard is
+ * on the core modules plugins cannot load.
+ */
+function exitAsHost(code: number): void {
+    let runAsHost: (fn: () => void) => void = (fn) => fn();
+    try { runAsHost = require('./plugin-context').runAsHost; } catch { /* plugin-context not loaded: no guard to dodge */ }
+    runAsHost(() => process.exit(code));
+}
+
+/**
  * Install global error handlers for runtime blame tracking
  * Should be called early in application startup
  */
 function installRuntimeBlameHandlers() {
     // Handle uncaught exceptions
     process.on('uncaughtException', (error) => {
+        const serving = pluginScopedUncaught();
+        if (serving) {
+            log.error({ err: error, slug: serving }, `[CrashGuard] Uncaught exception while serving plugin '${serving}' — contained, the process keeps running.`);
+            return;
+        }
         log.error({ err: error }, '💥 Uncaught Exception');
 
         const slug = extractPluginFromStack(error.stack);
@@ -248,7 +285,7 @@ function installRuntimeBlameHandlers() {
         }
 
         // Give time for file write, then exit
-        setTimeout(() => process.exit(1), 100);
+        setTimeout(() => exitAsHost(1), 100);
     });
 
     // Handle unhandled promise rejections
@@ -298,6 +335,8 @@ module.exports = {
     clear,
     // New exports
     installRuntimeBlameHandlers,
+    pluginScopedUncaught,
+    exitAsHost,
     blamePlugin,
     extractPluginFromStack,
     getStrikes,

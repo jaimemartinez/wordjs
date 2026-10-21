@@ -9,7 +9,7 @@
 // hasPermission is deliberately NOT imported: the filesystem gate now asks io-guard for BOTH halves
 // (see guardFsCall), because plugin-context reads the grant map directly and that map is only ever
 // populated on the host — inside an isolate it is empty, and "unreadable" is not "refused".
-const { getEffectivePlugin } = require('./plugin-context');
+const { getEffectivePlugin, getPluginFromStack } = require('./plugin-context');
 const originalFs = require('fs');
 const originalChildProcess = require('child_process');
 // Real os captured at LOAD time (before the require hook installs), so the os scrub below can read the
@@ -103,7 +103,7 @@ function guardFsCall(pluginSlug: string, prop: string, args: any[]): void {
             args[1] = safe;
         }
     }
-    const { isPathSafe, fsCapabilityRevoked, fsCapabilityAllowed, isModuleLoaderRead } = require('./io-guard');
+    const { isPathSafe, fsCapabilityRevoked, fsCapabilityAllowed, isModuleLoaderRead, isStagedUploadRead } = require('./io-guard');
     // [path, isWriteForThatPath] pairs: two-path ops read arg0 + write arg1; everything else is arg0.
     const pairs: [any, boolean][] = FS_TWO_PATH.has(p)
         ? [[args[0], false], [args[1], true]]
@@ -151,7 +151,9 @@ function guardFsCall(pluginSlug: string, prop: string, args: any[]): void {
         // asks the same declared-AND-granted question but knows the answer lives in the host-pushed cfg
         // when we are in a child. Same semantics on the host, correct semantics in the isolate.
         if (!isPathWithinPluginDir(pluginSlug, targetPath)) {
-            if (!fsCapabilityAllowed(pluginSlug, isWrite ? 'write' : 'read')) {
+            // io-guard's one storage carve-out, applied verbatim: reading the upload staged for this
+            // plugin's own multipart route (sandbox-paths uploadStagingDir) is reading the request.
+            if (!isStagedUploadRead(pluginSlug, targetPath, isWrite) && !fsCapabilityAllowed(pluginSlug, isWrite ? 'write' : 'read')) {
                 throw createSecurityError(pluginSlug, `fs.${String(prop)}`, targetPath);
             }
         } else if (!isModuleLoaderRead(targetPath, isWrite) && fsCapabilityRevoked(pluginSlug, isWrite ? 'write' : 'read')) {
@@ -583,7 +585,40 @@ function installOsSandboxScrub() {
     try { Object.defineProperty(realOs, '__wjs_os_scrubbed__', { value: true, enumerable: false }); } catch { /* */ }
 }
 
-function secureModuleFor(id: any) {
+/**
+ * HOST CODE IS NOT THE PLUGIN IT SERVES (FALLOS 113 / 112).
+ *
+ * The bridge runs host code inside runWithContext(slug) while it answers a plugin's call, so the ALS store
+ * names the plugin even though not one plugin frame is on the stack. A host library that requires a network
+ * builtin LAZILY from there was handed the plugin's egress-guarded module: node-postgres builds every new
+ * pool connection with `require('net')` / `require('tls')` inside lib/stream.js, so the host's OWN database
+ * connection — opened because a plugin query needed one — was judged by the plugin's public-only egress rule
+ * and refused for a database on a private address. The plugin then failed at every boot, and when the refusal
+ * surfaced as an uncaught exception the host died with it.
+ *
+ * The answer to "which module does this require get" belongs to the module that asks, exactly as
+ * corePolicyFor already keys on the requirer. On the HOST, a genuine loaded module that lives outside the
+ * plugins/themes trees and the writable data dirs gets the real network builtin when the plugin attribution
+ * comes from the ALS store ALONE. Nothing a plugin controls passes this test:
+ *   - the isolated child never takes it (the child IS the plugin; its own prototype-level guard stays);
+ *   - the requirer must be the module object Node itself cached for that file — a forged `{filename}` parent
+ *     handed to Module._load is not;
+ *   - any plugin or theme frame on the stack keeps the require policed, so an in-process theme calling a
+ *     loader with a borrowed host module still gets the guarded (or blocked) module.
+ * Only network builtins are affected: fs/child_process/os keep their existing policy (io-guard governs the
+ * host's fs by its own rules).
+ */
+function isHostOwnedRequire(requirer: any): boolean {
+    if ((globalThis as any).__WORDJS_ISOLATED__) return false;
+    const filename = requirer && requirer.filename;
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) return false;
+    if (Module._cache[filename] !== requirer) return false;
+    if (requirerSlug(filename) !== null) return false;
+    if (isUnderNonRequirableDir(filename)) return false;
+    return !getPluginFromStack();
+}
+
+function secureModuleFor(id: any, requirer?: any) {
     // Normalize the 'node:' prefix, then match on the FIRST PATH SEGMENT so SUBMODULES of a blocked
     // builtin are caught too — e.g. require('inspector/promises') (its Session.connectToMainThread() is
     // a worker->host escape) or 'dns/promises'. Exact-string matching missed these.
@@ -607,6 +642,7 @@ function secureModuleFor(id: any) {
     if (base === 'child_process') return secureChildProcess;
     if (base === 'os') return createSecureOs();
     if (isNet) {
+        if (requirer !== undefined && isHostOwnedRequire(requirer)) return undefined;
         // Raw sockets are allowed ONLY when an admin granted the Network permission. Inside the isolate
         // the grant comes from the bootstrap (cfg → __WORDJS_PLUGIN_NETWORK__) because the DB/config
         // isn't reachable there; on the main thread, fall back to plugin-permissions.
@@ -857,7 +893,7 @@ function guardPluginRequirePath(request: any, mod: any): void {
 function installSecureRequire() {
     // 1. Patch Module.prototype.require (the normal `require('fs')` path).
     Module.prototype.require = function (id: any) {
-        const secure = secureModuleFor(id);
+        const secure = secureModuleFor(id, this);
         if (secure !== undefined) return secure;
         const core = corePolicyFor(id, this);
         if (core !== undefined) return core;
@@ -870,7 +906,7 @@ function installSecureRequire() {
     //    but still go through _load, so guard it identically.
     const originalLoad = Module._load;
     Module._load = function (request: any, _parent: any, _isMain: any) {
-        const secure = secureModuleFor(request);
+        const secure = secureModuleFor(request, _parent || null);
         if (secure !== undefined) return secure;
         const core = corePolicyFor(request, _parent);
         if (core !== undefined) return core;

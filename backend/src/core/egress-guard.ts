@@ -618,8 +618,29 @@ export function installChildNetGuard(): void {
     } catch { /* best-effort; module-level wrappers remain as defense */ }
 }
 
+// TLS OVER A SOCKET THAT IS ALREADY CONNECTED opens no connection: `tls.connect({ socket, host, servername })`
+// is how STARTTLS upgrades a plain TCP session (nodemailer, smtp clients, pg's sslmode), and `host` there only
+// names the peer for SNI and certificate checks. The destination was judged when that socket connected — with
+// its port, so an administrator-approved private host:port passes there. Judging the upgrade again by `host`
+// alone asked "is this private IP approved on port undefined?", which never matches an approval, and refused
+// every STARTTLS relay on a private address the admin had allowed (M4-05 / S4-18 / X4-06). The socket is read
+// ONCE and pinned as a plain data property (same TOCTOU discipline as secureConnect), so Node cannot later
+// see a getter flip to "no socket" and dial `host` itself unchecked; without a socket the normal check runs.
+function secureTlsConnect(orig: any, thisArg: any, args: any[]): any {
+    const { options } = extractConnectOptions(args);
+    if (options && typeof options === 'object') {
+        const socketVal = options.socket;
+        if (socketVal != null && typeof socketVal === 'object') {
+            try { Object.defineProperty(options, 'socket', { value: socketVal, writable: true, configurable: true, enumerable: true }); }
+            catch { return secureConnect(orig, thisArg, args); }
+            return orig.apply(thisArg, args);
+        }
+    }
+    return secureConnect(orig, thisArg, args);
+}
+
 function guardTls(mod: any): any {
-    return wrapModule(mod, { connect: (...args: any[]) => secureConnect(mod.connect, mod, args) });
+    return wrapModule(mod, { connect: (...args: any[]) => secureTlsConnect(mod.connect, mod, args) });
 }
 
 // ---- http/https/http2 --------------------------------------------------------------------------

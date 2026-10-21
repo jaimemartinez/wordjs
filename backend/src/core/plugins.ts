@@ -3159,8 +3159,33 @@ async function retireOnSecondarySites(slug: string): Promise<number[]> {
     return retired;
 }
 
+/**
+ * Drop a plugin's tables whatever foreign keys link them (S4-14). The catalog lists tables in name order,
+ * not dependency order, so dropping one by one hit a parent before its children: MySQL/MariaDB and Postgres
+ * refused ("a foreign key constraint fails" / "other objects depend on it"), the first refusal ended the
+ * loop, and the admin was told every table was gone. Each pass drops what it can; a table refused because a
+ * sibling still references it goes on the next pass, once that sibling is gone. No foreign-key checks are
+ * switched off and nothing CASCADEs, so a table OUTSIDE the plugin that references one of its tables keeps
+ * that table in place — and the caller reports it instead of claiming success.
+ */
+async function dropTablesInDependencyOrder(names: string[], drop: (name: string) => Promise<any>): Promise<{ dropped: string[]; kept: string[]; lastError: any }> {
+    const dropped: string[] = [];
+    let pending = names.slice();
+    let lastError: any = null;
+    while (pending.length) {
+        const next: string[] = [];
+        for (const name of pending) {
+            try { await drop(name); dropped.push(name); }
+            catch (e: any) { lastError = e; next.push(name); }
+        }
+        if (next.length === pending.length) return { dropped, kept: next, lastError };
+        pending = next;
+    }
+    return { dropped, kept: [], lastError };
+}
+
 async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false, networkWide = false }: { dropTables?: boolean; keepGrants?: boolean; networkWide?: boolean } = {}) {
-    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; appContainerRetired: boolean; appContainerRetiredSites: number[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false, appContainerRetiredSites: [] };
+    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; tablesKept?: string[]; appContainerRetired: boolean; appContainerRetiredSites: number[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false, appContainerRetiredSites: [] };
     if (!keepGrants) {
         try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
         catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] removeGrants failed`); }
@@ -3181,9 +3206,11 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
                     : await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table'");
             // Filter in JS by the exact plugin prefix (no LIKE params → no cross-driver escaping pitfalls).
             const mine = (rows || []).map((r: any) => r.name).filter((n: string) => String(n).toLowerCase().startsWith(prefix));
-            for (const name of mine) {
-                await dbAsync.run(`DROP TABLE IF EXISTS "${String(name).replace(/"/g, '')}"`);
-                result.tablesDropped.push(name);
+            const dropped = await dropTablesInDependencyOrder(mine, (name) => dbAsync.run(`DROP TABLE IF EXISTS "${String(name).replace(/"/g, '')}"`));
+            result.tablesDropped.push(...dropped.dropped);
+            if (dropped.kept.length) {
+                result.tablesKept = dropped.kept;
+                log.warn({ slug: logSafe(slug), err: dropped.lastError }, `[uninstall ${logSafe(slug)}] ${dropped.kept.length} table(s) could not be dropped`);
             }
         } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] table drop failed`); }
     }
@@ -3204,6 +3231,7 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
 }
 
 module.exports = {
+    dropTablesInDependencyOrder,
     loadSitePlugins, deactivatePluginOnSecondarySites, retireOnSecondarySites, offerPluginToSites, withdrawPluginFromSites, respawnOnSecondarySites, onSecondarySite,
     scanPlugins,
     getActivePlugins,

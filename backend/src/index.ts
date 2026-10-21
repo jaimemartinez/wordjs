@@ -1998,9 +1998,13 @@ async function initializeMainSite() {
 }
 
 // Handle uncaught exceptions
+// An exception that escapes while the host serves a plugin's bridged call is contained by CrashGuard (it
+// logs it with the plugin's name); one plugin's request must not take every site down. Everything else
+// exits — as the host, so a plugin context still active on this path cannot veto the exit (FALLOS 113).
 process.on('uncaughtException', (error) => {
+    if (CrashGuard.pluginScopedUncaught()) return;
     log.error({ err: error }, 'Uncaught Exception');
-    process.exit(1);
+    CrashGuard.exitAsHost(1);
 });
 
 // Handle unhandled promise rejections

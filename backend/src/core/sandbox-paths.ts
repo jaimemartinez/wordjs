@@ -49,6 +49,17 @@ function privateStorageDirs(appRoot: string, slug: string, siteId: number = 1): 
     ];
 }
 
+/**
+ * Where the host stages a multipart upload for one of this plugin's routes: a fixed subdirectory of its
+ * private tmp storage (M4-04 / S4-19 / X4-05). It used to be the OS temp dir, which no layer of the sandbox
+ * lets a plugin read, so `req.file.path` named a file the handler could never open — every attachment was
+ * dropped. Inside the plugin's own storage every native layer already admits it, and io-guard admits a READ
+ * here without a filesystem grant (the upload IS the request's input; writes stay gated like any storage).
+ */
+function uploadStagingDir(appRoot: string, slug: string, siteId: number = 1): string {
+    return path.join(privateStorageDirs(path.resolve(appRoot), slug, siteId)[2], 'uploads');
+}
+
 function sandboxPaths(appRoot: string, slug: string, coreDir: string, siteId: number = 1): {
     own: string;
     ownWritable: boolean;
@@ -75,4 +86,4 @@ function sandboxPaths(appRoot: string, slug: string, coreDir: string, siteId: nu
     };
 }
 
-module.exports = { storageKey, siteStorageSlug, ownPluginDir, privateStorageDirs, sandboxPaths };
+module.exports = { storageKey, siteStorageSlug, ownPluginDir, privateStorageDirs, uploadStagingDir, sandboxPaths };
