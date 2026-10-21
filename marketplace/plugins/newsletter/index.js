@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Newsletter',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Newsletter subscriptions (double opt-in) + HTML campaigns with unsubscribe links',
     author: 'WordJS',
 };
@@ -76,6 +76,11 @@ exports.init = async function (wordjs) {
     await initSchema();
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
+
+    // A UTC 'YYYY-MM-DD HH:MM:SS' literal every engine accepts for a DATETIME column. The SQLite-only
+    // datetime('now') this replaced made the confirm link (and marking a campaign sent) fail on
+    // PostgreSQL and MySQL.
+    const sqlNow = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -147,6 +152,21 @@ exports.init = async function (wordjs) {
     }
 
     /**
+     * The confirm link. It always lands on the SITE's own origin (never a client-chosen host): the
+     * page the visitor subscribed from, when that page is on the site's origin, through the block's
+     * ?nl=confirm deep link (the visitor sees "confirmed" on the page they know), else the backend
+     * confirm route itself.
+     */
+    function buildConfirmUrl(siteBase, pageUrl, token) {
+        try {
+            if (pageUrl && new URL(pageUrl).origin === new URL(siteBase).origin) {
+                return pageUrl + '?nl=confirm&nl_token=' + token;
+            }
+        } catch (e) { /* fall through to the API route */ }
+        return `${siteBase}/api/v1/plugin/newsletter/public/confirm?token=${token}`;
+    }
+
+    /**
      * Confirmation (double opt-in) email body. It goes to an address nobody has verified yet, so it
      * carries nothing the visitor typed (not even the name): only the site's own text and link.
      */
@@ -165,7 +185,21 @@ exports.init = async function (wordjs) {
     }
 
     // Most recent failure to send a double opt-in mail (process-local; shown on the admin dashboard).
+    // Cleared by the next successful send: while it is set, mail is known to be down.
     let lastConfirmMailError = null;
+
+    // THE answer to a subscribe request. While confirmation mail is known to be failing, EVERY branch
+    // (new, pending, already confirmed, rate limited) answers "could not send, try later" — telling a
+    // visitor to check an inbox that will never receive anything was the bug, and answering that in
+    // every branch alike keeps the reply useless for enumerating who is subscribed.
+    const SUBSCRIBE_OK = 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.';
+    const SUBSCRIBE_MAIL_DOWN = 'No pudimos enviar el correo de confirmación en este momento. Inténtalo de nuevo más tarde.';
+    function subscribeReply(res) {
+        if (lastConfirmMailError) {
+            return res.status(503).json({ success: false, code: 'newsletter_mail_unavailable', error: SUBSCRIBE_MAIL_DOWN });
+        }
+        return res.json({ success: true, needsConfirm: true, message: SUBSCRIBE_OK });
+    }
 
     // ── PUBLIC routes (consumed by the Puck block; no auth) ──────────────────────────────────────
 
@@ -187,12 +221,12 @@ exports.init = async function (wordjs) {
             if (existing && existing.status === 'confirmed') {
                 // Already confirmed: do NOTHING (don't reset their status), and return the SAME generic
                 // response as any other subscribe so the reply can't enumerate who is subscribed (audit LOW).
-                return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+                return subscribeReply(res);
             }
             if (!allowConfirmMailTo(email)) {
                 // This address already got its share of confirmation mails this hour. Same reply as every
                 // other branch; nothing rotated, nothing sent (see the limiter comment above).
-                return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+                return subscribeReply(res);
             }
 
             const token = await genToken();
@@ -208,7 +242,7 @@ exports.init = async function (wordjs) {
                     [token, name || existing.name || '', pageUrl || existing.source_url || '', existing.id]
                 );
                 if (!r || !r.changes) {
-                    return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+                    return subscribeReply(res);
                 }
             } else {
                 try {
@@ -219,7 +253,7 @@ exports.init = async function (wordjs) {
                 } catch (e) {
                     // The UNIQUE email: a simultaneous subscribe for this address inserted it first.
                     if (await db.get('SELECT id FROM ' + T.subscribers + ' WHERE email = ?', [email])) {
-                        return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+                        return subscribeReply(res);
                     }
                     throw e;
                 }
@@ -235,17 +269,18 @@ exports.init = async function (wordjs) {
             try {
                 const siteBase = String((await wordjs.site.url()) || '').replace(/\/+$/, '');
                 if (!siteBase) throw new Error('no site url');
-                const confirmUrl = `${siteBase}/api/v1/plugin/newsletter/public/confirm?token=${token}`;
+                const confirmUrl = buildConfirmUrl(siteBase, pageUrl, token);
                 const msg = buildConfirmEmail(confirmUrl);
                 await mail({ to: email, subject: 'Confirma tu suscripción al boletín', html: msg.html, text: msg.text });
+                lastConfirmMailError = null;
             } catch (e) {
                 const reason = String((e && e.message) || e || 'unknown error').slice(0, 300);
                 lastConfirmMailError = { at: new Date().toISOString(), message: reason };
                 console.warn('[newsletter] confirmation email not sent; subscriber left pending:', reason);
             }
-            // Uniform response — IDENTICAL shape to the already-confirmed branch (no membership-revealing
-            // field like `already`/`needsConfirm`), so the reply can't be used to enumerate subscribers.
-            res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+            // Uniform response — IDENTICAL to the already-confirmed branch (no membership-revealing field
+            // like `already`), so the reply can't be used to enumerate subscribers.
+            subscribeReply(res);
         } catch (e) {
             res.status(500).json({ error: 'No se pudo procesar la suscripción.' });
         }
@@ -262,8 +297,8 @@ exports.init = async function (wordjs) {
             }
             if (sub.status === 'pending') {
                 await db.run(
-                    'UPDATE ' + T.subscribers + " SET status = 'confirmed', confirmed_at = datetime('now') WHERE id = ? AND status = 'pending'",
-                    [sub.id]
+                    'UPDATE ' + T.subscribers + " SET status = 'confirmed', confirmed_at = ? WHERE id = ? AND status = 'pending'",
+                    [sqlNow(), sub.id]
                 );
             }
             res.json({ success: true });
@@ -506,8 +541,8 @@ exports.init = async function (wordjs) {
             }
 
             await db.run(
-                'UPDATE ' + T.campaigns + " SET status = 'sent', sent_count = ?, fail_count = ?, sent_at = datetime('now') WHERE id = ? AND status = 'draft'",
-                [sent, failed, id]
+                'UPDATE ' + T.campaigns + " SET status = 'sent', sent_count = ?, fail_count = ?, sent_at = ? WHERE id = ? AND status = 'draft'",
+                [sent, failed, sqlNow(), id]
             );
             res.json({ sent, failed });
         } catch (e) {

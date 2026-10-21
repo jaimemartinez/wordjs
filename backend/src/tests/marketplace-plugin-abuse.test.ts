@@ -1530,7 +1530,9 @@ test('newsletter: a failed confirmation mail leaves the subscriber pending and i
     await withPlugin('newsletter', async (p) => {
         p.setMailFailure(new Error('SMTP down'));
         const r = await p.call('post', '/public/subscribe', { body: { email: 'victim@x.io', name: 'V' } });
-        assert.strictEqual(r.status, 200);
+        // The visitor is told the confirmation could not be sent (newsletter 1.0.3), never "check your inbox".
+        assert.strictEqual(r.status, 503);
+        assert.strictEqual(r.body.code, 'newsletter_mail_unavailable');
         assert.strictEqual(p.sdb.prepare(`SELECT status FROM ${p.prefix}subscribers WHERE email = 'victim@x.io'`).get().status, 'pending');
         const list = await p.call('get', '/subscribers', { user: { id: 1, role: 'administrator' } });
         assert.strictEqual(list.body.stats.confirmed, 0);

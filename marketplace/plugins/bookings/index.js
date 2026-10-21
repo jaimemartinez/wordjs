@@ -44,7 +44,7 @@
 
 exports.metadata = {
     name: 'Bookings',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Services with weekly availability, public slot picker, race-safe reservations, email confirmation, admin agenda.',
     author: 'WordJS',
 };
@@ -545,15 +545,27 @@ exports.init = async function (wordjs) {
         [serviceId, dateStr, time, exceptId]
     ));
 
-    /** Absolute page URL for the confirmation link: the visitor's page only when it is on this site. */
+    /**
+     * Absolute page URL for the confirmation link: the site's MAIN address + the PATH of the page the
+     * visitor booked on. Only the path is taken from the client (never its host), so the link cannot
+     * point anywhere else — and a visitor who came in through another accepted address (www/apex, an
+     * old domain) still lands on the booking page, not on the home page where nothing confirms it.
+     */
     const confirmBaseUrl = async (pageUrl) => {
         let site = '';
         try { site = String(await wordjs.site.url() || '').replace(/\/+$/, ''); } catch (e) { site = ''; }
-        const p = String(pageUrl || '').trim().slice(0, 1000);
-        if (site && /^https?:\/\//i.test(p) && (p === site || p.startsWith(site + '/') || p.startsWith(site + '?'))) {
-            return p.split('#')[0];
-        }
-        return site || '';
+        if (!site) return '';
+        let pathPart = '';
+        try {
+            const u = new URL(String(pageUrl || '').trim().slice(0, 1000));
+            if (u.protocol === 'http:' || u.protocol === 'https:') {
+                u.searchParams.delete('booking'); u.searchParams.delete('confirm'); // a stale link's own params
+                pathPart = u.pathname + u.search;
+            }
+        } catch (e) { pathPart = ''; }
+        // A plain same-site path: one leading '/', no '//' (protocol-relative), a conservative alphabet.
+        if (!pathPart || pathPart === '/' || !/^\/(?!\/)[-a-zA-Z0-9/._~%?=&+]*$/.test(pathPart) || pathPart.length > 500) return site;
+        return site + pathPart;
     };
 
     // CSV field escaping + formula-injection guard (Excel executes leading = + - @).
