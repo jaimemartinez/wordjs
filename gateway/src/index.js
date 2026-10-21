@@ -114,6 +114,34 @@ function writeGatewayConfig(configPath, data) {
     try { fs.chmodSync(configPath, 0o600); } catch { /* best effort */ }
 }
 
+const GATEWAY_CONFIG_PATH = path.resolve(__dirname, '../gateway-config.json');
+
+/**
+ * The primary's in-memory config made to match gateway-config.json again, and returned.
+ *
+ * The primary reads the file once, at boot, but it is not the file's only writer: on a fresh split install
+ * the wizard writes gatewaySecret, siteUrl and the mTLS paths into it AFTER the gateway has started. Every
+ * control-plane write used to serialize the boot-time object, so the first certificate upload or TLS switch
+ * after an install erased what the installer had written (the gateway lost its secret and its address).
+ * Reads that answer from the config and every write below go through here first.
+ */
+function syncConfigFromDisk() {
+    try {
+        const onDisk = JSON.parse(fs.readFileSync(GATEWAY_CONFIG_PATH, 'utf8'));
+        if (onDisk && typeof onDisk === 'object' && !Array.isArray(onDisk)) {
+            for (const k of Object.keys(config)) if (!(k in onDisk) && k !== 'sslAuto') delete config[k];
+            Object.assign(config, onDisk);
+        }
+    } catch { /* no file, or unreadable: keep what is in memory */ }
+    return config;
+}
+
+/** What a write puts in gateway-config.json: the config without the primary's runtime-only flag. */
+function configToWrite() {
+    const { sslAuto, ...toWrite } = config;
+    return toWrite;
+}
+
 /**
  * The http(s) ORIGIN `value` names (scheme, host, optional port — nothing else), or null. The site
  * address the backend pushes over /config-update is persisted into gateway-config.json and read back
@@ -521,10 +549,13 @@ if (cluster.isPrimary) {
      */
     const ensureRevalidateSecret = () => {
         if (config.revalidateSecret) return String(config.revalidateSecret);
+        // The installer may have written one since this primary started.
+        syncConfigFromDisk();
+        if (config.revalidateSecret) return String(config.revalidateSecret);
         const secret = require('crypto').randomBytes(32).toString('hex');
         config.revalidateSecret = secret;
         try {
-            writeGatewayConfig(path.resolve(__dirname, '../gateway-config.json'), config);
+            writeGatewayConfig(GATEWAY_CONFIG_PATH, configToWrite());
         } catch (e) {
             // Not fatal, but a secret we cannot persist would differ on the next boot and every purge
             // would 403 — say so loudly rather than failing mysteriously later.
@@ -534,6 +565,7 @@ if (cluster.isPrimary) {
     };
 
     // Helper to restart workers (used by both message handler and internal API)
+    const RELOAD_AFTER_ANSWER_MS = 1000;
     const restartGateway = () => {
         logger.info('[Gateway] 🔄 Reloading workers...');
         for (const id in cluster.workers) cluster.workers[id].kill();
@@ -737,6 +769,7 @@ if (cluster.isPrimary) {
 
                 // New Info Endpoint
                 internalApp.get('/info', requireIdentity(['backend']), (req, res) => {
+                    syncConfigFromDisk();
                     const info = {
                         gatewayPort: config.gatewayPort || 3000,
                         sslEnabled: tlsMode.sslSwitchedOn(config.ssl),
@@ -790,6 +823,7 @@ if (cluster.isPrimary) {
                 // gatewaySsl / internalApiUrl itself, so changing the address or the TLS switch from the
                 // panel no longer leaves every other machine pointing at the old one (zero config).
                 internalApp.get('/edge-info', requireIdentity(['frontend', 'backend']), (req, res) => {
+                    syncConfigFromDisk();
                     res.set('Cache-Control', 'no-store');
                     res.json({
                         siteUrl: isValidSiteOrigin(config.siteUrl) ? config.siteUrl : null,
@@ -898,6 +932,7 @@ if (cluster.isPrimary) {
                         // (tls-mode normalizeSsl): installing a certificate on a gateway that serves HTTP
                         // behind a proxy must not switch it to HTTPS and cut the proxy off. HTTPS is turned
                         // on explicitly (POST /config-update sslEnabled, Admin → Security).
+                        syncConfigFromDisk();
                         config.ssl = tlsMode.normalizeSsl(config.ssl);
                         config.ssl.key = './ssl/live/imported/privkey.pem';
                         config.ssl.cert = './ssl/live/imported/fullchain.pem';
@@ -910,11 +945,12 @@ if (cluster.isPrimary) {
                         }
 
                         // Save Config
-                        const configPath = path.resolve(__dirname, '../gateway-config.json');
-                        writeGatewayConfig(configPath, config);
+                        writeGatewayConfig(GATEWAY_CONFIG_PATH, configToWrite());
 
-                        // Restart Workers directly (we are in Primary process)
-                        restartGateway();
+                        // Restart Workers directly (we are in Primary process) — a moment after answering:
+                        // the answer travels back to the panel THROUGH a worker, and reloading them at once
+                        // cut it off (QA X1-02: "the call returns no body").
+                        setTimeout(restartGateway, RELOAD_AFTER_ANSWER_MS);
 
                         logger.info('[Gateway] [Internal] Certificate uploaded and config updated.');
                         res.json({ success: true });
@@ -956,7 +992,8 @@ if (cluster.isPrimary) {
                     if (siteUrl && !isValidSiteOrigin(newOrigin)) return res.status(400).json({ error: 'siteUrl must be an http(s) origin' });
 
                     try {
-                        // Update Config Object
+                        // Update Config Object — the file's current content, not the boot-time copy.
+                        syncConfigFromDisk();
                         const oldPort = parseInt(config.gatewayPort, 10) || FINAL_PORT;
                         if (newPort !== null) config.gatewayPort = newPort;
                         // `ssl: false` stays OFF ({ enabled: false }). It used to become `{}`, which every
@@ -980,11 +1017,12 @@ if (cluster.isPrimary) {
                         }
 
                         // Save Config
-                        const configPath = path.resolve(__dirname, '../gateway-config.json');
-                        writeGatewayConfig(configPath, config);
+                        writeGatewayConfig(GATEWAY_CONFIG_PATH, configToWrite());
 
-                        // Restart Workers directly (we are in Primary process)
-                        restartGateway();
+                        // Restart Workers directly (we are in Primary process) — a moment after answering:
+                        // the answer travels back to the panel THROUGH a worker, and reloading them at once
+                        // cut it off (QA X1-02: "the call returns no body").
+                        setTimeout(restartGateway, RELOAD_AFTER_ANSWER_MS);
 
                         logger.info('[Gateway] [Internal] Configuration updated via API.');
                         res.json({ success: true, siteUrl: config.siteUrl });

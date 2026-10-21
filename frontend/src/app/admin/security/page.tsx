@@ -154,6 +154,9 @@ function GatewayConfigForm() {
     // The switch as the gateway reported it when the screen loaded: a save that flips it asks first.
     const [savedSsl, setSavedSsl] = useState<boolean | null>(null);
     const [generating, setGenerating] = useState(false);
+    // The configuration as the gateway reported it: the warning above the form describes the gateway,
+    // never the switch the administrator is still editing.
+    const [reported, setReported] = useState<any>(null);
 
     // Reading the gateway's configuration is ALL this screen does on load. It used to POST
     // /system/certs/check whenever no certificate was reported, which generated a self-signed certificate
@@ -163,6 +166,7 @@ function GatewayConfigForm() {
         try {
             const data = await apiGet<any>('/system/certs/config?t=' + Date.now());
             setConfig(data);
+            setReported(data);
             setSavedSsl(data && typeof data.sslEnabled === 'boolean' ? data.sslEnabled : null);
         } catch (err: any) {
             setConfig({ error: err.message });
@@ -207,7 +211,11 @@ function GatewayConfigForm() {
                 port: config.gatewayPort,
                 sslEnabled: config.sslEnabled
             });
+            const transportChanged = savedSsl !== null && !!config.sslEnabled !== savedSsl;
             setSavedSsl(!!config.sslEnabled);
+            // What the gateway serves now, for the warning and the "serving now" line. Not after a protocol
+            // change: this page was loaded over the protocol the gateway no longer speaks.
+            if (!transportChanged) await load();
             // The answer also says what the change did to the site's main address: followed at once
             // (same host, http → https) or only suggested — then the admin decides on the
             // site-address screen, which opens the change dialog prefilled (SPEC §6, REDTEAM R1).
@@ -309,8 +317,8 @@ function GatewayConfigForm() {
     }
 
     // What visitors actually get (the workers' own report), next to the switch (QA X1-03).
-    const notice = gatewayServingNotice(config);
-    const needsCertificate = gatewayNeedsCertificate(config);
+    const notice = gatewayServingNotice(reported);
+    const needsCertificate = gatewayNeedsCertificate(reported);
 
     return (
         <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -328,11 +336,11 @@ function GatewayConfigForm() {
                     </div>
                 </div>
             )}
-            {typeof config.serving === 'string' && (
+            {typeof reported?.serving === 'string' && (
                 <div className="md:col-span-2 text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2" data-testid="gateway-serving">
                     <span className="text-xs uppercase tracking-wider text-gray-400 font-bold">{t('security.gateway.servingNow')}</span>
-                    <span className={`font-bold ${config.serving === 'https' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>
-                        {config.serving === 'https' ? t('security.gateway.httpsEnabled') : config.serving === 'http' ? t('security.gateway.httpNoTls') : t('security.gateway.servingReloading')}
+                    <span className={`font-bold ${reported.serving === 'https' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>
+                        {reported.serving === 'https' ? t('security.gateway.httpsEnabled') : reported.serving === 'http' ? t('security.gateway.httpNoTls') : t('security.gateway.servingReloading')}
                     </span>
                 </div>
             )}

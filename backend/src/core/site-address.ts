@@ -867,6 +867,12 @@ function isAutomaticUpgrade(current: SiteUrl, reported: SiteUrl): boolean {
     return current.scheme === 'http' && reported.scheme === 'https' && current.hostname === reported.hostname;
 }
 
+/** https → http on the same host AND the same explicit port: the gateway's own listener, nothing else moved. */
+function isTlsOffDowngrade(current: SiteUrl, reported: SiteUrl): boolean {
+    return current.scheme === 'https' && reported.scheme === 'http' && current.hostname === reported.hostname
+        && current.port !== null && current.port === reported.port;
+}
+
 // ─── State shared by the boot path, the watcher and the API ────────────────────────────────────────
 
 let conflict: { config: string; db: string } | null = null;
@@ -1912,7 +1918,7 @@ async function ensureStarted(): Promise<void> {
  * after an SSL or port toggle). It never writes anything by itself any more — except the R1 upgrade:
  * same host, http → https. Anything else is DRIFT: shown to the administrator, who decides.
  */
-function noteGatewaySiteUrl(reported: unknown): Promise<{ outcome: 'ignored' | 'in-sync' | 'upgraded' | 'drift'; canonical?: string; gateway?: string; warnings?: string[] }> {
+function noteGatewaySiteUrl(reported: unknown, opts: { adminTurnedTlsOff?: boolean } = {}): Promise<{ outcome: 'ignored' | 'in-sync' | 'upgraded' | 'downgraded' | 'drift'; canonical?: string; gateway?: string; warnings?: string[] }> {
     return serial(async () => {
         const g = hostPolicy.parseSiteUrl(reported);
         if (!g) return { outcome: 'ignored' as const };
@@ -1934,6 +1940,17 @@ function noteGatewaySiteUrl(reported: unknown): Promise<{ outcome: 'ignored' | '
                 { expectRev: siteAddressRev(cfg), via: 'gateway', actorId: null });
             mlog.info({ origin: g.origin, previousOrigin: c.origin }, `[site-address] the gateway now serves ${g.origin}; the main address moved from ${c.origin} (same host, http → https).`);
             return { outcome: 'upgraded' as const, canonical: g.origin, warnings: result.warnings };
+        }
+        // The administrator switched HTTPS OFF in Admin → Security and the gateway moved its own address
+        // with it (same host and port, https → http). Keeping the https:// main address then names a
+        // listener that no longer exists: every link breaks and nobody can sign in anywhere (a session
+        // cannot start over http on an https site, and https is gone). Only on that explicit request,
+        // never from a boot-time comparison, where a mismatch stays a suggestion.
+        if (opts.adminTurnedTlsOff === true && isTlsOffDowngrade(c, g) && !conflict) {
+            const result = await commitUnlocked((current) => planRepair(current, g.origin, 'gateway-http', Date.now()),
+                { expectRev: siteAddressRev(cfg), via: 'gateway', actorId: null });
+            mlog.info({ origin: g.origin, previousOrigin: c.origin }, `[site-address] HTTPS was switched off on the gateway; the main address moved from ${c.origin} to ${g.origin} (same host and port).`);
+            return { outcome: 'downgraded' as const, canonical: g.origin, warnings: result.warnings };
         }
         gatewayDrift = { gateway: g.origin, config: c.origin };
         warn(`the gateway reports ${g.origin} but the main address is ${c.origin}; nothing was changed. Choose one in Settings → Site address.`);

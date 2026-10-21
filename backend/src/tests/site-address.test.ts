@@ -986,6 +986,26 @@ describe('R1 — after a TLS/port change on the certificates page', () => {
         assert.deepStrictEqual(state.body.gatewayDrift, { gateway: 'http://example.com:3000', config: 'https://example.com' });
     });
 
+    test('HTTPS switched OFF here: the main address follows the gateway own listener (same host and port)', async () => {
+        const toggleOff = () => request(app).post(`${API}/system/certs/config`).set('Host', 'example.com')
+            .set('Authorization', `Bearer ${sessionOf('siteadmin')}`).send({ sslEnabled: false, port: 3443 });
+        await stage({ siteUrl: 'https://example.com:3443', frontendUrl: 'https://example.com:3443', gatewayUrl: 'https://example.com:3443' });
+        gatewayAnswer = 'http://example.com:3443';
+        const res = await toggleOff();
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.strictEqual(res.body.canonicalDowngraded, 'http://example.com:3443');
+        assert.strictEqual(fileConfig().siteUrl, 'http://example.com:3443');
+        const [row] = await auditRows();
+        assert.deepStrictEqual({ action: row.action, via: row.detail.via, to: row.detail.to }, { action: 'site.address.repair', via: 'gateway', to: 'http://example.com:3443' });
+        // Another port is never followed, even when switching TLS off.
+        await stage({ siteUrl: 'https://example.com' });
+        gatewayAnswer = 'http://example.com:3443';
+        const before = fileText();
+        const other = await toggleOff();
+        assert.strictEqual(other.body.suggestCanonical, 'http://example.com:3443');
+        assert.strictEqual(fileText(), before);
+    });
+
     test('another host is only suggested, even over https', async () => {
         await stage({ siteUrl: 'http://example.com' });
         gatewayAnswer = 'https://other.example';

@@ -177,4 +177,21 @@ describe('the real gateway: a site-address push keeps `ssl: false` off (111)', (
         await harness.eventually('HTTP after the reload', () => servesHttp(gw), 15000);
         assert.ok(!fs.existsSync(path.join(gw.dir, 'ssl-auto.key')), 'no auto pair generated while off');
     });
+
+    it('a control-plane write keeps what another writer put in the file after boot (the install wizard)', async () => {
+        const file = path.join(gw.dir, 'gateway-config.json');
+        const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+        onDisk.installedMarker = 'written-by-the-wizard';
+        onDisk.siteUrl = 'http://wizard.example.test:3303';
+        fs.writeFileSync(file, JSON.stringify(onDisk, null, 2));
+        const leaf = harness.makeLeaf(null, 'localhost');
+        const r = await internal(gw, ca, backendId, 'POST', '/cert-upload', { key: leaf.key, cert: leaf.cert });
+        assert.strictEqual(r.status, 200, r.body);
+        const after = readConfig(gw);
+        assert.strictEqual(after.installedMarker, 'written-by-the-wizard');
+        assert.strictEqual(after.siteUrl, 'http://wizard.example.test:3303');
+        assert.ok(after.gatewaySecret, 'the secret is kept');
+        assert.strictEqual(after.ssl.enabled, false);
+        assert.strictEqual(after.sslAuto, undefined, 'the runtime flag is never written');
+    });
 });
