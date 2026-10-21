@@ -48,7 +48,13 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     useEffect(() => {
         if (!isDrawer) return;
         const opener = document.activeElement as HTMLElement | null;
-        closeRef.current?.focus();
+        // The drawer slides in with visibility still transitioning from hidden, and nothing inside a
+        // hidden box can take focus — so keep asking until it lands (or give up after ~3s).
+        let tries = 0;
+        const focusIn = window.setInterval(() => {
+            closeRef.current?.focus();
+            if (document.activeElement === closeRef.current || ++tries > 60) window.clearInterval(focusIn);
+        }, 50);
         const onKey = (e: KeyboardEvent) => {
             if (e.key === "Escape") { onClose(); return; }
             if (e.key !== "Tab" || !asideRef.current) return;
@@ -62,6 +68,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
         };
         document.addEventListener("keydown", onKey);
         return () => {
+            window.clearInterval(focusIn);
             document.removeEventListener("keydown", onKey);
             if (opener && document.contains(opener)) opener.focus();
         };

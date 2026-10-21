@@ -217,7 +217,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                         />
                     </div>
                     <div className="space-y-2">
-                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.email')} <span className="text-gray-300 font-normal">{t('ssl.forLetsEncrypt')}</span></label>
+                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.email')} <span className="text-gray-500 font-normal">{t('ssl.forLetsEncrypt')}</span></label>
                         <input id="ssl-field-2"
                             type="email"
                             value={email}
