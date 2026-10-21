@@ -935,6 +935,12 @@ the boot error links there too.
 
 ### Fixed
 
+- **Verso on a phone or a tablet: nothing is desktop-only any more.** Below 768 px the block's motion (entrance
+  animation, interaction preset, steps and timeline) had no way in at all: the motion dock is a desktop/tablet panel
+  and those fields are not in the inspector. Its body now opens as a *Motion* section of the properties sheet. Below
+  1280 px a *More options* menu in the header holds what only the desktop header and rail showed: undo/redo,
+  publication status and date, preview, replaying the entrance animations, guides, templates, the media library,
+  review comments, revision history, the accessibility check and the command palette.
 - **Public header and footer on a touch screen.** Menu links, the site title and the logo are at least 44 px
   tall where the pointer is a finger (a mouse keeps the theme's own line height), the drawer's close button is
   44 px, and a header menu with submenus uses the drawer up to 1024 px on a touch screen: its dropdowns open on

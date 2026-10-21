@@ -275,7 +275,7 @@ function HistoryControls({ handle }: { handle: EditorHandle }) {
             title={title}
             disabled={!enabled}
             onClick={onClick}
-            className={`verso-icon-button w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
+            className={`verso-icon-button w-9 h-9 pointer-coarse:w-11 pointer-coarse:h-11 rounded-lg flex items-center justify-center transition-colors ${
                 enabled
                     ? "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                     : "text-[var(--ed-outline-variant)] cursor-not-allowed"
@@ -489,6 +489,18 @@ export default function VersoEditor({
     const [showRevisions, setShowRevisions] = useState(false);
     const [commentsOpen, setCommentsOpen] = useState(false);
     const [guidesOn, setGuidesOn] = useState(false);
+    // Below xl the header has no room for history, status, date, preview, replay and guides: they live
+    // in the «Más opciones» menu, so none of them is desktop-only.
+    const [moreOpen, setMoreOpen] = useState(false);
+    const moreRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (!moreOpen) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMoreOpen(false); };
+        const onDown = (e: PointerEvent) => { if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false); };
+        document.addEventListener("keydown", onKey);
+        document.addEventListener("pointerdown", onDown);
+        return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("pointerdown", onDown); };
+    }, [moreOpen]);
     const [a11yOpen, setA11yOpen] = useState(false);
     const [a11yIssues, setA11yIssues] = useState<A11yIssue[]>([]);
     const [a11yRunning, setA11yRunning] = useState(false);
@@ -1203,6 +1215,101 @@ export default function VersoEditor({
                                 {trStr("Vista Previa", language)}
                             </button>
                         )}
+
+                        {/* MÁS OPCIONES (móvil y tableta): lo que el header de escritorio pinta suelto. */}
+                        <div ref={moreRef} className="relative xl:hidden" data-verso-more="">
+                            <button
+                                type="button"
+                                onClick={() => setMoreOpen((o) => !o)}
+                                aria-haspopup="dialog"
+                                aria-expanded={moreOpen}
+                                aria-controls="verso-more-panel"
+                                aria-label={trStr("Más opciones", language)}
+                                title={trStr("Más opciones", language)}
+                                className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] aria-expanded:bg-[var(--ed-surface-container)]"
+                            >
+                                <MSym name="more_vert" size={20} />
+                            </button>
+                            {moreOpen && (
+                                <div
+                                    id="verso-more-panel"
+                                    role="dialog"
+                                    aria-label={trStr("Más opciones", language)}
+                                    className="verso-panel fixed right-2 top-[calc(var(--ed-header-height)+0.5rem)] z-[60] w-[min(20rem,calc(100vw-1rem))] max-h-[calc(100dvh-var(--ed-header-height)-var(--ed-mobile-nav-height)-1rem)] overflow-y-auto rounded-2xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] shadow-xl p-3 flex flex-col gap-3"
+                                >
+                                    <div className="flex items-center justify-between gap-2 lg:hidden">
+                                        <span className="text-[12px] font-semibold text-[var(--ed-on-surface)]">{trStr("Historial", language)}</span>
+                                        <HistoryControls handle={handle} />
+                                    </div>
+                                    {onStatusChange && (
+                                        <label className="flex flex-col gap-1 text-[12px] font-semibold text-[var(--ed-on-surface)]">
+                                            {trStr("Estado de publicación", language)}
+                                            <select
+                                                value={status}
+                                                onChange={(e) => onStatusChange(e.target.value)}
+                                                className="h-11 px-3 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[13px] font-normal text-[var(--ed-on-surface)]"
+                                            >
+                                                <option value="draft">{t("editor.status.draft")}</option>
+                                                <option value="publish">{t("editor.status.publish")}</option>
+                                                <option value="pending">{t("editor.status.pending")}</option>
+                                                {onScheduleDateChange && <option value="future">{t("editor.status.future")}</option>}
+                                            </select>
+                                        </label>
+                                    )}
+                                    {onStatusChange && shouldShowPostDateField({ canSchedule: !!onScheduleDateChange, status, scheduleDate }) && (
+                                        <label className="flex flex-col gap-1 text-[12px] font-semibold text-[var(--ed-on-surface)]">
+                                            {status === SCHEDULED_STATUS
+                                                ? trStr("Fecha y hora de publicación programada", language)
+                                                : trStr("Fecha de publicación de la entrada", language)}
+                                            <input
+                                                type="datetime-local"
+                                                value={scheduleDate}
+                                                min={status === SCHEDULED_STATUS ? toLocalInputValue(new Date()) : undefined}
+                                                onChange={(e) => onScheduleDateChange!(e.target.value)}
+                                                className="h-11 px-3 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[13px] font-normal text-[var(--ed-on-surface)]"
+                                                style={{ colorScheme: "light dark" }}
+                                            />
+                                        </label>
+                                    )}
+                                    <div className="flex flex-col gap-1">
+                                        {previewSlug && (
+                                            <button type="button" onClick={() => { setMoreOpen(false); handlePreview(); }} disabled={saving} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)] disabled:opacity-50">
+                                                <MSym name="visibility" size={18} /> {trStr("Vista Previa", language)}
+                                            </button>
+                                        )}
+                                        <button type="button" onClick={() => { if (frameDoc) replayAnimations(frameDoc); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
+                                            <MSym name="play_arrow" size={18} /> {trStr("Reproducir las animaciones de entrada", language)}
+                                        </button>
+                                        {/* Lo que en escritorio vive en el rail izquierdo y no tiene pestaña en la barra inferior. */}
+                                        <button type="button" onClick={() => { setMoreOpen(false); setRailView("patterns"); setMobileSheet("left"); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
+                                            <MSym name="dashboard_customize" size={18} /> {trStr("Plantillas", language)}
+                                        </button>
+                                        <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setCommentsOpen(false); setA11yOpen(false); setMediaOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
+                                            <MSym name="perm_media" size={18} /> {trStr("Biblioteca de medios", language)}
+                                        </button>
+                                        {pageId && (
+                                        <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setA11yOpen(false); setCommentsOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
+                                            <MSym name="forum" size={18} /> {trStr("Comentarios de revisión", language)}
+                                        </button>
+                                        )}
+                                        {pageId && (
+                                        <button type="button" onClick={() => { setMoreOpen(false); setCommentsOpen(false); setA11yOpen(false); setShowRevisions(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
+                                            <MSym name="history" size={18} /> {trStr("Historial de revisiones", language)}
+                                        </button>
+                                        )}
+                                        <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setCommentsOpen(false); setA11yOpen(true); runAudit(); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
+                                            <MSym name="accessibility_new" size={18} /> {trStr("Accesibilidad", language)}
+                                        </button>
+                                        <button type="button" onClick={() => { setMoreOpen(false); setCmdkOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
+                                            <MSym name="search" size={18} /> {trStr("Buscar acciones y bloques", language)}
+                                        </button>
+                                        <button type="button" onClick={() => setGuidesOn(!guidesOn)} aria-pressed={guidesOn} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)] aria-pressed:bg-[var(--ed-primary-container)] aria-pressed:text-[var(--ed-on-primary-container)]">
+                                            <MSym name="grid_view" size={18} /> {trStr("Guías y contornos", language)}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
 
                         {onSave && (
                             <button
