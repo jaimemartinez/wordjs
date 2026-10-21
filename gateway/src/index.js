@@ -43,6 +43,9 @@ const registration = require('./registration');
 // byte-identical to the backend's).
 const hostEdge = require('./host-edge');
 const siteCerts = require('./site-certs');
+// The one reading of gateway-config.json's `ssl` block (primary, workers and control plane alike).
+const tlsMode = require('./tls-mode');
+const upstreamDown = require('./upstream-down');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
 // gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
@@ -149,16 +152,14 @@ try {
         const internalPort = config.gatewayInternalPort || (configPort + 100);
         global.INTERNAL_PORT = internalPort;
 
-        if (config.ssl) {
-            if (config.ssl === true || (config.ssl.enabled !== false)) {
-                if (config.ssl.key && config.ssl.cert) {
-                    global.sslOptions = {
-                        key: config.ssl.key,
-                        cert: config.ssl.cert
-                    };
-                } else {
-                    config.sslAuto = true;
-                }
+        if (tlsMode.sslSwitchedOn(config.ssl)) {
+            if (config.ssl.key && config.ssl.cert) {
+                global.sslOptions = {
+                    key: config.ssl.key,
+                    cert: config.ssl.cert
+                };
+            } else {
+                config.sslAuto = true;
             }
         }
     }
@@ -179,7 +180,9 @@ const SSL_AUTO_KEY = path.resolve(__dirname, '../ssl-auto.key');
 const SSL_AUTO_CERT = path.resolve(__dirname, '../ssl-auto.crt');
 
 async function ensureSSLCerts(config) {
-    if (config && (config.ssl === true || (config.ssl && !config.ssl.key))) {
+    // Only when TLS is switched on: `{ enabled: false }` has no key either, and the pair generated then
+    // was served at the next restart by workers that ignored the switch.
+    if (config && tlsMode.needsAutoPair(config.ssl)) {
         if (fs.existsSync(SSL_AUTO_KEY) && fs.existsSync(SSL_AUTO_CERT)) return;
         try {
             const selfsigned = require('selfsigned');
@@ -314,10 +317,13 @@ if (cluster.isPrimary) {
     // What every worker's edge refused (src/host-edge.js createReportingRefusals), merged here, where the
     // control plane lives: the backend's POST /host-policy gets it back, for Settings → Site address.
     const edgeRefusals = hostEdge.createRefusalAggregate();
+    // The protocol each worker reports it serves (GET /info → Admin → Security), src/tls-mode.js.
+    const workerTransport = tlsMode.createTransportAggregate();
 
     cluster.on('exit', (worker) => {
         logger.error(`[Gateway] Worker ${worker.process.pid} died. Respawning...`);
         edgeRefusals.remove(worker.id);
+        workerTransport.remove(worker.id);
         cluster.fork();
     });
 
@@ -539,6 +545,8 @@ if (cluster.isPrimary) {
             restartGateway();
         } else if (message && message.type === hostEdge.REFUSALS_MESSAGE) {
             edgeRefusals.update(worker.id, message.refused);
+        } else if (message && message.type === tlsMode.TRANSPORT_MESSAGE) {
+            workerTransport.update(worker.id, message.https === true);
         }
     });
 
@@ -727,14 +735,18 @@ if (cluster.isPrimary) {
                 internalApp.get('/info', requireIdentity(['backend']), (req, res) => {
                     const info = {
                         gatewayPort: config.gatewayPort || 3000,
-                        sslEnabled: config.ssl === true || (config.ssl && config.ssl.enabled !== false),
+                        sslEnabled: tlsMode.sslSwitchedOn(config.ssl),
                         siteUrl: config.siteUrl,
-                        certInfo: null
+                        certInfo: null,
+                        // What the workers REPORT they serve (each says so once it listens), so the panel shows
+                        // the protocol visitors actually get, not only the switch: 'https', 'http', 'mixed'
+                        // while workers reload, or null before any worker has reported.
+                        serving: workerTransport.summary()
                     };
 
                     // Determine active cert path - ONLY from config, not from old auto-generated files
                     let certPath = null;
-                    if (config.ssl && config.ssl.cert) {
+                    if (config.ssl && typeof config.ssl === 'object' && config.ssl.cert) {
                         certPath = path.resolve(__dirname, '../' + config.ssl.cert);
                     }
 
@@ -766,6 +778,21 @@ if (cluster.isPrimary) {
                     }
 
                     res.json(info);
+                });
+
+                // What a node on another machine needs to keep its own copy of the edge wiring current: the
+                // site address the backend last pushed, the public port, and the protocol the workers serve.
+                // A frontend node polls it (frontend/src/lib/edgeSync.ts) and rewrites its siteUrl /
+                // gatewaySsl / internalApiUrl itself, so changing the address or the TLS switch from the
+                // panel no longer leaves every other machine pointing at the old one (zero config).
+                internalApp.get('/edge-info', requireIdentity(['frontend', 'backend']), (req, res) => {
+                    res.set('Cache-Control', 'no-store');
+                    res.json({
+                        siteUrl: isValidSiteOrigin(config.siteUrl) ? config.siteUrl : null,
+                        gatewayPort: parseInt(config.gatewayPort, 10) || FINAL_PORT,
+                        sslEnabled: tlsMode.sslSwitchedOn(config.ssl),
+                        serving: workerTransport.summary(),
+                    });
                 });
 
                 // ── The cluster from the admin panel (backend routes/cluster.ts → here, backend identity) ──────
@@ -848,16 +875,20 @@ if (cluster.isPrimary) {
                         try { fs.chmodSync(keyPath, 0o600); } catch (e) { /* chmod unsupported (e.g. Windows) */ }
                         fs.writeFileSync(certPath, cert);
 
-                        // Update Config
-                        if (!config.ssl) config.ssl = {};
+                        // Update Config. The certificate is STORED; the on/off switch stays as it was
+                        // (tls-mode normalizeSsl): installing a certificate on a gateway that serves HTTP
+                        // behind a proxy must not switch it to HTTPS and cut the proxy off. HTTPS is turned
+                        // on explicitly (POST /config-update sslEnabled, Admin → Security).
+                        config.ssl = tlsMode.normalizeSsl(config.ssl);
                         config.ssl.key = './ssl/live/imported/privkey.pem';
                         config.ssl.cert = './ssl/live/imported/fullchain.pem';
 
-                        // CRITICAL: Update global.sslOptions so workers use HTTPS after restart
-                        global.sslOptions = {
-                            key: config.ssl.key,
-                            cert: config.ssl.cert
-                        };
+                        if (config.ssl.enabled) {
+                            global.sslOptions = {
+                                key: config.ssl.key,
+                                cert: config.ssl.cert
+                            };
+                        }
 
                         // Save Config
                         const configPath = path.resolve(__dirname, '../gateway-config.json');
@@ -907,35 +938,26 @@ if (cluster.isPrimary) {
 
                     try {
                         // Update Config Object
+                        const oldPort = parseInt(config.gatewayPort, 10) || FINAL_PORT;
                         if (newPort !== null) config.gatewayPort = newPort;
-                        if (!config.ssl) config.ssl = {};
+                        // `ssl: false` stays OFF ({ enabled: false }). It used to become `{}`, which every
+                        // reader takes as "on, auto-generate": a mere change of the site address turned
+                        // HTTPS on at the next restart (tls-mode normalizeSsl).
+                        config.ssl = tlsMode.normalizeSsl(config.ssl);
                         if (typeof sslEnabled !== 'undefined') config.ssl.enabled = !!sslEnabled;
 
                         // Update siteUrl logic (Gateway side)
                         if (newOrigin && isValidSiteOrigin(newOrigin)) {
                             config.siteUrl = newOrigin;
-                        } else if (config.siteUrl) {
-                            // If backend didn't send new siteUrl, try to autocorrect protocol
-                            // Use updated values
-                            const isSsl = config.ssl.enabled;
-                            const currentPort = config.gatewayPort;
-                            const protocol = isSsl ? 'https' : 'http';
-
-                            try {
-                                const url = new URL(config.siteUrl);
-                                url.protocol = protocol + ':';
-                                const isStandardPort = (protocol === 'http' && currentPort === 80) ||
-                                    (protocol === 'https' && currentPort === 443);
-                                if (isStandardPort) {
-                                    url.port = '';
-                                } else {
-                                    url.port = String(currentPort);
-                                }
-                                config.siteUrl = url.toString().replace(/\/$/, '');
-                            } catch (e) {
-                                // Fallback regex replacement
-                                config.siteUrl = config.siteUrl.replace(/^https?:/, protocol + ':');
-                            }
+                        } else if (config.siteUrl && (newPort !== null || typeof sslEnabled !== 'undefined')) {
+                            // The backend sent no address: follow the port / TLS change only when the address
+                            // names this gateway's own listener (tls-mode followGatewaySiteUrl), never the
+                            // address of a proxy or tunnel in front of it.
+                            config.siteUrl = tlsMode.followGatewaySiteUrl(config.siteUrl, {
+                                oldPort,
+                                newPort: parseInt(config.gatewayPort, 10) || oldPort,
+                                https: config.ssl.enabled,
+                            });
                         }
 
                         // Save Config
@@ -1346,11 +1368,8 @@ if (cluster.isPrimary) {
                     }
                     // The upstream address and the error text stay in the log above; the client only learns
                     // that the upstream could not answer.
-                    if (code === 'ECONNREFUSED') {
-                        res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.' });
-                    } else {
-                        res.status(502).json({ error: 'Upstream Error', message: 'The upstream service could not complete the request.' });
-                    }
+                    // A browser navigation gets a page, an API client the JSON it parses (src/upstream-down.js).
+                    upstreamDown.sendUpstreamFailure(req, res, code === 'ECONNREFUSED' ? 'down' : 'error');
                 }
             });
         } else { res.status(404).json({ error: 'Not Found' }); }
@@ -1377,31 +1396,29 @@ if (cluster.isPrimary) {
 
     let server;
 
+    // Tell the primary which protocol this worker's public listener speaks (GET /info shows it).
+    const reportTransport = (isHttps) => {
+        try {
+            if (typeof process.send === 'function' && process.connected) process.send({ type: tlsMode.TRANSPORT_MESSAGE, https: !!isHttps });
+        } catch (e) { /* the primary is going away */ }
+    };
+
     // Workers read config directly from file (global.sslOptions is not shared between processes)
     let workerSslOptions = null;
     try {
         const configPath = path.resolve(__dirname, '../gateway-config.json');
         if (fs.existsSync(configPath)) {
             const workerConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            if (workerConfig.ssl && workerConfig.ssl.key && workerConfig.ssl.cert) {
-                workerSslOptions = {
-                    key: workerConfig.ssl.key,
-                    cert: workerConfig.ssl.cert
-                };
-            } else if (workerConfig.ssl === true || (workerConfig.ssl && workerConfig.ssl.enabled !== false)) {
-                // SSL is ON but no key/cert was supplied — the documented auto-generated case, and exactly
-                // what `npm run setup` writes ({ ssl: { enabled: true } }). The PRIMARY honoured this by
-                // generating ssl-auto.key/.crt (ensureSSLCerts, awaited before it forks any worker) but never
-                // recorded those paths in the config, so every worker re-read the file, found no key/cert,
-                // and served plain HTTP while the operator's config, the docs and the primary all said HTTPS.
-                // Mirror the primary: serve from the auto-generated pair when it exists.
-                const autoKey = path.resolve(__dirname, '../ssl-auto.key');
-                const autoCert = path.resolve(__dirname, '../ssl-auto.crt');
-                if (fs.existsSync(autoKey) && fs.existsSync(autoCert)) {
-                    workerSslOptions = { key: 'ssl-auto.key', cert: 'ssl-auto.crt' };
-                } else {
-                    logger.warn(`[Gateway] Worker ${process.pid}: ssl is enabled but no key/cert is configured and ssl-auto.* is absent — serving HTTP`);
-                }
+            // The switch first, then the pair (tls-mode servingKeyPair): the same reading as the primary.
+            // Workers used to test for key/cert BEFORE the switch, so `{ enabled: false, key, cert }` served
+            // HTTPS while the primary, the logs and the panel all said HTTP, and the panel could not turn
+            // TLS off once a certificate was stored. With the switch on and no pair configured, the
+            // auto-generated pair the primary writes before forking (ensureSSLCerts) is served.
+            const pair = tlsMode.servingKeyPair(workerConfig.ssl, path.resolve(__dirname, '..'));
+            if (pair) {
+                workerSslOptions = { key: pair.key, cert: pair.cert };
+            } else if (tlsMode.sslSwitchedOn(workerConfig.ssl)) {
+                logger.warn(`[Gateway] Worker ${process.pid}: ssl is enabled but no key/cert is configured and ssl-auto.* is absent — serving HTTP`);
             }
         }
     } catch (e) {
@@ -1420,13 +1437,14 @@ if (cluster.isPrimary) {
             };
             server = https.createServer(options, app).listen(FINAL_PORT, () => {
                 logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTPS)`);
+                reportTransport(true);
             });
         } catch (e) {
             logger.error(`[Gateway] Worker ${process.pid} SSL Error: ${e.message}`);
-            server = app.listen(FINAL_PORT, () => logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTP - SSL ERROR)`));
+            server = app.listen(FINAL_PORT, () => { logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTP - SSL ERROR)`); reportTransport(false); });
         }
     } else {
-        server = app.listen(FINAL_PORT, () => logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTP)`));
+        server = app.listen(FINAL_PORT, () => { logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTP)`); reportTransport(false); });
     }
 
     // Outlive any fronting proxy's idle timeout (nginx default 60s): with Node's 5s default the

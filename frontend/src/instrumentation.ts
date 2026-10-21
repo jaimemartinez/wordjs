@@ -125,6 +125,37 @@ export async function register() {
             }
         };
 
+        /**
+         * A node on another machine follows the gateway's site address and TLS switch (lib/edgeSync.ts):
+         * once when registration proves the channel, then every 30 s, so a change made from the panel
+         * reaches this node's wordjs-config.json without anyone editing it. A single-host node has no
+         * cluster identity of its own and the sync does nothing there. Started once per process.
+         */
+        let edgeSyncStarted = false;
+        const startEdgeSync = () => {
+            if (edgeSyncStarted) return;
+            edgeSyncStarted = true;
+            let failureReported = false;
+            const run = async () => {
+                try {
+                    const { syncEdgeConfig } = await import('@/lib/edgeSync');
+                    const outcome = await syncEdgeConfig();
+                    if (outcome.status === 'not-a-cluster-node') { clearInterval(timer); return; }
+                    if (outcome.status === 'failed' && !failureReported) {
+                        failureReported = true;
+                        console.warn(`[Frontend Instrumentation] could not read the gateway's edge settings (${outcome.reason}); retrying every 30 s`);
+                    } else if (outcome.status !== 'failed') {
+                        failureReported = false;
+                    }
+                } catch (e: any) {
+                    console.warn('[Frontend Instrumentation] edge sync failed:', e?.message);
+                }
+            };
+            const timer = setInterval(run, 30_000);
+            timer.unref?.();
+            void run();
+        };
+
         // Everything the next attempt needs, read from disk AT THAT ATTEMPT. A split install starts the
         // frontend before the wizard has written any config or certificate; reading them once, at boot,
         // left this loop dialling the gateway's public port without an identity for the life of the
@@ -240,6 +271,7 @@ export async function register() {
                         // it, so every purge is refused with 403 forever unless someone remembers to
                         // re-enroll the node. Repair it here instead. See lib/revalidateSecret.ts.
                         void recoverPurgeSecret();
+                        startEdgeSync();
                     } else {
                         retry();
                     }
