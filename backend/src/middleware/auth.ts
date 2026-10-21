@@ -1454,14 +1454,14 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
     // Scoped API token. The read/write scope is still honored (a read token can't drive a mutating
     // request even on an optional-auth route).
     if (token.startsWith(ApiToken.PREFIX)) {
-        let record: any = null;
-        let user: any = null;
-        try {
-            record = await ApiToken.findByRawToken(token);
-            user = record ? await User.findById(record.userId) : null;
-        } catch {
-            record = null;
-        }
+        const { record, user } = await (async () => {
+            try {
+                const found = await ApiToken.findByRawToken(token);
+                return { record: found, user: found ? await User.findById(found.userId) : null };
+            } catch {
+                return { record: null, user: null };
+            }
+        })();
         if (!record || !user) return unresolved();
         if (ApiToken.scopeAllows(record.scopes, req.method, apiResourceOf(req))) {
             req.user = user;
@@ -1510,7 +1510,7 @@ function generateToken(user: any, req?: Request, opts?: { mfa?: boolean; handoff
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
     // One id per signed-in session, inherited by every refresh of it (core/session-revocation).
     // Only a token minted FOR the user who holds that session inherits its id.
-    const inherited = req && (req as any).user && Number((req as any).user.id) === Number(user.id) ? SESSION_ID.get(req) : undefined;
+    const inherited = req && req.user && Number(req.user.id) === Number(user.id) ? SESSION_ID.get(req) : undefined;
     claims.ses = inherited || require('../core/session-revocation').newSessionId();
     if ((opts && opts.mfa === true) || (req && sessionMfaVerified(req))) claims.amr = [MFA_AMR];
     const address = sessionAddressClaims(req);
