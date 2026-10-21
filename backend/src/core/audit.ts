@@ -51,6 +51,11 @@ const AUDIT_ACTIONS = Object.freeze({
     // Security → Server (routes/server-settings.ts): {fields, trustProxy?, logLevel?} — the reverse-proxy
     // trust and the log level, written to wordjs-config.json and applied by a restart.
     SERVER_SETTINGS_UPDATE: 'system.server.update',
+    // Admin → Servers (routes/cluster.ts): a join token minted {role, host, expiresAt, mfa} (never the
+    // token), every outstanding token revoked, a node taken out of the cluster {url, routes, mfa}.
+    CLUSTER_TOKEN_CREATE: 'cluster.token.create',
+    CLUSTER_TOKENS_REVOKE: 'cluster.tokens.revoke',
+    CLUSTER_NODE_REMOVE: 'cluster.node.remove',
     // A new password stored through a profile write (routes/users.ts PUT /users/me and PUT /users/:id).
     // Kept under `auth.` rather than as a `user.update` field, so "who changed whose password" is one query.
     PASSWORD_CHANGE: 'auth.password.change',

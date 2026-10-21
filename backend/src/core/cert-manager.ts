@@ -1175,3 +1175,5 @@ class CertManager {
 }
 
 module.exports = new CertManager();
+// The backend's mTLS control channel to the gateway, for the cluster screen (routes/cluster.ts).
+module.exports.gatewayControlRequest = gatewayControlRequest;

@@ -162,6 +162,7 @@ describe('F0 live REST characterization', () => {
             fonts: '/api/v1/fonts',
             certificates: '/api/v1/system/certs',
             serverSettings: '/api/v1/system/server',
+            cluster: '/api/v1/system/cluster',
             health: '/api/v1/health',
             seo: '/api/v1/seo',
             hooks: '/api/v1/hooks',

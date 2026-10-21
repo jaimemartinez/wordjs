@@ -69,6 +69,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     fonts: '/fonts',
     certificates: '/system/certs',
     serverSettings: '/system/server',
+    cluster: '/system/cluster',
     health: '/health',
     seo: '/seo',
     hooks: '/hooks',
@@ -143,12 +144,14 @@ router.use('/setup', multisiteGuards.mainSiteWrites);
 router.use('/system/certs', multisiteGuards.mainSiteOnly);
 // The reverse-proxy trust and the log level are the process's, so the whole network's.
 router.use('/system/server', multisiteGuards.mainSiteOnly);
+// The cluster (the gateway's nodes and join tokens) is the whole network's.
+router.use('/system/cluster', multisiteGuards.mainSiteOnly);
 router.use('/health/details', multisiteGuards.mainSiteOnly);
 router.use('/health/site', multisiteGuards.mainSiteOnly);
 router.use('/hooks', multisiteGuards.mainSiteOnly);
 // On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
 // administrator of the main site (the plugin and theme guards above apply the same rule to code changes).
-for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/hooks']) {
+for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/cluster', '/hooks']) {
     router.use(subtree, multisiteGuards.networkAdminOnMainSite);
 }
 // The network itself: its sites and administrators (main site, network administrators only).
@@ -194,6 +197,8 @@ router.use('/fonts', require('./fonts'));
 router.use('/system/certs', certsRoutes);
 // Security → Server: reverse-proxy trust and log level from the panel (zero config).
 router.use('/system/server', require('./server-settings'));
+// Admin → Servers: join tokens, the nodes and their health, removal (zero config for multi-node).
+router.use('/system/cluster', require('./cluster'));
 router.use('/health', healthRoutes);
 router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);

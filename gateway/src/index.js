@@ -327,6 +327,10 @@ if (cluster.isPrimary) {
     // could re-evict the backend's restored loopback /api (routes:[]) and route /api/v1/auth to itself
     // (adversarial re-verify #3, "ownership amnesia"). Enforced in the mTLS /register handler.
     const targetOwner = new Map();
+    // Nodes an administrator took out of the cluster from the panel (src/cluster-admin.js): refused at
+    // /register until a new join token is minted for their host.
+    const clusterAdmin = require('./cluster-admin');
+    const removedNodes = clusterAdmin.removedStore(path.resolve(__dirname, '../cluster-removed.json'));
 
     const saveRegistry = () => {
         try {
@@ -637,6 +641,11 @@ if (cluster.isPrimary) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' target host '${logSafe(host || '(invalid url)')}' not covered by its certificate`);
                         return res.status(403).json({ error: 'Target URL host is invalid or not covered by your certificate identity.' });
                     }
+                    // Taken out of the cluster from the admin panel: not put back by its own heartbeat.
+                    if (removedNodes.has(targetUrl)) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: '${logSafe(targetUrl)}' was removed from the cluster by an administrator`);
+                        return res.status(403).json({ error: 'This node was removed from the cluster. Mint a new join token to admit it again.', code: 'node_removed' });
+                    }
                     // Ownership: a peer may only (re)register a target url that is unowned or already its own — it
                     // can NEVER touch (and thus evict) another identity's target (e.g. the backend's /api, which
                     // otherwise let a frontend evict it and capture /api/v1/auth via the `/` catch-all).
@@ -757,6 +766,66 @@ if (cluster.isPrimary) {
                     }
 
                     res.json(info);
+                });
+
+                // ── The cluster from the admin panel (backend routes/cluster.ts → here, backend identity) ──────
+                // What `scripts/cluster.js info | tokens | token | revoke-tokens` show and do, plus taking a
+                // node out. The backend has already checked who asks (password + two-factor code).
+                const TOKENS_FILE = path.resolve(__dirname, '../cluster-tokens.json');
+                const clusterInitialized = () => fs.existsSync(path.join(CERTS_DIR, 'cluster-ca.key'));
+                const caFingerprintNow = () => clusterCa.caFingerprint(fs.readFileSync(path.join(CERTS_DIR, 'cluster-ca.crt'), 'utf8'));
+                internalApp.get('/cluster', requireIdentity(['backend']), (req, res) => {
+                    if (!clusterInitialized()) return res.json({ initialized: false, nodes: clusterAdmin.describeNodes(registry, targetOwner), tokens: [], removed: removedNodes.list() });
+                    res.json({
+                        initialized: true,
+                        advertiseHost: config.gatewayAdvertiseHost || null,
+                        enrollPort: config.gatewayEnrollPort || ((config.gatewayInternalPort || 3100) + 1),
+                        caFingerprint: caFingerprintNow(),
+                        nodes: clusterAdmin.describeNodes(registry, targetOwner),
+                        tokens: clusterCa.tokenStore(TOKENS_FILE).list().filter((t) => !t.used && !t.expired),
+                        removed: removedNodes.list(),
+                    });
+                });
+                internalApp.post('/cluster/token', requireIdentity(['backend']), (req, res) => {
+                    if (!clusterInitialized()) return res.status(409).json({ error: 'This gateway has no cluster CA yet.', code: 'cluster_not_initialized' });
+                    const role = req.body && req.body.role;
+                    if (role !== 'backend' && role !== 'frontend') return res.status(400).json({ error: 'role is backend or frontend', code: 'cluster_invalid_role' });
+                    const ttl = clusterAdmin.ttlMinutes(req.body.ttlMinutes);
+                    if (ttl === null) return res.status(400).json({ error: `ttlMinutes is a whole number from 1 to ${clusterAdmin.MAX_TTL_MIN}`, code: 'cluster_invalid_ttl' });
+                    const host = clusterAdmin.pinnedHost(req.body.host);
+                    if (host === undefined) return res.status(400).json({ error: 'host is an IP address or a DNS name', code: 'cluster_invalid_host' });
+                    const token = clusterCa.tokenStore(TOKENS_FILE).mint(role, { ttlMs: ttl * 60000, host });
+                    const readmitted = host ? removedNodes.clearHost(host) : 0;
+                    const enrollPort = config.gatewayEnrollPort || ((config.gatewayInternalPort || 3100) + 1);
+                    const gatewayHost = config.gatewayAdvertiseHost || '127.0.0.1';
+                    // Only values the gateway chose are logged (the request's own fields are in the backend's audit log).
+                    const roleLabel = role === 'backend' ? 'backend' : 'frontend';
+                    logger.info(`[Gateway] [Cluster] join token minted from the admin panel: role=${roleLabel} ${host ? 'host-pinned' : 'unpinned'}`);
+                    res.json({
+                        token, role, host, readmitted,
+                        expiresAt: new Date(Date.now() + ttl * 60000).toISOString(),
+                        command: clusterAdmin.joinCommand({ role, gatewayHost, enrollPort, token, caFingerprint: caFingerprintNow(), host }),
+                    });
+                });
+                internalApp.post('/cluster/tokens/revoke', requireIdentity(['backend']), (req, res) => {
+                    clusterCa.tokenStore(TOKENS_FILE).revokeAll();
+                    logger.info('[Gateway] [Cluster] every outstanding join token revoked from the admin panel');
+                    res.json({ revoked: true });
+                });
+                internalApp.post('/cluster/nodes/remove', requireIdentity(['backend']), (req, res) => {
+                    const url = String((req.body && req.body.url) || '');
+                    // The node as the registry knows it: what is removed and logged is the registry's own value.
+                    const known = clusterAdmin.describeNodes(registry, targetOwner).find((n) => n.url === url);
+                    if (!known) return res.status(404).json({ error: 'No registered node has that address.', code: 'cluster_node_not_found' });
+                    const nodeUrl = known.url;
+                    // A request through this very node removing it is still fine: the registry changes for the
+                    // NEXT requests; the backend answering now finishes its answer.
+                    const routes = clusterAdmin.removeNode(registry, targetOwner, nodeUrl);
+                    removedNodes.add(nodeUrl);
+                    saveRegistry();
+                    broadcastRegistry();
+                    logger.info(`[Gateway] [Cluster] a ${known.role === 'frontend' ? 'frontend' : 'backend'} node was removed from the admin panel (${Number(routes)} route(s))`);
+                    res.json({ removed: nodeUrl, routes });
                 });
 
                 // New Cert Upload Endpoint
