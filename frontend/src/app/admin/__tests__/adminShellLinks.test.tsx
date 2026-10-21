@@ -147,24 +147,25 @@ describe("the sidebar's logo leads to a page the user may open", () => {
 describe("the sidebar (desktop and phone menu) draws no heading over an empty section", () => {
     const render = () => renderToStaticMarkup(<Sidebar isOpen={true} onClose={() => undefined} />);
 
-    it("a team member after roles:declare was revoked: «Sistema › Cuenta» only, no bare «Principal»", () => {
+    it("a team member after roles:declare was revoked: «Usuarios › Cuenta» only, no bare «Contenido»", () => {
         state.menu = { pluginMenus: [], isLoading: false, refreshMenus: async () => undefined };
         asUser("conference_manager_team", ["read", "access_admin_panel"]);
         const html = render();
-        expect(html).not.toContain("nav.sectionCore");
-        expect(html).not.toContain('data-sidebar-section="core"');
-        expect(html).toContain("nav.sectionSystem");
+        expect(html).not.toContain("nav.section.content");
+        expect(html).not.toContain('data-sidebar-section="content"');
+        expect(html).toContain("nav.section.people");
         expect(hrefs(html)).toContain("/admin/account");
     });
 
-    it("an administrator and an editor keep both headings", () => {
+    it("an administrator gets the task groups; an editor only the ones it has entries in", () => {
         state.menu = { pluginMenus: [CM_ITEM], isLoading: false, refreshMenus: async () => undefined };
-        for (const [role, caps] of [["administrator", ["*"]], ["editor", EDITOR]] as const) {
-            asUser(role, [...caps]);
-            const html = render();
-            expect(html, role).toContain("nav.sectionCore");
-            expect(html, role).toContain("nav.sectionSystem");
-        }
+        asUser("administrator", ["*"]);
+        const admin = render();
+        for (const g of ["content", "appearance", "people", "plugins", "settings", "advanced"]) expect(admin, g).toContain(`nav.section.${g}`);
+        asUser("editor", [...EDITOR]);
+        const editor = render();
+        expect(editor).toContain("nav.section.content");
+        expect(editor).toContain("nav.section.people");
     });
 });
 

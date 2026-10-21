@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { PageHeader, Button } from "@/components/ui";
 import { plural } from "@/lib/i18n";
 // A role a plugin declared is shown as that plugin's, read-only (backend core/plugin-roles.ts).
 import { PluginRoleBadges, PluginRolePanel, canDeleteRole, isPluginRole } from "./PluginRole";
@@ -124,19 +125,13 @@ export default function RolesPage() {
 
     return (
         <div className="max-w-6xl mx-auto p-8 h-full overflow-y-auto">
-            <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
-                <div>
-                    <h1 className="text-3xl font-black text-gray-900 tracking-tight">{t('roles.title')}</h1>
-                    <p className="text-gray-500 mt-1">{t('roles.subtitle')}</p>
-                </div>
-                <button
-                    onClick={handleNewRole}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-500/20 flex items-center gap-2"
-                >
-                    <i className="fa-solid fa-plus text-sm"></i>
-                    {t('roles.addNewRole')}
-                </button>
-            </div>
+            {/* The same header as every other admin screen (QA M1-12: this one had its own H1 and a blue button). */}
+            <PageHeader
+                title={t('roles.title')}
+                subtitle={t('roles.subtitle')}
+                icon="fa-shield-halved"
+                actions={<Button icon="fa-plus" onClick={handleNewRole}>{t('roles.addNewRole')}</Button>}
+            />
 
             {error && (
                 <div className="bg-red-50 border border-red-200 text-red-600 px-6 py-4 rounded-2xl mb-6 flex items-center gap-3">

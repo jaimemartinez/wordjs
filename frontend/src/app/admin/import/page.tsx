@@ -4,6 +4,7 @@ import { Fragment, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { PageHeader } from "@/components/ui";
 import { registerTranslations } from "@/lib/i18n";
 import { importApi, type WxrAnalysis, type ImportSummary, type ImportMediaMode } from "@/lib/api";
 
@@ -291,14 +292,11 @@ export default function ImportPage() {
 
     return (
         <div className="max-w-4xl mx-auto px-4 py-8 space-y-8 h-full overflow-y-auto">
-            {/* Header */}
-            <div className="flex items-start gap-4">
-                <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/30 shrink-0">
-                    <i className="fa-brands fa-wordpress text-white text-xl"></i>
-                </div>
-                <div>
-                    <h1 className="text-2xl font-bold text-gray-900">{t("wpImport.title")}</h1>
-                    <p className="text-gray-500 mt-1">
+            {/* Header — the shared one (QA M1-12); the intro keeps its inline markup below it. */}
+            <div>
+                <PageHeader title={t("wpImport.title")} icon="fa-file-import" />
+                <div className="-mt-4 md:-mt-8">
+                    <p className="text-gray-500">
                         {fill(t("wpImport.intro"), {
                             xml: <code className="text-sm bg-gray-100 px-1.5 py-0.5 rounded">.xml</code>,
                             tools: <span className="font-medium">{t("wpImport.intro.tools")}</span>,

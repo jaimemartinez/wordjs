@@ -51,7 +51,8 @@ files `verifyDefaultTheme()` treats as a complete theme. The three declarative o
 `@import url('fonts.css')` at the top of each `style.css`); `gaceta` names only system families
 (Georgia / system-ui) and so carries neither. Only `default` ships `functions.js`, `partials/` and
 the legacy Handlebars `templates/`.
-None ships a `screenshot.png` or a `.design/` directory. `fonts.css` and `fonts/` are not optional in
+Each ships a `screenshot.jpg` (its home page with the starter content, 4:3) for the theme picker; none
+ships a `.design/` directory. `fonts.css` and `fonts/` are not optional in
 practice — a theme that names a non-system family gets it only if it ships the files (see *Self-host
 the webfonts* below).
 

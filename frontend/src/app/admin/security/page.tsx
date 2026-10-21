@@ -1,6 +1,7 @@
 "use client";
 
 import { useI18n } from "@/contexts/I18nContext";
+import { PageHeader } from "@/components/ui";
 import Link from "next/link";
 import SSLCertManager from "./SSLCertManager";
 import AutoRenewalPanel from "./AutoRenewalPanel";
@@ -33,17 +34,8 @@ export default function SecurityPage() {
 
             <div className="relative z-10 w-full max-w-5xl mx-auto px-6 py-10 h-full overflow-y-auto custom-scrollbar">
 
-                <div className="mb-10 text-center md:text-left animate-in slide-in-bottom fade-in duration-700">
-                    <h1 className="text-4xl font-bold text-gray-800 mb-3 font-oswald tracking-wide flex items-center justify-center md:justify-start gap-4">
-                        <div className="p-3 bg-blue-100 rounded-2xl shadow-sm">
-                            <i className="fa-solid fa-shield-halved text-blue-600"></i>
-                        </div>
-                        {t('security.title')}
-                    </h1>
-                    <p className="text-gray-600 text-lg max-w-2xl">
-                        {t('security.intro')}
-                    </p>
-                </div>
+                {/* The shared header (QA M1-12: centred and oversized on a phone, its own font). */}
+                <PageHeader title={t('security.title')} subtitle={t('security.intro')} icon="fa-shield-halved" />
 
                 <div className="space-y-8 animate-in slide-in-bottom fade-in duration-700 delay-150">
                     {/* Multisite: certificates and the gateway are the network's — a network administrator on the

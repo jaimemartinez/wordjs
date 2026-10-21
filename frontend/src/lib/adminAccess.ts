@@ -289,24 +289,49 @@ export function sidebarSections(user: AdminAccessUser | null | undefined, plugin
 
 /** One titled group of the sidebar (desktop sidebar and phone menu alike). */
 export interface SidebarSection {
-    key: "core" | "management";
+    key: SidebarGroup;
     /** i18n key of the section's heading. */
     labelKey: string;
     items: AdminMenuItem[];
 }
 
 /**
+ * The sidebar's groups, by TASK. It used to be two: «Core» (6 entries) and «System» (29), where
+ * comments and tags sat next to the hook registry, database migration and API tokens — internal jargon
+ * over a list that had to be scrolled inside a small box to find Settings (QA M1-04).
+ */
+export type SidebarGroup = "content" | "appearance" | "people" | "plugins" | "settings" | "advanced";
+const SIDEBAR_GROUPS: readonly SidebarGroup[] = ["content", "appearance", "people", "plugins", "settings", "advanced"];
+
+/** Which group a CORE entry belongs to (by path; anything unlisted is "advanced"). */
+const CORE_GROUP: Record<string, SidebarGroup> = {
+    "/admin": "content", "/admin/posts": "content", "/admin/pages": "content", "/admin/media": "content",
+    "/admin/comments": "content", "/admin/forms": "content", "/admin/categories": "content", "/admin/tags": "content",
+    "/admin/menus": "appearance", "/admin/chrome": "appearance", "/admin/widgets": "appearance", "/admin/themes": "appearance",
+    "/admin/fonts": "appearance", "/admin/settings/interactions": "appearance",
+    "/admin/users": "people", "/admin/users/roles": "people", [ACCOUNT_PATH]: "people",
+    "/admin/plugins": "plugins",
+    "/admin/settings": "settings", "/admin/settings/ai": "settings", "/admin/security": "settings",
+    "/admin/settings/backups": "settings", "/admin/site-health": "settings", "/admin/update": "settings", "/admin/network": "settings",
+};
+
+/**
  * The sidebar's sections, in display order, WITHOUT the empty ones: a heading is only drawn above at
- * least one entry. A plugin team member whose plugin lost its grant (no plugin entry, no core entry in
- * the first section) used to see a bare «PRINCIPAL» heading above «SISTEMA › Cuenta».
+ * least one entry. A plugin team member whose plugin lost its grant used to see a bare heading above
+ * their account. The ENTRIES are exactly sidebarSections' (what the user may open); only the grouping
+ * is the sidebar's: a plugin's main-section entries join Content, its management entries join Plugins.
  */
 export function visibleSidebarSections(user: AdminAccessUser | null | undefined, pluginMenus: AdminMenuItem[]): SidebarSection[] {
     const { core, management } = sidebarSections(user, pluginMenus);
-    const all: SidebarSection[] = [
-        { key: "core", labelKey: "nav.sectionCore", items: core },
-        { key: "management", labelKey: "nav.sectionSystem", items: management },
-    ];
-    return all.filter((section) => section.items.length > 0);
+    const coreHrefs = new Set(CORE_MENU_ITEMS.map((i) => i.href));
+    const groupOf = (item: AdminMenuItem, pluginFallback: SidebarGroup): SidebarGroup =>
+        coreHrefs.has(item.href) ? (CORE_GROUP[pathOf(item.href)] ?? "advanced") : pluginFallback;
+    const byGroup = new Map<SidebarGroup, AdminMenuItem[]>(SIDEBAR_GROUPS.map((g) => [g, []]));
+    for (const item of core) byGroup.get(groupOf(item, "content"))!.push(item);
+    for (const item of management) byGroup.get(groupOf(item, "plugins"))!.push(item);
+    return SIDEBAR_GROUPS
+        .map((key) => ({ key, labelKey: `nav.section.${key}`, items: byGroup.get(key)! }))
+        .filter((section) => section.items.length > 0);
 }
 
 /**

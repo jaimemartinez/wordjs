@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { PageHeader, Button } from "@/components/ui";
 import { plural } from "@/lib/i18n";
 import LiveTimeline from "./LiveTimeline";
 
@@ -136,31 +137,27 @@ export default function HooksPage() {
 
     return (
         <div className="px-4 py-6 sm:p-8 max-w-7xl mx-auto h-full w-full overflow-y-auto">
-            <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 flex items-center gap-3">
-                        <i className="fa-solid fa-microscope text-indigo-600"></i>
-                        {t('hooks.admin.title')}
-                    </h1>
-                    <p className="text-slate-500 mt-2">{t('hooks.admin.subtitle')}</p>
-                </div>
+            {/* The shared header (QA M1-12); the two actions keep their controls. */}
+            <PageHeader title={t('hooks.admin.title')} subtitle={t('hooks.admin.subtitle')} icon="fa-microscope" actions={
                 <div className="flex gap-2">
-                    <button
+                    <Button
+                        variant={showDict ? "primary" : "secondary"}
+                        icon="fa-book"
+                        aria-pressed={showDict}
                         onClick={() => setShowDict(!showDict)}
-                        className={`h-10 px-4 rounded-full border flex items-center gap-2 transition-all font-bold text-xs uppercase tracking-wide ${showDict ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}
                     >
-                        <i className="fa-solid fa-book"></i>
                         {t('hooks.admin.dictionary')}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        icon="fa-rotate-right"
+                        loading={loading}
                         onClick={loadHooks}
-                        className="w-11 h-11 shrink-0 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 flex items-center justify-center transition-all"
+                        aria-label={t('hooks.admin.refreshRegistry')}
                         title={t('hooks.admin.refreshRegistry')}
-                    >
-                        <i className={`fa-solid fa-rotate-right ${loading ? 'fa-spin' : ''}`}></i>
-                    </button>
+                    />
                 </div>
-            </div>
+            } />
 
             {/* Dictionary Reference */}
             {showDict && (

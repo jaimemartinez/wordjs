@@ -198,6 +198,8 @@ export default function DbMigrationPage() {
             </div>
         </div>
     );
+    // The current engine is the legacy in-memory SQLite (or unknown): moving to native SQLite IS an upgrade.
+    const fromLegacySqlite = !['sqlite-native', 'postgres', 'mysql'].includes(String(status.currentDriver));
 
     return (
         <div className="px-4 py-6 sm:p-8 max-w-7xl mx-auto relative min-h-[85vh] h-full w-full overflow-y-auto overflow-x-hidden">
@@ -311,11 +313,16 @@ export default function DbMigrationPage() {
                                             </div>
                                             <div>
                                                 <h3 className="text-xl font-bold text-gray-900 group-hover:text-blue-700 transition-colors">{t('dbMigration.toNative.title')}</h3>
-                                                <p className="text-gray-500 font-medium mt-1">{t('dbMigration.toNative.desc')}</p>
+                                                {/* "Recommended · 10x faster · Upgrade now" is true only coming FROM the legacy
+                                                    in-memory SQLite. On PostgreSQL or MySQL it read as advice to downgrade a
+                                                    production database server to a file (QA M1-16). */}
+                                                <p className="text-gray-500 font-medium mt-1">{t(fromLegacySqlite ? 'dbMigration.toNative.desc' : 'dbMigration.toNative.descFromServer')}</p>
+                                                {fromLegacySqlite && (
                                                 <div className="flex gap-2 mt-3">
                                                     <span className="px-2 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded uppercase">{t('dbMigration.badge.recommended')}</span>
                                                     <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded uppercase">{t('dbMigration.badge.fast')}</span>
                                                 </div>
+                                                )}
                                             </div>
                                         </div>
                                         <button
@@ -323,7 +330,7 @@ export default function DbMigrationPage() {
                                             disabled={loading}
                                             className="px-8 py-4 bg-gray-900 text-white font-bold rounded-xl hover:bg-blue-600 hover:shadow-lg hover:shadow-blue-500/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                                         >
-                                            {t('dbMigration.upgradeNow')}
+                                            {t(fromLegacySqlite ? 'dbMigration.upgradeNow' : 'dbMigration.moveTo')}
                                         </button>
                                     </div>
                                 </div>

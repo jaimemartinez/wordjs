@@ -113,6 +113,13 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
     }, [language, pathname]);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
+    // The header & footer editor needs the width: with the full sidebar its 1280px preview was drawn
+    // at 41% on a 1440px screen, the menu ~5px tall (QA M1-17). There the sidebar starts collapsed; the
+    // toggle still expands it, without touching the preference saved for every other screen.
+    const onWideEditor = (pathname ?? "").startsWith("/admin/chrome");
+    const [editorExpanded, setEditorExpanded] = useState(false);
+    const collapsed = onWideEditor ? !editorExpanded : isCollapsed;
+    const toggleCollapsed = () => (onWideEditor ? setEditorExpanded((v) => !v) : setIsCollapsed(!isCollapsed));
 
     const [logoUrl, setLogoUrl] = useState<string | null>(null);
     const [siteTitle, setSiteTitle] = useState("WordJS");
@@ -292,21 +299,21 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
             <Sidebar
                 isOpen={sidebarOpen}
                 onClose={() => setSidebarOpen(false)}
-                isCollapsed={isCollapsed}
+                isCollapsed={collapsed}
             />
 
             {/* Collapse Toggle Button (Desktop) */}
             <button
                 data-wjs-host-ui=""
-                onClick={() => setIsCollapsed(!isCollapsed)}
+                onClick={toggleCollapsed}
                 className={`
                     hidden lg:flex absolute top-10 z-[5003] w-8 h-8 bg-white border border-gray-200 rounded-full items-center justify-center text-gray-500 hover:text-blue-500 hover:border-blue-200 shadow-lg transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]
-                    ${isCollapsed ? 'left-[calc(96px+env(safe-area-inset-left))]' : 'left-[calc(304px+env(safe-area-inset-left))]'}
+                    ${collapsed ? 'left-[calc(96px+env(safe-area-inset-left))]' : 'left-[calc(304px+env(safe-area-inset-left))]'}
                 `}
-                title={isCollapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
-                aria-label={isCollapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
+                title={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
+                aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
             >
-                <i className={`fa-solid fa-chevron-${isCollapsed ? 'right' : 'left'} text-xs`}></i>
+                <i className={`fa-solid fa-chevron-${collapsed ? 'right' : 'left'} text-xs`}></i>
             </button>
 
             <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
