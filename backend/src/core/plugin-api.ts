@@ -199,7 +199,10 @@ const PROTECTED_OPTION_NAMES = new Set([
     // /taxonomies routes, and initPostTypes() turns them into authorization at boot: a schema's
     // visibility.public decides who may read a type's entries and permissions.operations which capability
     // edits them. Rewritten by a settings:write plugin, `invoice` becomes public, or editable with `read`.
-    'custom_post_types', 'custom_content_schemas', 'custom_taxonomies'
+    'custom_post_types', 'custom_content_schemas', 'custom_taxonomies',
+    // 'plugin_owned_options' records which options each plugin created (core/plugin-owned-options); "delete
+    // its data" deletes them. A plugin rewriting it could have ANOTHER plugin's uninstall delete core options.
+    'plugin_owned_options'
 ]);
 
 // Protected for EVERY plugin now (no trusted bypass). Secret/security-critical options are never
@@ -690,6 +693,8 @@ function createPluginApi(slug: string) {
                 if (isProtectedOption(key, slug)) {
                     throw new Error(`🛡️ Option '${key}' is not writable by plugins.`);
                 }
+                // Record an option this plugin creates, so "delete its data" can remove it (S4-21).
+                await require('./plugin-owned-options').noteOptionWrite(slug, key);
                 const { updateOption } = require('./options');
                 return updateOption(key, value);
             }

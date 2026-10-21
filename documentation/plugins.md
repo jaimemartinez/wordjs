@@ -489,7 +489,7 @@ Each active plugin runs in its own OS process, and WordJS now **supervises** it:
 
 Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its folder **and** always purges its permission grants (so a later re-upload of the same slug can't silently inherit old, possibly-revoked grants) and its crash-guard strikes. To install a newer version, **update** instead (above): deleting is not needed and drops the grants.
 
-By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data / tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables. Only those prefixed tables are dropped — core and other plugins are never touched.
+By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data / tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables, delete the options it created, revoke the account capabilities it declared and remove its private storage. Only what belongs to the plugin goes — core settings and other plugins are never touched ([plugin-database.md](plugin-database.md#lifecycle-uninstalling-and-dropdata)).
 
 > Options written via `wordjs.options.set` live in a **global** key space with no per-plugin namespace, so they are **not** auto-purged on delete. If your plugin stores option keys, prefix them with your slug and document how to remove them, or clean them up yourself.
 

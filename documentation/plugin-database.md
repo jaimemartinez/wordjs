@@ -201,7 +201,14 @@ assets — so a re-uploaded slug does not inherit old permissions. The plugin's 
 **kept by default** (parity with WordPress) and are only **dropped** when the admin ticks the
 `dropData` box on deletion (`DELETE`, `routes/plugins.ts` → `dropTables: !!dropData`). The drop is
 limited to tables under the plugin's `wjp_<slug>_` prefix: it never touches core or other plugins'
-tables.
+tables. They are dropped in dependency order, so tables linked by foreign keys all go; a table that
+something outside the plugin still references is kept and named in the response (`cleanup.tablesKept`).
+
+`dropData` also removes the rest of what the plugin left in the site: the **options it created** through
+the options bridge (recorded per plugin in `plugin_owned_options` the first time it writes a name the site
+did not have — a core setting it merely changed is never recorded, and an option another plugin also
+created is kept), the **account capabilities** it declared (every account's grant is revoked), and its
+**private storage** directories under `data/plugins/`, `logs/plugins/` and `os-tmp/plugins/` on every site.
 
 The scoping is **unconditional**: there is no way for a plugin to lift it.
 `verifyPermission('database', …)` only decides whether the plugin **may** reach the database;
