@@ -68,6 +68,9 @@ function splitTopLevel(body: string): string[] {
     return parts;
 }
 
+/** The current UTC time as SQLite's CURRENT_TIMESTAMP writes it, for a TEXT column's DEFAULT. */
+const PG_TEXT_NOW = `(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))`;
+
 function translateColumnDef(def: string): string {
     // Table-level constraints (composite PK, UNIQUE(...), etc.) pass through unchanged.
     if (/^\s*(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CONSTRAINT|CHECK|KEY|INDEX)\b/i.test(def)) return def;
@@ -78,10 +81,19 @@ function translateColumnDef(def: string): string {
     // AUTOINCREMENT keyword Postgres would reject.
     d = d.replace(/\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/i, 'SERIAL PRIMARY KEY');
     d = d.replace(/\s*\bAUTOINCREMENT\b/gi, '');
-    // Type keywords Postgres doesn't have.
-    d = d.replace(/\bDATETIME\b/gi, 'TIMESTAMP');
-    d = d.replace(/\bBLOB\b/gi, 'BYTEA');
-    return d;
+    // A TEXT date column defaulting to CURRENT_TIMESTAMP (posts.post_date, users.user_registered, …):
+    // Postgres casts the timestamptz to text in its own format, `2026-10-21 11:19:18.683525+00`, so rows
+    // that took the default answered the API in another format than every other row and every other
+    // engine (`YYYY-MM-DD HH:MM:SS`, UTC — what SQLite's CURRENT_TIMESTAMP gives).
+    if (/^\s*\S+\s+(TEXT|VARCHAR(\s*\(\s*\d+\s*\))?)\b/i.test(d)) {
+        d = d.replace(/\bDEFAULT\s+CURRENT_TIMESTAMP\b/i, `DEFAULT ${PG_TEXT_NOW}`);
+    }
+    // Type keywords Postgres doesn't have — in the definition AFTER the column's name, so a column that
+    // is itself called `blob` or `datetime` keeps its name.
+    const named = /^(\s*(?:"[^"]*"|`[^`]*`|\S+))([\s\S]*)$/.exec(d);
+    const head = named ? named[1] : '';
+    const rest = (named ? named[2] : d).replace(/\bDATETIME\b/gi, 'TIMESTAMP').replace(/\bBLOB\b/gi, 'BYTEA');
+    return head + rest;
 }
 
 function translateCreateTable(sql: string): string {
@@ -135,6 +147,34 @@ function safeIdent(name: string): string {
         throw new Error(`unsafe SQL identifier for plugin role isolation: ${JSON.stringify(name)}`);
     }
     return m[0];
+}
+
+// SQLSTATEs / socket codes meaning "the server or the network closed this connection" — a database
+// restart or failover (57P01-57P03), pgbouncer or a firewall recycling idle connections (08xxx,
+// ECONNRESET), `pg_terminate_backend`, an `idle_session_timeout`.
+const CONNECTION_LOST_CODES = new Set(['57P01', '57P02', '57P03', '08000', '08003', '08006', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT']);
+function isConnectionLost(err: any): boolean {
+    if (!err) return false;
+    if (CONNECTION_LOST_CODES.has(String(err.code || ''))) return true;
+    return /Connection terminated|Client has encountered a connection error|not queryable/i.test(String(err.message || ''));
+}
+
+/**
+ * A pooled connection the server closes while it sits IDLE in the pool makes `pg` emit 'error' on the
+ * pool, and a CHECKED-OUT connection with no query in flight emits it on the client. Node turns an
+ * 'error' event nobody listens to into an uncaught exception — one database restart, failover or
+ * pgbouncer recycle used to kill the whole WordJS process. pg-pool already drops the broken client;
+ * here we only have to listen: the pool opens a fresh connection on the next query.
+ */
+function attachPoolErrorHandlers(pool: any) {
+    pool.on('error', (err: any) => {
+        log.warn({ code: err && err.code, message: err && err.message }, 'Postgres: the database closed an idle pooled connection; it was discarded and the pool reconnects on demand');
+    });
+    pool.on('connect', (client: any) => {
+        client.on('error', (err: any) => {
+            log.debug({ code: err && err.code }, 'Postgres: a pooled connection was closed by the database');
+        });
+    });
 }
 
 class PostgresDriver extends DatabaseDriverInterface {
@@ -194,6 +234,8 @@ class PostgresDriver extends DatabaseDriverInterface {
                 ...(num(dbConfig.statementTimeoutMs, 0) > 0 ? { statement_timeout: num(dbConfig.statementTimeoutMs, 0) } : {})
             });
 
+            attachPoolErrorHandlers(this.pool);
+
             // Verify connection
             const client = await this.pool.connect();
             const res = await client.query('SELECT NOW()');
@@ -219,6 +261,22 @@ class PostgresDriver extends DatabaseDriverInterface {
     }
 
     /**
+     * A read (get/all) that lost its connection — the database restarted, failed over, or a proxy closed
+     * the connection between pool checkout and the query — is retried ONCE on a fresh connection: a
+     * SELECT has no side effect to repeat. Writes are never retried here (the caller cannot know
+     * whether the server applied them).
+     */
+    async readQuery(sql: string, params: any[]) {
+        try {
+            return await this.pool.query(sql, params);
+        } catch (err) {
+            if (!isConnectionLost(err) || !/^\s*(SELECT|WITH)\b/i.test(sql)) throw err;
+            log.warn({ code: (err as any).code }, 'Postgres: connection lost during a read; retrying once on a fresh connection');
+            return await this.pool.query(sql, params);
+        }
+    }
+
+    /**
      * Normalize SQL queries from SQLite style (?) to Postgres style ($1, $2)
      */
     normalizeSql(sql: string) {
@@ -232,7 +290,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             // This allows plugins to always write SQLite-style SQL
             const normalizedSql = this.normalizeSql(sql);
-            const res = await this.pool.query(normalizedSql, params);
+            const res = await this.readQuery(normalizedSql, params);
             return res.rows[0];
         } catch (err) {
             log.error({ err, sql }, '❌ Postgres Query Error (get)');
@@ -267,7 +325,7 @@ class PostgresDriver extends DatabaseDriverInterface {
         try {
             // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             const normalizedSql = this.normalizeSql(sql);
-            const res = await this.pool.query(normalizedSql, params);
+            const res = await this.readQuery(normalizedSql, params);
             return res.rows;
         } catch (err) {
             log.error({ err, sql }, '❌ Postgres Query Error (all)');
@@ -335,6 +393,20 @@ class PostgresDriver extends DatabaseDriverInterface {
      * @returns {Promise<any>} the value returned by fn
      */
     async transaction(fn: any) {
+        // A deadlock victim (40P01) was rolled back whole by the server: run the unit of work again, as
+        // the MySQL driver does for ER_LOCK_DEADLOCK, instead of failing the request.
+        for (let attempt = 1; ; attempt++) {
+            try {
+                return await this.transactionOnce(fn);
+            } catch (err: any) {
+                if (!(err && err.code === '40P01') || attempt >= 4) throw err;
+                log.warn({ attempt }, 'Postgres: transaction chosen as a deadlock victim; running it again');
+                await new Promise((r) => setTimeout(r, 10 + Math.floor(Math.random() * 40 * attempt)));
+            }
+        }
+    }
+
+    async transactionOnce(fn: any) {
         const client = await this.pool.connect();
 
         const tx = {
@@ -362,6 +434,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             }
         };
 
+        let broken = false;
         try {
             await client.query('BEGIN');
             const result = await fn(tx);
@@ -371,11 +444,13 @@ class PostgresDriver extends DatabaseDriverInterface {
             try {
                 await client.query('ROLLBACK');
             } catch (rbErr: any) {
-                log.error({ err: rbErr }, '❌ Postgres ROLLBACK failed');
+                // A connection the database closed cannot roll back (the server already did): discard it.
+                broken = true;
+                if (!isConnectionLost(rbErr)) log.error({ err: rbErr }, '❌ Postgres ROLLBACK failed');
             }
             throw err;
         } finally {
-            client.release();
+            client.release(broken ? true : undefined);
         }
     }
 
@@ -467,7 +542,8 @@ class PostgresDriver extends DatabaseDriverInterface {
 
                 // Normalizations for Universal Compatibility
                 if (type === 'CHARACTER VARYING') type = 'TEXT';
-                if (type.includes('INT')) type = 'INTEGER';
+                if (type === 'BIGINT') type = 'BIGINT'; // epoch milliseconds (wordjs_locks, plugin timestamps) do not fit a 32-bit INTEGER
+                else if (type.includes('INT')) type = 'INTEGER';
                 if (type === 'BOOLEAN') type = 'INTEGER'; // WordJS usually uses 0/1 for bools in SQLite
                 if (type.includes('TIMESTAMP')) type = 'DATETIME'; // Strip time zone info
                 if (type.includes('JSON')) type = 'TEXT'; // SQLite stores JSON as TEXT
@@ -522,3 +598,6 @@ module.exports.PostgresDriver = PostgresDriver;
 // Exported for unit tests of the dialect translation.
 module.exports.translateSql = translateSql;
 module.exports.translateCreateTable = translateCreateTable;
+module.exports.isConnectionLost = isConnectionLost;
+module.exports.PG_TEXT_NOW = PG_TEXT_NOW;
+module.exports.attachPoolErrorHandlers = attachPoolErrorHandlers;

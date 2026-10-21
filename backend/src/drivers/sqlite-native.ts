@@ -28,6 +28,7 @@ function init(options: any = {}) {
         dbInstance.pragma('journal_mode = WAL'); // Write-Ahead Logging
         dbInstance.pragma('synchronous = NORMAL'); // Faster writes, safe for WAL
         dbInstance.pragma('foreign_keys = ON');
+        require('../core/db-file-mode').restrictDbFiles(dbPath);
 
         log.info('⚡ Native SQLite Driver initialized with WAL mode.');
         return dbInstance;

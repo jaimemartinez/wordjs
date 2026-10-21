@@ -218,6 +218,7 @@ function openStore(): any {
     const handle = new Database(file);
     handle.pragma('journal_mode = WAL');
     handle.pragma('synchronous = NORMAL');
+    require('./db-file-mode').restrictDbFiles(file);
     for (const ddl of TABLES) handle.exec(ddl);
     // Each network administrator row names the account's login as well as its id (added after the first
     // release of the table: older rows have none until reconcileNetworkAdmins fills it in). A database

@@ -886,7 +886,7 @@ The backup zip file contains an **allowlist of three content roots** plus the da
 *   **Content:** `uploads/` (images, videos).
 *   **Extensions:** `plugins/`, `themes/`.
 *   **Database (logical):** A logical dump (`wordjs-content.json`) is generated and added to ensure data integrity across versions.
-*   **Database (physical):** For SQLite drivers, a consistent physical snapshot of the live `.db` is also added (as `database/wordjs.db`); for Postgres and MySQL a `pg_dump` / `mysqldump` is added under `database/` (the backup fails if the tool is missing rather than ship an incomplete archive). Either covers the tables the logical export does not (analytics, notifications, plugin tables, `schema_migrations`).
+*   **Database (physical):** For SQLite drivers, a consistent physical snapshot of the live `.db` is also added (as `database/wordjs.db`); for Postgres and MySQL a `pg_dump` / `mysqldump` is added under `database/` when the host has the tool, and otherwise WordJS's own portable dump of every table (`database/portable.jsonl`, `core/portable-dump.ts`) — so backups work, from the panel and on schedule, without the client tools installed. A backup that cannot capture the database still fails rather than ship an incomplete archive, and `POST /backups` answers `500 backup_failed` with the reason. Either covers the tables the logical export does not (analytics, notifications, plugin tables, `schema_migrations`).
 
 **Not included:**
 *   **Code & config:** `src/`, `server.js`, `package.json`, `.env`, `wordjs-config.json` — intentionally excluded (see above). `languages/` is also not backed up.
@@ -898,7 +898,7 @@ The backup zip file contains an **allowlist of three content roots** plus the da
 *   `createBackup()`: Zips the three content roots (`uploads/`, `plugins/`, `themes/`), adds the logical dump and a physical `.db` snapshot, and generates a timestamped ZIP.
 *   `restoreBackup(filename)`:
     1.  **Files:** Extracts **only** entries under the `uploads/`, `plugins/`, and `themes/` allowlist (each path-contained against traversal, all proved before the first write); any `src/`, config, or other entry is skipped, never overwriting code or config.
-    2.  **Database:** Restores the physical snapshot when the archive carries one (the SQLite file, or the `pg_dump` / `mysqldump`). Otherwise it wipes the content tables and rebuilds them with `importSite()`, accounts included (`importUsers` + `updateExisting`).
+    2.  **Database:** Restores the physical snapshot when the archive carries one (the SQLite file, the `pg_dump` / `mysqldump`, or the portable dump — every table's rows put back in one transaction, all or nothing, on the engine it was made on). Otherwise it wipes the content tables and rebuilds them with `importSite()`, accounts included (`importUsers` + `updateExisting`).
     Either way the site's accounts and roles become the snapshot's (the physical path also brings back their passwords, two-factor enrolments and API tokens, the plugin grants and the registration settings; the logical one wipes the options and imports the snapshot's settings), which is why `POST /backups/:filename/restore` is for an interactive administrator only: an API token gets `403 rest_token_management_forbidden` and a session started at an address other than the main one `403 rest_account_bound_session`.
 *   `listBackups()`: Returns available backup files from `backend/backups/` (newest first).
 *   `deleteBackup(filename)`: safely removes a backup file.

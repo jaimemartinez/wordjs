@@ -122,6 +122,16 @@ function scalarString(value: unknown, field: string, fallback: string): string {
  * NOTHING ELSE FROM THE ROW. `users` also holds the e-mail and the password hash; an author byline is
  * not an account listing, and `/users` is authenticated precisely so a public post cannot become one.
  */
+/**
+ * Did the database refuse an INSERT/UPDATE because the slug is taken? (the unique index on
+ * posts(post_name, post_type): SQLite/Postgres `idx_posts_name_type`, MySQL `uq_posts_slug`).
+ */
+function isSlugUniqueViolation(e: any): boolean {
+    if (!require('../core/db-errors').isUniqueViolation(e)) return false;
+    const where = String((e && (e.message || e.sqlMessage)) || '') + ' ' + String((e && e.constraint) || '');
+    return /idx_posts_name_type|uq_posts_slug|posts\.post_name/i.test(where);
+}
+
 /** Which entries a new slug must not collide with — see Post.generateUniqueSlug. */
 type SlugScope = 'public' | 'type';
 
@@ -642,6 +652,7 @@ class Post {
         // asked to keep a source site's permalinks unique per type (`slugScope: 'type'`). Only the two
         // importers' own literal call sites set it; no route forwards a request body to this function.
         const slugScope: SlugScope = data.slugScope === 'type' ? 'type' : 'public';
+        const base = boundSlug(postName);
         postName = await Post.generateUniqueSlug(postName, postType, null, slugScope);
 
         // Sanitize content
@@ -671,8 +682,11 @@ class Post {
         // Generate GUID
         const guid = `${network.currentSiteUrl()}/?p=${Date.now()}`;
 
-        // Postgres requires RETURNING id to get the inserted ID
-        const result = await dbAsync.run(`
+        // Postgres requires RETURNING id to get the inserted ID. generateUniqueSlug is a check-then-insert:
+        // two requests creating the same title at once both see the slug free, and the database's unique
+        // index (posts.post_name + post_type) refuses the second INSERT. That is the index doing its job —
+        // the answer is the next free slug, not a 500 (or, where the index was missing, a duplicate URL).
+        const insertPost = async () => dbAsync.run(`
       INSERT INTO posts (
         author_id, post_date, post_date_gmt, post_content, post_title, post_excerpt,
         post_status, comment_status, ping_status, post_password, post_name,
@@ -702,6 +716,28 @@ class Post {
             postLanguage,
             postTranslationGroup
         ]);
+        // Inside a Postgres transaction (every create from the API runs in one) a failed statement aborts
+        // the whole transaction, so each attempt runs under a savepoint the retry can roll back to. MySQL
+        // and SQLite roll back only the failed statement.
+        const database = require('../config/database');
+        const savepoint = database.getDbType().driver === 'postgres' && database.hasActiveTransaction();
+        let result: any;
+        for (let attempt = 1; ; attempt++) {
+            try {
+                if (savepoint) await dbAsync.exec('SAVEPOINT wjs_post_slug');
+                result = await insertPost();
+                if (savepoint) await dbAsync.exec('RELEASE SAVEPOINT wjs_post_slug');
+                break;
+            } catch (e: any) {
+                if (savepoint) { try { await dbAsync.exec('ROLLBACK TO SAVEPOINT wjs_post_slug'); } catch { /* the error below says why */ } }
+                if (!postName || attempt >= 25 || !isSlugUniqueViolation(e)) throw e;
+                // The next number after the one that was taken. Not a fresh lookup alone: under MySQL's
+                // REPEATABLE READ this transaction keeps reading its first snapshot, in which the slug the
+                // other request just committed is still free. The lookup still skips one taken elsewhere.
+                const own = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(\\d+)$`).exec(postName);
+                postName = await Post.generateUniqueSlug(`${base}-${own ? Number(own[1]) + 1 : 2}`, postType, null, slugScope);
+            }
+        }
 
         const postId = result.lastID;
 
@@ -1232,8 +1268,9 @@ class Post {
             } else {
                 // Best-effort fallback: no usable FTS engine (sqlite-legacy, FTS5 compiled out, a term
                 // too short for MySQL's min token size, or nothing indexable survived sanitisation).
-                conditions.push(`(${col}post_title LIKE ? OR ${col}post_content LIKE ?)`);
-                const searchTerm = `%${search}%`;
+                const { containsSql, containsPattern } = require('../core/sql-like');
+                conditions.push(`(${containsSql(`${col}post_title`)} OR ${containsSql(`${col}post_content`)})`);
+                const searchTerm = containsPattern(search);
                 params.push(searchTerm, searchTerm);
             }
         }
@@ -1269,6 +1306,13 @@ class Post {
      * below only ever answers for SQLite and is the default for direct buildWhere callers.
      */
     static _searchEngineCache: string | null | undefined = undefined;
+    /** The Postgres text search configuration posts.search_vector is built with. */
+    static _pgSearchConfig = 'english';
+
+    static _pgConfigFromExpression(expr: any): string {
+        const m = /to_tsvector\('([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?)'/i.exec(String(expr || ''));
+        return m ? m[1] : 'english';
+    }
 
     static _syncSearchEngine(): string | null {
         // Synchronous best-effort: only SQLite exposes a sync handle here. Anything else stays null
@@ -1286,9 +1330,12 @@ class Post {
             }
             if (driver === 'postgres') {
                 const row = await dbAsync.get(
-                    `SELECT 1 AS ok FROM information_schema.columns ` +
+                    `SELECT generation_expression AS g FROM information_schema.columns ` +
                     `WHERE table_schema = current_schema() AND table_name = 'posts' AND column_name = 'search_vector' LIMIT 1`
                 );
+                // The query must parse the search box with the SAME text search configuration the column
+                // was built with (migration 0021: wordjs_search or simple; before it, 0010: english).
+                Post._pgSearchConfig = Post._pgConfigFromExpression(row && row.g);
                 return (Post._searchEngineCache = row ? 'pg' : null);
             }
             if (driver === 'mysql' || driver === 'mariadb') {
@@ -1348,10 +1395,14 @@ class Post {
             const q = String(search).trim();
             if (!q) return null;
             const cols = `${col}search_vector`;
+            // plainto_tsquery parses the box as plain text (never a syntax error); its LAST lexeme then
+            // becomes a prefix match (`'word':*`), so type-ahead finds "wordjs" from "word", as the FTS5
+            // query does on SQLite. The configuration is a validated identifier, never request input.
+            const tsq = `(regexp_replace(plainto_tsquery('${Post._pgSearchConfig}', ?)::text, '''$', ''':*'))::tsquery`;
             return {
-                filterSql: `${cols} @@ plainto_tsquery('english', ?)`,
+                filterSql: `${cols} @@ ${tsq}`,
                 filterParams: [q],
-                orderSql: `ts_rank(${cols}, plainto_tsquery('english', ?)) DESC`,
+                orderSql: `ts_rank(${cols}, ${tsq}) DESC`,
                 orderParams: [q]
             };
         }

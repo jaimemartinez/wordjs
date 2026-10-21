@@ -144,6 +144,27 @@ async function checkDatabase(): Promise<HealthCheck[]> {
     if (driver === 'sqlite-legacy') {
         out.push(check('database.driver', 'database', 'warn', 'legacy', 'Database engine', 'This site runs on the older, slower SQLite engine (sqlite-legacy), which keeps the whole database in memory and cannot hold a network of sites. Move it to the current engine: it takes a minute and restarts WordJS by itself.', undefined, FIX.migrateEngine));
     }
+    if (r.status !== 'OK') return out;
+    const db = require('../config/database').getDbAsync();
+    if (driver === 'postgres') {
+        const enc = await db.get('SHOW server_encoding').catch(() => null);
+        const encoding = String((enc && enc.server_encoding) || '').toUpperCase();
+        if (encoding && encoding !== 'UTF8') {
+            out.push({ id: 'database.encoding', group: 'database', status: 'warn', title: 'Database encoding', message: `The PostgreSQL database uses ${encoding}, not UTF8: accented and non-Latin words cannot be found by search and case rules work byte by byte. Create a database with ENCODING 'UTF8' TEMPLATE template0 and move the site to it with Database migration.`, fix: { href: '/admin/db-migration', label: 'Database migration' } });
+        }
+    }
+    if (driver === 'sqlite-native') {
+        const fts = await db.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'posts_fts'").catch(() => null);
+        if (!fts) out.push({ id: 'database.search', group: 'database', status: 'warn', title: 'Search index', message: 'The full-text search index is missing, so search is slower and does not ignore accents. Restart WordJS to build it.' });
+    }
+    if (driver === 'postgres' || driver === 'mysql') {
+        const tool = driver === 'postgres' ? 'pg_dump' : 'mysqldump';
+        const available = await require('./db-dump').isToolAvailable(tool);
+        out.push(available
+            ? { id: 'database.backup', group: 'database', status: 'ok', title: 'Database backups', message: `Backups include a ${tool} dump of the database.` }
+            : { id: 'database.backup', group: 'database', status: 'info', title: 'Database backups', message: `Backups include WordJS's own dump of every table, because ${tool} is not installed on this host. It restores the whole database; ${tool} would also keep views and custom indexes.`
+            });
+    }
     return out;
 }
 

@@ -42,6 +42,12 @@ const {
 } = require('./mysql-text-rule');
 const log = require('../core/module-logger').moduleLogger('drivers/mysql');
 
+const DEADLOCK_RETRIES = 4;
+/** ER_LOCK_DEADLOCK (1213): InnoDB rolled the whole transaction back; it is safe to run it again. */
+function isDeadlock(err: any): boolean {
+    return !!err && (err.code === 'ER_LOCK_DEADLOCK' || err.errno === 1213);
+}
+
 /**
  * The session SQL mode EVERY connection runs with — the main pool AND every per-plugin scoped pool.
  *
@@ -992,7 +998,26 @@ class MysqlDriver extends DatabaseDriverInterface {
      * tx.get/all/run/exec use the SAME translation as the top-level methods so callers write identical
      * SQLite-style SQL inside and outside a transaction.
      */
+    /**
+     * transaction() with InnoDB's deadlock answer applied: when two transactions lock the same rows in
+     * opposite orders (concurrent meta writes on one post, autosave + a plugin), InnoDB rolls ONE of them
+     * back whole with ER_LOCK_DEADLOCK and expects the client to run it again. Nothing of the victim was
+     * applied, so the unit of work is retried (up to DEADLOCK_RETRIES times, after a short random pause)
+     * instead of failing the request and losing the change.
+     */
     async transaction(fn: any) {
+        for (let attempt = 1; ; attempt++) {
+            try {
+                return await this.transactionOnce(fn);
+            } catch (err: any) {
+                if (!isDeadlock(err) || attempt >= DEADLOCK_RETRIES) throw err;
+                log.warn({ attempt }, 'MySQL: transaction chosen as a deadlock victim; running it again');
+                await new Promise((r) => setTimeout(r, 10 + Math.floor(Math.random() * 40 * attempt)));
+            }
+        }
+    }
+
+    async transactionOnce(fn: any) {
         const conn = await this.pool.getConnection();
         const tx = {
             get: async (sql: string, params: any[] = []) => {
@@ -1067,6 +1092,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             const columns = rows.map((col: any) => {
                 let type = String(col.column_name ? col.data_type : col.DATA_TYPE || '').toUpperCase();
                 if (type.includes('CHAR') || type.includes('TEXT')) type = 'TEXT';
+                else if (type === 'BIGINT') type = 'BIGINT'; // epoch milliseconds do not fit a 32-bit INTEGER
                 else if (type.includes('INT')) type = 'INTEGER';
                 else if (type.includes('DATETIME') || type.includes('TIMESTAMP')) type = 'DATETIME';
                 else if (type.includes('JSON')) type = 'TEXT';
@@ -1198,6 +1224,7 @@ class MysqlDriver extends DatabaseDriverInterface {
 module.exports = new MysqlDriver();
 // The class, for config/database to open one pool per site database (multisite).
 module.exports.MysqlDriver = MysqlDriver;
+module.exports.isDeadlock = isDeadlock;
 // Exported for unit tests of the dialect translation.
 module.exports.translateSql = translateSql;
 module.exports.translateCreateTable = translateCreateTable;

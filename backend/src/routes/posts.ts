@@ -13,6 +13,24 @@ import type {
 
 const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/posts');
+/**
+ * A post date the API cannot take as it is: unparseable ("not-a-date" became "now"), or a calendar day
+ * that does not exist ("2025-02-30" was rolled over to March 2nd). Absent or empty means "now/unchanged".
+ */
+function isInvalidPostDate(value: any): boolean {
+    if (value === undefined || value === null || value === '') return false;
+    if (typeof value !== 'string' && typeof value !== 'number') return true;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return true;
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+    if (m) {
+        const [y, mo, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+        const probe = new Date(Date.UTC(y, mo - 1, day));
+        if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== day) return true;
+    }
+    return false;
+}
+
 const router = express.Router();
 
 interface ContentRouteUser {
@@ -1348,6 +1366,7 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
     // date is the ONLY thing that schedules: the model resolves a future date into 'future' by itself.
     // A caller who may not publish may not choose WHEN the post goes live either, so the date is
     // dropped rather than forwarded (absent → the model stamps "now", the same as any plain draft).
+    if (isInvalidPostDate(date)) return invalidParamValue(res, 'date', 'Not a valid date (use ISO 8601, e.g. 2026-10-21T10:00:00Z).');
     const requestedDate = mayPublish ? date : undefined;
 
     // Validate/sanitize the complete bag BEFORE Post.create. A rejected `_puck_data` tree must not
@@ -1569,6 +1588,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     // Hence the test is the CAPABILITY, not the shape of the request: no publish cap → no date. Absent
     // is not empty here (Post.update only touches the date columns when the key arrives non-empty), so
     // dropping it leaves the stored date exactly as it was.
+    if (isInvalidPostDate(date)) return invalidParamValue(res, 'date', 'Not a valid date (use ISO 8601, e.g. 2026-10-21T10:00:00Z).');
     const requestedDate = mayPublish ? date : undefined;
 
     // The metadata belongs to this same logical write. Sanitize it before the recovery snapshot and
@@ -2398,3 +2418,4 @@ router.delete('/:id/translations', authenticate, asyncHandler(async (req: Authen
 }));
 
 module.exports = router;
+module.exports.isInvalidPostDate = isInvalidPostDate;

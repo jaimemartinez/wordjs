@@ -192,9 +192,12 @@ function assertCodec(version: unknown): number {
     return version as number;
 }
 
-function assertScalar(value: unknown, path: string): JsonScalar {
+// A value written INTO the manifest is bounded (the manifest has its own storage budget). A column the
+// revision row carries itself (title, content, excerpt) never enters the manifest, so its length is not
+// the manifest's business: bounding it here made every post over 64 K characters impossible to save.
+function assertScalar(value: unknown, path: string, maxLength = 65_536): JsonScalar {
     if (value === null || typeof value === 'boolean' || typeof value === 'string') {
-        if (typeof value === 'string' && value.length > 65_536) fail('revision_manifest_invalid', `${path} is too long`);
+        if (typeof value === 'string' && value.length > maxLength) fail('revision_manifest_invalid', `${path} is too long`);
         return value;
     }
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -346,7 +349,11 @@ function buildRevisionSnapshot(
             for (const row of values) copiedMeta.push({ key: definition.storage.key, value: row.value });
             return { ...definition, present: values.length > 0, valueCount: values.length };
         }
-        const value = assertScalar(post?.[definition.storage.column] ?? null, `fields.${definition.name}.value`);
+        const value = assertScalar(
+            post?.[definition.storage.column] ?? null,
+            `fields.${definition.name}.value`,
+            definition.source === 'manifest' ? undefined : Number.POSITIVE_INFINITY,
+        );
         if (definition.source === 'manifest') {
             return { ...definition, present: true, valueCount: 1, value };
         }

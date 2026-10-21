@@ -361,6 +361,22 @@ router.get('/status', (_req: Request, res: Response) => {
  *       429:
  *         description: Rate limited by the setup limiter.
  */
+/**
+ * A Postgres database created with ENCODING 'SQL_ASCII' (what `initdb` gives under the C locale, and so
+ * many server defaults) stores bytes, not text: search drops every non-ASCII word, lower()/upper() and
+ * length() work byte by byte (so the case-insensitive email rule misses 'Á'), and the engine-switch
+ * migration already refuses such a database. The installer used to accept it without a word; now it
+ * says why and how to create a usable one.
+ */
+async function pgEncodingProblem(client: any): Promise<string | null> {
+    const r = await client.query('SHOW server_encoding');
+    const enc = String((r && r.rows && r.rows[0] && r.rows[0].server_encoding) || '').toUpperCase();
+    if (!enc || enc === 'UTF8' || enc === 'UTF-8') return null;
+    return `This PostgreSQL database uses the ${enc} encoding. WordJS needs UTF8: with ${enc}, accented and non-Latin text `
+        + `is not searchable and case rules break. Create the database with: CREATE DATABASE <name> ENCODING 'UTF8' `
+        + `TEMPLATE template0; and use that one.`;
+}
+
 router.post('/test-db', async (req: Request, res: Response) => {
     if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });
     if (!requireInstallToken(req, res)) return;
@@ -380,9 +396,15 @@ router.post('/test-db', async (req: Request, res: Response) => {
                 ssl: dbTlsOptions(installerDbTls(dbConn)),
                 connectionTimeoutMillis: 4000
             });
+            client.on('error', () => { /* a connection dropped after the answer: nothing to report */ });
             await client.connect();
-            await client.query('SELECT 1');
-            await client.end();
+            try {
+                await client.query('SELECT 1');
+                const encodingProblem = await pgEncodingProblem(client);
+                if (encodingProblem) return res.json({ ok: false, error: encodingProblem });
+            } finally {
+                await client.end().catch(() => { /* already closed */ });
+            }
             return res.json({ ok: true, message: 'PostgreSQL connection successful.' });
         }
         if (dbDriver === 'mysql') {
@@ -416,9 +438,31 @@ router.post('/test-db', async (req: Request, res: Response) => {
         return res.json({ ok: false, error: 'Invalid database driver.' });
     } catch (e: any) {
         const message = e && e.message ? e.message : 'Connection failed.';
-        return res.json({ ok: false, error: isCertificateError(e) ? `${message}. ${DB_TLS_VERIFY_HINT}` : message });
+        if (isCertificateError(e)) return res.json({ ok: false, error: `${message}. ${DB_TLS_VERIFY_HINT}` });
+        return res.json({ ok: false, error: explainDbConnectError(e, dbDriver, dbConn) });
     }
 });
+
+/**
+ * What a failed "Test connection" means, in words that say which field to check — the driver's own
+ * message (kept at the end) is a code like ETIMEDOUT, or for a port of the other engine, "Received
+ * unexpected copyData message".
+ */
+function explainDbConnectError(e: any, dbDriver: string, dbConn: any): string {
+    const raw = String((e && e.message) || 'Connection failed.');
+    const code = String((e && e.code) || '');
+    const host = String((dbConn && dbConn.host) || '');
+    const port = String((dbConn && dbConn.port) || (dbDriver === 'mysql' ? 3306 : 5432));
+    const engine = dbDriver === 'mysql' ? 'MySQL/MariaDB' : 'PostgreSQL';
+    let hint = '';
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') hint = `The host name "${host}" could not be found. Check the Host field.`;
+    else if (code === 'ECONNREFUSED') hint = `Nothing accepts connections on ${host}:${port}. Check the Host and Port fields, and that the database server is running.`;
+    else if (code === 'ETIMEDOUT' || /timeout expired|timed out/i.test(raw)) hint = `No answer from ${host}:${port} in time: the host is wrong or unreachable, or a firewall blocks the port.`;
+    else if (code === '28P01' || code === 'ER_ACCESS_DENIED_ERROR' || /password authentication failed|Access denied/i.test(raw)) hint = 'The database refused this user and password. Check the User and Password fields.';
+    else if (code === '3D000' || code === 'ER_BAD_DB_ERROR') hint = 'This database does not exist on the server. Check the Database field, or create the database first.';
+    else if (/unexpected copyData|Received unexpected|Packets out of order|protocol/i.test(raw)) hint = `The server on ${host}:${port} does not speak the ${engine} protocol: is this the port of the other engine?`;
+    return hint ? `${hint} (${raw})` : raw;
+}
 
 /**
  * @swagger
@@ -620,6 +664,22 @@ router.post('/install', async (req: Request, res: Response) => {
     if (!ALLOWED_DRIVERS.includes(dbDriver)) return fail('Invalid database driver.');
     if ((dbDriver === 'postgres' || dbDriver === 'mysql') && (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user)) {
         return fail(`${dbDriver === 'mysql' ? 'MySQL' : 'PostgreSQL'} requires host, database, and user.`);
+    }
+    // A Postgres database that is not UTF8 is refused before anything is written (see pgEncodingProblem).
+    if (dbDriver === 'postgres') {
+        let problem: string | null = null;
+        try {
+            const { Client } = require('pg');
+            const client = new Client({
+                host: dbConn.host, port: Number(dbConn.port) || 5432, user: dbConn.user,
+                password: dbConn.password || '', database: dbConn.database,
+                ssl: dbTlsOptions(installerDbTls(dbConn)), connectionTimeoutMillis: 10000
+            });
+            client.on('error', () => { /* reported by the install step that connects for real */ });
+            await client.connect();
+            try { problem = await pgEncodingProblem(client); } finally { await client.end().catch(() => { /* */ }); }
+        } catch { /* unreachable now: the install step reports the connection error itself */ }
+        if (problem) return fail(problem);
     }
     // Before anything is written: a native driver without its binary used to fail halfway through the
     // install, after the config below already marked the site installed.
@@ -1125,3 +1185,5 @@ module.exports.installTimeAlias = installTimeAlias;
 module.exports.classifyInstallRequest = classifyInstallRequest;
 module.exports.suggestedSiteUrl = suggestedSiteUrl;
 module.exports.issueLocalClusterIdentity = issueLocalClusterIdentity;
+module.exports.pgEncodingProblem = pgEncodingProblem;
+module.exports.explainDbConnectError = explainDbConnectError;

@@ -390,6 +390,35 @@ function resolveBackendPort(fromFile: unknown): number {
     return valid(fromFile) || defaultConfig.port;
 }
 
+/**
+ * The database connection a config FILE describes, exactly as boot resolves it (flat keys outrank the
+ * nested `db` block). Pure: the engine-switch migration reads its freshly written config back through
+ * this same rule and opens that connection before restarting, so a config that would not connect is
+ * never the one the next boot finds.
+ */
+function resolveDbConnection(fileConfig: any) {
+    return {
+        host: fileConfig.dbHost || (fileConfig.db && fileConfig.db.host) || 'localhost',
+        port: fileConfig.dbPort || (fileConfig.db && fileConfig.db.port) || 5432,
+        user: fileConfig.dbUser || (fileConfig.db && fileConfig.db.user) || 'postgres',
+        password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
+        // `db.database` is what the install wizard wrote before it wrote `db.name`; both name the database.
+        name: fileConfig.dbName || (fileConfig.db && (fileConfig.db.name || fileConfig.db.database)) || 'wordjs',
+        ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false,
+        sslCa: fileConfig.dbSslCa || fileConfig.db?.sslCa || undefined,
+        // Verified unless an operator opts out EXPLICITLY with `false` (flat or nested).
+        sslRejectUnauthorized: !(fileConfig.dbSslRejectUnauthorized === false || fileConfig.db?.sslRejectUnauthorized === false),
+        // Postgres connection-pool tuning (safe defaults live in drivers/postgres.ts; override per-field via
+        // a "db" block in wordjs-config.json). statementTimeoutMs stays OFF unless set — a blanket cap would
+        // kill legit long migrations/imports/backups.
+        poolMax: fileConfig.db?.poolMax,
+        poolIdleMs: fileConfig.db?.poolIdleMs,
+        poolConnectTimeoutMs: fileConfig.db?.poolConnectTimeoutMs,
+        idleInTxnTimeoutMs: fileConfig.db?.idleInTxnTimeoutMs,
+        statementTimeoutMs: fileConfig.db?.statementTimeoutMs
+    };
+}
+
 const config: AppConfig = {
     ...defaultConfig,
     ...fileConfig,
@@ -431,26 +460,7 @@ const config: AppConfig = {
     },
 
     // Database Connection Object (Normalized)
-    db: {
-        host: fileConfig.dbHost || (fileConfig.db && fileConfig.db.host) || 'localhost',
-        port: fileConfig.dbPort || (fileConfig.db && fileConfig.db.port) || 5432,
-        user: fileConfig.dbUser || (fileConfig.db && fileConfig.db.user) || 'postgres',
-        password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
-        // `db.database` is what the install wizard wrote before it wrote `db.name`; both name the database.
-        name: fileConfig.dbName || (fileConfig.db && (fileConfig.db.name || fileConfig.db.database)) || 'wordjs',
-        ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false,
-        sslCa: fileConfig.dbSslCa || fileConfig.db?.sslCa || undefined,
-        // Verified unless an operator opts out EXPLICITLY with `false` (flat or nested).
-        sslRejectUnauthorized: !(fileConfig.dbSslRejectUnauthorized === false || fileConfig.db?.sslRejectUnauthorized === false),
-        // Postgres connection-pool tuning (safe defaults live in drivers/postgres.ts; override per-field via
-        // a "db" block in wordjs-config.json). statementTimeoutMs stays OFF unless set — a blanket cap would
-        // kill legit long migrations/imports/backups.
-        poolMax: fileConfig.db?.poolMax,
-        poolIdleMs: fileConfig.db?.poolIdleMs,
-        poolConnectTimeoutMs: fileConfig.db?.poolConnectTimeoutMs,
-        idleInTxnTimeoutMs: fileConfig.db?.idleInTxnTimeoutMs,
-        statementTimeoutMs: fileConfig.db?.statementTimeoutMs
-    },
+    db: resolveDbConnection(fileConfig),
 
     // Uploads Configuration
     uploads: {
@@ -723,4 +733,5 @@ module.exports = config;
 // Not part of the config object: the boot-time secret gate, exported for its regression test.
 Object.defineProperty(module.exports, 'assertInstalledJwtSecretIsNotPublished', { value: assertInstalledJwtSecretIsNotPublished, enumerable: false });
 Object.defineProperty(module.exports, 'resolveDbStrictDriver', { value: resolveDbStrictDriver, enumerable: false });
+Object.defineProperty(module.exports, 'resolveDbConnection', { value: resolveDbConnection, enumerable: false });
 Object.defineProperty(module.exports, 'resolveBackendPort', { value: resolveBackendPort, enumerable: false });

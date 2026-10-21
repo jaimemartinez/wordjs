@@ -69,7 +69,19 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  */
 router.post('/', authenticate, isAdmin, credentialExportSessionOnly, asyncHandler(async (req: Request, res: Response) => {
     // Potentially long running, might want to increase timeout or use background job in future
-    const result = await createBackup();
+    let result: any;
+    try {
+        result = await createBackup();
+    } catch (e: any) {
+        // The administrator sees WHY (a dump tool that fails, a full disk) — not "internal error" with the
+        // reason only in the server log. Only administrators reach this route.
+        require('../core/module-logger').moduleLogger('routes/backups').error({ err: e }, 'Backup failed');
+        return res.status(500).json({
+            code: 'backup_failed',
+            message: `The backup could not be created: ${(e && e.message) || 'unknown error'}`,
+            data: { status: 500 }
+        });
+    }
     await recordAudit(req.user && req.user.id, 'backup.create', 'backup', (result && result.filename) || '', {
         size: (result && result.size) != null ? result.size : null
     });

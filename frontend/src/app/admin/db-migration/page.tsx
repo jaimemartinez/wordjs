@@ -137,7 +137,21 @@ export default function DbMigrationPage() {
         }
     };
 
-    if (loading && migrationProgress && migrationProgress.step !== 'idle' && migrationProgress.step !== 'done') {
+    if (restarting) {
+        return (
+            <DialogLayer className="bg-white/90 flex flex-col items-center justify-center animate-in fade-in">
+                <div className="animate-spin text-4xl text-blue-600 mb-4">
+                    <i className="fa-solid fa-circle-notch"></i>
+                </div>
+                <h2 className="text-xl font-bold text-gray-800">{t('dbMigration.restarting')}</h2>
+                <p className="text-gray-500 mt-2">{t('dbMigration.restartingHint')}</p>
+            </DialogLayer>
+        );
+    }
+
+    // The restart notice wins over the progress bar: the copy is over (the bar used to stay frozen on
+    // its last table while the server restarted).
+    if (loading && migrationProgress && !['idle', 'done', 'failed'].includes(migrationProgress.step)) {
         return (
             // A blocker over the WHOLE admin, shell included (components/DialogLayer.tsx): at z-60 inside the
             // page the sidebar stayed clickable in the middle of a migration.
@@ -178,18 +192,6 @@ export default function DbMigrationPage() {
         );
     }
 
-    if (restarting) {
-        return (
-            <DialogLayer className="bg-white/90 flex flex-col items-center justify-center animate-in fade-in">
-                <div className="animate-spin text-4xl text-blue-600 mb-4">
-                    <i className="fa-solid fa-circle-notch"></i>
-                </div>
-                <h2 className="text-xl font-bold text-gray-800">{t('dbMigration.restarting')}</h2>
-                <p className="text-gray-500 mt-2">{t('dbMigration.restartingHint')}</p>
-            </DialogLayer>
-        );
-    }
-
     if (!status) return (
         <div className="flex items-center justify-center min-h-[60vh]">
             <div className="flex flex-col items-center gap-4 animate-pulse">
@@ -213,9 +215,9 @@ export default function DbMigrationPage() {
                 icon="fa-database"
             />
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
                 {/* Left Column: Status (4 cols) */}
-                <div className="lg:col-span-4 space-y-6 animate-in slide-in-from-left-4 fade-in duration-700 delay-100">
+                <div className="xl:col-span-4 space-y-6 min-w-0 animate-in slide-in-from-left-4 fade-in duration-700 delay-100">
                     <div className="bg-white/80 backdrop-blur-xl p-5 sm:p-8 rounded-3xl md:rounded-[40px] border border-white/60 shadow-xl overflow-hidden relative group hover:shadow-2xl transition-all duration-500">
                         <div className="absolute top-0 right-0 p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity duration-500 transform scale-150 rotate-12 pointer-events-none">
                             <i className="fa-solid fa-server text-9xl text-indigo-900"></i>
@@ -232,7 +234,7 @@ export default function DbMigrationPage() {
                                         <div className="w-4 h-4 bg-emerald-500 rounded-full shadow-[0_0_15px_rgba(16,185,129,0.5)]"></div>
                                         <div className="absolute inset-0 bg-emerald-500 rounded-full animate-ping opacity-75"></div>
                                     </div>
-                                    <span className="text-3xl font-black text-gray-800 tracking-tight leading-none">
+                                    <span className="text-2xl sm:text-3xl font-black text-gray-800 tracking-tight leading-tight min-w-0 break-words">
                                         {status.currentDriver === 'sqlite-native' ? t('dbMigration.engine.sqliteNative') :
                                             status.currentDriver === 'postgres' ? 'PostgreSQL' :
                                                 status.currentDriver === 'mysql' ? 'MySQL / MariaDB' : t('dbMigration.engine.sqliteLegacy')}
@@ -292,7 +294,7 @@ export default function DbMigrationPage() {
                 </div>
 
                 {/* Right Column: Migrations (8 cols) */}
-                <div className="lg:col-span-8 animate-in slide-in-from-bottom-8 fade-in duration-700 delay-200">
+                <div className="xl:col-span-8 min-w-0 animate-in slide-in-from-bottom-8 fade-in duration-700 delay-200">
                     <div className="bg-white/50 backdrop-blur-sm rounded-3xl p-2 md:p-8 border border-white/60">
                         <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3 mb-6 px-2">
                             <div className="w-8 h-8 shrink-0 rounded-lg bg-gray-900 text-white flex items-center justify-center text-sm">
@@ -307,7 +309,7 @@ export default function DbMigrationPage() {
                                 <div className="group bg-white p-6 md:p-8 rounded-2xl border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                                        <div className="flex items-start gap-6">
+                                        <div className="flex items-start gap-4 sm:gap-6 min-w-0">
                                             <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl shadow-blue-100 group-hover:scale-110 group-hover:rotate-3 transition-all duration-300">
                                                 <i className="fa-solid fa-bolt"></i>
                                             </div>
@@ -341,7 +343,7 @@ export default function DbMigrationPage() {
                                 <div className="group bg-white p-6 md:p-8 rounded-3xl md:rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-indigo-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                                        <div className="flex items-start gap-6">
+                                        <div className="flex items-start gap-4 sm:gap-6 min-w-0">
                                             <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl shadow-indigo-100 group-hover:scale-110 group-hover:-rotate-3 transition-all duration-300">
                                                 <i className="fa-solid fa-network-wired"></i>
                                             </div>
@@ -370,7 +372,7 @@ export default function DbMigrationPage() {
                                 <div className="group bg-white p-6 md:p-8 rounded-3xl md:rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-teal-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                                        <div className="flex items-start gap-6">
+                                        <div className="flex items-start gap-4 sm:gap-6 min-w-0">
                                             <div className="w-16 h-16 bg-teal-100 text-teal-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl shadow-teal-100 group-hover:scale-110 group-hover:rotate-3 transition-all duration-300">
                                                 <i className="fa-solid fa-database"></i>
                                             </div>
@@ -398,7 +400,7 @@ export default function DbMigrationPage() {
                             {status.currentDriver !== 'sqlite-legacy' && status.availableDrivers?.includes('sqlite-legacy') && (
                                 <div className="group bg-white/40 p-6 md:p-8 rounded-3xl md:rounded-[40px] border-2 border-dashed border-gray-200 hover:border-gray-300 hover:bg-white transition-all duration-300">
                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                                        <div className="flex items-start gap-6">
+                                        <div className="flex items-start gap-4 sm:gap-6 min-w-0">
                                             <div className="w-16 h-16 bg-gray-100 text-gray-400 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl group-hover:text-gray-600 transition-colors">
                                                 <i className="fa-regular fa-hard-drive"></i>
                                             </div>

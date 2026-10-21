@@ -47,6 +47,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
             this.db.pragma('cache_size = -64000');      // 64 MB page cache
             this.db.pragma('mmap_size = 268435456');    // 256 MB mmap window
             this.db.pragma('temp_store = MEMORY');
+            require('../core/db-file-mode').restrictDbFiles(this.dbPath);
             log.info('✅ SQLite Native Async: Connected.');
         } catch (err) {
             log.error({ err }, '❌ SQLite Native Async: Connection failed');

@@ -88,14 +88,20 @@ class Term {
         let termSlug = slug || sanitizeTitle(name);
         termSlug = await Term.generateUniqueSlug(termSlug);
 
-        // Check if term exists
+        // Check if term exists: the same name under the same parent (WordPress allows "Foo A" at the root
+        // AND under "Foo Parent" — an import lost one of them). Names compare exactly on every engine:
+        // MySQL's default collation called "Café"/"cafe"/"CAFÉ" and even 😀/😁 the same term.
+        const { getDbType } = require('../config/database');
+        const exactName = getDbType().driver === 'mysql' ? 't.name = ? COLLATE utf8mb4_bin' : 't.name = ?';
         const existing = await dbAsync.get(`
-      SELECT t.term_id FROM terms t
+      SELECT t.term_id, t.slug FROM terms t
       JOIN term_taxonomy tt ON t.term_id = tt.term_id
-      WHERE t.name = ? AND tt.taxonomy = ?
-    `, [name, taxonomy]);
+      WHERE ${exactName} AND tt.taxonomy = ? AND tt.parent = ?
+    `, [name, taxonomy, parent || 0]);
 
-        if (existing) {
+        // As in WordPress, a caller that names its OWN, different slug (an importer carrying the source
+        // site's terms) gets a second term with that name; only a same-name term without one is a duplicate.
+        if (existing && !(slug && existing.slug !== slug)) {
             throw new Error('Term already exists');
         }
 

@@ -803,10 +803,15 @@ async function initializeSchema(db: any, isAsync = false) {
   //     fills post_name via generateUniqueSlug). Partial unique indexes work on both engines.
   // On FRESH installs these always succeed (no data yet). Existing installs get them via
   // schema-migrations (which dedupes/defensively guards first).
+  // MySQL/MariaDB have neither expression nor partial indexes: the email and slug rules are generated key
+  // columns there, built by schema migration 0020 (core/mysql-unique-keys.ts) — not attempted here.
+  const isMysqlEngine = driverName === 'mysql' || driverName === 'mariadb';
   const uniqueIndexes = [
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users (user_login)',
-    'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))',
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_name_type ON posts (post_name, post_type) WHERE post_name <> ''"
+    ...(isMysqlEngine ? [] : [
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))',
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_name_type ON posts (post_name, post_type) WHERE post_name <> ''"
+    ])
   ];
   for (const idx of uniqueIndexes) {
     try {
@@ -816,6 +821,15 @@ async function initializeSchema(db: any, isAsync = false) {
       // schema-migration path will retry/dedupe on existing data. Log loudly so it's visible.
       log.warn({ err: e }, '⚠️  Could not create unique index (continuing)');
     }
+  }
+  // Every boot on MySQL: cheap probes, and a key left out because of duplicates is added the first boot
+  // after they are resolved (migration 0020 runs once).
+  if (isMysqlEngine) {
+    await require('../core/mysql-unique-keys').ensureMysqlUniqueKeys({
+      exec: (sql: string) => db.exec(sql),
+      get: (sql: string, params: any[] = []) => db.get(sql, params),
+      all: (sql: string, params: any[] = []) => db.all(sql, params),
+    });
   }
 
   log.info('✅ Database Schema verified.');

@@ -54,7 +54,8 @@ function save() {
     if (!dbInstance || !activeDbPath) return;
     const data = dbInstance.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(activeDbPath, buffer);
+    fs.writeFileSync(activeDbPath, buffer, { mode: 0o600 });
+    require('../core/db-file-mode').restrictDbFiles(activeDbPath);
 }
 
 function get() {
