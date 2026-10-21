@@ -197,7 +197,10 @@ function collectSnapshot(): any {
         ...walk(path.join(BACKEND_ROOT, 'src', 'routes'), (f) => f.endsWith('.ts')),
         ...walk(path.join(BACKEND_ROOT, 'src', 'middleware'), (f) => f.endsWith('.ts')),
     ];
-    const swagger = require(path.join(BACKEND_ROOT, 'src', 'config', 'swagger'));
+    // swagger.ts reads the content-type registry while it loads, and with multisite on that registry is
+    // per site: the server loads it during boot, which runs as site 1, so the snapshot does the same.
+    const { runWithSite, PRIMARY_SITE_ID } = require(path.join(BACKEND_ROOT, 'src', 'core', 'site-context'));
+    const swagger = runWithSite(PRIMARY_SITE_ID, () => require(path.join(BACKEND_ROOT, 'src', 'config', 'swagger')));
     const semanticPaths = stripDocumentation(swagger.paths || {});
     const swaggerPaths = Object.keys(swagger.paths || {});
     let swaggerOperations = 0;
