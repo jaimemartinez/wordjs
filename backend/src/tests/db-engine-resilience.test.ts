@@ -736,3 +736,49 @@ test('postgres → mysql (real): a whole site switches — core tables keep thei
         await pgDrop(pg);
     }
 });
+
+/** Same-slug term inserts at once: the database keeps one (QA S3-12); empty slugs never collide. */
+async function assertTermSlugRace(driver: any) {
+    const insert = (slug: string) => driver.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0)', ['S3 race tag', slug]);
+    const results = await Promise.allSettled(Array.from({ length: 8 }, () => insert('s3-race-tag')));
+    assert.strictEqual(results.filter((r) => r.status === 'fulfilled').length, 1, 'one insert wins');
+    for (const r of results) {
+        if (r.status === 'rejected') assert.ok(require('../core/db-errors').isUniqueViolation(r.reason), String(r.reason && r.reason.message));
+    }
+    const n = await driver.get("SELECT COUNT(*) AS c FROM terms WHERE slug = 's3-race-tag'");
+    assert.strictEqual(Number(n.c), 1);
+    await insert('');
+    await insert('');
+}
+
+test('postgres (real): a same-slug tag race leaves one term (S3-12)', async (t: any) => {
+    const ctx = await pgScratch(t);
+    if (!ctx) return;
+    const file = path.join(os.tmpdir(), `wjs-b-srcterm-${SUFFIX}.db`);
+    const src = await seededNativeSource(file);
+    if (!src) { await pgDrop(ctx); return t.skip('better-sqlite3 unavailable'); }
+    try {
+        await migrateNativeInto(src, ctx.driver, 'postgres');
+        await assertTermSlugRace(ctx.driver);
+    } finally {
+        try { src.db.close(); } catch { /* */ }
+        for (const f of [file, file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }); } catch { /* */ } }
+        await pgDrop(ctx);
+    }
+});
+
+test('mysql (real): a same-slug tag race leaves one term (S3-12)', async (t: any) => {
+    const ctx = await mysqlScratch(t);
+    if (!ctx) return;
+    const file = path.join(os.tmpdir(), `wjs-b-srctermmy-${SUFFIX}.db`);
+    const src = await seededNativeSource(file);
+    if (!src) { await mysqlDrop(ctx); return t.skip('better-sqlite3 unavailable'); }
+    try {
+        await migrateNativeInto(src, ctx.driver, 'mysql');
+        await assertTermSlugRace(ctx.driver);
+    } finally {
+        try { src.db.close(); } catch { /* */ }
+        for (const f of [file, file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }); } catch { /* */ } }
+        await mysqlDrop(ctx);
+    }
+});

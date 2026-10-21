@@ -104,3 +104,22 @@ test('terms: the slug is unique in the database, and a same-name race ends with 
     assert.strictEqual(results.filter((r) => r.status === 'fulfilled').length, 1);
     assert.ok(results.filter((r) => r.status === 'rejected').every((r: any) => /already exists/.test(r.reason.message)));
 });
+
+test('revisions: rows committed by parallel saves are pruned once this save commits (S3-16)', async () => {
+    const revisions = require('../core/revisions');
+    const post = await Post.create({ title: 'Busy post', content: '<p>v0</p>', status: 'draft', authorId: 1 });
+    for (let i = 0; i < 10; i++) await revisions.saveRevision(post.id);
+    assert.strictEqual(Number(await revisions.countRevisions(post.id)), 10);
+    await database.dbAsync.transaction(async (q: any) => {
+        await revisions.saveRevision(post.id);
+        // What the other transactions add: rows this save's own prune did not count. On Postgres and
+        // MySQL they commit beside this one; here they are written after the in-transaction prune.
+        for (let i = 0; i < 3; i++) {
+            await q.run(
+                "INSERT INTO posts (author_id, post_title, post_content, post_excerpt, post_status, post_name, post_type, post_parent, guid) VALUES (1, 'r', '', '', 'inherit', ?, 'revision', ?, '')",
+                [`${post.id}-revision-parallel-${i}`, post.id]
+            );
+        }
+    });
+    assert.strictEqual(Number(await revisions.countRevisions(post.id)), 10, 'the post ends at the cap');
+});
