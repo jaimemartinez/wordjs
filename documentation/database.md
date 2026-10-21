@@ -161,6 +161,11 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
 > **fails gracefully** — plugin SQL is still confined to the plugin's `wjp_<slug>_` tables by the
 > text-guard (`assertSqlAllowed`), it just loses the second, database-enforced layer. Grant `CREATEROLE`
 > to the WordJS role if you want that layer; do **not** reach for the superuser to get it.
+>
+> MySQL/MariaDB is the same with a per-plugin **login user**: creating it needs `CREATE USER`, and giving it
+> its tables needs `GRANT OPTION`, which managed databases usually withhold (`GRANT ALL PRIVILEGES` alone does
+> not include it). When a grant is refused the plugin falls back to the text-guard straight away — at boot
+> or the moment it creates a table — and keeps working.
 
 **TLS to the database (`dbSsl`).** With `"dbSsl": true` the Postgres and MySQL connections use TLS and
 **verify the server certificate** (chain and host name) — the same as any HTTPS client. A server whose

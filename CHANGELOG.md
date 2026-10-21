@@ -943,6 +943,29 @@ the boot error links there too.
 
 ### Fixed
 
+- **Isolated plugins with their own tables start on PostgreSQL and MySQL/MariaDB servers on a private
+  address, and a plugin's request can no longer take the whole process down.** While the host answered a
+  plugin's database call it opened its own pool connections under that plugin's sandbox rules, so a database
+  on a LAN address was refused as "plugin egress": the plugin stopped at every restart (only deactivating and
+  activating it again brought it back). The host's own modules now always get the real network modules and
+  the database driver runs as the host. An exception raised while the host serves a plugin is logged with the
+  plugin's name and the process keeps running; any other fatal error exits cleanly with code 1 for the
+  supervisor instead of aborting. A plugin card whose worker is stopped now shows why.
+- **Database users without `GRANT OPTION`.** On MySQL/MariaDB (and PostgreSQL) a plugin activated without a
+  restart was routed through its own database login even when the server refused to grant it its new tables,
+  so every query failed with "access denied" until the next restart. The plugin now falls back to the SQL
+  guard at once, as it already did at boot.
+- **"Also delete this plugin's data" deletes every table.** Tables linked by foreign keys were dropped in
+  catalog order, the first refusal stopped the rest, and the admin was told everything was gone. They are now
+  dropped in dependency order; any table that something outside the plugin still references is kept and named
+  in the confirmation.
+- **Files uploaded to a plugin route are readable by the plugin.** The host staged multipart uploads in the OS
+  temp directory, which the plugin sandbox does not let a plugin read, so attachments were lost. They are now
+  staged in the plugin's own private temporary storage (still removed when the response is sent).
+- **An approved private relay works over STARTTLS.** "Sandbox access → Allow host:port" was approved for the
+  TCP connection but the TLS upgrade on that same connection was judged again without its port and refused.
+  A TLS layer over an already-connected socket is no longer re-judged.
+
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
   certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes
