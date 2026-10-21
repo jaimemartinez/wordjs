@@ -100,9 +100,12 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`)?.scrollIntoView({ block: "nearest" });
     }, [highlight, isOpen]);
 
+    // Opened from inside the Verso editor, the portalled menu joins the editor's palette.
+    const [inEditor, setInEditor] = useState(false);
     const open = () => {
         if (disabled) return;
         updateCoords();
+        setInEditor(!!containerRef.current?.closest('.verso-container, .verso-editor-ui'));
         setIsOpen(true);
     };
 
@@ -189,7 +192,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                         }}
                         // Opened from the Verso editor, the menu (portalled out of it) joins the editor's
                         // palette: in its dark mode a white list hung off a dark panel.
-                        className={`bg-white/95 backdrop-blur-xl border border-gray-100 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in duration-150${containerRef.current?.closest('.verso-container, .verso-editor-ui') ? ' verso-editor-ui' : ''}`}
+                        className={`bg-white/95 backdrop-blur-xl border border-gray-100 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in duration-150${inEditor ? ' verso-editor-ui' : ''}`}
                     >
                         <div ref={listRef} className="py-1 overflow-y-auto overscroll-contain custom-scrollbar" style={{ maxHeight: coords.maxHeight }} role="listbox">
                             {options.length === 0 ? (
