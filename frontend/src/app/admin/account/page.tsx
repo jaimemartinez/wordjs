@@ -50,6 +50,11 @@ export default function AccountPage() {
     const [confirmPassword, setConfirmPassword] = useState("");
     const [changingPw, setChangingPw] = useState(false);
 
+    // «Sign out everywhere». The header's Sign out ends THIS browser's session only; this ends every
+    // session of the account (other browsers and devices included), so it asks for the password.
+    const [sessionsPassword, setSessionsPassword] = useState("");
+    const [endingSessions, setEndingSessions] = useState(false);
+
     useEffect(() => {
         if (user) {
             setDisplayName(user.displayName || "");
@@ -94,6 +99,22 @@ export default function AccountPage() {
         } catch (err: any) {
             addToast(err?.message || t('account.pwError'), "error");
             setChangingPw(false);
+        }
+    };
+
+    const endAllSessions = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setEndingSessions(true);
+        try {
+            await usersApi.revokeSessions(sessionsPassword);
+            addToast(t('account.sessions.done'), "success");
+            // This session ended too: back to the login screen.
+            setTimeout(() => { logout(); router.replace("/login"); }, 900);
+        } catch (err: any) {
+            addToast(isBadCurrentPassword(err)
+                ? (err?.message || t('account.currentPassword'))
+                : (err?.message || t('account.sessions.error')), "error");
+            setEndingSessions(false);
         }
     };
 
@@ -199,6 +220,23 @@ export default function AccountPage() {
 
                         {/* MFA */}
                         <MfaSetup />
+
+                        {/* Sessions */}
+                        <form onSubmit={endAllSessions} className={`${cardCls} space-y-5`} data-testid="account-sessions">
+                            <div>
+                                <h2 className="font-bold text-gray-800">{t('account.sessions.title')}</h2>
+                                <p className="text-sm text-gray-500 mt-2 leading-relaxed">{t('account.sessions.help')}</p>
+                            </div>
+                            <div className="max-w-md">
+                                <label htmlFor="account-field-7" className={labelCls}>{t('account.currentPassword')}</label>
+                                <input id="account-field-7" type="password" value={sessionsPassword} onChange={(e) => setSessionsPassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
+                            </div>
+                            <div className="flex justify-end">
+                                <button type="submit" disabled={endingSessions || !sessionsPassword} className={btnCls}>
+                                    {endingSessions ? t('account.saving') : t('account.sessions.action')}
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             </div>

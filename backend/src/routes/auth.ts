@@ -798,7 +798,8 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     // Verification OFF: the account is created, active, and signed in at once.
     let user: any;
     try {
-        const defaultRole = await getOption('default_role', 'subscriber');
+        // Never a role that runs the site (core/registration-settings signupRole).
+        const defaultRole = await require('../core/registration-settings').signupRole();
         user = await User.create({
             username,
             email,
@@ -1371,12 +1372,16 @@ router.post('/refresh', authenticate, (req: Request, res: Response) => {
  *               $ref: '#/components/schemas/RestError'
  */
 router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
-    // Best-effort revocation: stamp the user's security epoch so the just-cleared token (and any
-    // stolen copy of it) can no longer authenticate. Logout still succeeds without a valid token.
+    // Best-effort revocation of THIS session, so the just-cleared token (and any stolen copy of it) can no
+    // longer authenticate. It used to stamp the account's security epoch, which ended every session the
+    // user had — signing out of one browser signed them out of all of them. Ending all of them is the
+    // explicit POST /users/me/sessions/revoke (core/session-revocation). Logout still succeeds without a
+    // valid token.
     // Who logged out, when it is knowable. A logout with no valid token revokes nothing and is not an
     // event: recording an anonymous 'auth.logout' on every unauthenticated POST would hand an
     // unauthenticated caller a free row in the audit table.
     let actorId: any = null;
+    let scope: 'session' | 'all' | null = null;
     try {
         const ah = req.headers.authorization;
         let token = (ah && ah.startsWith('Bearer ')) ? ah.substring(7) : null;
@@ -1392,16 +1397,16 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
             // out everywhere, as often as they liked, while the JWT lived.
             if (decoded && decoded.userId && !decoded.purpose && sessionAddressStillAccepted(decoded)) {
                 const user = await User.findById(decoded.userId);
-                const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
-                if (user && !(validAfter && decoded.iat && decoded.iat <= validAfter)) {
-                    await User.updateMeta(decoded.userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
+                const revocation = require('../core/session-revocation');
+                if (user && !revocation.isSessionRevoked(user, decoded)) {
+                    scope = await revocation.revokeSession(decoded.userId, decoded);
                     actorId = decoded.userId;
                 }
             }
         }
     } catch { /* invalid/expired token — nothing to revoke */ }
     if (actorId !== null) {
-        await recordAudit(actorId, 'auth.logout', 'user', actorId, { ip: auditText(clientIp(req), 45) });
+        await recordAudit(actorId, 'auth.logout', 'user', actorId, { ip: auditText(clientIp(req), 45), scope });
     }
     // Clears BOTH the session cookie and its `wjs_csrf` double-submit partner — one helper, in the same
     // module that issues them, so a future third cookie cannot be left behind here.
@@ -1806,7 +1811,7 @@ router.post('/verify-email', asyncHandler(async (req: Request, res: Response) =>
                 email: pending.email,
                 passwordHash: pending.passwordHash,
                 displayName: pending.displayName,
-                role: await getOption('default_role', 'subscriber')
+                role: await require('../core/registration-settings').signupRole()
             });
             await recordAudit(created.id, 'user.create', 'user', created.id, { via: 'register' });
         } catch (error) {
@@ -2478,6 +2483,11 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
     }
     const user = await User.findById(challenge.userId);
     if (!user) return res.status(401).json({ code: 'rest_user_invalid', message: 'User not found.', data: { status: 401 } });
+    // A challenge is good for ONE session (core/mfa). Asked before the code is looked at, so a replayed
+    // challenge never spends a backup code.
+    if (await mfa.challengeUsed(user.id, challenge)) {
+        return res.status(401).json({ code: 'rest_mfa_challenge_invalid', message: 'Your login session expired. Please sign in again.', data: { status: 401 } });
+    }
     // Before the code is looked at: a backup code spent on a session that could not be issued is lost.
     if (refuseRetiringSignIn(req, res)) return;
 
@@ -2511,6 +2521,7 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
             return res.status(401).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 401 } });
         }
         await clearLoginFails(lockKey);
+        await mfa.markChallengeUsed(user.id, challenge);
         // The second half of a 2FA login: THIS is where the session is issued, so this is where the
         // completed login is recorded (POST /auth/login only handed out a challenge).
         await recordAudit(user.id, 'auth.login.success', 'user', user.id, {

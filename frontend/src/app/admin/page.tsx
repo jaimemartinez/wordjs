@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { postsApi, usersApi, commentsApi, systemApi, api, Comment, SystemStatus } from "@/lib/api";
+import { postsApi, usersApi, systemApi, api, apiGetPaged, Comment, SystemStatus } from "@/lib/api";
+import { parseServerDate } from "@/lib/serverDate";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -162,28 +163,31 @@ export default function DashboardPage() {
         try {
             loadAnalytics();
 
-            const fetchUsers = sections.stats.includes('users') ? usersApi.list() : Promise.resolve([]);
-            const fetchComments = sections.recentComments ? commentsApi.list({ per_page: 5 }) : Promise.resolve([]);
+            // COUNTS COME FROM X-WP-Total. They used to be `array.length` of the first page — "10 POSTS ·
+            // 5 COMMENTS" on a site with 540 posts — and downloaded whole records (content included) just to
+            // count them. One row per list is enough to read the total.
+            const fetchUsers = sections.stats.includes('users') ? usersApi.listPaged({ perPage: 1 }).then((r) => r.total) : Promise.resolve(0);
+            const fetchComments = sections.recentComments ? apiGetPaged<Comment[]>('/comments?per_page=5') : Promise.resolve({ data: [] as Comment[], total: 0, totalPages: 0 });
             // Administrators only, like its endpoint; and a failure here must not blank every count above.
             const fetchSystem = sections.systemHealth ? systemApi.getStatus().catch(() => null) : Promise.resolve(null);
 
             // ... (keep rest of function)
 
             const [posts, pages, users, comments, system] = await Promise.all([
-                postsApi.list("post"),
-                postsApi.list("page"),
+                postsApi.listPaged({ type: "post", perPage: 1 }),
+                postsApi.listPaged({ type: "page", perPage: 1 }),
                 fetchUsers,
                 fetchComments,
                 fetchSystem
             ]);
 
             setStats({
-                posts: posts.length,
-                pages: pages.length,
-                comments: comments?.length || 0,
-                users: users?.length || 0,
+                posts: posts.total,
+                pages: pages.total,
+                comments: comments.total || 0,
+                users: users || 0,
             });
-            setRecentComments(Array.isArray(comments) ? comments.slice(0, 5) : []);
+            setRecentComments(Array.isArray(comments.data) ? comments.data.slice(0, 5) : []);
             setSystemStatus(system);
         } catch (error) {
             console.error("Failed to load data:", error);
@@ -472,7 +476,7 @@ export default function DashboardPage() {
                                                     {comment.author}
                                                 </p>
                                                 <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-gray-500 bg-white px-2 py-0.5 rounded-full shadow-sm border border-gray-100">
-                                                    {new Date(comment.date).toLocaleDateString()}
+                                                    {(parseServerDate(comment.dateGmt, comment.date) ?? new Date(NaN)).toLocaleDateString()}
                                                 </span>
                                             </div>
                                             <div

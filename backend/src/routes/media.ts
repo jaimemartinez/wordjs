@@ -159,7 +159,8 @@ const storage = multer.diskStorage({
         const resolvedExt = Media.getExtensionForMime(file.mimetype);
         const ext = resolvedExt ? `.${resolvedExt}` : '';
         const name = path.basename(file.originalname, path.extname(file.originalname));
-        const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
+        // Accents fold to their base letter first (ñandú → nandu) instead of each becoming a dash.
+        const safeName = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
         const uniqueName = `${safeName}-${uuidv4().substring(0, 8)}${ext}`;
         cb(null, uniqueName);
     }
@@ -195,9 +196,14 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     cb(null, true);
 };
 
-const upload = multer({
+// The multer options POST /media uploads with. `fileSize` here is only the boot-time default: each
+// request uses the limit set in the panel (core/upload-limit), see singleUpload below.
+const UPLOAD_OPTIONS = {
     storage,
     fileFilter,
+    // Browsers send the multipart filename as raw UTF-8 with no charset parameter; busboy's default
+    // (latin1) turned «ñandú.png» into «Ã±andÃº.png» in the media title.
+    defParamCharset: 'utf8',
     limits: {
         fileSize: config.uploads.maxFileSize,
         // SECURITY: Prevent CVE-2025-47935 (memory leak) and CVE-2025-47944 (malformed multipart)
@@ -206,7 +212,21 @@ const upload = multer({
         parts: 100,         // Max total parts (fields + files)
         headerPairs: 2000   // Limit header pairs to prevent header bomb
     }
-});
+};
+
+/**
+ * `upload.single('file')` with the CURRENT size limit (Settings → Media → «Maximum upload size»), read
+ * per request so a change applies at once, without a restart. A refusal for size carries the limit, so
+ * the client can say "the maximum is 10 MB" instead of "Failed to upload file".
+ */
+function singleUpload(req: Request, res: Response, next: (err?: unknown) => void) {
+    require('../core/upload-limit').maxUploadBytes().then((limit: number) => {
+        multer({ ...UPLOAD_OPTIONS, limits: { ...UPLOAD_OPTIONS.limits, fileSize: limit } }).single('file')(req, res, (err: any) => {
+            if (err && err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE') err.limitBytes = limit;
+            next(err);
+        });
+    }, next);
+}
 
 /**
  * @swagger
@@ -482,7 +502,7 @@ router.get('/:id/file', authenticate, asyncHandler(async (req: Request, res: Res
  *       415:
  *         description: "`rest_upload_invalid_type` — a file type or extension the media library does not accept."
  */
-router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req: UploadRequest, res: Response) => {
+router.post('/', authenticate, can('upload_files'), singleUpload, asyncHandler(async (req: UploadRequest, res: Response) => {
     // Bound once into a const so the "an upload actually arrived" guard below still holds inside the
     // per-size callbacks further down; narrowing a property access does not survive a closure.
     const uploaded = req.file;

@@ -67,6 +67,8 @@ const handler = createHandler({
 
 const multipart = multer({
     storage: multer.memoryStorage(),
+    // UTF-8 file names, as POST /media reads them (busboy's default is latin1).
+    defParamCharset: 'utf8',
     limits: {
         // The REST upload limit: a file POST /media would refuse is refused before it is buffered whole.
         fileSize: config.uploads.maxFileSize,

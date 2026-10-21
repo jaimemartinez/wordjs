@@ -24,7 +24,7 @@ const { attachmentReadable } = require('../core/attachment-visibility');
 // A MEMBERS-ONLY ENTRY'S COMMENTS ARE GATED WITH IT (core/content-access): listed, read and written only by
 // a viewer who reads the entry in full.
 const { canReadGatedContent } = require('../core/content-access');
-const { getOption } = require('../core/options');
+const { getOption, getBooleanOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -832,8 +832,19 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
         });
     }
 
-    // Check if registration is required to comment
-    const requireRegistration = await getOption('comment_registration', '0') === '1';
+    // The site-wide switch (Settings → «Enable comments»). It used to be a UI-only control — and a broken
+    // one — so turning comments off left this endpoint taking them. Off means off for everyone.
+    if (!(await getBooleanOption('comments_enabled', true))) {
+        return res.status(403).json({
+            code: 'rest_comment_closed',
+            message: 'Comments are turned off on this site.',
+            data: { status: 403 }
+        });
+    }
+
+    // Check if registration is required to comment. getBooleanOption, not `=== '1'`: the saved option
+    // comes back as the number 1, so the strict string comparison never held (see core/options).
+    const requireRegistration = await getBooleanOption('comment_registration', false);
     if (requireRegistration && !req.user) {
         return res.status(401).json({
             code: 'rest_comment_login_required',
@@ -1281,6 +1292,73 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
     await recordCommentAudit(req.user.id, commentId, before && before.commentApproved, updated.commentApproved);
 
     res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
+}));
+
+/**
+ * @swagger
+ * /comments/{id}/unapprove:
+ *   post:
+ *     summary: Send a comment back to the moderation queue
+ *     description: >-
+ *       Moderation shortcut for setting the comment's status to pending — "Unapprove" on an approved
+ *       comment, "Not spam" on a spam one and "Restore" on a trashed one. Gated by moderate_comments like
+ *       approve and spam (PUT /comments/{id} needs edit_comments, which the Editor role does not hold, so
+ *       routing these through it left an editor able to approve but never to take an approval back).
+ *     tags: [Comments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie; Bearer/API-token callers are exempt.
+ *     responses:
+ *       200:
+ *         description: The comment, now pending, in the moderator projection
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_forbidden (no moderate_comments), rest_csrf_token / rest_csrf_invalid, or
+ *           mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       404:
+ *         description: "rest_comment_invalid_id — no such comment, or a malformed route id."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
+router.post('/:id/unapprove', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
+    const commentId = parseInt(String(req.params.id), 10);
+    const before = await Comment.findById(commentId);
+    const updated = before ? await Comment.unapprove(commentId) : null;
+
+    if (!updated) {
+        return res.status(404).json({
+            code: 'rest_comment_invalid_id',
+            message: 'Invalid comment ID.',
+            data: { status: 404 }
+        });
+    }
+    await recordCommentAudit(req.user.id, commentId, before.commentApproved, updated.commentApproved);
+
+    res.json(updated.toJSON(true)); // moderation route — moderator sees full PII
 }));
 
 /**

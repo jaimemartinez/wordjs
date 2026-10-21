@@ -22,6 +22,14 @@ export async function generateStaticParams(): Promise<{ slug: string }[]> {
     }
 }
 
+/**
+ * Reusable symbols (lib/symbols, type `wjs_symbol`) are public so pages can render them, but a symbol is
+ * a fragment of other pages, not a page: the untyped slug lookup must not serve one at its own URL.
+ */
+function isRoutedEntry(post: { type?: string }): boolean {
+    return post.type !== "wjs_symbol";
+}
+
 interface RouteParams {
     slug: string;
 }
@@ -31,7 +39,7 @@ export async function generateMetadata(
 ): Promise<Metadata> {
     const { slug } = await params;
     const post = await getPostBySlug(slug);
-    if (!post) return { title: "Not found", robots: { index: false } };
+    if (!post || !isRoutedEntry(post)) return { title: "Not found", robots: { index: false } };
     const settings = await getSettings();
     return buildPostMetadata(post, {
         siteName: settings?.blogname,
@@ -49,7 +57,7 @@ export default async function SinglePostPage(
         getSettings(),
         resolveSiteBase(),
     ]);
-    if (!post) contentNotFound();
+    if (!post || !isRoutedEntry(post)) contentNotFound();
     // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
     const withBlocks = await withResolvedBlocks(post);
     return (

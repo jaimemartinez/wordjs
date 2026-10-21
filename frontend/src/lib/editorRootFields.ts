@@ -336,7 +336,9 @@ export function categoryField(
     recordCategories: readonly PostTermRef[] = [],
 ): VersoField {
     const options: Array<{ label: string; value: string }> = [
-        { label: "Sin categoría", value: "" },
+        // "" = ninguna elegida: el servidor la pone en la categoría por defecto del sitio (default_category),
+        // así que la opción lo dice. Con «Sin categoría» salía «Uncategorized» DOS veces (esta y la real).
+        { label: "Categoría por defecto", value: "" },
         ...mergeCategoryOptions(categories, recordCategories).map((c) => ({ label: c.name, value: String(c.id) })),
     ];
     // Un valor guardado que no case con ninguna opción (el NOMBRE que guardaba el control viejo, o
@@ -463,6 +465,31 @@ export function withRecordRootFields(
 /* ------------------------------------------------------------------ */
 /* Siembra desde el registro cargado.                                  */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Identidad del registro (título y slug) que la CARGA impone sobre `_puck_data`, en `root` y en
+ * `root.props` (el guardado lee `root.props.title || root.title`). La BD manda: un `_puck_data`
+ * copiado de otro registro (Duplicar) o escrito antes de un cambio por la API traía el título de
+ * OTRO registro, y el primer autoguardado lo devolvía a la columna — la copia volvía a llamarse como
+ * el original, su slug se regeneraba a partir de ese título y «Vista previa» abría el original.
+ * El slug sembrado además rellena el campo «Slug» del panel, que salía vacío.
+ */
+export function seedRecordIdentity(post: Pick<Post, "title" | "slug"> | undefined | null): { title: string; slug: string } {
+    return {
+        title: typeof post?.title === "string" ? post.title : "",
+        slug: typeof post?.slug === "string" ? post.slug : "",
+    };
+}
+
+/**
+ * ¿Debe el slug dejar de seguir al título? Sí en cuanto el registro tiene un slug guardado y está
+ * publicado (o programado/privado): cambiar el título de una entrada publicada no debe mover su URL
+ * pública en silencio. Un borrador sigue regenerándolo, como hasta ahora.
+ */
+export function slugFollowsTitle(post: Pick<Post, "slug" | "status"> | undefined | null): boolean {
+    if (!post?.slug) return true;
+    return !["publish", "future", "private"].includes(String(post.status));
+}
 
 /**
  * Props ROOT que la CARGA impone sobre lo que traiga `_puck_data`: la BD manda. Las claves se

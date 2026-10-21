@@ -911,6 +911,72 @@ export const getPostPool = siteCache(async (
     return walkPosts(type, status, wanted);
 });
 
+/**
+ * One page of the «Latest posts» front page (Settings → Homepage display), with its real totals. The
+ * front page used to show the first `posts_per_page` posts and stop: no pager, and `/page/2` was a 404,
+ * so on a site with 43 posts only the first ones were reachable from it. Pages live at `/page/{n}`.
+ */
+export const getLatestPostsPage = siteCache(async (page: number): Promise<{ posts: Post[]; total: number; totalPages: number; page: number }> => {
+    const perPage = Math.min(API_MAX_PER_PAGE, await resolvePostsPerPage());
+    const current = Math.max(1, Math.floor(page) || 1);
+    const res = await serverResponse(`/posts?type=post&status=publish&per_page=${perPage}&page=${current}`, { revalidate: 30, tags: ['posts'] });
+    if (!res || !res.ok) return { posts: [], total: 0, totalPages: 1, page: current };
+    const total = parseInt(res.headers.get('x-wp-total') || '0', 10) || 0;
+    let posts: Post[] = [];
+    try {
+        const body = await res.json();
+        posts = Array.isArray(body) ? (body as Post[]) : [];
+    } catch { /* an unreadable page renders as empty */ }
+    return { posts, total, totalPages: Math.max(1, Math.ceil(total / perPage)), page: current };
+});
+
+/**
+ * One page of the public search: published posts first, then published pages, with the REAL total.
+ *
+ * The search page showed `results.length` — the API's first page of each type — as the number of
+ * results ("10 results" with hundreds) and offered no way past it. The two types are separate lists on
+ * the API, so the page is cut from their concatenation: the posts part is always one aligned page of the
+ * posts list, the pages part at most two pages of the pages list. Totals come from X-WP-Total.
+ */
+export async function searchPostsPaged(query: string, page: number, perPage = 10): Promise<{ posts: Post[]; total: number; totalPages: number; page: number }> {
+    const size = Math.max(1, Math.min(100, Math.floor(perPage)));
+    const q = encodeURIComponent(query);
+    const fetchPage = async (type: string, p: number): Promise<{ items: Post[]; total: number }> => {
+        const res = await serverResponse(`/posts?type=${type}&search=${q}&status=publish&per_page=${size}&page=${p}`);
+        if (!res || !res.ok) return { items: [], total: 0 };
+        const total = parseInt(res.headers.get('x-wp-total') || '0', 10) || 0;
+        try {
+            const body = await res.json();
+            return { items: Array.isArray(body) ? (body as Post[]) : [], total };
+        } catch {
+            return { items: [], total };
+        }
+    };
+    // Totals first (page 1 of each answers them), clamped page after.
+    const [firstPosts, firstPages] = await Promise.all([fetchPage('post', 1), fetchPage('page', 1)]);
+    const totalPosts = firstPosts.total;
+    const total = totalPosts + firstPages.total;
+    const totalPages = Math.max(1, Math.ceil(total / size));
+    const current = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
+    const offset = (current - 1) * size;
+
+    let posts: Post[] = [];
+    if (offset < totalPosts) {
+        const p = Math.floor(offset / size) + 1;
+        posts = p === 1 ? firstPosts.items : (await fetchPage('post', p)).items;
+    }
+    const need = size - posts.length;
+    if (need > 0 && firstPages.total > 0) {
+        const start = Math.max(0, offset - totalPosts);
+        const p1 = Math.floor(start / size) + 1;
+        const first = p1 === 1 ? firstPages.items : (await fetchPage('page', p1)).items;
+        let items = first.slice(start % size);
+        if (items.length < need && start % size !== 0) items = items.concat((await fetchPage('page', p1 + 1)).items);
+        posts = posts.concat(items.slice(0, need));
+    }
+    return { posts, total, totalPages, page: current };
+}
+
 /** Search published posts + pages server-side. Tolerates both `Post[]` and `{ posts: Post[] }` shapes. */
 export async function searchPosts(query: string): Promise<Post[]> {
     const norm = (r: unknown): Post[] => {

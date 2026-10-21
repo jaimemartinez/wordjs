@@ -171,7 +171,7 @@ export default function AgentsPage() {
             setPublishConfirmation(!!res.publishConfirmation);
             if (res.canGrant) loadQueue();
             if (res.canGrant && users.length === 0) {
-                usersApi.list().then(setUsers).catch(() => { /* binding to another user stays unavailable */ });
+                usersApi.listPaged({ perPage: 100 }).then((r) => setUsers(r.data)).catch(() => { /* binding to another user stays unavailable */ });
             }
         } catch (e: any) {
             addToast(e?.message || t("agents.loadFailed"), "error");

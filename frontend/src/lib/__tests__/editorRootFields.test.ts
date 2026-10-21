@@ -340,7 +340,7 @@ describe("categoryField — el select guarda ids, y no esconde lo que hay guarda
         const f = categoryField(CATS) as unknown as { type: string; options: Array<{ label: string; value: string }> };
         expect(f.type).toBe("select");
         expect(f.options).toEqual([
-            { label: "Sin categoría", value: "" },
+            { label: "Categoría por defecto", value: "" },
             { label: "Noticias", value: "3" },
             { label: "Tutoriales", value: "7" },
         ]);

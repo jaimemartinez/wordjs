@@ -407,8 +407,34 @@ async function initCacheSetting() {
 // startup race where the DB driver may not yet be initialized. It is invoked from
 // the app startup sequence in src/index.ts after the database/options are ready.
 
+/**
+ * An on/off option, whatever shape it was stored in.
+ *
+ * getOption() JSON-parses the stored text, so a switch saved from the settings screen as "1" comes back
+ * as the NUMBER 1 — and `getOption(name) === '1'` was false for every saved value. That is how
+ * «Registered users only» and «Enable comments» stopped doing anything. This reads 1/"1"/true/"true"/
+ * "yes"/"on" as on and 0/"0"/false/"false"/"no"/"off"/"" as off; anything else (or nothing stored)
+ * is `defaultValue`.
+ */
+function toBooleanOption(value: unknown, defaultValue: boolean): boolean {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    if (typeof value === 'string') {
+        const v = value.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+        if (['0', 'false', 'no', 'off', ''].includes(v)) return false;
+    }
+    return defaultValue;
+}
+
+async function getBooleanOption(name: string, defaultValue = false): Promise<boolean> {
+    return toBooleanOption(await getOption(name, null), defaultValue);
+}
+
 module.exports = {
     getOption,
+    getBooleanOption,
+    toBooleanOption,
     getOptionFresh,
     updateOption,
     persistOption,

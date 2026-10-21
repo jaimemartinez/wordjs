@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AuthGate, probeSession } from "../AuthContext";
+import { AuthGate, connectionRetryDelay, probeSession } from "../AuthContext";
 
 const fetchAnswering = (status: number, body: unknown = {}) =>
     (async () => ({ ok: status >= 200 && status < 300, status, json: async () => body })) as unknown as typeof fetch;
@@ -48,10 +48,24 @@ describe("probeSession — what GET /auth/me means", () => {
 
     it("403, 5xx and network errors → unknown, so a transient failure never logs anyone out", async () => {
         expect(await probeSession(fetchAnswering(403))).toEqual({ kind: "unknown" });
-        expect(await probeSession(fetchAnswering(502))).toEqual({ kind: "unknown" });
+        expect(await probeSession(fetchAnswering(502))).toEqual({ kind: "unknown", reason: "unavailable" });
         const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
-        expect(await probeSession((async () => { throw new TypeError("network"); }) as unknown as typeof fetch)).toEqual({ kind: "unknown" });
+        expect(await probeSession((async () => { throw new TypeError("network"); }) as unknown as typeof fetch)).toEqual({ kind: "unknown", reason: "unavailable" });
         quiet.mockRestore();
+    });
+
+    it("REGRESSION (M1-05): a 429 is the rate limiter, not a sign-out — reported with its Retry-After", async () => {
+        const limited = (retryAfter: string | null) => (async () => ({
+            ok: false, status: 429, json: async () => ({}),
+            headers: { get: (h: string) => (h.toLowerCase() === "retry-after" ? retryAfter : null) },
+        })) as unknown as typeof fetch;
+        expect(await probeSession(limited("42"))).toEqual({ kind: "unknown", reason: "rate-limited", retryAfterSeconds: 42 });
+        expect(await probeSession(limited(null))).toEqual({ kind: "unknown", reason: "rate-limited" });
+        expect(await probeSession(fetchAnswering(429))).toEqual({ kind: "unknown", reason: "rate-limited" });
+    });
+
+    it("the automatic re-check backs off 5 s → 60 s", () => {
+        expect([0, 1, 2, 3, 4, 9].map(connectionRetryDelay)).toEqual([5000, 10000, 20000, 40000, 60000, 60000]);
     });
 
     it("asks the session endpoint with the cookie", async () => {

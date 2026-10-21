@@ -6,6 +6,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import Link from "next/link";
 import { csrfHeaders } from "@/lib/csrf";
+import { claimNotification, subscribeNotifications } from "@/lib/notificationStream";
 
 interface Notification {
     uuid: string;
@@ -24,6 +25,21 @@ interface NotificationCenterProps {
     isCollapsed?: boolean;
 }
 
+async function loadNotifications(url: string): Promise<Notification[] | null> {
+    const res = await fetch(url, { credentials: 'include' });
+    return res.ok ? await res.json() : null;
+}
+
+// The admin layout mounts this component twice (mobile header and sidebar); their mount-time loads
+// share one request instead of fetching the same list twice on every page.
+let initialLoad: { at: number; promise: Promise<Notification[] | null> } | null = null;
+function loadInitialOnce(url: string): Promise<Notification[] | null> {
+    if (initialLoad && Date.now() - initialLoad.at < 2000) return initialLoad.promise;
+    const promise = loadNotifications(url).catch(() => null);
+    initialLoad = { at: Date.now(), promise };
+    return promise;
+}
+
 export default function NotificationCenter({ variant = 'floating', isCollapsed = false }: NotificationCenterProps) {
     const { user } = useAuth();
     const { addToast } = useToast();
@@ -35,7 +51,6 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
         [notifications]
     );
     const [isRefreshing, setIsRefreshing] = useState(false);
-    const eventSourceRef = useRef<EventSource | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const API_URL = '/api/v1';
@@ -56,13 +71,8 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
         if (!user) return;
         if (!silent) setIsRefreshing(true);
         try {
-            const res = await fetch(`${API_URL}/notifications`, {
-                credentials: 'include',
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setNotifications(data);
-            }
+            const data = silent ? await loadInitialOnce(`${API_URL}/notifications`) : await loadNotifications(`${API_URL}/notifications`);
+            if (data) setNotifications(data);
         } catch (error) {
             console.error("Fetch notifications error:", error);
         } finally {
@@ -74,94 +84,24 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
         fetchNotifications(true);
     }, [user]);
 
-    // Real-time stream
+    // Real-time stream — ONE per browser, shared by every subscriber and tab (lib/notificationStream).
     useEffect(() => {
         if (!user) return;
-
-        let retryCount = 0;
-        let retryTimeoutId: NodeJS.Timeout;
-        let isMounted = true;
-
-        const connectStream = () => {
-            if (!isMounted) return;
-
-            // Close existing connection if any
-            if (eventSourceRef.current) {
-                eventSourceRef.current.close();
-                eventSourceRef.current = null;
-            }
-
-            const url = `${API_URL}/notifications/stream`;
-            console.debug(`[SSE] Connecting to ${url}...`);
-
-            const es = new EventSource(url, { withCredentials: true });
-            eventSourceRef.current = es;
-
-            es.onopen = () => {
-                if (!isMounted) {
-                    es.close();
-                    return;
+        return subscribeNotifications(`${API_URL}/notifications/stream`, String(user.id), (newNotification) => {
+            setNotifications(prev => {
+                if (prev.some(n => n.uuid === newNotification.uuid)) return prev;
+                return [newNotification, ...prev];
+            });
+            // Side effects once per notification, however many centres are mounted in this tab.
+            if (claimNotification(newNotification.uuid)) {
+                addToast(newNotification.title || t('notif.newNotification'), "info");
+                window.dispatchEvent(new CustomEvent('wordjs:notification', { detail: newNotification }));
+                if ("vibrate" in navigator) {
+                    navigator.vibrate(100);
                 }
-                retryCount = 0;
-                console.debug("[SSE] Connected");
-            };
-
-            es.onmessage = (event) => {
-                if (!isMounted) return;
-
-                // Handle Keep-Alive / empty frames BEFORE parsing (they are not valid JSON).
-                if (!event.data || event.data === ': keepalive' || event.data.startsWith(':')) return;
-
-                let newNotification;
-                try {
-                    newNotification = JSON.parse(event.data);
-                } catch {
-                    return; // ignore non-JSON frames instead of throwing on every tick
-                }
-
-                setNotifications(prev => {
-                    const exists = prev.some(n => n.uuid === newNotification.uuid);
-                    if (exists) return prev;
-
-                    // Side-effects only fire for genuinely new frames (avoid double-toast
-                    // on duplicate SSE deliveries).
-                    addToast(newNotification.title || t('notif.newNotification'), "info");
-                    window.dispatchEvent(new CustomEvent('wordjs:notification', { detail: newNotification }));
-                    if ("vibrate" in navigator) {
-                        navigator.vibrate(100);
-                    }
-
-                    return [newNotification, ...prev];
-                });
-            };
-
-            es.onerror = () => {
-                if (!isMounted) return;
-                es.close();
-                eventSourceRef.current = null;
-
-                // Exponential Backoff
-                const delay = Math.min(1000 * Math.pow(2, retryCount), 30000); // Max 30s
-                retryCount++;
-
-                console.warn(`[SSE] Connection lost. Reconnecting in ${delay}ms... (Attempt ${retryCount})`);
-
-                if (retryTimeoutId) clearTimeout(retryTimeoutId);
-                retryTimeoutId = setTimeout(connectStream, delay);
-            };
-        };
-
-        connectStream();
-
-        return () => {
-            isMounted = false;
-            if (eventSourceRef.current) {
-                console.debug("[SSE] Cleaning up connection...");
-                eventSourceRef.current.close();
-                eventSourceRef.current = null;
             }
-            if (retryTimeoutId) clearTimeout(retryTimeoutId);
-        };
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user?.id]);
 
     const markAsRead = async (uuid: string) => {

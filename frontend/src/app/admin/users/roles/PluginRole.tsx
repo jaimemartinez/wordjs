@@ -12,8 +12,15 @@ import type { Role } from "@/lib/api";
 /** A role a plugin declared. */
 export const isPluginRole = (role: Role | undefined | null): boolean => !!role && role.source === "plugin" && !!role.plugin;
 
-/** May the administrator delete this role from the Roles screen? Not a plugin's role while it is installed. */
-export const canDeleteRole = (role: Role | undefined | null): boolean => !(isPluginRole(role) && role!.pluginInstalled);
+/** The five built-in roles: the server refuses to delete them (400 rest_role_protected). */
+export const CORE_ROLE_SLUGS: readonly string[] = ["administrator", "editor", "author", "contributor", "subscriber"];
+
+/**
+ * May the administrator delete this role from the Roles screen? Not a core role (the button used to show
+ * on all five and the server refused it), and not a plugin's role while that plugin is installed.
+ */
+export const canDeleteRole = (role: Role | undefined | null, slug?: string): boolean =>
+    !(slug && CORE_ROLE_SLUGS.includes(slug)) && !(isPluginRole(role) && role!.pluginInstalled);
 
 const fill = (template: string, plugin: string) => template.replace("{plugin}", plugin);
 

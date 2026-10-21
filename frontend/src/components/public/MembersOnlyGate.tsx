@@ -40,13 +40,15 @@ interface MembersOnlyGateProps {
     showNotice: boolean;
     /** Render the comments once access is confirmed (the server withheld them with the body). */
     commentsWhenGranted: boolean;
+    /** The «registered users only» comment setting, passed through to CommentsSection. */
+    commentsRequireLogin?: boolean;
     /** The teaser, server-rendered. */
     children: React.ReactNode;
 }
 
 
 export default function MembersOnlyGate(props: MembersOnlyGateProps) {
-    const { postId, mode, htmlClassName, ixPresets, motion, ui, strings, showNotice, commentsWhenGranted, children } = props;
+    const { postId, mode, htmlClassName, ixPresets, motion, ui, strings, showNotice, commentsWhenGranted, commentsRequireLogin, children } = props;
     const [full, setFull] = useState<FullEntry | null>(null);
     const [checking, setChecking] = useState(false);
     // `?redirect=<this page>` for the sign-in / sign-up links, set after mount so the server HTML and the
@@ -82,7 +84,7 @@ export default function MembersOnlyGate(props: MembersOnlyGateProps) {
                 ) : (
                     <div className={htmlClassName} dangerouslySetInnerHTML={{ __html: sanitizeHTML(full.content || "") }} />
                 )}
-                {commentsWhenGranted && <CommentsSection postId={postId} />}
+                {commentsWhenGranted && <CommentsSection postId={postId} requireLogin={commentsRequireLogin} />}
             </>
         );
     }

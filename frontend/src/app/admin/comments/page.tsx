@@ -7,6 +7,8 @@ import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, EmptyState, DataTable, Pagination } from "@/components/ui";
 import type { DataTableAction } from "@/components/ui";
 import { sanitizeHTML } from "@/lib/sanitize";
+import { commentActions, commentState, type CommentActionKey } from "@/lib/commentModeration";
+import { formatServerDateTime } from "@/lib/serverDate";
 
 type Tab = 'all' | 'pending' | 'approved' | 'spam' | 'trash';
 
@@ -72,7 +74,7 @@ export default function CommentsPage() {
         }
     };
 
-    const handleAction = async (id: number, action: 'approve' | 'unapprove' | 'spam' | 'trash' | 'restore') => {
+    const handleAction = async (id: number, action: Exclude<CommentActionKey, 'deletePermanently'>) => {
         setProcessingId(id);
         try {
             if (action === 'approve') {
@@ -81,10 +83,10 @@ export default function CommentsPage() {
                 await commentsApi.spam(id);
             } else if (action === 'trash') {
                 await commentsApi.delete(id, false); // Trash
-            } else if (action === 'restore') {
-                await commentsApi.update(id, { status: '1' }); // Restore to approved
-            } else if (action === 'unapprove') {
-                await commentsApi.update(id, { status: '0' });
+            } else {
+                // Unapprove, Not spam and Restore all send the comment back to the moderation queue,
+                // through the moderate_comments route (PUT needs edit_comments, which editors lack).
+                await commentsApi.unapprove(id);
             }
             loadComments();
         } catch (err) {
@@ -161,7 +163,7 @@ export default function CommentsPage() {
                         rowLabel={(c) => c.author}
                         actionsLabel={t('actions')}
                         stackBelow="lg"
-                        rowClassName={(c) => (c.status === '0' ? 'bg-yellow-50/70' : '')}
+                        rowClassName={(c) => (commentState(c.status) === 'pending' ? 'bg-yellow-50/70' : '')}
                         columns={[
                             {
                                 key: "author",
@@ -188,7 +190,8 @@ export default function CommentsPage() {
                                                     {comment.authorUrl}
                                                 </a>
                                             )}
-                                            {comment.status === '0' && <div className="text-xs mt-1 text-yellow-700 font-bold">{t('comments.status.pending')}</div>}
+                                            {commentState(comment.status) === 'pending' && <div className="text-xs mt-1 text-yellow-700 font-bold">{t('comments.status.pending')}</div>}
+                                            {commentState(comment.status) === 'spam' && activeTab !== 'spam' && <div className="text-xs mt-1 text-red-700 font-bold">{t('comments.status.spam')}</div>}
                                         </div>
                                     </div>
                                 ),
@@ -215,23 +218,22 @@ export default function CommentsPage() {
                                 key: "date",
                                 header: t('comments.column.date'),
                                 className: "lg:w-40",
-                                cell: (comment) => <span className="text-sm text-gray-500">{new Date(comment.date).toLocaleString()}</span>,
+                                cell: (comment) => <span className="text-sm text-gray-500">{formatServerDateTime(comment.dateGmt, comment.date)}</span>,
                             },
                         ]}
                         actions={(comment) => {
                             const busy = processingId === comment.id;
-                            const list: DataTableAction[] = [];
-                            if (comment.status === '0') list.push({ key: "approve", label: t('comments.approve'), icon: "fa-check", onClick: () => handleAction(comment.id, 'approve'), disabled: busy, tone: "success" });
-                            if (comment.status === '1') list.push({ key: "unapprove", label: t('comments.unapprove'), icon: "fa-rotate-left", onClick: () => handleAction(comment.id, 'unapprove'), disabled: busy, tone: "warning" });
-                            if (activeTab !== 'spam' && activeTab !== 'trash') {
-                                list.push({ key: "spam", label: t('comments.spam'), icon: "fa-ban", onClick: () => handleAction(comment.id, 'spam'), disabled: busy, tone: "warning" });
-                                list.push({ key: "trash", label: t('comments.trash'), icon: "fa-trash", onClick: () => handleAction(comment.id, 'trash'), disabled: busy, tone: "danger" });
-                            }
-                            if (activeTab === 'trash') {
-                                list.push({ key: "restore", label: t('comments.restore'), icon: "fa-trash-arrow-up", onClick: () => handleAction(comment.id, 'restore'), disabled: busy, tone: "success" });
-                                list.push({ key: "delete", label: t('comments.deletePermanently'), icon: "fa-xmark", onClick: () => handleDeletePermanently(comment.id), disabled: busy, tone: "danger" });
-                            }
-                            return list;
+                            // Derived from the comment's own state, not the tab: "All" lists every state.
+                            const spec: Record<CommentActionKey, Omit<DataTableAction, 'key' | 'disabled'>> = {
+                                approve: { label: t('comments.approve'), icon: "fa-check", onClick: () => handleAction(comment.id, 'approve'), tone: "success" },
+                                unapprove: { label: t('comments.unapprove'), icon: "fa-rotate-left", onClick: () => handleAction(comment.id, 'unapprove'), tone: "warning" },
+                                spam: { label: t('comments.spam'), icon: "fa-ban", onClick: () => handleAction(comment.id, 'spam'), tone: "warning" },
+                                trash: { label: t('comments.trash'), icon: "fa-trash", onClick: () => handleAction(comment.id, 'trash'), tone: "danger" },
+                                notSpam: { label: t('comments.notSpam'), icon: "fa-circle-check", onClick: () => handleAction(comment.id, 'notSpam'), tone: "success" },
+                                restore: { label: t('comments.restore'), icon: "fa-trash-arrow-up", onClick: () => handleAction(comment.id, 'restore'), tone: "success" },
+                                deletePermanently: { label: t('comments.deletePermanently'), icon: "fa-xmark", onClick: () => handleDeletePermanently(comment.id), tone: "danger" },
+                            };
+                            return commentActions(comment.status).map((key) => ({ key, ...spec[key], disabled: busy }));
                         }}
                     />
                     <Pagination page={page} hasNext={hasMore} onChange={setPage} />

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import type { ConnectionIssue } from "@/contexts/AuthContext";
 import Sidebar from "@/components/Sidebar";
 import NotificationCenter from "@/components/NotificationCenter";
 import MfaSetup from "@/components/MfaSetup";
@@ -98,8 +99,39 @@ function AdminLoadingScreen() {
     );
 }
 
+/**
+ * The session could not be checked (rate limited, server or network down) and no user is known: not a
+ * sign-out, so no redirect to /login (M1-05 / S2-04). AuthProvider retries on its own; the countdown is
+ * informational and "Try now" re-checks at once.
+ */
+function AdminConnectionIssueScreen({ issue, onRetry }: { issue: ConnectionIssue; onRetry: () => void }) {
+    const { t } = useI18n();
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const id = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, []);
+    const seconds = Math.max(0, Math.ceil((issue.retryAt - now) / 1000));
+    const limited = issue.reason === "rate-limited";
+    return (
+        <div className="flex h-dvh items-center justify-center bg-gray-100 p-4">
+            <div role="alert" aria-live="polite" className="max-w-md w-full bg-white rounded-3xl border border-gray-100 shadow-xl p-8 text-center" data-testid="admin-connection-issue">
+                <div className="inline-flex w-14 h-14 shrink-0 rounded-2xl bg-amber-100 text-amber-600 items-center justify-center mb-4">
+                    <i className={`fa-solid ${limited ? "fa-hourglass-half" : "fa-plug-circle-xmark"} text-2xl`} aria-hidden="true"></i>
+                </div>
+                <h1 className="text-xl font-black text-gray-900">{t(limited ? "admin.connection.limited.title" : "admin.connection.down.title")}</h1>
+                <p className="text-sm text-gray-500 mt-2">{t(limited ? "admin.connection.limited.body" : "admin.connection.down.body")}</p>
+                <p className="text-xs text-gray-400 mt-4">{t("admin.connection.retrying").replace("{s}", String(seconds))}</p>
+                <button type="button" onClick={onRetry} className="mt-6 min-h-11 px-6 rounded-2xl bg-gray-900 hover:bg-blue-600 text-white text-xs font-black uppercase tracking-widest">
+                    {t("admin.connection.retryNow")}
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
-    const { user, isLoading, logout, can, refreshUser } = useAuth();
+    const { user, isLoading, logout, can, refreshUser, connectionIssue, retrySession } = useAuth();
     const { t, language } = useI18n();
     const { pluginMenus, isLoading: menusLoading } = useMenu();
     const router = useRouter();
@@ -194,6 +226,8 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
     useEffect(() => {
         if (!isLoading) {
             if (!user) {
+                // Could not check the session (429 / server down): that is not a sign-out.
+                if (connectionIssue) return;
                 router.push("/login");
             } else if (!can("access_admin_panel")) {
                 // Use the role-aware can() helper, NOT a raw user.capabilities check: an
@@ -204,7 +238,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                 logout(); // Logout if they managed to get a token but shouldn't be here
             }
         }
-    }, [user, isLoading, router, logout, can]);
+    }, [user, isLoading, router, logout, can, connectionIssue]);
 
     // ROUTE GUARD — "a page you cannot see in the menu is a page you cannot open" (lib/adminAccess.ts).
     // A NAVIGATION guard in the browser, not access control: every API still enforces its own capability.
@@ -227,6 +261,8 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
     }, [isLoading, redirectTo, router, pathname]);
 
     if (isLoading) return <AdminLoadingScreen />;
+
+    if (!user && connectionIssue) return <AdminConnectionIssueScreen issue={connectionIssue} onRetry={() => { void retrySession(); }} />;
 
     if (!user) return null;
 

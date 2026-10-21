@@ -27,7 +27,7 @@ const { recordAudit } = require('../core/audit');
 const { protectsNetworkAdmin, refuseNetworkAdminTarget } = require('../core/network-auth');
 const networkHandoff = require('../core/network-handoff');
 // THE SCALAR QUERY RULE — see core/query-params.
-const { requireScalarQuery, requireRouteId, routeIdOrNull } = require('../core/query-params');
+const { requireScalarQuery, requireRouteId, routeIdOrNull, scalarQueryParam } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
 
 // THE ROUTE-ID CONTRACT — see core/query-params. `:id` is a user id: `/users/abc` reached
@@ -43,7 +43,7 @@ router.param('id', requireRouteId({ code: 'rest_user_invalid_id', message: 'Inva
  * TypeError surfaced as a 500 to any caller who could list users.
  */
 const USER_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
-    'page', 'per_page', 'search', 'role', 'orderby', 'order',
+    'page', 'per_page', 'search', 'role', 'exclude_role', 'orderby', 'order',
 ]);
 
 // ─── DOCTRINE, ENFORCED ONCE FOR THE WHOLE ROUTER ──────────────────────────────────────────────────
@@ -215,9 +215,15 @@ router.use(authenticate, refuseHeadlessAccountSecurity, refuseBoundSessionOnOthe
  *           type: string
  *       - in: query
  *         name: role
+ *         description: Only users holding this role. A user with no stored role counts as a subscriber.
  *         schema:
  *           type: string
-*       - in: query
+ *       - in: query
+ *         name: exclude_role
+ *         description: Leave out users holding this role (the admin's Team list asks for exclude_role=subscriber).
+ *         schema:
+ *           type: string
+ *       - in: query
  *         name: orderby
  *         schema:
  *           type: string
@@ -274,6 +280,7 @@ router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Respon
         per_page = 10,
         search,
         role,
+        exclude_role: excludeRole,
         orderby = 'id',
         order = 'asc'
     } = req.query;
@@ -302,13 +309,14 @@ router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Respon
     const users = await User.findAll({
         search,
         role,
+        excludeRole,
         limit,
         offset,
         orderBy: safeOrderBy,
         order: safeOrder
     });
 
-    const total = await User.count({ search, role });
+    const total = await User.count({ search, role, excludeRole });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
@@ -573,6 +581,8 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
+    if (rejectWeakPassword(res, password)) return;
+
     // The username rule (models/User.ts) — User.create enforces it too; checked here for a clean 400.
     const usernameProblem = User.usernameError(username);
     if (usernameProblem) {
@@ -689,7 +699,7 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *               $ref: '#/components/schemas/User'
  *       400:
  *         description: >-
- *           rest_weak_password (self edit, under 8 characters), rest_invalid_email (malformed or already
+ *           rest_weak_password (a new password under 8 characters), rest_invalid_email (malformed or already
  *           taken — one uniform message, so this is never an account-existence oracle),
  *           rest_invalid_personal_email, rest_invalid_role, or rest_invalid_param (an account capability
  *           change no active plugin declares).
@@ -816,12 +826,15 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  */
 // NOTE: must be declared BEFORE '/:id' — Express matches in order and '/:id' would otherwise
 // capture the literal path 'me' (parseInt('me') → NaN → "Invalid user ID"). Mirrors GET /me / GET /:id.
-// Password-change-specific PRECONDITION for a SELF edit: a new password must be long enough. The sudo
+// PRECONDITION for every password this router writes — self edit, an administrator's edit of another
+// account and account creation: a new password must be long enough. (The admin paths used to accept «abc».) The sudo
 // re-auth itself is no longer chained here — it is decided per TOUCHED FIELD by selfEditNeedsSudo below
 // and applied ONCE, just before the write, by both self-service doors. Returns true if it already sent a
 // response (caller must return), false to proceed.
-function rejectWeakSelfPassword(res: Response, password: any): boolean {
-    if (!password) return false;
+function rejectWeakPassword(res: Response, password: any): boolean {
+    // A blank one (absent, empty, whitespace) is "not supplied": the sink skips it (ACCOUNT_SECURITY_FIELDS
+    // declares password 'nonblank'), so it is not a weak password either.
+    if (!password || !String(password).trim()) return false;
     if (String(password).length < 8) {
         res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
         return true;
@@ -1166,7 +1179,7 @@ function unusableEmail(res: Response) {
 router.put('/me', networkHandoff.refuseHandoffSession, asyncHandler(async (req: Request, res: Response) => {
     const { email, displayName, password, url, personalEmail, currentPassword } = req.body;
 
-    if (rejectWeakSelfPassword(res, password)) return;
+    if (rejectWeakPassword(res, password)) return;
 
     // Optional personal/recovery email (coexists with the primary email; used for password recovery).
     // Validated on the NORMALIZED value — the one the write below stores (see personalEmailValue).
@@ -1366,7 +1379,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // via /users/:ownId and take the account over persistently. An `edit_users` delegate acting on ANOTHER
     // user is unaffected (isOwn is false → admin edit, as before, with its own capability gates).
     // The sudo call itself is the last gate before the write, below — same shape as PUT /me.
-    if (isOwn && rejectWeakSelfPassword(res, password)) return;
+    if (rejectWeakPassword(res, password)) return;
 
     // SINK CRITERION: 'nonblank' for both `email` and `password` (see ACCOUNT_SECURITY_FIELDS). The
     // password used to go through RAW, and `User.update` only skips a FALSY one — so `'   '` was truthy,
@@ -1670,7 +1683,12 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
  *         required: true
  *         schema:
  *           type: integer
-*       - in: header
+ *       - in: query
+ *         name: reassign
+ *         description: Attribute every entry of the deleted user (any type and status) to this other user first. Without it the entries stay, credited to the deleted account.
+ *         schema:
+ *           type: integer
+ *       - in: header
  *         name: X-CSRF-Token
  *         schema:
  *           type: string
@@ -1689,6 +1707,9 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
  *                   type: boolean
  *                 previous:
  *                   $ref: '#/components/schemas/User'
+ *                 reassigned:
+ *                   type: integer
+ *                   description: How many entries were attributed to the reassign user (0 without reassign).
  *       400:
  *         description: "rest_user_cannot_delete — you cannot delete yourself."
  *         content:
@@ -1739,10 +1760,28 @@ router.delete('/:id', isAdmin, asyncHandler(async (req: Request, res: Response) 
     }
     if (protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
 
+    // `?reassign=<user id>`: the deleted account's content (every entry, any type and status) is
+    // attributed to that user first, as WordPress offers. Without it the entries stay, credited to an
+    // account that no longer exists — the old behaviour, kept so nothing is ever deleted implicitly.
+    const reassignRaw = scalarQueryParam(req.query.reassign, 'reassign');
+    let reassigned = 0;
+    if (reassignRaw !== undefined && reassignRaw !== '') {
+        const target = routeIdOrNull(reassignRaw);
+        const targetUser = target ? await User.findById(target) : null;
+        if (!targetUser || target === userId) {
+            return res.status(400).json({
+                code: 'rest_invalid_param',
+                message: 'reassign must name another existing user.',
+                data: { status: 400, params: { reassign: 'Invalid user ID.' } }
+            });
+        }
+        reassigned = await require('../models/Post').reassignAuthor(userId, target);
+    }
+
     await User.delete(userId);
     // AUDIT: admin deleted a user. Record who + the deleted account's login/role (no secret material).
-    await recordAudit(req.user.id, 'user.delete', 'user', userId, { username: user.userLogin, role: user.getRole && user.getRole() });
-    res.json({ deleted: true, previous: user.toJSON() });
+    await recordAudit(req.user.id, 'user.delete', 'user', userId, { username: user.userLogin, role: user.getRole && user.getRole(), ...(reassigned ? { reassignedTo: Number(reassignRaw), reassigned } : {}) });
+    res.json({ deleted: true, previous: user.toJSON(), reassigned });
 }));
 
 module.exports = router;

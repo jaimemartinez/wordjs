@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { mediaApi } from "@/lib/api";
+import { mediaApi, settingsApi } from "@/lib/api";
+import { uploadSequentially, type UploadFailure } from "@/lib/uploadQueue";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural } from "@/lib/i18n";
 import ConfirmationModal from "@/components/ConfirmationModal";
@@ -348,33 +349,58 @@ export default function MediaPage() {
 
     useEffect(() => { loadMedia(); }, [loadMedia]);
 
+    // The upload size limit as it applies now (Settings → Media; derived on the server). A file over it
+    // is refused HERE, before its bytes travel: the server's 413 only came after the whole file was sent.
+    const [uploadLimitBytes, setUploadLimitBytes] = useState<number | null>(null);
+    useEffect(() => {
+        settingsApi.get().then((s) => {
+            const n = Number((s as Record<string, unknown>).upload_max_bytes);
+            if (Number.isFinite(n) && n > 0) setUploadLimitBytes(n);
+        }).catch(() => { /* the server still enforces it */ });
+    }, []);
+
     const [uploadProgress, setUploadProgress] = useState(0);
+    // Which file of a multi-file pick is going up ("2 / 4"); null for a single file.
+    const [uploadStep, setUploadStep] = useState<{ index: number; total: number } | null>(null);
+    const [uploadFailures, setUploadFailures] = useState<UploadFailure[]>([]);
 
     const handleFileUpload = async (files: FileList | null) => {
         if (!files || !files.length) return;
 
         setUploading(true);
         setUploadProgress(0);
-
-        // Handle only first file for now, ideally loop
-        const file = files[0];
-        const formData = new FormData();
-        formData.append("file", file);
+        setUploadFailures([]);
+        const visibility = uploadPrivate ? "private" : "public";
 
         try {
-            await mediaApi.uploadWithProgress(formData, (progress) => {
-                setUploadProgress(Math.round(progress));
-            }, { visibility: uploadPrivate ? "private" : "public" });
-            // The upload lands newest-first on page 1, so go there and refetch.
-            setPage(1);
-            setRefreshKey((k) => k + 1);
-            addToast(t('media.upload.success'), "success");
-        } catch (error) {
-            console.error("Failed to upload file:", error);
-            addToast(t('media.upload.failed'), "error");
+            // EVERY picked or dropped file, one after another (lib/uploadQueue). It used to send files[0]
+            // and silently drop the rest.
+            const result = await uploadSequentially(files, async (file, onPercent) => {
+                if (uploadLimitBytes && file.size > uploadLimitBytes) {
+                    throw new Error(t('media.upload.tooLarge').replace('{mb}', String(Math.round((uploadLimitBytes / 1048576) * 10) / 10)));
+                }
+                const formData = new FormData();
+                formData.append("file", file);
+                return mediaApi.uploadWithProgress(formData, onPercent, { visibility });
+            }, (p) => {
+                setUploadProgress(p.percent);
+                setUploadStep(p.total > 1 ? { index: p.index, total: p.total } : null);
+            });
+            if (result.uploaded) {
+                // The uploads land newest-first on page 1, so go there and refetch.
+                setPage(1);
+                setRefreshKey((k) => k + 1);
+                addToast(result.uploaded === 1 ? t('media.upload.success') : t('media.upload.successMany').replace('{n}', String(result.uploaded)), "success");
+            }
+            if (result.failed.length) {
+                console.warn("Some uploads failed:", result.failed);
+                setUploadFailures(result.failed);
+                addToast(t('media.upload.failedMany').replace('{n}', String(result.failed.length)), "error");
+            }
         } finally {
             setUploading(false);
             setUploadProgress(0);
+            setUploadStep(null);
         }
     };
 
@@ -399,7 +425,9 @@ export default function MediaPage() {
         e.preventDefault();
         setIsDragging(false);
         handleFileUpload(e.dataTransfer.files);
-    }, []);
+        // Re-bound when "upload as private" or the size limit changes, so a drop uses the current values.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [uploadPrivate, uploadLimitBytes]);
 
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
     const [mediaToDelete, setMediaToDelete] = useState<number | null>(null);
@@ -556,7 +584,7 @@ export default function MediaPage() {
                             disabled={uploading}
                             onClick={() => fileInputRef.current?.click()}
                         >
-                            {uploading ? t('media.uploading') : t('media.upload')}
+                            {uploading ? (uploadStep ? `${t('media.uploading')} ${uploadStep.index} / ${uploadStep.total}` : t('media.uploading')) : t('media.upload')}
                         </Button>
                         <label className="flex items-center gap-2 min-h-11 text-xs font-bold text-gray-600 cursor-pointer whitespace-nowrap">
                             <input type="checkbox" className="h-5 w-5" checked={uploadPrivate} onChange={(e) => setUploadPrivate(e.target.checked)} />
@@ -566,6 +594,24 @@ export default function MediaPage() {
                     </div>
                 }
             />
+
+            {/* What failed in the last upload, and why (the server's reason: too large, refused type,
+                quota) — a toast alone vanished before anyone could read which file it meant. */}
+            {uploadFailures.length > 0 && (
+                <div role="alert" className="mb-6 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700" data-testid="media-upload-failures">
+                    <div className="flex items-start justify-between gap-3">
+                        <p className="font-bold">{t('media.upload.failedTitle')}</p>
+                        <button type="button" onClick={() => setUploadFailures([])} className="min-h-11 min-w-11 -m-3 text-red-500 hover:text-red-700" aria-label={t('common.close')}>
+                            <i className="fa-solid fa-xmark" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                    <ul className="mt-2 space-y-1">
+                        {uploadFailures.map((f, i) => (
+                            <li key={`${f.name}-${i}`} className="break-words"><span className="font-semibold">{f.name}</span>: {f.message}</li>
+                        ))}
+                    </ul>
+                </div>
+            )}
 
             {/* Progress Bar */}
             {uploading && (

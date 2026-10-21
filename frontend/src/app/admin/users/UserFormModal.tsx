@@ -74,6 +74,11 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // The server's rule (8 characters, every password it writes): said before the round trip.
+        if (formData.password && formData.password.length < 8) {
+            await alert(t('account.pwTooShort'));
+            return;
+        }
         setSaving(true);
 
         try {

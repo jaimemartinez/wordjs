@@ -19,7 +19,7 @@ import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput } from "@/li
 // — ver la cabecera de editorRootFields.ts. Sin categoría: la asimetría del CMS no se colapsa.
 import {
     withRecordRootFields,
-    seedRootPropsFromPost,
+    seedRootPropsFromPost, seedRecordIdentity, slugFollowsTitle,
     featuredImageMetaValue,
     resolveExcerptForSave,
     seedSeoRootProps,
@@ -152,6 +152,11 @@ export default function PageEditorPage() {
             const page = await postsApi.get(pageId!);
             setTitle(page.title);
             setSlug(page.slug);
+            // The loaded title is already in sync with the loaded slug: the auto-slug effect must not
+            // rewrite it on open, and a published entry keeps its URL when its title changes.
+            setLastSyncedTitle(page.title);
+            setSlugManuallyEdited(!slugFollowsTitle(page));
+            const identity = seedRecordIdentity(page);
             contentRef.current = page.content;
             setStatus(page.status);
             lastServerStatusRef.current = page.status;
@@ -176,16 +181,14 @@ export default function PageEditorPage() {
                     ...stored,
                     root: {
                         ...(stored.root as any),
-                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate, ...seedRoot }
+                        title: identity.title,
+                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate, ...seedRoot, ...identity }
                     }
                 };
                 setInitialVersoData(withTemplate);
                 versoDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
                 setHasStoredDocument(true);
-                if (typeof stored.root?.title === "string") {
-                    setTitle(stored.root.title);
-                }
             } else {
                 // Seed Puck data with existing info for legacy pages. A legacy/imported page keeps its
                 // body as HTML in `content` with no _puck_data. Wrap that HTML in an HTMLEmbed block so it

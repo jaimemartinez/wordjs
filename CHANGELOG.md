@@ -1052,6 +1052,35 @@ the boot error links there too.
   gateway serves over plain HTTP, asks before removing a network administrator, clears the action password
   after each action, and the two-factor field on the login screen is labelled for assistive technology. A
   join token's role, TTL and address are checked before the two-factor code is spent on it.
+- **Content, comments and accounts: what the admin screens promised now happens.** Found by testing a site
+  end to end in all three deployment modes:
+  - *Media*: picking or dropping several files uploads every one of them (only the first was sent); a file
+    the server refuses is listed with its reason (too large, refused type); UTF-8 file names keep their
+    accents in the title, and the stored file name folds them (`ñandú` → `nandu`).
+  - *Posts and pages*: «Delete» moves an entry to the trash, and the list now has a **Trash** tab with
+    **Restore** (back to the status it had) and **Delete permanently**; `POST /posts/:id/restore` is the API.
+    «Duplicate» carries categories, tags and SEO fields over, and opening the copy no longer gives it back the
+    original's title and slug. The editor's Slug field shows the entry's slug, a published entry keeps its URL
+    when its title changes, and an entry created or saved without a category lands in the default category.
+  - *Reusable symbols* can be saved again («Save block as symbol» always failed); a site where the symbol
+    type had been registered as internal is corrected on the next save.
+  - *Comments*: Approve / Unapprove appear, pending comments are highlighted, the Spam tab offers «Not spam»
+    and «Delete permanently», and times are shown in the viewer's time zone. `POST /comments/:id/unapprove`
+    lets an editor take an approval back. «Enable comments» and «Registered users only» now take effect on the
+    public form and on `POST /comments`, and a signed-in visitor comments under their own name.
+  - *Accounts*: «Sign out» ends this browser's session only; My Account → **Sessions** signs out everywhere.
+    A rate-limited (429) or unreachable server no longer looks like a sign-out: the admin says so and retries
+    on its own. The live notification stream is shared by every tab of a browser, backs off properly when
+    refused, and past the per-user cap the server answers `429` with `Retry-After`.
+  - *Users and roles*: the Team and Subscribers lists page, search and filter by role on the server (they
+    showed the first ten accounts); deleting a user names them and can attribute their posts and pages to
+    another user (`DELETE /users/:id?reassign=`); every password the admin sets needs 8 characters; a custom
+    role still held by users cannot be deleted; core roles offer no delete button; `edit_comments` can be
+    granted from the Roles screen.
+  - *Settings*: the sign-up default role cannot be one that runs the site, `posts_per_page` and
+    `admin_email` are validated, a refused save shows the server's reason, the admin email no longer promises
+    a confirmation message that does not exist, and the dashboard counters show real totals.
+
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
   certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes

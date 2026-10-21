@@ -1,4 +1,4 @@
-import { apiGet, apiPost, postsApi, type Post } from "@/lib/api";
+import { apiDelete, apiGet, apiPost, postsApi, type Post } from "@/lib/api";
 
 /**
  * Símbolos — componentes reutilizables estilo Figma/Webflow.
@@ -14,6 +14,14 @@ import { apiGet, apiPost, postsApi, type Post } from "@/lib/api";
  * (routes/post-types.ts) → saveCustomPostType guarda en la option `custom_post_types` y
  * initPostTypes lo re-registra en cada boot — así que `ensureSymbolType()` lo registra al vuelo
  * la primera vez y no vuelve a hacer red en la sesión.
+ *
+ * EL TIPO TIENE QUE SER REST-EXPOSED. Se registraba con `showInRest: false` (= tipo INTERNO), y desde
+ * el endurecimiento de /posts (isListablePostTypeParam) un tipo interno no se puede crear, listar ni leer
+ * por /posts: «Could not save the symbol» siempre, y la lista del bloque Symbol salía vacía. Ahora se
+ * registra visible para REST (fuera del menú, sin archivo) y PÚBLICO — el render público lee los
+ * símbolos publicados de forma anónima (resolveDynamicBlocks → GET /posts/:id). Un sitio que ya tenga el
+ * tipo registrado como interno (de un intento anterior) se corrige al vuelo: se borra la definición (las
+ * entradas no se tocan) y se registra de nuevo.
  *
  * GOTCHA del backend: la ruta POST /types NO hace await de saveCustomPostType (responde 201 antes
  * de que registerPostType haya corrido), así que tras registrar verificamos con GET /types/:name
@@ -39,14 +47,43 @@ export interface SymbolSummary {
 
 let ensurePromise: Promise<boolean> | null = null;
 
-async function typeExists(): Promise<boolean> {
+/** Lo que el registro dice del tipo: ausente, utilizable, o registrado como interno (inservible por /posts). */
+export type SymbolTypeState = "missing" | "ready" | "internal";
+
+export function symbolTypeState(type: { showInRest?: unknown } | null | undefined): SymbolTypeState {
+    if (!type) return "missing";
+    return type.showInRest === false ? "internal" : "ready";
+}
+
+async function readTypeState(): Promise<SymbolTypeState> {
     try {
-        await apiGet(`/types/${SYMBOL_POST_TYPE}`);
-        return true;
+        return symbolTypeState(await apiGet<{ showInRest?: unknown }>(`/types/${SYMBOL_POST_TYPE}`));
     } catch {
-        return false;
+        return "missing";
     }
 }
+
+async function typeExists(): Promise<boolean> {
+    return (await readTypeState()) === "ready";
+}
+
+/** La definición con la que se registra el tipo (exportada para el test). */
+export const SYMBOL_TYPE_DEFINITION = {
+    name: SYMBOL_POST_TYPE,
+    label: "Symbols",
+    labels: { singular: "Symbol", plural: "Symbols" },
+    // Fuera del menú admin y sin archivo, pero expuesto a REST y legible en público: los símbolos
+    // publicados forman parte de páginas públicas y el render los resuelve sin sesión.
+    public: true,
+    showInMenu: false,
+    showInRest: true,
+    hasArchive: false,
+    supports: ["title", "editor", "revisions"],
+    taxonomies: [],
+    // Familia de capacidades 'post' (edit_posts/publish_posts): cualquier usuario que pueda crear
+    // posts puede crear símbolos, sin capacidades nuevas que seedear.
+    capability_type: "post",
+};
 
 /**
  * Garantiza que el tipo `wjs_symbol` está registrado en el backend. Idempotente y cacheado por
@@ -56,24 +93,12 @@ async function typeExists(): Promise<boolean> {
  */
 export function ensureSymbolType(): Promise<boolean> {
     return (ensurePromise ||= (async () => {
-        if (await typeExists()) return true;
+        const state = await readTypeState();
+        if (state === "ready") return true;
         try {
-            await apiPost("/types", {
-                name: SYMBOL_POST_TYPE,
-                label: "Símbolos",
-                labels: { singular: "Símbolo", plural: "Símbolos" },
-                // Interno: fuera del menú admin y del listado REST de tipos; los POSTS publicados
-                // siguen siendo legibles (el render público los necesita vía el resolver SSR).
-                public: false,
-                showInMenu: false,
-                showInRest: false,
-                hasArchive: false,
-                supports: ["title", "editor", "revisions"],
-                taxonomies: [],
-                // Familia de capacidades 'post' (edit_posts/publish_posts): cualquier usuario que
-                // pueda crear posts puede crear símbolos, sin capacidades nuevas que seedear.
-                capability_type: "post",
-            });
+            // Registrado como interno por una versión anterior: se quita la definición (no las entradas).
+            if (state === "internal") await apiDelete(`/types/${SYMBOL_POST_TYPE}`);
+            await apiPost("/types", SYMBOL_TYPE_DEFINITION);
         } catch (err: unknown) {
             // 409 = otro cliente lo registró primero — perfecto. Cualquier otro fallo (403 no-admin,
             // red) cae a la verificación de abajo por si el tipo existe igualmente.
@@ -89,6 +114,7 @@ export function ensureSymbolType(): Promise<boolean> {
             if (await typeExists()) return true;
             await new Promise((r) => setTimeout(r, 200));
         }
+        ensurePromise = null; // un fallo no se recuerda: el siguiente intento vuelve a preguntar
         return false;
     })().catch(() => {
         ensurePromise = null; // permitir reintento en el siguiente uso
@@ -120,6 +146,11 @@ function toSymbol(p: Post): SymbolSummary {
         name: p.title || `Símbolo ${p.id}`,
         items: Array.isArray(content) ? content : [],
     };
+}
+
+/** Slug reservado a símbolos (el sitio público no los sirve como página — ver app/(public)/[slug]). */
+export function symbolSlug(now: number = Date.now(), rand: number = Math.random()): string {
+    return `wjs-symbol-${now.toString(36)}${Math.floor(rand * 1296).toString(36).padStart(2, "0")}`;
 }
 
 /** Meta en el formato EXACTO del editor de páginas: objeto (no string) bajo _puck_data. */
@@ -186,6 +217,9 @@ export const symbolsApi = {
         }
         const post = await postsApi.create({
             title: name,
+            // Slug propio: los tipos públicos comparten el espacio de slugs, y un símbolo llamado
+            // «Header» no debe ocupar /header antes que una página.
+            slug: symbolSlug(),
             content: "",
             status: "publish",
             type: SYMBOL_POST_TYPE,
@@ -212,7 +246,9 @@ export const symbolsApi = {
 
     /** Elimina un símbolo. Las páginas que lo usaban lo renderizan vacío (aviso en el editor). */
     async remove(id: number): Promise<void> {
-        await postsApi.delete(id);
+        // Borrado definitivo: ninguna pantalla lista una papelera de símbolos, así que un borrado
+        // blando los dejaba en un limbo inalcanzable.
+        await postsApi.deletePermanently(id);
         invalidate(id);
     },
 

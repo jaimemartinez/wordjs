@@ -7,6 +7,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { trStr, trFmt } from "@/lib/editorI18n";
 import MSym from "@/components/editor/MSym";
 import { buildRevisionRestoreMessage } from "@/lib/revisionRestoreDescription";
+import { parseServerDate } from "@/lib/serverDate";
 
 interface RevisionsSidebarProps {
     postId: number;
@@ -17,8 +18,13 @@ interface RevisionsSidebarProps {
 
 const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-function formatRelativeDate(value: string, language: string): string {
-    const then = new Date(value).getTime();
+/** A revision's instant: its UTC twin when present (lib/serverDate), never the zone-less string as local time. */
+function revisionWhen(rev: Pick<Revision, "modified" | "modifiedGmt">): Date | null {
+    return parseServerDate(rev.modifiedGmt, rev.modified);
+}
+
+function formatRelativeDate(when: Date | null, language: string): string {
+    const then = when ? when.getTime() : NaN;
     if (!Number.isFinite(then)) return "";
     const deltaMs = then - Date.now();
     const rtf = new Intl.RelativeTimeFormat(language, { numeric: "auto" });
@@ -28,7 +34,7 @@ function formatRelativeDate(value: string, language: string): string {
     if (Math.abs(hours) < 24) return rtf.format(hours, "hour");
     const days = Math.round(deltaMs / 86_400_000);
     if (Math.abs(days) < 30) return rtf.format(days, "day");
-    return new Date(value).toLocaleDateString(language, { dateStyle: "medium", timeStyle: undefined });
+    return (when as Date).toLocaleDateString(language, { dateStyle: "medium", timeStyle: undefined });
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +224,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
      * Argument order is (message, title, isDanger) — see ModalContext.
      */
     const handleRestoreClick = async (revision: Revision) => {
-        const when = new Date(revision.modified).toLocaleString();
+        const when = revisionWhen(revision)?.toLocaleString() ?? "";
         const ok = await confirm(
             buildRevisionRestoreMessage(revision, when),
             "Restore this version?",
@@ -274,7 +280,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                         <div className="mb-5">
                             <p className="text-[11px] text-[var(--ed-on-surface-variant)] font-semibold uppercase tracking-wider mb-2">{tr("Comparando")}</p>
                             <p className="text-xs text-[var(--ed-on-surface-variant)] leading-relaxed">
-                                <del className="bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] rounded px-1 no-underline">{new Date(diffRev.modified).toLocaleString()}</del>
+                                <del className="bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] rounded px-1 no-underline">{revisionWhen(diffRev)?.toLocaleString()}</del>
                                 <span className="mx-2" aria-hidden="true">→</span>
                                 <ins className="bg-emerald-100 text-emerald-900 rounded px-1 no-underline">{tr("Última")}</ins>
                             </p>
@@ -350,8 +356,8 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                                                 <span>{tr("Antes del cambio de un agente de IA")}{rev.source.agentName ? ` · ${rev.source.agentName}` : ""}</span>
                                             </p>
                                         )}
-                                        <p className="text-xs text-[var(--ed-on-surface-variant)]">{formatRelativeDate(rev.modified, language)}</p>
-                                        <p className="text-[11px] text-[var(--ed-outline)] mt-1 tabular-nums" style={{ fontFamily: "var(--ed-font-family-monospaced)" }}>{new Date(rev.modified).toLocaleString()}</p>
+                                        <p className="text-xs text-[var(--ed-on-surface-variant)]">{formatRelativeDate(revisionWhen(rev), language)}</p>
+                                        <p className="text-[11px] text-[var(--ed-outline)] mt-1 tabular-nums" style={{ fontFamily: "var(--ed-font-family-monospaced)" }}>{revisionWhen(rev)?.toLocaleString()}</p>
                                     </div>
                                     <div className="flex flex-wrap gap-2 mt-4">
                                         <button type="button" disabled={restoringId !== null || rev.restore?.compatible === false} title={rev.restore?.compatible === false ? tr("Esta revisión usa un formato no compatible") : undefined} onClick={() => handleRestoreClick(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5">

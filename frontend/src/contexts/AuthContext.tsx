@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { SESSION_ENDED_EVENT, announceHostNotAllowed, settingsApi } from "@/lib/api";
 import { canonicalLink, fillTemplate, noticeLanguage, storedAdminLanguage } from "@/lib/siteAddress";
@@ -52,6 +52,21 @@ interface AuthContextType {
     hostRefused: boolean;
     /** Signed out, and this address may not mint a session (REDTEAM R13): why, or null. */
     signInRefused: SignInRefusal | null;
+    /**
+     * The session could not be checked at all (429 rate limited, 5xx, network down) and no user is known
+     * yet: NOT a sign-out. The admin shows a "server busy / unreachable, retrying" screen instead of
+     * sending the visitor to /login, and the check is retried on its own. Null otherwise.
+     */
+    connectionIssue: ConnectionIssue | null;
+    /** Check the session again now (the connection-issue screen's "Try now"). */
+    retrySession: () => Promise<void>;
+}
+
+/** Why the session could not be checked: rate limited (429) or the server/network is unavailable. */
+export interface ConnectionIssue {
+    reason: "rate-limited" | "unavailable";
+    /** When the next automatic check happens (epoch ms). */
+    retryAt: number;
 }
 
 /** Why an accepted address still may not start a session: plain http to an https site, or not enabled. */
@@ -66,7 +81,7 @@ export type SessionProbe =
     | { kind: "user"; user: User }
     | { kind: "signed-out"; signInRefused: SignInRefusal | null }
     | { kind: "host-refused" }
-    | { kind: "unknown" };
+    | { kind: "unknown"; reason?: "rate-limited" | "unavailable"; retryAfterSeconds?: number };
 
 /**
  * Ask the backend who is signed in, and say what the answer MEANS. The one place that maps statuses:
@@ -91,11 +106,24 @@ export async function probeSession(fetchImpl: typeof fetch = fetch): Promise<Ses
             return { kind: "signed-out", signInRefused: data.signInRefused === "transport" ? "transport" : "address" };
         }
         if (res.status === 421) return { kind: "host-refused" };
+        // A 429 is the rate limiter, not a verdict on the session (M1-05: it used to land on /login).
+        if (res.status === 429) {
+            const retry = parseInt(String(res.headers?.get?.("Retry-After") ?? ""), 10);
+            return Number.isFinite(retry) && retry > 0
+                ? { kind: "unknown", reason: "rate-limited", retryAfterSeconds: retry }
+                : { kind: "unknown", reason: "rate-limited" };
+        }
+        if (res.status >= 500) return { kind: "unknown", reason: "unavailable" };
         return { kind: "unknown" };
     } catch (error) {
         console.error("Auth error:", error);
-        return { kind: "unknown" };
+        return { kind: "unknown", reason: "unavailable" };
     }
+}
+
+/** Wait before re-checking an unanswered session probe (attempt is 0-based): 5 s doubling to 60 s. */
+export function connectionRetryDelay(attempt: number): number {
+    return Math.min(5000 * Math.pow(2, Math.max(0, attempt)), 60_000);
 }
 
 /**
@@ -160,6 +188,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [isLoading, setIsLoading] = useState(true);
     const [hostRefused, setHostRefused] = useState(false);
     const [signInRefused, setSignInRefused] = useState<SignInRefusal | null>(null);
+    const [connectionIssue, setConnectionIssue] = useState<ConnectionIssue | null>(null);
+    const retryRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; attempt: number }>({ timer: null, attempt: 0 });
+    const userRef = useRef<User | null>(null);
+    userRef.current = user;
     const router = useRouter();
 
     // A 421 seen by one of this context's own raw-fetch calls. Announced the way api() does, so the root
@@ -172,6 +204,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const fetchUser = useCallback(async () => {
         const probe = await probeSession();
+        if (retryRef.current.timer) { clearTimeout(retryRef.current.timer); retryRef.current.timer = null; }
+        if (probe.kind === "unknown" && probe.reason && !userRef.current) {
+            // Nobody known yet and the server could not answer: say so and check again on our own,
+            // honouring Retry-After, else backing off 5 s, 10 s, 20 s … up to a minute.
+            const r = retryRef.current;
+            const delayMs = probe.retryAfterSeconds ? probe.retryAfterSeconds * 1000 : connectionRetryDelay(r.attempt);
+            r.attempt++;
+            setConnectionIssue({ reason: probe.reason, retryAt: Date.now() + delayMs });
+            r.timer = setTimeout(() => { void fetchUserRef.current?.(); }, delayMs);
+        } else if (probe.kind !== "unknown") {
+            retryRef.current.attempt = 0;
+            setConnectionIssue(null);
+        }
         if (probe.kind === "user") setUser(probe.user);
         else if (probe.kind === "signed-out") {
             setUser(null);
@@ -180,6 +225,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // "unknown": keep the previous user rather than forcing a logout over a transient failure.
         setIsLoading(false);
     }, [refuseHost]);
+    const fetchUserRef = useRef<typeof fetchUser | null>(null);
+    fetchUserRef.current = fetchUser;
+    useEffect(() => () => { if (retryRef.current.timer) clearTimeout(retryRef.current.timer); }, []);
 
     useEffect(() => {
         // Check for existing session via HttpOnly cookie
@@ -348,8 +396,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, [user]);
 
     const value = useMemo(
-        () => ({ user, login, verifyMfa, logout, refreshUser, isLoading, can, hostRefused, signInRefused }),
-        [user, login, verifyMfa, logout, refreshUser, isLoading, can, hostRefused, signInRefused]
+        () => ({ user, login, verifyMfa, logout, refreshUser, isLoading, can, hostRefused, signInRefused, connectionIssue, retrySession: fetchUser }),
+        [user, login, verifyMfa, logout, refreshUser, isLoading, can, hostRefused, signInRefused, connectionIssue, fetchUser]
     );
 
     return (

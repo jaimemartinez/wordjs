@@ -17,7 +17,7 @@ const totp = require('./totp');
 const { getOption, updateOption, deleteOption } = require('./options');
 const { getRoles } = require('./roles');
 
-const META = { enabled: 'mfa_enabled', secret: 'mfa_totp_secret', pending: 'mfa_pending_secret', backup: 'mfa_recovery_codes', lastStep: 'mfa_totp_last_step' };
+const META = { enabled: 'mfa_enabled', secret: 'mfa_totp_secret', pending: 'mfa_pending_secret', backup: 'mfa_recovery_codes', lastStep: 'mfa_totp_last_step', usedChallenges: 'mfa_used_challenges' };
 const N_BACKUP = 10;
 const CHALLENGE_TTL = '5m';
 
@@ -41,16 +41,49 @@ function generateBackupCodes(n = N_BACKUP): { codes: string[]; hashes: string[] 
     return { codes, hashes };
 }
 
-/** A 5-minute signed token proving the password step passed, so the 2nd factor can't be reached alone. */
+/**
+ * A 5-minute signed token proving the password step passed, so the 2nd factor can't be reached alone.
+ * It is good for ONE session: its id (`jti`) is recorded when a code completes the sign-in, and a used
+ * challenge is refused (it used to mint a second session with the next code for as long as it lived).
+ */
 function signChallenge(userId: number): string {
-    return require('./site-keys').signForSite({ userId, purpose: 'mfa_challenge' }, { algorithm: 'HS256', expiresIn: CHALLENGE_TTL });
+    const jti = crypto.randomBytes(12).toString('base64url');
+    return require('./site-keys').signForSite({ userId, purpose: 'mfa_challenge', jti }, { algorithm: 'HS256', expiresIn: CHALLENGE_TTL });
 }
-function verifyChallenge(token: string): { userId: number } | null {
+function verifyChallenge(token: string): { userId: number; jti?: string; exp?: number } | null {
     try {
         const d = require('./site-keys').verifyForSite(token);
         if (d.purpose !== 'mfa_challenge' || !d.userId) return null;
-        return { userId: d.userId };
+        return { userId: d.userId, jti: typeof d.jti === 'string' ? d.jti : undefined, exp: Number(d.exp) || undefined };
     } catch { return null; }
+}
+
+/** The used-challenge list (`{ jti: exp }`) with expired entries dropped. */
+async function readUsedChallenges(userId: number): Promise<Record<string, number>> {
+    const raw = await User.getMeta(userId, META.usedChallenges);
+    const now = Math.floor(Date.now() / 1000);
+    try {
+        const parsed = raw ? JSON.parse(String(raw)) : {};
+        const out: Record<string, number> = Object.create(null);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            for (const [k, v] of Object.entries(parsed)) if (Number(v) > now) out[k] = Number(v);
+        }
+        return out;
+    } catch { return Object.create(null); }
+}
+
+/** Has this challenge already completed a sign-in? (A challenge from before ids were issued has none.) */
+async function challengeUsed(userId: number, challenge: { jti?: string }): Promise<boolean> {
+    if (!challenge.jti) return false;
+    return Object.prototype.hasOwnProperty.call(await readUsedChallenges(userId), challenge.jti);
+}
+
+/** Record that this challenge completed a sign-in, until it would have expired anyway. */
+async function markChallengeUsed(userId: number, challenge: { jti?: string; exp?: number }): Promise<void> {
+    if (!challenge.jti) return;
+    const used = await readUsedChallenges(userId);
+    used[challenge.jti] = challenge.exp || Math.floor(Date.now() / 1000) + 300;
+    await User.updateMeta(userId, META.usedChallenges, JSON.stringify(used));
 }
 
 async function isEnabled(userId: number): Promise<boolean> {
@@ -356,7 +389,7 @@ async function tokenExposure(): Promise<{ requiredRoleTokens: number; unenrolled
 
 module.exports = {
     META, N_BACKUP,
-    signChallenge, verifyChallenge, isEnabled, verifyLoginCode,
+    signChallenge, verifyChallenge, challengeUsed, markChallengeUsed, isEnabled, verifyLoginCode,
     beginEnroll, completeEnroll, regenerateBackupCodes, disable, backupCount, hashBackup,
     getPolicy, setPolicy, evaluate, tokenExposure, POLICY_OPTION, DEFAULT_POLICY,
     recordFreshInstall, tokenEnforcementDefault, FRESH_INSTALL_OPTION

@@ -120,6 +120,11 @@ const MFA_AMR = 'mfa';
  * the claim and never outlives its end; GET /auth/me reports it so the admin shows the handoff banner.
  */
 const SESSION_HANDOFF = new WeakMap<object, { uid: number; by: string; from: string; exp: number }>();
+/**
+ * The session id (`ses`, core/session-revocation) of the session that authenticated this request, so a
+ * token refreshed FROM it keeps the same id and a logout of that browser ends exactly that session.
+ */
+const SESSION_ID = new WeakMap<object, string>();
 
 /** The handoff the presenting session belongs to, or null for any other session. */
 function sessionHandoff(req: Request): { uid: number; by: string; from: string; exp: number } | null {
@@ -622,8 +627,8 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         // Use <= (not <): JWT iat is whole seconds and validAfter is stamped as Math.floor(now/1000),
         // so a token minted in the SAME wall-clock second as the logout/password-change must also be
         // revoked — otherwise iat === validAfter slips through.
-        const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
-        if (validAfter && decoded.iat && decoded.iat <= validAfter) {
+        // Plus the per-session list: a logout ends ITS session only (core/session-revocation).
+        if (require('../core/session-revocation').isSessionRevoked(user, decoded)) {
             return res.status(401).json({
                 code: 'rest_token_revoked',
                 message: 'Session has been revoked. Please log in again.',
@@ -638,6 +643,7 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         // POST /auth/tokens can tell an MFA-verified session from one that never answered a code.
         SESSION_MFA.set(req, Array.isArray(decoded.amr) && decoded.amr.includes(MFA_AMR));
         if (decoded.hof) SESSION_HANDOFF.set(req, decoded.hof);
+        if (typeof decoded.ses === 'string' && decoded.ses) SESSION_ID.set(req, decoded.ses);
         req.user = user;
         noteAuthenticatedUse(req);
         next();
@@ -1445,8 +1451,7 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
         const user = await User.findById(decoded.userId);
         // Honor token revocation here too (see verifyAndAttachUser): treat a revoked token as anonymous.
         // Use <= so a token issued in the same second as logout/password-change is also revoked.
-        const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
-        if (user && validAfter && decoded.iat && decoded.iat <= validAfter) {
+        if (user && require('../core/session-revocation').isSessionRevoked(user, decoded)) {
             req.user = null;
         } else if (user && require('../core/network-handoff').handoffSessionRefusal(decoded, user)) {
             req.user = null;
@@ -1474,6 +1479,10 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
  */
 function generateToken(user: any, req?: Request, opts?: { mfa?: boolean; handoff?: { uid: number; by: string; from: string; exp: number } }) {
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
+    // One id per signed-in session, inherited by every refresh of it (core/session-revocation).
+    // Only a token minted FOR the user who holds that session inherits its id.
+    const inherited = req && (req as any).user && Number((req as any).user.id) === Number(user.id) ? SESSION_ID.get(req) : undefined;
+    claims.ses = inherited || require('../core/session-revocation').newSessionId();
     if ((opts && opts.mfa === true) || (req && sessionMfaVerified(req))) claims.amr = [MFA_AMR];
     const address = sessionAddressClaims(req);
     if (address) claims.mh = address.mh;

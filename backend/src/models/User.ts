@@ -193,7 +193,7 @@ async function generateUniqueNicename(source: any): Promise<string> {
  * (an enforced-MFA user who turns it off). Requests re-check these on their own; a long-lived stream is
  * ONE request, so it is told explicitly (core/collab-rooms recheckUser), here, where every write lands.
  */
-const ACCOUNT_SECURITY_META = new Set(['role', 'token_valid_after', 'mfa_enabled']);
+const ACCOUNT_SECURITY_META = new Set(['role', 'token_valid_after', 'revoked_session_tokens', 'mfa_enabled']);
 function noteAccountSecurityChange(userId: number, key: string): void {
     if (!ACCOUNT_SECURITY_META.has(String(key))) return;
     try { require('../core/collab-rooms').recheckUser(Number(userId)); } catch { /* periodic re-check still applies */ }
@@ -620,7 +620,8 @@ class User {
             // here, before one does.
             // PREVIOUS_NICENAME_META is an author-archive ALIAS the lookups resolve: writing it would claim
             // another author's old URL.
-            const PROTECTED_META = new Set(['role', 'token_valid_after', LEGACY_META_KEY, PREVIOUS_NICENAME_META]);
+            // 'revoked_session_tokens' is the per-session logout list (core/session-revocation).
+            const PROTECTED_META = new Set(['role', 'token_valid_after', 'revoked_session_tokens', LEGACY_META_KEY, PREVIOUS_NICENAME_META]);
             const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_', 'network_handoff',
                 accountCapabilities.ACCOUNT_CAPABILITY_META_PREFIX];
             const isProtectedMeta = (k: string) =>
@@ -655,15 +656,31 @@ class User {
 
     // Shared filter builder for findAll + count so their WHERE/JOIN can never drift — which is exactly
     // what made count() ignore the search/role filter (wrong X-WP-Total pagination). All values are bound.
+    //
+    // A user with NO role meta is a subscriber (toJSON's `role || 'subscriber'`), so the subscriber
+    // filter — and its inverse, `excludeRole: 'subscriber'` (the admin's Team list) — are written as
+    // "has no other role" / "has another role" rather than an equality on the meta row, which left those
+    // accounts out of every list.
     static _buildFilter(args: any = {}) {
-        const { role, search } = args;
+        const { role, search, excludeRole } = args;
         let join = '';
         const where: string[] = [];
         const params: any[] = [];
-        if (role) {
+        const roleRow = "SELECT 1 FROM user_meta rm WHERE rm.user_id = u.id AND rm.meta_key = 'role'";
+        if (role === 'subscriber') {
+            where.push(`NOT EXISTS (${roleRow} AND rm.meta_value <> ?)`);
+            params.push('subscriber');
+        } else if (role) {
             join = ' JOIN user_meta um ON u.id = um.user_id';
             where.push("um.meta_key = 'role' AND um.meta_value = ?");
             params.push(role);
+        }
+        if (excludeRole === 'subscriber') {
+            where.push(`EXISTS (${roleRow} AND rm.meta_value <> ?)`);
+            params.push('subscriber');
+        } else if (excludeRole) {
+            where.push(`NOT EXISTS (${roleRow} AND rm.meta_value = ?)`);
+            params.push(excludeRole);
         }
         if (search) {
             where.push('(u.user_login LIKE ? OR u.display_name LIKE ? OR u.user_email LIKE ?)');

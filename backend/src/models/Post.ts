@@ -1964,6 +1964,10 @@ class Post {
     /**
      * Delete a post
      * Equivalent to wp_delete_post()
+     *
+     * `forceDelete` false is a SOFT delete (move to trash), so it must go through the trash path:
+     * it used to write `post_status = 'trash'` directly, which lost the status the post came from —
+     * a later restore had nothing to restore TO and fell back to 'draft', silently unpublishing.
      */
     static async delete(id: any, forceDelete = false) {
         if (!isContentMutationActive()) return await runContentMutation(() => Post.delete(id, forceDelete));
@@ -2030,9 +2034,30 @@ class Post {
 
             return result.changes > 0;
         } else {
-            // Move to trash
-            return await Post.update(id, { status: 'trash' });
+            // Move to trash — recording where the post came from, so it can be restored (see trash()).
+            return await Post.trash(id);
         }
+    }
+
+    /**
+     * Attribute every entry of one author to another (DELETE /users/:id?reassign=). Any type and status,
+     * one UPDATE (revisions included). Returns how many entries moved. Each moved entry's cached copy carries the old author, so
+     * it is evicted, and the cached counts are retired.
+     */
+    static async reassignAuthor(fromUserId: number, toUserId: number): Promise<number> {
+        const moved = await dbAsync.all('SELECT id, post_name, post_type FROM posts WHERE author_id = ?', [fromUserId]);
+        if (!moved.length) return 0;
+        await dbAsync.run('UPDATE posts SET author_id = ? WHERE author_id = ?', [toUserId, fromUserId]);
+        for (const row of moved) {
+            await cache.del(`post:id:${row.id}`);
+            if (row.post_name) {
+                await cache.del(`post:slug:${row.post_type}:${row.post_name}`);
+                await cache.del(`post:slug:any:${row.post_name}`);
+            }
+        }
+        Post._invalidateCounts();
+        // Revisions move with their entries (they carry the author too) but are not entries themselves.
+        return moved.filter((row: any) => row.post_type !== 'revision').length;
     }
 
     /**
@@ -2044,6 +2069,10 @@ class Post {
         const post = await Post.findById(id);
         if (!post) return false;
 
+        // Already in the trash: re-recording the meta would store 'trash' AS the original status, and
+        // the next restore would "restore" the post straight back into the trash. Idempotent no-op.
+        if (post.postStatus === 'trash') return post;
+
         // Store original status in meta
         await Post.updateMeta(id, '_wp_trash_meta_status', post.postStatus);
         await Post.updateMeta(id, '_wp_trash_meta_time', Date.now());
@@ -2054,19 +2083,27 @@ class Post {
     /**
      * Restore a post from trash
      * Equivalent to wp_untrash_post()
+     *
+     * `restrict` (optional) maps the STORED original status to the one actually applied. The REST layer
+     * passes the publish-capability gate through it, so restoring can never hand an author a published
+     * post they would not be allowed to publish — the check happens on the ONE status that gets written,
+     * instead of a restore-then-downgrade that would fire two transitions (and briefly go live).
      */
-    static async untrash(id: any) {
-        if (!isContentMutationActive()) return await runContentMutation(() => Post.untrash(id));
+    static async untrash(id: any, restrict?: (originalStatus: string) => string) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.untrash(id, restrict));
         const post = await Post.findById(id);
         if (!post || post.postStatus !== 'trash') return false;
 
-        const originalStatus = (await Post.getMeta(id, '_wp_trash_meta_status')) || 'draft';
+        const originalStatus = String((await Post.getMeta(id, '_wp_trash_meta_status')) || 'draft');
+        // A row trashed before this meta existed (or with a corrupt value) restores as a draft, never
+        // back into the trash it is being pulled out of.
+        const target = originalStatus === 'trash' ? 'draft' : originalStatus;
 
         // Delete trash meta
         await Post.deleteMeta(id, '_wp_trash_meta_status');
         await Post.deleteMeta(id, '_wp_trash_meta_time');
 
-        return await Post.update(id, { status: originalStatus });
+        return await Post.update(id, { status: restrict ? restrict(target) : target });
     }
 
     /**

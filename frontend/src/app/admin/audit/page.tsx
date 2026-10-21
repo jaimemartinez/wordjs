@@ -154,7 +154,7 @@ export default function AuditPage() {
     // tabla sigue enseñando el id, que es el dato que el log guarda.
     const loadActors = async () => {
         try {
-            const users = await usersApi.list();
+            const users = (await usersApi.listPaged({ perPage: 100 })).data;
             setActorNames(new Map(users.map((u) => [u.id, u.displayName || u.username])));
         } catch {
             /* silencio deliberado: ver arriba */
