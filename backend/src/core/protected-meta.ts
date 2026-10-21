@@ -69,6 +69,9 @@ const PROTECTED_POST_META: Set<string> = new Set([
     '_wxr_source_url',
     '_wxr_menu_item_id',
     '_wxr_remote_url',
+    // Which WXR item an imported post or page came from (core/wxr-import): what tells a re-run that a
+    // post with the same slug IS that item, and not unrelated content of this site.
+    '_wxr_source_item',
     // Where an attachment's bytes live (core/media-storage): server-owned, set only by the upload route,
     // the visibility move and the offload/restore migration.
     '_wjs_media_storage',

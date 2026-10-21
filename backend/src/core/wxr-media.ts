@@ -144,6 +144,12 @@ function extensionMimeMap(): Map<string, string> {
     return map;
 }
 
+/** The MIME type an allowed upload extension maps to (`photo.JPG` → image/jpeg), or ''. */
+function mimeFromName(name: string): string {
+    const m = /\.([A-Za-z0-9]+)(?:[?#].*)?$/.exec(String(name || ''));
+    return m ? (extensionMimeMap().get(m[1].toLowerCase()) || '') : '';
+}
+
 /** Types whose binary signature must be confirmable (mirrors the upload route's `requiresSignature`). */
 function requiresSignature(mime: string): boolean {
     return (mime.startsWith('image/') && mime !== 'image/svg+xml') || mime === 'application/pdf';
@@ -173,6 +179,12 @@ interface MediaSettings {
     mode: MediaMode;
     /** Opt-in to `http://` sources. Off by default: a migration source that is not https is a downgrade. */
     allowHttp: boolean;
+    /**
+     * The export's OWN site host, when the administrator allowed downloads from it on a private network
+     * (a WordPress on the LAN, an intranet, a staging box). Only that host; loopback, link-local (cloud
+     * metadata) and multicast stay refused. null = every private address is refused, as before.
+     */
+    privateSourceHost: string | null;
     maxFileBytes: number;
     maxTotalBytes: number;
     timeoutMs: number;
@@ -192,6 +204,26 @@ function isDevLoopback(u: URL, allowHttp: boolean): boolean {
     const host = u.hostname.replace(/^\[|\]$/g, '');
     if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') return false;
     return (config.nodeEnv || process.env.NODE_ENV || 'production') !== 'production';
+}
+
+/** The address of an allowed private source host, or a thrown reason when it is one no opt-in opens. */
+async function resolvePrivateSource(hostname: string): Promise<string> {
+    const net = require('net');
+    const host = hostname.replace(/^\[|\]$/g, '');
+    const ip = net.isIP(host) ? host : (await require('dns').promises.lookup(host, { verbatim: true })).address;
+    const loopback = /^127\./.test(ip) || ip === '::1';
+    if (loopback || egress.isNeverExemptIp(ip)) throw new Error(`refused: ${hostname} resolves to ${ip}, which no import may reach`);
+    return ip;
+}
+
+/** A dns.lookup replacement that always answers `ip` (the address checked above: no rebinding). */
+function pinnedLookup(ip: string) {
+    const family = require('net').isIP(ip);
+    return (_host: string, options: any, cb?: any) => {
+        const callback = typeof options === 'function' ? options : cb;
+        if (options && typeof options === 'object' && options.all) callback(null, [{ address: ip, family }]);
+        else callback(null, ip, family);
+    };
 }
 
 /** Parse + scheme-check an attachment URL. Throws with a reportable reason. */
@@ -232,7 +264,21 @@ async function fetchAttachment(
 ): Promise<Buffer> {
     const u = assertSaneAttachmentUrl(rawUrl, settings.allowHttp);
     const devLoopback = isDevLoopback(u, settings.allowHttp);
-    if (!devLoopback) await egress.assertUrlAllowed(u.href); // throws on an internal/blocked target
+    // The administrator's opt-in for the export's own site on a private network: that host's address is
+    // resolved once, checked against the never-allowed ranges, and the connection pinned to it.
+    const privateIp = !devLoopback && settings.privateSourceHost && u.hostname.toLowerCase() === settings.privateSourceHost
+        ? await resolvePrivateSource(u.hostname)
+        : null;
+    if (!devLoopback && !privateIp) {
+        try {
+            await egress.assertUrlAllowed(u.href); // throws on an internal/blocked target
+        } catch (e: any) {
+            if (/network egress to .* is blocked/.test(String(e && e.message))) {
+                throw new Error(`refused: ${u.hostname} is on a private network, so the download was blocked. If it is the WordPress site you are moving, tick "Allow downloads from this site's private address" and run the import again.`);
+            }
+            throw e;
+        }
+    }
     const lib = u.protocol === 'https:' ? https : http;
     return await new Promise<Buffer>((resolve, reject) => {
         const opts: any = {
@@ -243,7 +289,8 @@ async function fetchAttachment(
             timeout: settings.timeoutMs,
             headers: { 'user-agent': 'WordJS-Importer' },
         };
-        if (!devLoopback) opts.lookup = egress.validatingLookup; // pin the validated IP (no DNS rebinding)
+        if (privateIp) opts.lookup = pinnedLookup(privateIp);
+        else if (!devLoopback) opts.lookup = egress.validatingLookup; // pin the validated IP (no DNS rebinding)
         const req = lib.request(opts, (res: IncomingMessage) => {
             const status = res.statusCode || 0;
             // Redirects are followed MANUALLY so the next hop re-runs the FULL guard (scheme + resolved
@@ -514,6 +561,8 @@ function normalizeSettings(options: any): MediaSettings {
     return {
         mode,
         allowHttp: options?.allowHttp === true,
+        privateSourceHost: typeof options?.privateSourceHost === 'string' && options.privateSourceHost
+            ? String(options.privateSourceHost).toLowerCase() : null,
         maxFileBytes: positive(options?.maxFileBytes, DEFAULT_MAX_FILE_BYTES),
         maxTotalBytes: positive(options?.maxTotalBytes, DEFAULT_MAX_TOTAL_BYTES),
         timeoutMs: positive(options?.timeoutMs, DEFAULT_TIMEOUT_MS),
@@ -872,7 +921,9 @@ class MediaImporter {
                     authorId: att.authorId,
                     title: att.title || path.basename(relative || url) || att.slug,
                     filename: relative,
-                    mimeType: placed ? placed.mimeType : (att.mimeType || 'application/octet-stream'),
+                    // A WXR item without `wp:post_mime_type` is typed by its extension (a linked .jpg was
+                    // `application/octet-stream`, so nothing treated it as an image).
+                    mimeType: placed ? placed.mimeType : (att.mimeType || mimeFromName(relative || url) || 'application/octet-stream'),
                     filePath: relative,
                     fileSize: placed ? placed.body.length : 0,
                     width,

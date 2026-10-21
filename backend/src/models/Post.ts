@@ -188,7 +188,7 @@ class Post {
     // "resolved, no featured image" (also when `_thumbnail_id` names a row that is not an attachment);
     // `parent` is the row the attachment hangs off (null when unattached or dangling). WHO may see the
     // attachment is decided per caller in toJSON, never here: this cache is viewer-independent.
-    _featuredImageCache?: { post: any; attachedFile: any; parent: any } | undefined;
+    _featuredImageCache?: { post: any; attachedFile: any; parent: any; remoteUrl?: string } | undefined;
     // Optional pre-loaded terms (set by hydrateRelations to avoid the per-post taxonomy query in
     // toJSON()). Same contract as _featuredImageCache: `undefined` means "not resolved yet" and
     // toJSON falls back to ONE per-post query; a post with no terms gets an empty-but-DEFINED bucket
@@ -437,7 +437,7 @@ class Post {
      * hydrateRelations() left on the instance; otherwise a few per-post queries, memoized the same way.
      * Viewer-independent on purpose — see toJSON for who may see it.
      */
-    async loadFeaturedImage(): Promise<{ post: any; attachedFile: any; parent: any }> {
+    async loadFeaturedImage(): Promise<{ post: any; attachedFile: any; parent: any; remoteUrl?: string }> {
         if (this._featuredImageCache !== undefined) return this._featuredImageCache;
         const none = { post: null, attachedFile: null, parent: null };
         // Prefer pre-loaded meta (hydrateRelations) to avoid an extra per-post query.
@@ -449,10 +449,15 @@ class Post {
         if (!row || row.postType !== 'attachment') return (this._featuredImageCache = none);
         const attachedFile = await Post.getMeta(row.id, '_wp_attached_file');
         const parent = row.postParent ? await Post.findById(row.postParent) : null;
+        // A `link`-mode WordPress import keeps the file on the old site (server-owned `_wxr_remote_url`,
+        // the same key models/Media.formatAttachment prefers): the featured image is THAT url, not the
+        // local /uploads path of a file never fetched (a 404, and a broken og:image).
+        const remote = await Post.getMeta(row.id, '_wxr_remote_url');
         return (this._featuredImageCache = {
             post: row,
             attachedFile: attachedFile != null ? attachedFile : null,
             parent: parent || null,
+            remoteUrl: typeof remote === 'string' && /^https?:\/\//i.test(remote) ? remote : undefined,
         });
     }
 
@@ -540,7 +545,7 @@ class Post {
         };
 
         if (includeContent) {
-            json.content = await doShortcodeAsync(bodySource);
+            json.content = await doShortcodeAsync(bodySource, { postId: Number(this.id) });
         }
         // Present only on a gated entry: `level` it requires, whether THIS viewer reads it in full.
         if (access.gated) json.access = { level: access.level, gated: true, granted: access.granted };
@@ -561,6 +566,8 @@ class Post {
             if (featuredImage.postStatus === privateMedia.PRIVATE_ATTACHMENT_STATUS) {
                 sitePath = privateMedia.privateFileUrl(featuredImage.id);
                 dynamicUrl = `${network.currentSiteUrl()}${sitePath}`;
+            } else if (featured.remoteUrl) {
+                dynamicUrl = featured.remoteUrl;
             } else if (attachedFile) {
                 const safePath = attachedFile.replace(/\\/g, '/');
                 dynamicUrl = `${network.currentSiteUrl()}/uploads/${safePath}`;
@@ -1170,6 +1177,17 @@ class Post {
         //
         // Callers that really want EVERY row, trash included, ask explicitly: pass
         // `includeStatuses: [...]` with the exact list, or `status: null` for no status filter at all.
+        // An explicit id set (GET /posts?sticky=…): `includeIds` keeps only those rows (an EMPTY set keeps
+        // none), `excludeIds` drops them. Ids are integers by construction (core/sticky-posts).
+        if (Array.isArray(options.includeIds)) {
+            const ids = options.includeIds.filter((n: any) => Number.isSafeInteger(n));
+            if (ids.length) { conditions.push(`${col}id IN (${ids.map(() => '?').join(',')})`); params.push(...ids); }
+            else conditions.push('1 = 0');
+        }
+        if (Array.isArray(options.excludeIds)) {
+            const ids = options.excludeIds.filter((n: any) => Number.isSafeInteger(n));
+            if (ids.length) { conditions.push(`${col}id NOT IN (${ids.map(() => '?').join(',')})`); params.push(...ids); }
+        }
         if (includeStatuses) {
             conditions.push(`${col}post_status IN (${includeStatuses.map(() => '?').join(',')})`);
             params.push(...includeStatuses);
@@ -1637,6 +1655,7 @@ class Post {
         if (data.status !== undefined) scalarString(data.status, 'status', 'draft');
         if (data.slug !== undefined) scalarString(data.slug, 'slug', '');
         if (data.commentStatus !== undefined) scalarString(data.commentStatus, 'commentStatus', 'open');
+        if (data.password !== undefined && data.password !== null) scalarString(data.password, 'password', '');
         if (data.language !== undefined && data.language !== null) scalarString(data.language, 'language', '');
 
         const updates: string[] = [];
@@ -1771,6 +1790,11 @@ class Post {
         if (data.commentStatus !== undefined) {
             updates.push('comment_status = ?');
             values.push(data.commentStatus);
+        }
+        // Password protection (WordPress "password protected" visibility): '' or null clears it.
+        if (data.password !== undefined) {
+            updates.push('post_password = ?');
+            values.push(data.password === null ? '' : String(data.password).slice(0, 255));
         }
 
         if (data.authorId !== undefined) {

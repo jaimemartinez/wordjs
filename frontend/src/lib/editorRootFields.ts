@@ -501,11 +501,31 @@ export function slugFollowsTitle(post: Pick<Post, "slug" | "status"> | undefined
 export function seedRootPropsFromPost(post: Post | undefined | null): {
     featuredImage: FeaturedMediaRef | undefined;
     excerpt: string;
+    visibilityPassword: string;
+    sticky: "1" | "0";
 } {
     return {
         featuredImage: featuredMediaFromPost(post),
         excerpt: typeof post?.excerpt === "string" ? post.excerpt : "",
+        visibilityPassword: typeof post?.password === "string" ? post.password : "",
+        sticky: post?.sticky === true ? "1" : "0",
     };
+}
+
+/**
+ * Contraseña y «fijar arriba» para el guardado: solo lo que el autor CAMBIÓ respecto de lo sembrado,
+ * para que un registro abierto sin esos campos (otra versión, otro editor) no los pise.
+ */
+export function visibilityForSave(
+    rootProps: Record<string, unknown>,
+    seeded: { visibilityPassword: string; sticky: "1" | "0" },
+): { password?: string; sticky?: boolean } {
+    const out: { password?: string; sticky?: boolean } = {};
+    const pw = typeof rootProps.visibilityPassword === "string" ? rootProps.visibilityPassword : seeded.visibilityPassword;
+    if (pw !== seeded.visibilityPassword) out.password = pw;
+    const st = rootProps.sticky === "1" || rootProps.sticky === "0" ? rootProps.sticky : seeded.sticky;
+    if (st !== seeded.sticky) out.sticky = st === "1";
+    return out;
 }
 
 /**

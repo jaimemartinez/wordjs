@@ -102,6 +102,8 @@ export interface ContentRecord {
     commentStatus: string;
     meta?: Record<string, unknown>;
     protected?: boolean;
+    password?: string;
+    sticky?: boolean;
     access?: { level: string; gated: boolean; granted: boolean };
     featuredMedia?: { id: number; url: string; title?: string };
     categories?: ContentTermRef[];
@@ -121,6 +123,8 @@ export interface ContentAttachmentCreateInput {
     meta?: Record<string, unknown>;
     categories?: number[];
     tags?: number[];
+    password?: string | null;
+    sticky?: boolean;
 }
 
 export interface ContentAttachmentUpdateInput {
@@ -134,6 +138,8 @@ export interface ContentAttachmentUpdateInput {
     meta?: Record<string, unknown>;
     categories?: number[];
     tags?: number[];
+    password?: string | null;
+    sticky?: boolean;
     autosave?: boolean;
 }
 
@@ -153,6 +159,8 @@ export interface ContentPageCreateInput {
     };
     categories?: number[];
     tags?: number[];
+    password?: string | null;
+    sticky?: boolean;
 }
 
 export interface ContentPageUpdateInput {
@@ -171,6 +179,8 @@ export interface ContentPageUpdateInput {
     };
     categories?: number[];
     tags?: number[];
+    password?: string | null;
+    sticky?: boolean;
     autosave?: boolean;
 }
 
@@ -189,6 +199,8 @@ export interface ContentPostCreateInput {
     };
     categories?: number[];
     tags?: number[];
+    password?: string | null;
+    sticky?: boolean;
 }
 
 export interface ContentPostUpdateInput {
@@ -206,6 +218,8 @@ export interface ContentPostUpdateInput {
     };
     categories?: number[];
     tags?: number[];
+    password?: string | null;
+    sticky?: boolean;
     autosave?: boolean;
 }
 
@@ -224,6 +238,8 @@ export interface ContentCreateInput {
     categories?: number[];
     tags?: number[];
     meta?: Record<string, unknown>;
+    password?: string | null;
+    sticky?: boolean;
 }
 
 export interface ContentUpdateInput {
@@ -241,6 +257,8 @@ export interface ContentUpdateInput {
     categories?: number[];
     tags?: number[];
     meta?: Record<string, unknown>;
+    password?: string | null;
+    sticky?: boolean;
     autosave?: boolean;
 }
 
@@ -258,6 +276,7 @@ export interface ContentListQuery {
     order?: string;
     categories?: string;
     tags?: string;
+    sticky?: string;
 }
 
 export type Post = ContentRecord;

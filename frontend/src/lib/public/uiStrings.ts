@@ -82,6 +82,26 @@ export function footerStrings(settings: Record<string, unknown> | null | undefin
     return footerStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
 }
 
+/** The password form of a password-protected entry (components/public/ProtectedEntryUnlock). */
+export interface ProtectedEntryStrings {
+    notice: string;
+    password: string;
+    submit: string;
+    wrong: string;
+    tooMany: string;
+}
+
+export function protectedEntryStrings(settings: Record<string, unknown> | null | undefined): ProtectedEntryStrings {
+    const lang = catalogueLanguage(resolveDocumentLanguage(settings).lang);
+    return {
+        notice: t("public.protected.notice", lang),
+        password: t("public.protected.password", lang),
+        submit: t("public.protected.submit", lang),
+        wrong: t("public.protected.wrong", lang),
+        tooMany: t("public.protected.tooMany", lang),
+    };
+}
+
 /** The members-only notice (core/content-access): shown where a gated entry's teaser ends. */
 export interface MembersGateStrings {
     title: string;

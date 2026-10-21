@@ -647,6 +647,9 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
         json.translations = await visibleTranslationRefs(json.translations, user);
     }
     json.protected = isPasswordProtected(post);
+    json.sticky = post.postType === 'post' && await require('../core/sticky-posts').isSticky(post.id);
+    // The password itself only to who manages the entry (the editor shows and changes it there).
+    if (canManagePostRecord(user, post)) json.password = post.postPassword || '';
     if (!canManagePostRecord(user, post)) {
         json.meta = publicPostMeta(json.meta);
         if (json.protected) {
@@ -847,8 +850,12 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         orderby = 'date',
         order = 'desc',
         categories,
-        tags
+        tags,
+        sticky
     } = req.query;
+    // WordPress's `sticky` filter: `true` lists only the stuck posts, `false` everything else.
+    const stickyIds = sticky === 'true' || sticky === 'false' ? await require('../core/sticky-posts').getStickyIds() : null;
+    const stickyFilter = stickyIds ? (sticky === 'true' ? { includeIds: stickyIds } : { excludeIds: stickyIds }) : {};
 
     // THE THREE FILTERS THE DOCUMENTATION HAS ALWAYS PROMISED, PARSED ONCE.
     //
@@ -1012,6 +1019,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         search,
         searchProtectedVisibleTo,
         attachmentViewer,
+        ...stickyFilter,
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'post_date',
@@ -1030,7 +1038,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         tags: tagsFilter,
         search,
         searchProtectedVisibleTo,
-        attachmentViewer
+        attachmentViewer,
+        ...stickyFilter
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -1205,6 +1214,63 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequ
     res.json(await serializeVisibleContent(post, req.user));
 }));
 
+// Ten tries per address per entry every 15 minutes: enough for a reader who mistypes, too few to guess.
+const unlockLimiter = require('express-rate-limit')({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request) => `${require('../core/client-ip').clientIpBucket(req)}:${String((req.params as any).id || '')}`,
+    message: { code: 'rest_post_unlock_rate_limited', message: 'Too many attempts. Try again later.', data: { status: 429 } },
+});
+
+/**
+ * @swagger
+ * /posts/{id}/unlock:
+ *   post:
+ *     summary: Read a password-protected entry with its password
+ *     description: >-
+ *       WordPress's "password protected" visibility. With the entry's password, answers the entry as its
+ *       readers see it (content, excerpt and page-builder tree included); members-only rules still apply.
+ *       A wrong password is 403 rest_post_incorrect_password; 10 attempts per address and entry per 15 minutes.
+ *     tags: [Posts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [password]
+ *             properties:
+ *               password: { type: string }
+ *     responses:
+ *       200: { description: The entry, unlocked. }
+ *       403: { description: Wrong password. }
+ *       404: { description: No such readable, password-protected entry. }
+ *       429: { description: Too many attempts. }
+ */
+router.post('/:id/unlock', unlockLimiter, optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
+    const post = await Post.findById(parseInt(req.params.id, 10));
+    if (!post || isHiddenFromRest(post) || !isPasswordProtected(post) || !(await canReadThroughRest(req.user, post))) {
+        return res.status(404).json(NOT_FOUND);
+    }
+    const given = typeof (req.body as any)?.password === 'string' ? (req.body as any).password : '';
+    const crypto = require('crypto');
+    const digest = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest();
+    if (!given || !crypto.timingSafeEqual(digest(given), digest(String(post.postPassword)))) {
+        return res.status(403).json({ code: 'rest_post_incorrect_password', message: 'Incorrect password.', data: { status: 403 } });
+    }
+    const json = await post.toJSON(true, req.user);
+    json.protected = true;
+    if (!canManagePostRecord(req.user, post)) json.meta = publicPostMeta(json.meta);
+    res.json(json);
+}));
+
 /**
  * @swagger
  * /posts:
@@ -1262,7 +1328,9 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
         tags,
         meta,
         date,
-        language
+        language,
+        password,
+        sticky
     } = req.body;
 
     if (!title) {
@@ -1400,8 +1468,13 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
             commentStatus: comment_status,
             date: requestedDate,
             // MULTILINGUAL (opt-in): the model canonicalizes a BCP-47 tag, or stores NULL. Absent → NULL.
-            language
+            language,
+            password: typeof password === 'string' ? password : undefined
         });
+        // Sticking a post to the front page is a publishing decision (WordPress: publish_posts).
+        if (typeof sticky === 'boolean' && mayPublish && createType === 'post') {
+            await require('../core/sticky-posts').setSticky(created.id, sticky);
+        }
 
         const createCategories = await categoriesToStore(createType, categories, true);
         if (createCategories) {
@@ -1528,7 +1601,9 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
         meta,
         autosave,
         date,
-        language
+        language,
+        password,
+        sticky
     } = req.body;
 
     // Re-parenting takes the PARENT's edit gate too, exactly as creation does — the twin surface of the
@@ -1659,8 +1734,12 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
                 menuOrder: menuOrderProvided ? newMenuOrder : undefined,
                 commentStatus: comment_status,
                 date: requestedDate,
-                language
+                language,
+                password: typeof password === 'string' || password === null ? password : undefined
             });
+            if (typeof sticky === 'boolean' && mayPublish && post.postType === 'post') {
+                await require('../core/sticky-posts').setSticky(postId, sticky);
+            }
 
             const updateCategories = await categoriesToStore(post.postType || post.type, categories, false);
             if (updateCategories) {

@@ -1538,6 +1538,8 @@ export const importApi = {
             media?: ImportMediaMode;
             /** Allow `http://` attachment sources. Off by default — the SSRF guard applies either way. */
             allowHttp?: boolean;
+            /** Download from the export's own site even on a private network (backend core/wxr-media). */
+            allowPrivateSource?: boolean;
             importAttachments?: boolean;
         } = {}
     ) => {
@@ -1547,6 +1549,7 @@ export const importApi = {
         fd.append("importComments", options.importComments === false ? "0" : "1");
         if (options.media) fd.append("media", options.media);
         fd.append("allowHttp", options.allowHttp ? "1" : "0");
+        fd.append("allowPrivateSource", options.allowPrivateSource ? "1" : "0");
         fd.append("importAttachments", options.importAttachments ? "1" : "0");
         return api<{ success: boolean; summary: ImportSummary }>("/import/wordpress", {
             method: "POST",

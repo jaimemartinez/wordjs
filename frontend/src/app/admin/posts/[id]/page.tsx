@@ -19,6 +19,7 @@ import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput, isFutureInp
 import {
     withRecordRootFields,
     seedRootPropsFromPost, seedRecordIdentity, slugFollowsTitle,
+    visibilityForSave,
     featuredImageMetaValue,
     resolveExcerptForSave,
     resolveCategoriesForSave,
@@ -106,6 +107,8 @@ export default function PostEditorPage() {
     // y `toJSON` devuelve un extracto DERIVADO cuando no hay uno propio — mandarlos siempre
     // reescribiría la taxonomía en cada autosave y congelaría el resumen automático).
     const seededExcerptRef = useRef("");
+    // Contraseña / «fijar arriba» tal como los sembró la carga (ver visibilityForSave).
+    const seededVisibilityRef = useRef<{ visibilityPassword: string; sticky: "1" | "0" }>({ visibilityPassword: "", sticky: "0" });
     // TODOS los ids de categoría del registro: el select enseña el primero, y los demás se reenvían
     // en vez de perderse (ver resolveCategoriesForSave).
     const seededCategoryIdsRef = useRef<number[]>([]);
@@ -248,6 +251,7 @@ export default function PostEditorPage() {
                 allowComments: post.commentStatus || "open",
             };
             seededExcerptRef.current = seedRoot.excerpt;
+            seededVisibilityRef.current = { visibilityPassword: seedRoot.visibilityPassword, sticky: seedRoot.sticky };
             seededCategoryIdsRef.current = taxonomy.categoryIds;
             seededTagsRef.current = taxonomy.tags;
             setRecordTags(taxonomy.tagRefs);
@@ -455,6 +459,8 @@ export default function PostEditorPage() {
                 seeded: seededTagsRef.current,
             });
 
+            const visibilityPatch = visibilityForSave(rootProps, seededVisibilityRef.current);
+
             const postData = {
                 title: finalTitle,
                 slug: finalSlug,
@@ -462,6 +468,7 @@ export default function PostEditorPage() {
                 ...statusPatch,
                 commentStatus,
                 ...(excerptPatch !== undefined ? { excerpt: excerptPatch } : {}),
+                ...visibilityPatch,
                 ...(categoriesPatch !== undefined ? { categories: categoriesPatch } : {}),
                 ...(tagsPatch !== undefined ? { tags: tagsPatch } : {}),
                 meta: {
@@ -519,6 +526,8 @@ export default function PostEditorPage() {
             // Lo que ya viajó pasa a ser la base: sin esto cada autosave posterior reenviaría el
             // mismo extracto y las mismas categorías eternamente. Solo tras un guardado CONFIRMADO.
             if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
+            if (visibilityPatch.password !== undefined) seededVisibilityRef.current = { ...seededVisibilityRef.current, visibilityPassword: visibilityPatch.password };
+            if (visibilityPatch.sticky !== undefined) seededVisibilityRef.current = { ...seededVisibilityRef.current, sticky: visibilityPatch.sticky ? "1" : "0" };
             const accessPatch = finalPostData.meta ? (finalPostData.meta as Record<string, unknown>)[ACCESS_META_KEY] : undefined;
             if (typeof accessPatch === "string") seededAccessRef.current = accessPatch;
             const savedMeta = (finalPostData.meta || {}) as Record<string, unknown>;

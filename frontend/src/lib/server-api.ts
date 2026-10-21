@@ -927,6 +927,18 @@ export const getLatestPostsPage = siteCache(async (page: number): Promise<{ post
         const body = await res.json();
         posts = Array.isArray(body) ? (body as Post[]) : [];
     } catch { /* an unreadable page renders as empty */ }
+    // Page 1 opens with the sticky posts (WordPress "Stick to the top of the blog"): those already on the
+    // page move up, the others are added in front; later pages keep their chronological order.
+    if (current === 1) {
+        const stuck = await serverFetch<Post[]>(
+            `/posts?type=post&status=publish&sticky=true&per_page=${API_MAX_PER_PAGE}`,
+            { revalidate: 30, tags: ['posts', 'posts:post'] },
+        );
+        if (Array.isArray(stuck) && stuck.length) {
+            const ids = new Set(stuck.map((p) => p.id));
+            posts = [...stuck, ...posts.filter((p) => !ids.has(p.id))];
+        }
+    }
     return { posts, total, totalPages: Math.max(1, Math.ceil(total / perPage)), page: current };
 });
 

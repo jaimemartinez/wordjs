@@ -181,6 +181,14 @@ const MEDIA_MODES: ReadonlySet<string> = new Set(['download', 'link', 'skip']);
  *                   Allow `http://` attachment sources. Off by default because a migration source that is not https
  *                   is a downgrade. It does not weaken the SSRF guard - a private or loopback address is still
  *                   refused, whatever the scheme.
+ *               allowPrivateSource:
+ *                 type: string
+ *                 enum: ["0", "1"]
+ *                 default: "0"
+ *                 description: >
+ *                   Allow downloads from the export's own site when it is on a private network (a WordPress on
+ *                   the LAN, an intranet, a staging host). Only that host; loopback, link-local and cloud
+ *                   metadata addresses stay refused.
  *               importAttachments:
  *                 type: string
  *                 enum: ["0", "1"]
@@ -237,6 +245,7 @@ router.post('/wordpress', authenticate, isAdmin, accountAuthorityOnly, upload.si
             importComments: req.body?.importComments !== '0',
             media,
             allowHttp: req.body?.allowHttp === '1',
+            allowPrivateSource: req.body?.allowPrivateSource === '1',
         });
         return res.json({ success: true, summary });
     } catch (e: any) {

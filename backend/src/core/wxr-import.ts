@@ -71,6 +71,9 @@ const { isCanonicalPostTypeName, canonicalImportedPostStatus } = require('./post
  */
 const ALWAYS_INTERNAL_POST_TYPES: Set<string> = new Set(['nav_menu_item', 'revision']);
 
+/** The WXR item a post came from (`<site>#<wp:post_id>`), server-owned (core/protected-meta). */
+const SOURCE_ITEM_META_KEY = '_wxr_source_item';
+
 /** The featured-image reference: a post's meta naming an ATTACHMENT id (remapped on import). */
 const THUMBNAIL_META_KEY = '_thumbnail_id';
 
@@ -232,6 +235,14 @@ function metaValueOf(item: any, key: string): string {
 
 const isPlaceholderDate = (d: string) => !d || d.startsWith('0000-00-00');
 
+/** A `YYYY-MM-DD HH:MM:SS` UTC time as the same moment in this server's clock (what Post.create stores). */
+function localFromGmt(gmt: string): string {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(gmt || ''));
+    if (!m) return '';
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+    return Number.isNaN(d.getTime()) ? '' : require('./formatting').formatDate(d);
+}
+
 /**
  * A WXR timestamp (`YYYY-MM-DD HH:MM:SS`, the MySQL DATETIME shape WordPress exports), or '' for a
  * placeholder or anything else. Used where the value is written into a date column of a row we did
@@ -383,6 +394,8 @@ interface ImportOptions {
     importAttachments?: boolean;
     /** Allow `http://` attachment sources. OFF by default — a migration source that is not https is a downgrade. */
     allowHttp?: boolean;
+    /** Allow downloads from the export's OWN site host when it is on a private network (core/wxr-media). */
+    allowPrivateSource?: boolean;
     /** Per-file download ceiling in bytes (default 50 MB). */
     maxFileBytes?: number;
     /** Whole-run download ceiling in bytes (default 1 GB). */
@@ -434,7 +447,9 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
     const defaultAuthorId = options.defaultAuthorId;
     const importComments = options.importComments !== false;
 
-    const media = createMediaImporter(options);
+    // "Allow downloads from this site's private address": the export's own host only (core/wxr-media).
+    const sourceHost = (() => { try { return new URL(String(parsed.site.baseUrl || parsed.site.link || '')).hostname; } catch { return ''; } })();
+    const media = createMediaImporter({ ...options, privateSourceHost: options.allowPrivateSource === true && sourceHost ? sourceHost : null });
     const attachmentItems = parsed.items.filter((i: any) => (text(i['wp:post_type']) || 'post') === 'attachment');
     // Rewriting is ON exactly when we know where the files ended up. In `link` mode the whole point is
     // that the bodies keep pointing at the old site; in `skip` mode nothing was placed under /uploads,
@@ -497,6 +512,17 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             const moved = renames.get(target);
             return moved === undefined ? match : `${before}/uploads/${moved}`;
         });
+    };
+
+    // Which WXR item a post came from: the exported site plus the item's id.
+    const sourceSite = String(parsed.site.link || parsed.site.baseUrl || '').trim().replace(/\/+$/, '');
+    const itemSourceKey = (oldId: string) => (oldId ? `${sourceSite}#${oldId}`.slice(0, 500) : '');
+    const isSameImportedItem = async (postId: number, sourceItem: string, item: any): Promise<boolean> => {
+        const mark = await dbAsync.get('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, SOURCE_ITEM_META_KEY]);
+        if (mark) return !!sourceItem && mark.meta_value === sourceItem;
+        const row = await dbAsync.get('SELECT post_date_gmt FROM posts WHERE id = ?', [postId]);
+        const gmt = text(item['wp:post_date_gmt']);
+        return !!row && !isPlaceholderDate(gmt) && String(row.post_date_gmt).slice(0, 19) === gmt.slice(0, 19);
     };
 
     /** Re-point an already-imported post's old-site upload URLs at the files now on this install. */
@@ -678,9 +704,13 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
         const pDateGmt = text(item['wp:post_date_gmt']);
         if (isPlaceholderDate(pDate)) return;
         const gmt = isPlaceholderDate(pDateGmt) ? pDate : pDateGmt;
+        // `post_date` holds the same clock as a post written here: the moment (post_date_gmt) in this
+        // server's local time, as Post.create stamps it. The WordPress site's wall time was kept before,
+        // so imported and native posts mixed two clocks in every listing and ordering.
+        const local = localFromGmt(gmt) || pDate;
         await dbAsync.run(
             `UPDATE posts SET post_date = ?, post_date_gmt = ?, post_modified = ?, post_modified_gmt = ? WHERE id = ?`,
-            [pDate, gmt, pDate, gmt, newId]
+            [local, gmt, local, gmt, newId]
         );
     };
 
@@ -846,7 +876,23 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
 
         try {
             // Idempotency: skip if a post with this slug+type already exists.
-            const existing = await Post.findBySlug(slug, type);
+            const sourceItem = itemSourceKey(oldId);
+            // The row an earlier run made from THIS item, wherever its slug ended up; else the slug's owner.
+            const marked = sourceItem ? await dbAsync.get(
+                `SELECT p.id FROM posts p JOIN post_meta m ON m.post_id = p.id WHERE m.meta_key = ? AND m.meta_value = ? AND p.post_type = ? LIMIT 1`,
+                [SOURCE_ITEM_META_KEY, sourceItem, type]
+            ) : null;
+            let existing = marked ? await Post.findById(Number(marked.id)) : await Post.findBySlug(slug, type);
+            // THE SAME ITEM, NOT THE SAME SLUG. A post of this site that merely shares the slug (the
+            // sample "About" page against WordPress's "about") used to count as "already imported": the
+            // WordPress page was dropped and its children hung off the sample page. It is this item when
+            // it carries this item's marker — or, for a run made before the marker existed, when it has
+            // no marker and the item's own publication moment.
+            let slugTaken = false;
+            if (existing && !(await isSameImportedItem(existing.id, sourceItem, item))) {
+                slugTaken = true;
+                existing = null;
+            }
             if (existing) {
                 if (oldId) oldToNewPost.set(oldId, existing.id);
                 // A post an EARLIER run created may still carry the raw source id (imports before the
@@ -915,6 +961,14 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             });
 
             if (oldId) oldToNewPost.set(oldId, post.id);
+            if (sourceItem) await Post.updateMeta(post.id, SOURCE_ITEM_META_KEY, sourceItem);
+            // WordPress "Stick to the top of the blog" (`wp:is_sticky`) — it was dropped.
+            if (type === 'post' && text(item['wp:is_sticky']).trim() === '1') {
+                await require('./sticky-posts').setSticky(post.id, true);
+            }
+            if (slugTaken) {
+                pushError(`${type} "${slug}": this site already has unrelated content at that address, so it was imported as "${post.slug || post.postName}"`);
+            }
             const wpParent = text(item['wp:post_parent']);
             if (wpParent && wpParent !== '0') deferredParent.set(post.id, wpParent);
 
@@ -948,7 +1002,7 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                             const cDateGmt = wxrDateTime(text(cm['wp:comment_date_gmt'])) || cDate;
                             await dbAsync.run(
                                 `UPDATE comments SET comment_date = ?, comment_date_gmt = ? WHERE comment_id = ?`,
-                                [cDate, cDateGmt, newCommentId]
+                                [localFromGmt(cDateGmt) || cDate, cDateGmt, newCommentId]
                             );
                         }
                         const cOld = text(cm['wp:comment_id']);

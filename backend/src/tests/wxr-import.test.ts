@@ -172,7 +172,10 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(hello.post_status, 'publish');
             assert.strictEqual(hello.author_id, jdoe.id, 'post attributed to imported author, not admin');
             assert.strictEqual(hello.post_content, HELLO_CONTENT, 'CDATA body stored byte-for-byte');
-            assert.strictEqual(hello.post_date, '2025-01-06 09:30:00', 'original publish date preserved');
+            // The moment is the export's post_date_gmt; post_date is that moment on this server's clock, the
+            // clock Post.create stamps native posts with (QA M3-16: the two used to be mixed in listings).
+            assert.strictEqual(hello.post_date_gmt, '2025-01-06 09:30:00', 'original publish moment preserved');
+            assert.strictEqual(hello.post_date, require('../core/formatting').formatDate(new Date(Date.UTC(2025, 0, 6, 9, 30, 0))));
 
             // ---- post meta: skip-list honoured, CDATA value verbatim, _puck_data sanitized -----
             const editLast = await dbAsync.get(
@@ -389,7 +392,7 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(att.post_excerpt, 'The photo caption.', 'excerpt:encoded -> caption');
             assert.strictEqual(att.post_content, 'The photo description.', 'content:encoded -> description');
             assert.strictEqual(att.guid, '/uploads/2025/01/photo.jpg', 'guid is the portable relative path');
-            assert.strictEqual(att.post_date, '2025-01-12 11:22:33', 'original upload date preserved');
+            assert.strictEqual(att.post_date, require('../core/formatting').formatDate(new Date(Date.UTC(2025, 0, 12, 11, 22, 33))), "original upload moment preserved (on this server clock)");
             const parentPost = await dbAsync.get(`SELECT id FROM posts WHERE post_name = 'media-post'`);
             assert.strictEqual(att.post_parent, parentPost.id, 'wp:post_parent mapped to the imported post');
 
@@ -898,8 +901,9 @@ describe('WXR importer (fast-xml-parser v5)', () => {
         it('keeps the comment dates the export carries', async () => {
             const post = await byName('remap-pour-over', 'post');
             const leo = await dbAsync.get(`SELECT comment_date, comment_date_gmt FROM comments WHERE comment_post_id = ? AND comment_author = 'Leo'`, [post.id]);
-            assert.strictEqual(leo.comment_date, '2024-03-03 08:00:00');
             assert.strictEqual(leo.comment_date_gmt, '2024-03-03 07:00:00');
+            // On this server's clock, like a comment written here (QA M3-16).
+            assert.strictEqual(leo.comment_date, require('../core/formatting').formatDate(new Date(Date.UTC(2024, 2, 3, 7, 0, 0))));
             const ana = await dbAsync.get(`SELECT comment_date FROM comments WHERE comment_post_id = ? AND comment_author = 'Ana'`, [post.id]);
             assert.ok(ana, 'a comment with an unreadable date is still imported');
             assert.notStrictEqual(ana.comment_date, 'not a date', 'an unreadable date is never written into the column');
