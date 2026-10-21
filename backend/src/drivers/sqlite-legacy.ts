@@ -46,7 +46,6 @@ async function init(options: any = {}) {
 
     // Enable foreign keys
     dbInstance.run('PRAGMA foreign_keys = ON;');
-    require('../core/sqlite-functions').registerSqliteFunctions(dbInstance);
 
     return dbInstance;
 }

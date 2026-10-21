@@ -1330,7 +1330,8 @@ class Post {
     static async _titleSortKey(column: string): Promise<string> {
         const { getDbType } = require('../config/database');
         const driver = String(getDbType().driver || '');
-        if (driver.startsWith('sqlite')) return `wjs_fold(${column})`;
+        if (driver === 'sqlite-native') return `wjs_fold(${column})`;
+        if (driver.startsWith('sqlite')) return `LOWER(${column})`;
         if (driver === 'postgres') {
             if (Post._pgUnaccentCache === undefined) {
                 try {

@@ -1182,8 +1182,8 @@ the boot error links there too.
 - **Edits, searches and orderings that depended on the engine.** Two editors saving one post that has no
   live session no longer overwrite each other silently: the second save asks first. The same tag created
   twice at once is one tag on every engine, and concurrent saves no longer leave more revisions than the
-  cap. The SQLite search (sqlite-legacy in particular) ignores case and accents in any language; title
-  order ignores case, and accents where the engine can. `og:article:published_time` and JSON-LD
+  cap. On sqlite-native the LIKE search (users, and posts when the full-text index cannot answer)
+  ignores case and accents in any language; title order ignores case, and accents where the engine can. `og:article:published_time` and JSON-LD
   `datePublished` are ISO 8601. Settings → General has a Time zone, and the public site prints dates in
   it. The installer explains what the legacy SQLite engine costs. In split mode, a second install on the
   same host uses its own ports before it is set up instead of the first install's.
