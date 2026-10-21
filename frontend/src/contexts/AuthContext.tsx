@@ -191,7 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [connectionIssue, setConnectionIssue] = useState<ConnectionIssue | null>(null);
     const retryRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; attempt: number }>({ timer: null, attempt: 0 });
     const userRef = useRef<User | null>(null);
-    userRef.current = user;
+    useEffect(() => { userRef.current = user; }, [user]);
     const router = useRouter();
 
     // A 421 seen by one of this context's own raw-fetch calls. Announced the way api() does, so the root
@@ -226,7 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsLoading(false);
     }, [refuseHost]);
     const fetchUserRef = useRef<typeof fetchUser | null>(null);
-    fetchUserRef.current = fetchUser;
+    useEffect(() => { fetchUserRef.current = fetchUser; }, [fetchUser]);
     useEffect(() => () => { if (retryRef.current.timer) clearTimeout(retryRef.current.timer); }, []);
 
     useEffect(() => {
