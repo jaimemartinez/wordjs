@@ -54,6 +54,11 @@ function clean(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
+/** Driver work for a principal is the host's own, whatever context asked for it (see runScoped). */
+function asHost<T>(fn: () => Promise<T>): Promise<T> {
+    return require('./plugin-context').runAsHost(fn);
+}
+
 function normalizeSlug(slug: string): string { return String(slug).replace(/[^A-Za-z0-9]+/g, '_').toLowerCase(); }
 function roleName(slug: string): string { return 'wjp_role_' + normalizeSlug(slug) + principalSuffix(); }
 function tablePrefix(slug: string): string { return 'wjp_' + normalizeSlug(slug) + '_'; }
@@ -96,6 +101,9 @@ function mysqlDriver(): any {
 
 /** Provision a plugin's DB principal + grants. Idempotent (once per process); no-op on SQLite; graceful. */
 async function provision(slug: string): Promise<void> {
+    return asHost(() => provisionImpl(slug));
+}
+async function provisionImpl(slug: string): Promise<void> {
     if (!enabled() || provisioned.has(principalKey(slug))) return;
     const pg = pgDriver();
     if (pg) {
@@ -136,6 +144,9 @@ async function reconcile(slugs: string[]): Promise<void> {
 
 /** Drop a plugin's DB principal on uninstall (best-effort; its tables are dropped separately). */
 async function deprovision(slug: string): Promise<void> {
+    return asHost(() => deprovisionImpl(slug));
+}
+async function deprovisionImpl(slug: string): Promise<void> {
     provisioned.delete(principalKey(slug));
     pluginPasswords.delete(principalKey(slug));
     const pg = pgDriver();
@@ -151,20 +162,34 @@ async function deprovision(slug: string): Promise<void> {
     }
 }
 
-/** GRANT a newly-created table to the plugin's DB principal (called right after a plugin CREATE TABLE). */
+/**
+ * GRANT a newly-created table to the plugin's DB principal (called right after a plugin CREATE TABLE).
+ *
+ * If the GRANT is refused the principal can never read that table, so routing the plugin's queries through
+ * it would fail every one of them with "access denied" (M3-03 / S4-01: a MySQL/MariaDB user holding ALL
+ * PRIVILEGES without GRANT OPTION — the usual managed-database user — creates the plugin's login user but
+ * cannot grant it anything; the first activation then left the plugin provisioned with no rights at all
+ * until the next restart, where provision() itself failed and fell back). The principal is dropped from
+ * this process's routing instead, so the plugin runs on the SQL text-guard, exactly as it would have if
+ * provisioning had failed up-front. Never broken, as the header promises.
+ */
 async function grantNewTable(slug: string, table: string): Promise<void> {
+    return asHost(() => grantNewTableImpl(slug, table));
+}
+async function grantNewTableImpl(slug: string, table: string): Promise<void> {
     if (!provisioned.has(principalKey(slug))) return;
     const tbl = String(table).toLowerCase();
     const pg = pgDriver();
-    if (pg) {
-        try { await pg.grantPluginTable(roleName(slug), tbl); }
-        catch (e: any) { log.warn({ table: clean(table), slug: clean(slug), err: e }, `[plugin-db-roles] grant new table '${clean(table)}' to '${clean(slug)}' failed`); }
-        return;
-    }
-    const my = mysqlDriver();
-    if (my) {
-        try { await my.grantPluginTableToUser(userName(slug), tbl); }
-        catch (e: any) { log.warn({ table: clean(table), slug: clean(slug), err: e }, `[plugin-db-users] grant new table '${clean(table)}' to '${clean(slug)}' failed`); }
+    const my = pg ? null : mysqlDriver();
+    if (!pg && !my) return;
+    try {
+        if (pg) await pg.grantPluginTable(roleName(slug), tbl);
+        else await my.grantPluginTableToUser(userName(slug), tbl);
+    } catch (e: any) {
+        provisioned.delete(principalKey(slug));
+        pluginPasswords.delete(principalKey(slug));
+        log.warn({ table: clean(table), slug: clean(slug), err: e },
+            `[plugin-db-${pg ? 'roles' : 'users'}] grant new table '${clean(table)}' to '${clean(slug)}' failed (falling back to the SQL text-guard)`);
     }
 }
 
@@ -176,11 +201,14 @@ async function grantNewTable(slug: string, table: string): Promise<void> {
 async function runScoped(slug: string, method: 'all' | 'get' | 'run', sql: string, params: any[]): Promise<any> {
     const { dbAsync } = require('../config/database');
     if (provisioned.has(principalKey(slug))) {
+        // The principal's connection belongs to the HOST, like the shared pool (config/database): opened
+        // under the plugin's context it would be judged by that plugin's sandbox and keep its context.
+        const { runAsHost } = require('./plugin-context');
         const pg = pgDriver();
-        if (pg) return pg.runAsRole(roleName(slug), method, sql, params);
+        if (pg) return runAsHost(() => pg.runAsRole(roleName(slug), method, sql, params));
         const my = mysqlDriver();
         const pw = pluginPasswords.get(principalKey(slug));
-        if (my && pw) return my.runAsUser(userName(slug), pw, method, sql, params);
+        if (my && pw) return runAsHost(() => my.runAsUser(userName(slug), pw, method, sql, params));
     }
     return dbAsync[method](sql, params);
 }

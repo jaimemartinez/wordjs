@@ -926,7 +926,7 @@ async function checkDbDivergence() {
 }
 
 // 3. Permission Enforcement
-const { verifyPermission } = require('../core/plugin-context');
+const { verifyPermission, getCurrentPlugin, runAsHost } = require('../core/plugin-context');
 
 // Create a proxy that returns getDb() when accessed (SYNC)
 const dbProxy = new Proxy({}, {
@@ -998,6 +998,14 @@ const dbAsyncProxy = new Proxy({}, {
         // LIMIT/OFFSET) works the same in both SQLite and PostgreSQL.
         // Covers both SQL and non-SQL operations (close, connect, etc.) — the
         // proxy passes every method through untouched after the permission check.
+        //
+        // The DRIVER runs as the host. A plugin's bridged query reaches here inside runWithContext(slug),
+        // and everything the driver creates on the way — a new pool connection, its socket, its idle
+        // timer — would otherwise keep that plugin's context for life: judged by the plugin's sandbox when
+        // it is opened (FALLOS 112/113: the plugin's egress rule refused the host's own database on a
+        // private address) and blamed on that plugin whenever it later fails. The permission checks above
+        // and the plugin's SQL guard (plugin-api) have already run under the plugin's context.
+        if (getCurrentPlugin()) return await runAsHost(() => db[prop].bind(db)(...args));
         return await db[prop].bind(db)(...args);
       }
     }

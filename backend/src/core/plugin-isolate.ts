@@ -89,23 +89,28 @@ function policyFingerprintFor(slug: string): string | undefined {
 // the happy path; this sweeps files ORPHANED by a host crash/restart (or a handler that never responded)
 // so os-tmp/wordjs-uploads can't accumulate unbounded. Started lazily when the first multipart route is
 // registered; the interval is unref'd so it never keeps the process alive.
+// Uploads are staged per plugin (sandbox-paths uploadStagingDir), so the reaper sweeps every staging dir
+// a multipart route was mounted with, plus the former shared os-tmp/wordjs-uploads for files an older
+// version left behind.
 let _uploadReaperStarted = false;
-function startUploadReaper(): void {
+const _uploadReaperDirs = new Set<string>([path.join(require('os').tmpdir(), 'wordjs-uploads')]);
+function startUploadReaper(dir?: string): void {
+    if (dir) _uploadReaperDirs.add(dir);
     if (_uploadReaperStarted) return;
     _uploadReaperStarted = true;
-    const os = require('os');
     const fsm = require('fs');
-    const dir = path.join(os.tmpdir(), 'wordjs-uploads');
     const MAX_AGE_MS = 60 * 60 * 1000; // reap temp uploads older than 1h (well past any 10MB in-flight upload)
     const sweep = () => {
-        fsm.readdir(dir, (err: any, files: string[]) => {
-            if (err) return; // dir may not exist yet
-            const cutoff = Date.now() - MAX_AGE_MS;
-            for (const f of files) {
-                const fp = path.join(dir, f);
-                fsm.stat(fp, (e: any, st: any) => { if (!e && st.isFile() && st.mtimeMs < cutoff) fsm.unlink(fp, () => { /* best effort */ }); });
-            }
-        });
+        for (const d of _uploadReaperDirs) {
+            fsm.readdir(d, (err: any, files: string[]) => {
+                if (err) return; // dir may not exist yet
+                const cutoff = Date.now() - MAX_AGE_MS;
+                for (const f of files) {
+                    const fp = path.join(d, f);
+                    fsm.stat(fp, (e: any, st: any) => { if (!e && st.isFile() && st.mtimeMs < cutoff) fsm.unlink(fp, () => { /* best effort */ }); });
+                }
+            });
+        }
     };
     sweep(); // catch orphans left by a previous run immediately
     const t = setInterval(sweep, 30 * 60 * 1000);
@@ -353,7 +358,7 @@ function onHostUncaughtException(err: any): void {
     // OWN uncaughtException listener too, defer to it (it also runs) rather than exiting out from under it.
     if (process.listenerCount('uncaughtException') > 1) return;
     try { log.error(err); } catch { /* */ }
-    process.exit(1);
+    require('./plugin-context').runAsHost(() => process.exit(1));
 }
 // SEND-SIDE twin of the guard above. `child.send()` can throw SYNCHRONOUSLY for two unrelated reasons:
 // the channel is gone (the child died between our `connected` check and the write — ERR_IPC_CHANNEL_CLOSED
@@ -3086,14 +3091,18 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 if (msg.opts && msg.opts.multipart) {
                     try {
                         const multer = require('multer');
-                        const os = require('os');
                         // Cap upload size: this was the ONE multer instance with no fileSize limit, so a
                         // plugin multipart route (e.g. mail attachments) accepted multi-GB bodies → tmp-disk DoS.
                         let maxFileSize = 10 * 1024 * 1024;
                         try { maxFileSize = require('../config/app').uploads.maxFileSize || maxFileSize; } catch { /* default */ }
-                        const up = multer({ dest: path.join(os.tmpdir(), 'wordjs-uploads'), limits: { fileSize: maxFileSize, files: 1 } });
+                        // Staged INSIDE the plugin's own private tmp storage, the one place its sandbox can
+                        // read the file it is handed as req.file.path (the OS temp dir was not: every upload
+                        // was unreadable to the handler). Created by the host, before the first request.
+                        const stagingDir = require('./sandbox-paths').uploadStagingDir(path.resolve(__dirname, '..', '..'), slug, siteId);
+                        require('fs').mkdirSync(stagingDir, { recursive: true });
+                        const up = multer({ dest: stagingDir, limits: { fileSize: maxFileSize, files: 1 } });
                         mw.push(up.single(String(msg.opts.multipart)));
-                        startUploadReaper(); // sweep crash-orphaned temp uploads (the per-request unlink handles the happy path)
+                        startUploadReaper(stagingDir); // sweep crash-orphaned temp uploads (the per-request unlink handles the happy path)
                     } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] multipart unavailable`); }
                 }
                 const cookieNs = `wjp_${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}_`;

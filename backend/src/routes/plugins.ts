@@ -2369,7 +2369,9 @@ router.post('/:slug/private-egress', authenticate, isAdmin, pluginLifecycleLimit
  *       200:
  *         description: Isolate re-spawned (the reload re-runs the full load pipeline, AST scan included)
  *       404:
- *         description: Plugin is not a loaded isolated plugin
+ *         description: Plugin is not active
+ *       500:
+ *         description: An active plugin that was not running could not be started (its runtime lastError says why)
  *       409:
  *         description: >-
  *           `sandbox_unavailable` — the plugin sandbox refused to start the new child; the old one was
@@ -2388,7 +2390,19 @@ router.post('/:slug/reload', authenticate, isAdmin, pluginLifecycleLimiter, asyn
     // re-runs, so this cannot be used to sidestep the security model.
     const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
     if (!isIsolated(slug)) {
-        return res.status(404).json({ error: `Plugin '${slug}' is not a loaded isolated plugin (is it active?)` });
+        // An ACTIVE plugin that failed to start (at boot, or its child died for good) has no isolate to
+        // reload, and answering 404 left the admin no way back short of deactivating and activating it
+        // again (FALLOS 112). Start it through the same pipeline a cross-node activation uses —
+        // grants re-read, permissions re-validated, full load with the AST scan — so "Restart" recovers it.
+        const core = require('../core/plugins');
+        if (!(await core.isPluginActive(slug))) {
+            return res.status(404).json({ error: `Plugin '${slug}' is not a loaded isolated plugin (is it active?)` });
+        }
+        const started = await core.loadOnePlugin(slug);
+        if (!started || !isIsolated(slug)) {
+            return res.status(500).json({ error: `Plugin '${slug}' could not be started. Its last error is shown on the plugin card.`, slug, stopped: true });
+        }
+        return res.json({ success: true, slug, message: `Plugin '${slug}' started.` });
     }
     try {
         await reloadIsolatedPlugin(slug);

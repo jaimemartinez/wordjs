@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { sandboxPaths } = require('./sandbox-paths');
+const { sandboxPaths, uploadStagingDir } = require('./sandbox-paths');
 // Use the EFFECTIVE plugin (context OR call stack), not ALS-only, so this global-fs backstop
 // also applies to detached plugin code that reaches the real fs.
 const { getEffectivePlugin } = require('./plugin-context');
@@ -667,6 +667,18 @@ function forgetDeclaredPermissions(pluginSlug?: string): void {
 }
 
 /**
+ * Is this a READ of the upload the host staged for one of this plugin's own multipart routes? The one
+ * place in private storage a plugin reads without a filesystem grant: the file is the request's input.
+ * Shared by isPathSafe and secure-require's capability gate so both surfaces exempt the same set.
+ */
+function isStagedUploadRead(pluginSlug: string, targetPath: any, isWrite: boolean): boolean {
+    if (isWrite || !pluginSlug || pluginSlug.startsWith('theme:')) return false;
+    let resolved: string;
+    try { resolved = path.resolve(String(targetPath)).replace(/^\\\\\?\\UNC\\/, '\\\\').replace(/^\\\\\?\\/, ''); } catch { return false; }
+    try { return under(resolved, uploadStagingDir(ROOT_DIR, pluginSlug, guardSiteId(pluginSlug))); } catch { return false; }
+}
+
+/**
  * Check if a path is safe to access
  */
 // `knownSlug` lets a CALLER that has already resolved the effective plugin pass it in. That resolution is
@@ -873,7 +885,10 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
 
     // The hashed data/log/tmp roots are capability storage, not free private storage. secure-require
     // already asks this question, but the global fs backstop must enforce it independently too.
-    if (nativePaths.storage.some((dir: string) => under(resolved, dir))
+    // One read is not storage: the upload the host staged for this plugin's own multipart route
+    // (sandbox-paths uploadStagingDir) is that request's input, handed over as req.file.path.
+    const stagedUploadRead = isStagedUploadRead(pluginSlug, resolved, isWrite);
+    if (!stagedUploadRead && nativePaths.storage.some((dir: string) => under(resolved, dir))
         && !fsCapabilityAllowed(pluginSlug, isWrite ? 'write' : 'read')) {
         throttledWarn(`${pluginSlug}:storage-grant`, `[Security Block] Plugin '${pluginSlug}' lacks filesystem:${isWrite ? 'write' : 'read'} for private capability storage: ${resolved}`);
         return false;
@@ -1330,6 +1345,7 @@ for (const m of [
 
 module.exports = {
     isPathSafe,
+    isStagedUploadRead,
     // The RUNTIME authority for a revoked filesystem capability, exported so secure-require's fs and
     // fs.promises proxies ask the SAME question this guard asks (one definition of "the admin said no"),
     // and so a test can drive it directly. forgetDeclaredPermissions() exists because the manifest cache

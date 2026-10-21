@@ -728,14 +728,17 @@ export default function PluginsPage() {
         if (!pluginToDelete || !password) return;
 
         try {
-            await pluginsApi.delete(pluginToDelete.slug, password, dropData);
+            const res = await pluginsApi.delete(pluginToDelete.slug, password, dropData);
             setDeleteModalOpen(false);
             setPluginToDelete(null);
             setPassword("");
             setDropData(false);
             loadPlugins();
             refreshMenus();
-            addToast(t('common.success'), "success");
+            // Deleted, but some of its data tables are still in the database: say so, never a plain success.
+            const kept: string[] = Array.isArray(res?.cleanup?.tablesKept) ? res.cleanup.tablesKept : [];
+            if (kept.length) addToast(t('plugins.delete.tablesKept').replace('{count}', String(kept.length)).replace('{tables}', kept.join(', ')), "error", 0);
+            else addToast(t('common.success'), "success");
         } catch (error: any) {
             console.error("Failed to delete plugin:", error);
             setDeleteError(error.message || t('plugins.delete.failed'));
@@ -1375,6 +1378,8 @@ export default function PluginsPage() {
                             const rss = fmtMB(plugin.runtime?.rssBytes);
                             const isCrashLooping = plugin.runtime?.state === 'crash-looping';
                             const isRefused = plugin.runtime?.state === 'refused';
+                            // An ACTIVE plugin whose worker is not running failed to start: say why on the card.
+                            const isStopped = plugin.runtime?.state === 'stopped';
                             return (
                             <div
                                 key={plugin.slug}
@@ -1469,7 +1474,7 @@ export default function PluginsPage() {
                                                 <FaSyncAlt className={`text-[11px] ${restarting[plugin.slug] ? 'animate-spin' : ''}`} />
                                             </button>
                                         </div>
-                                        {(isCrashLooping || isRefused) && plugin.runtime?.lastError && (
+                                        {(isCrashLooping || isRefused || isStopped) && plugin.runtime?.lastError && (
                                             <p className="text-[11px] text-red-600 bg-red-50/50 border border-red-100 rounded-lg p-2 mt-2 font-mono break-words line-clamp-2" title={plugin.runtime.lastError}>{plugin.runtime.lastError}</p>
                                         )}
                                         {isRefused && (
