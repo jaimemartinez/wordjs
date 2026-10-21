@@ -17,6 +17,7 @@ import ThemeTokenOverlay from "@/components/public/ThemeTokenOverlay";
 import SidebarLayout from "@/components/public/SidebarLayout";
 import { ActivePluginsProvider } from "@/lib/useActivePlugins";
 import { parseThemeLayout } from "@/lib/themeLayout";
+import type { FooterStrings } from "@/lib/public/uiStrings";
 
 export default function PublicLayoutShell({
     children,
@@ -28,6 +29,7 @@ export default function PublicLayoutShell({
     headerMenu,
     footerMenu,
     footerSocials,
+    footerStrings,
     announcementSlot,
     headerSlot,
     footerSlot,
@@ -50,6 +52,8 @@ export default function PublicLayoutShell({
     headerMenu?: any[];
     footerMenu?: any[];
     footerSocials?: any[];
+    // Built-in footer headings in the site language, resolved by the server layout (lib/public/uiStrings).
+    footerStrings?: FooterStrings;
     // Composable chrome (contract v1): when the async layout resolved a composition (site option or
     // theme chrome file) it passes the ALREADY-RENDERED <header>/<footer> here and it replaces the
     // built-in Header/Footer for that part. Absent ⇒ today's layout-v2 chrome, byte-for-byte.
@@ -110,7 +114,7 @@ export default function PublicLayoutShell({
                 <main id="main-content" className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>
                     <SidebarLayout enabled={sidebar.enabled} position={sidebar.position}>{children}</SidebarLayout>
                 </main>
-                {footerSlot ?? <Footer previewSettings={settings} previewMenu={footerMenu} previewSocials={footerSocials} variant={footer.variant} columns={footer.columns} />}
+                {footerSlot ?? <Footer previewSettings={settings} previewMenu={footerMenu} previewSocials={footerSocials} variant={footer.variant} columns={footer.columns} strings={footerStrings} />}
             </div>
         </ActivePluginsProvider>
     );
