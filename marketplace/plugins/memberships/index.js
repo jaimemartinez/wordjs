@@ -396,11 +396,15 @@ exports.init = async function (wordjs) {
 
     // Whether visitors can create an account (Settings → General). The paywall only offers "Create account"
     // when they can; otherwise it sent them to a "registration closed" page (X4-10).
+    // The host answers it (site.registrationOpen): users_can_register is a protected option, unreadable
+    // through options.get. A core without that bridge call (or any failure) counts as CLOSED, so the wall
+    // never offers a sign-up that ends on "Registration closed".
     const registrationOpen = async () => {
         try {
-            const v = await options.get('users_can_register', 0);
-            return !!v && v !== '0' && v !== 'false';
-        } catch (e) { return true; }
+            return (wordjs.site && typeof wordjs.site.registrationOpen === 'function')
+                ? !!(await wordjs.site.registrationOpen())
+                : false;
+        } catch (e) { return false; }
     };
 
     http.route('get', '/public/tiers', quietly('tier list', async (req, res) => {

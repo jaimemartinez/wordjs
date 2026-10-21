@@ -19,6 +19,10 @@ const GalleryPicker = ({ value, onChange }: { value: string; onChange: (value: s
             className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
         >
             {items.length === 0 && <option value="default">default</option>}
+            {/* A stored id that no longer exists stays visible instead of silently showing the first gallery. */}
+            {items.length > 0 && value && !items.some((g) => String(g.id) === String(value)) && (
+                <option value={value}>{value} (no encontrada)</option>
+            )}
             {items.map((g) => (
                 <option key={g.id} value={g.id}>{g.name || g.id} ({g.videoCount || 0})</option>
             ))}

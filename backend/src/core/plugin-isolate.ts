@@ -1798,7 +1798,7 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'crypto.randomToken', 'crypto.randomInt', 'crypto.hmac', 'crypto.hash', 'crypto.timingSafeEqual',
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
-    'site.url', 'site.domain', 'site.adminEmail',
+    'site.url', 'site.domain', 'site.adminEmail', 'site.registrationOpen',
     'posts.get',
     // Private media description (gated host-side on media:private_read). Streaming the BYTES is not a
     // bridge call: it is a route reply (`res.sendPrivateMedia`), so file contents never cross the IPC.

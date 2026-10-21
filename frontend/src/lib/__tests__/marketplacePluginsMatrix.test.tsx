@@ -9,6 +9,8 @@ import { menuLabel } from "@/lib/menuLabel";
 import { paletteGroupOf, paletteIconOf, FALLBACK_GROUP } from "@/lib/blockCatalog";
 import { PluginBundleError, remotePluginFailureComponent } from "@/lib/pluginBundleLoader";
 import { PermissionRow } from "@/app/admin/plugins/PermissionRow";
+import { membersGateStrings } from "@/lib/public/uiStrings";
+import MembersOnlyGate from "@/components/public/MembersOnlyGate";
 
 /**
  * The marketplace-plugin pass, admin and editor side:
@@ -137,5 +139,21 @@ describe("unconfigured plugin blocks: editor hint only", () => {
         // Form / poll start "loading": no admin text either way on the first render.
         expect(renderToStaticMarkup(<ContactForms formId="" title="" elementId="" />)).not.toContain("Admin → Formularios");
         expect(renderToStaticMarkup(<Polls pollId="" accentColor="" elementId="" />)).not.toContain("Admin → Encuestas");
+    });
+});
+
+describe("the core members-only notice with registration closed", () => {
+    const gate = (settings: Record<string, unknown>) => renderToStaticMarkup(
+        <MembersOnlyGate postId={1} mode="html" strings={membersGateStrings(settings)} showNotice commentsWhenGranted={false}>{null}</MembersOnlyGate>,
+    );
+    it("offers no «Create an account» that ends on «Registration closed»", () => {
+        expect(membersGateStrings({ users_can_register: 0 }).signupOpen).toBe(false);
+        expect(membersGateStrings({ users_can_register: "0" }).signupOpen).toBe(false);
+        expect(gate({ users_can_register: 0 })).not.toContain('href="/register');
+        expect(gate({ users_can_register: 0 })).toContain('href="/login');
+    });
+    it("open registration, or settings that do not say, keep the link", () => {
+        expect(gate({ users_can_register: 1 })).toContain('href="/register');
+        expect(membersGateStrings({}).signupOpen).toBe(true);
     });
 });

@@ -100,7 +100,9 @@ export default function MembersOnlyGate(props: MembersOnlyGateProps) {
                     {!checking && (
                         <div className="flex flex-wrap gap-3 justify-center">
                             <a className="wp-button button-primary" href={`/login${returnQuery}`}>{strings.login}</a>
-                            <a className="wp-button button-secondary" href={`/register${returnQuery}`}>{strings.signup}</a>
+                            {strings.signupOpen !== false && (
+                                <a className="wp-button button-secondary" href={`/register${returnQuery}`}>{strings.signup}</a>
+                            )}
                         </div>
                     )}
                 </div>

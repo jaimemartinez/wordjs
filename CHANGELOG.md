@@ -1257,7 +1257,9 @@ the boot error links there too.
   marketplace plugin does (English, Spanish, Portuguese). The core form-submissions screen is *Form submissions* and the contact-forms
   plugin's is *Contact forms*, instead of two entries called "Forms".
 - **Payments and forms plugins.** memberships: the paywall no longer offers *Create account* when registration is
-  closed, nor *Subscribe* when no payment provider is set up; the settings warn about both. Switching the
+  closed, nor *Subscribe* when no payment provider is set up; the settings warn about both. The core members-only
+  notice no longer offers *Create an account* on a site with registration closed either, and plugins can ask
+  `site.registrationOpen()` (with *Read site settings*) instead of reading the protected option. Switching the
   payment provider after a key was refused no longer re-sends the refused key. bookings: the *New service* window
   is no longer partly hidden behind the sidebar. contact-forms: a failed *Save form* (no connection) says so next
   to the button. Updated: analytics-tag 1.0.2, auctions 1.1.2, card-gallery 1.0.2, cookie-consent 1.0.2,

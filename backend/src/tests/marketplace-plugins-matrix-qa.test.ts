@@ -170,6 +170,20 @@ describe('memberships: the paywall knows whether visitors may register', () => {
         assert.match(src, /!canPay \? \(\s*<span className="wjms-note">El pago en línea aún no está disponible\.<\/span>/);
     });
 
+    test('the answer comes from the host bridge: users_can_register itself is unreadable to plugins', async () => {
+        const { isProtectedOption } = require('../core/plugin-api');
+        assert.strictEqual(isProtectedOption('users_can_register'), true, 'reading it through options.get throws on the host');
+        const api = fs.readFileSync(path.join(__dirname, '../core/plugin-api.ts'), 'utf8');
+        assert.match(api, /async registrationOpen\(\) \{\s*verifyPermission\('settings', 'read'\);/);
+        const isolate = fs.readFileSync(path.join(__dirname, '../core/plugin-isolate.ts'), 'utf8');
+        assert.match(isolate, /'site\.registrationOpen'/, 'allowed through the isolate bridge');
+        const worker = fs.readFileSync(path.join(__dirname, '../core/plugin-worker.js'), 'utf8');
+        assert.match(worker, /registrationOpen: \(\) => callHost\('site\.registrationOpen', \[\]\)/, 'exposed to isolated plugins');
+        const src = fs.readFileSync(path.join(PLUGINS_DIR, 'memberships/index.js'), 'utf8');
+        assert.match(src, /wordjs\.site\.registrationOpen\(\)/);
+        assert.doesNotMatch(src, /options\.get\('users_can_register'/);
+    });
+
     test('switching provider does not resend the hidden, refused credential', () => {
         const src = fs.readFileSync(path.join(PLUGINS_DIR, 'memberships/client/admin/page.tsx'), 'utf8');
         assert.match(src, /const chosen = p\.id === payload\.paymentProvider;/);

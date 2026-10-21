@@ -109,6 +109,15 @@ export interface MembersGateStrings {
     login: string;
     signup: string;
     checking: string;
+    /** Visitors may create an account (users_can_register). False hides "Create an account": on a site whose
+     *  registration is closed the link only led to "Registration closed". Unknown → shown, as before. */
+    signupOpen: boolean;
+}
+
+function registrationOpen(settings: Record<string, unknown> | null | undefined): boolean {
+    if (!settings || !("users_can_register" in settings)) return true;
+    const v = settings.users_can_register;
+    return !!v && v !== "0" && v !== "false";
 }
 
 export function membersGateStrings(settings: Record<string, unknown> | null | undefined): MembersGateStrings {
@@ -119,6 +128,7 @@ export function membersGateStrings(settings: Record<string, unknown> | null | un
         login: t("public.members.login", lang),
         signup: t("public.members.signup", lang),
         checking: t("public.members.checking", lang),
+        signupOpen: registrationOpen(settings),
     };
 }
 
