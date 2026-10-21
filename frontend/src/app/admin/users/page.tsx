@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usersApi, User } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "@/contexts/I18nContext";
+import { plural } from "@/lib/i18n";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader, Button, EmptyState, StatusBadge, DataTable } from "@/components/ui";
 import UserFormModal from "./UserFormModal";
@@ -14,6 +15,7 @@ export default function UsersPage() {
     const { t } = useI18n();
     const searchParams = useSearchParams();
     const type = searchParams.get("type"); // subscribers
+    const isSubscribers = type === "subscribers";
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedUser, setSelectedUser] = useState<User | "new" | null>(null);
@@ -59,9 +61,9 @@ export default function UsersPage() {
 
             <PageHeader
                 title={type === "subscribers" ? t('users.subscribers') : t('users.team.members')}
-                subtitle={(type === "subscribers" ? t("users.count.subscribers") : t("users.count.team")).replace("{n}", String(users.length))}
+                subtitle={plural(t, type === "subscribers" ? "users.count.subscribers" : "users.count.team", users.length).replace("{n}", String(users.length))}
                 actions={
-                    <Button icon="fa-plus" onClick={() => setSelectedUser("new")}>{t('users.new')}</Button>
+                    <Button icon="fa-plus" onClick={() => setSelectedUser("new")}>{t(isSubscribers ? 'users.newSubscriber' : 'users.new')}</Button>
                 }
             />
 
@@ -73,11 +75,11 @@ export default function UsersPage() {
                     </div>
                 ) : users.length === 0 ? (
                     <EmptyState
-                        icon="fa-users"
-                        title={t('users.not.found') || "No users found"}
-                        description={t('users.empty.description')}
+                        icon={isSubscribers ? "fa-user-group" : "fa-users"}
+                        title={isSubscribers ? t('users.subscribers.empty.title') : (t('users.not.found') || "No users found")}
+                        description={t(isSubscribers ? 'users.subscribers.empty.description' : 'users.empty.description')}
                         action={
-                            <Button icon="fa-plus" onClick={() => setSelectedUser("new")}>{t('users.new')}</Button>
+                            <Button icon="fa-plus" onClick={() => setSelectedUser("new")}>{t(isSubscribers ? 'users.newSubscriber' : 'users.new')}</Button>
                         }
                     />
                 ) : (
@@ -103,7 +105,7 @@ export default function UsersPage() {
                                                     {user.displayName || user.username}
                                                 </span>
                                             </button>
-                                            <span className="text-[11px] font-bold text-gray-400 tracking-wider block break-all">
+                                            <span className="text-[11px] font-bold text-gray-400 tracking-wider block break-words">
                                                 @{user.username}
                                             </span>
                                         </div>
@@ -113,7 +115,7 @@ export default function UsersPage() {
                             {
                                 key: "email",
                                 header: t('users.email'),
-                                cell: (user) => <span className="text-sm font-bold text-gray-500 break-all">{user.email}</span>,
+                                cell: (user) => <span className="text-sm font-bold text-gray-500 break-words">{user.email}</span>,
                             },
                             {
                                 key: "role",

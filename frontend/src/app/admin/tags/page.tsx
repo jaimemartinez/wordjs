@@ -21,7 +21,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { registerTranslations } from "@/lib/i18n";
+import { plural, registerTranslations } from "@/lib/i18n";
 import { PageHeader, Card, EmptyState, Button, DataTable, Pagination } from "@/components/ui";
 import {
     TagDraft,
@@ -39,8 +39,9 @@ import {
 registerTranslations({
     es: {
         "tags.title": "Etiquetas",
-        "tags.subtitle": "Etiquetas de las entradas (taxonomía post_tag)",
+        "tags.subtitle": "Palabras clave que agrupan entradas relacionadas",
         "tags.count": "etiquetas",
+        "tags.count.one": "etiqueta",
         "tags.add": "Nueva etiqueta",
         "tags.field.name": "Nombre",
         "tags.field.namePlaceholder": "Nombre de la etiqueta",
@@ -82,8 +83,9 @@ registerTranslations({
     },
     en: {
         "tags.title": "Tags",
-        "tags.subtitle": "Post tags (post_tag taxonomy)",
+        "tags.subtitle": "Keywords that group related posts",
         "tags.count": "tags",
+        "tags.count.one": "tag",
         "tags.add": "New tag",
         "tags.field.name": "Name",
         "tags.field.namePlaceholder": "Tag name",
@@ -125,8 +127,9 @@ registerTranslations({
     },
     pt: {
         "tags.title": "Etiquetas",
-        "tags.subtitle": "Etiquetas das publicações (taxonomia post_tag)",
+        "tags.subtitle": "Palavras-chave que agrupam publicações relacionadas",
         "tags.count": "etiquetas",
+        "tags.count.one": "etiqueta",
         "tags.add": "Nova etiqueta",
         "tags.field.name": "Nome",
         "tags.field.namePlaceholder": "Nome da etiqueta",
@@ -321,7 +324,7 @@ export default function TagsPage() {
         <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t("tags.title")}
-                subtitle={`${t("tags.subtitle")} · ${total} ${t("tags.count")}`}
+                subtitle={`${t("tags.subtitle")} · ${total} ${plural(t, "tags.count", total)}`}
                 icon="fa-tags"
             />
 
@@ -469,7 +472,7 @@ export default function TagsPage() {
                                         {
                                             key: "slug",
                                             header: t("tags.column.slug"),
-                                            cell: (tag) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-all">{tag.slug}</span>,
+                                            cell: (tag) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-words">{tag.slug}</span>,
                                         },
                                         {
                                             key: "count",

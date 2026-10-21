@@ -386,8 +386,8 @@ describe("coreBlocks — field labels are translated (editorI18n)", () => {
   it("English and Portuguese differ from the Spanish source for translated labels (spot check)", () => {
     expect(trStr("Grosor", "en")).toBe("Weight");
     expect(trStr("Media", "en")).toBe("Medium");
-    expect(trStr("Redondeo (p. ej. 16)", "en")).toBe("Corner radius (e.g. 16)");
-    expect(trStr("Redondeo (p. ej. 16)", "pt")).toBe("Arredondamento (ex. 16)");
+    expect(trStr("Redondeo (px, p. ej. 16)", "en")).toBe("Corner radius (px, e.g. 16)");
+    expect(trStr("Redondeo (px, p. ej. 16)", "pt")).toBe("Arredondamento (px, ex. 16)");
     expect(humanizeFieldKey("level", "en")).toBe("Level");
     expect(humanizeFieldKey("level", "es")).toBe("Nivel");
   });

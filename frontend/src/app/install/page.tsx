@@ -301,16 +301,16 @@ export default function InstallPage() {
                             {step === 1 && (
                                 <div className="space-y-5 animate-in fade-in slide-in-from-right-8 duration-500">
                                     <div className="group">
-                                        <label className={labelCls}>Site Title</label>
-                                        <input type="text" required className={inputCls} value={siteName} onChange={(e) => setSiteName(e.target.value)} placeholder="e.g. My Amazing Portfolio" />
+                                        <label htmlFor="install-site-title" className={labelCls}>Site Title</label>
+                                        <input id="install-site-title" type="text" required className={inputCls} value={siteName} onChange={(e) => setSiteName(e.target.value)} placeholder="e.g. My Amazing Portfolio" />
                                     </div>
                                     <div className="group">
-                                        <label className={labelCls}>Tagline</label>
-                                        <input type="text" className={inputCls} value={siteDescription} onChange={(e) => setSiteDescription(e.target.value)} placeholder="Just another WordJS site" />
+                                        <label htmlFor="install-tagline" className={labelCls}>Tagline</label>
+                                        <input id="install-tagline" type="text" className={inputCls} value={siteDescription} onChange={(e) => setSiteDescription(e.target.value)} placeholder="Just another WordJS site" />
                                     </div>
                                     <div className="group">
-                                        <label className={labelCls}>Install Token</label>
-                                        <input type="text" required className={inputCls} value={installToken} onChange={(e) => setInstallToken(e.target.value.trim())} placeholder="Paste the token from your terminal or backend/data/install-token" autoComplete="off" spellCheck={false} />
+                                        <label htmlFor="install-token" className={labelCls}>Install Token</label>
+                                        <input id="install-token" type="text" required className={inputCls} value={installToken} onChange={(e) => setInstallToken(e.target.value.trim())} placeholder="Paste the token from your terminal or backend/data/install-token" autoComplete="off" spellCheck={false} />
                                         <p className="text-xs text-gray-500 mt-1">For security, WordJS mints a one-time <span className="font-semibold">install token</span> while it is not yet installed: it is printed in the terminal that started the server and always written to <code>backend/data/install-token</code>. Paste it here to authorize setup.</p>
                                     </div>
                                     <label className="flex items-start gap-3 cursor-pointer select-none rounded-lg border border-gray-200 p-3.5 hover:border-gray-300 transition-colors">
@@ -375,11 +375,11 @@ export default function InstallPage() {
                                     {needsConn && (
                                         <div className="space-y-4 rounded-lg border border-gray-200 bg-white/40 p-4 animate-in fade-in duration-300">
                                             <div className="grid grid-cols-2 gap-3">
-                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Host</label><input className={inputCls} value={dbHost} onChange={e => { setDbHost(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder="localhost" /></div>
-                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Port</label><input className={inputCls} value={dbPort} onChange={e => setDbPort(e.target.value)} placeholder={dbDriver === 'mysql' ? '3306' : '5432'} /></div>
-                                                <div className="group col-span-2"><label className={labelCls}>Database</label><input className={inputCls} value={dbName} onChange={e => { setDbName(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder="wordjs" /></div>
-                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>User</label><input className={inputCls} value={dbUser} onChange={e => { setDbUser(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder={dbDriver === 'mysql' ? 'root' : 'postgres'} /></div>
-                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Password</label><input type="password" className={inputCls} value={dbPassword} onChange={e => setDbPassword(e.target.value)} /></div>
+                                                <div className="group col-span-2 sm:col-span-1"><label htmlFor="install-db-host" className={labelCls}>Host</label><input id="install-db-host" className={inputCls} value={dbHost} onChange={e => { setDbHost(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder="localhost" /></div>
+                                                <div className="group col-span-2 sm:col-span-1"><label htmlFor="install-db-port" className={labelCls}>Port</label><input id="install-db-port" className={inputCls} value={dbPort} onChange={e => setDbPort(e.target.value)} placeholder={dbDriver === 'mysql' ? '3306' : '5432'} /></div>
+                                                <div className="group col-span-2"><label htmlFor="install-db-name" className={labelCls}>Database</label><input id="install-db-name" className={inputCls} value={dbName} onChange={e => { setDbName(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder="wordjs" /></div>
+                                                <div className="group col-span-2 sm:col-span-1"><label htmlFor="install-db-user" className={labelCls}>User</label><input id="install-db-user" className={inputCls} value={dbUser} onChange={e => { setDbUser(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder={dbDriver === 'mysql' ? 'root' : 'postgres'} /></div>
+                                                <div className="group col-span-2 sm:col-span-1"><label htmlFor="install-db-password" className={labelCls}>Password</label><input id="install-db-password" type="password" className={inputCls} value={dbPassword} onChange={e => setDbPassword(e.target.value)} /></div>
                                             </div>
                                             <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={dbSsl} onChange={e => { setDbSsl(e.target.checked); resetDbTest(); }} /> Use SSL</label>
                                             {dbSsl && (
@@ -429,17 +429,17 @@ export default function InstallPage() {
                             {step === 3 && (
                                 <div className="space-y-5 animate-in fade-in slide-in-from-right-8 duration-500">
                                     <div className="group">
-                                        <label className={labelCls}>Username</label>
-                                        <input type="text" required className={inputCls} value={adminUser} onChange={(e) => setAdminUser(e.target.value)} />
+                                        <label htmlFor="install-admin-username" className={labelCls}>Username</label>
+                                        <input id="install-admin-username" type="text" required className={inputCls} value={adminUser} onChange={(e) => setAdminUser(e.target.value)} />
                                     </div>
                                     <div className="group">
-                                        <label className={labelCls}>Email Address</label>
-                                        <input type="email" required className={inputCls} value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="you@example.com" />
+                                        <label htmlFor="install-admin-email" className={labelCls}>Email Address</label>
+                                        <input id="install-admin-email" type="email" required className={inputCls} value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="you@example.com" />
                                         {adminEmail.length > 0 && !emailValid && <p className="text-xs text-red-600 mt-1">Enter a valid email address.</p>}
                                     </div>
                                     <div className="group">
-                                        <label className={labelCls}>Password</label>
-                                        <input type="password" required className={inputCls} value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
+                                        <label htmlFor="install-admin-password" className={labelCls}>Password</label>
+                                        <input id="install-admin-password" type="password" required className={inputCls} value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
                                         {adminPassword.length > 0 && (
                                             <div className="mt-2">
                                                 <div className="h-1.5 w-full bg-gray-200 rounded overflow-hidden">
@@ -450,8 +450,8 @@ export default function InstallPage() {
                                         )}
                                     </div>
                                     <div className="group">
-                                        <label className={labelCls}>Confirm Password</label>
-                                        <input type="password" required className={inputCls} value={adminPassword2} onChange={(e) => setAdminPassword2(e.target.value)} />
+                                        <label htmlFor="install-admin-password-confirm" className={labelCls}>Confirm Password</label>
+                                        <input id="install-admin-password-confirm" type="password" required className={inputCls} value={adminPassword2} onChange={(e) => setAdminPassword2(e.target.value)} />
                                         {adminPassword2.length > 0 && !pwMatch && <p className="text-xs text-red-600 mt-1">Passwords do not match.</p>}
                                     </div>
 

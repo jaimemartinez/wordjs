@@ -46,7 +46,7 @@ export function VisibilityControl({ value, onChange }: { value: Hide; onChange: 
                             onClick={() => onChange({ ...hide, [d.key]: !hidden })}
                             className={`flex-1 flex flex-col items-center gap-0.5 py-1.5 rounded text-[10px] font-medium transition ${
                                 hidden
-                                    ? "bg-[var(--ed-primary)] text-white shadow-sm"
+                                    ? "bg-[var(--ed-primary-solid)] text-white shadow-sm"
                                     : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                             }`}
                         >

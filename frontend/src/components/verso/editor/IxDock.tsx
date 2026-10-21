@@ -55,6 +55,15 @@ import { dockFieldEntries } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
 const MOTION_DOCK_KEY = "verso_motion_dock";
+
+/** Whether the author left the Motion dock OPEN last time (see the open state in IxDock). */
+function dockPrefersOpen(): boolean {
+    try {
+        return typeof localStorage !== "undefined" && localStorage.getItem(MOTION_DOCK_KEY) === "open";
+    } catch {
+        return false; /* almacenamiento bloqueado: comportamiento por defecto (plegado) */
+    }
+}
 /** Altura del cuerpo elegida arrastrando el borde superior (px); sin valor, la de siempre. */
 const MOTION_DOCK_H_KEY = "verso_motion_dock_h";
 const DOCK_MIN_H = 180;
@@ -75,22 +84,15 @@ export default function IxDock({ handle, registry }: IxDockProps) {
     const isDragging = state.dragPreview !== null;
     const ixCtx = useSiteIxPresets();
 
-    // Plegado LOCAL del dock: no roba lienzo cuando todavía no hay una selección. La selección
-    // puede llegar DESPUÉS del montaje (la ruta nueva arranca vacía), así que debe sincronizar el
-    // estado: un bloque nuevo abre Movimiento; deseleccionar vuelve a plegarlo.
-    // Quien lo PLIEGA con un bloque seleccionado lo quiere plegado: esa preferencia se recuerda
-    // (localStorage `verso_motion_dock`) y las selecciones siguientes ya no lo reabren — 280 px de
-    // lienzo en cada clic, para editar textos que no tienen nada que ver con el movimiento, era
-    // el peaje de no recordarlo. Desplegarlo a mano vuelve al comportamiento por defecto.
-    const [open, setOpen] = useState(() => Boolean(node));
+    // Plegado por DEFECTO: seleccionar un bloque ya no abre Movimiento por sí solo — se comía la
+    // mitad inferior del lienzo (≈500 px útiles a 1440×900) en cada clic, para editar textos que no
+    // tienen nada que ver con el movimiento (QA M1-08). La barra plegada sigue a la vista y quien lo
+    // DESPLIEGA con un bloque seleccionado lo quiere abierto: esa preferencia se recuerda
+    // (localStorage `verso_motion_dock` = "open") y las selecciones siguientes lo abren; plegarlo
+    // vuelve al comportamiento por defecto. Deseleccionar siempre lo pliega.
+    const [open, setOpen] = useState(() => Boolean(node) && dockPrefersOpen());
     useEffect(() => {
-        let keepClosed = false;
-        try {
-            keepClosed = localStorage.getItem(MOTION_DOCK_KEY) === "closed";
-        } catch {
-            /* almacenamiento bloqueado: comportamiento por defecto */
-        }
-        setOpen(Boolean(selectedId) && !keepClosed);
+        setOpen(Boolean(selectedId) && dockPrefersOpen());
     }, [selectedId]);
     // Altura AJUSTABLE: arrastrar el borde superior del dock. La preferencia se recuerda; con la
     // ventana más baja se recorta al 70 % del alto, para que el lienzo nunca desaparezca.

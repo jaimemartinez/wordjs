@@ -136,7 +136,7 @@ export default function CategoriesPage() {
                                     {
                                         key: "slug",
                                         header: t('categories.slug') || "Slug",
-                                        cell: (cat) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-all">{cat.slug}</span>,
+                                        cell: (cat) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-words">{cat.slug}</span>,
                                     },
                                     {
                                         key: "count",

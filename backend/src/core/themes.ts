@@ -50,6 +50,8 @@ class Theme {
   translations: Record<string, { description?: string }> | null;
   /** How many permissions the theme's functions.js declares (theme.json `permissions`): 0 = none to grant. */
   declaredPermissions: number;
+  /** The chrome compositions the theme ships (chrome/<part>.json): the editor canvas asks only for these. */
+  chrome: string[];
 
   constructor(data: any) {
     this.name = data.name;
@@ -66,6 +68,7 @@ class Theme {
     this.layout = (data.layout && typeof data.layout === 'object') ? data.layout : null;
     this.translations = themeTranslations(data.translations);
     this.declaredPermissions = Number.isInteger(data.declaredPermissions) ? data.declaredPermissions : 0;
+    this.chrome = Array.isArray(data.chrome) ? data.chrome : [];
   }
 
   /**
@@ -196,6 +199,8 @@ function scanThemes() {
       records.push({
         ...metadata,
         declaredPermissions: (require('./theme-declaration').themeDeclaredPermissions(themeDir) || []).length,
+        // Which site-chrome parts the theme composes. Three existsSync per theme, inside the memoized scan.
+        chrome: ['header', 'footer', 'announcement'].filter((part) => fs.existsSync(path.join(themeDir, 'chrome', `${part}.json`))),
         slug: entry.name,
         path: themeDir,
         templatePath: path.join(themeDir, 'templates')
@@ -450,6 +455,7 @@ async function getAllThemes() {
     screenshot: theme.screenshot,
     layout: theme.layout,
     declaredPermissions: theme.declaredPermissions,
+    chrome: theme.chrome,
     active: theme.slug === current
   }));
 }
@@ -499,7 +505,7 @@ function createDefaultTheme(force = false) {
   // theme.json
   const themeJson: Record<string, any> = {
     name: 'WordJS',
-    version: '2.1.0',
+    version: '2.1.1',
     description: 'The default WordJS theme — modern, JavaScript-native, developer-first. Signature indigo→violet gradient, Space Grotesk display type, and a deep-indigo footer.',
     // Same as the committed themes/default/theme.json, so a restore does not lose the translations.
     translations: {
@@ -778,26 +784,29 @@ article:hover {
 }
 
 /* ============================ FOOTER ============================ */
-footer {
+/* The SITE footer only: the band is the shell's own <footer> (built-in or composed). A bare \`footer\`
+   also matched every <footer> inside the content — the Quote block's citation is one — and painted
+   it as a full-width deep-indigo strip. :where() keeps the old specificity. */
+:where(.wjs-shell) > footer {
   background-color: var(--wjs-footer-bg) !important;
   color: var(--wjs-footer-text-body) !important;
   border-top: 3px solid transparent !important;
   border-image: var(--wjs-gradient) 1 !important;
 }
-footer h3, footer h4 {
+:where(.wjs-shell) > footer :is(h3, h4) {
   color: var(--wjs-footer-text-heading) !important;
   font-family: var(--wjs-font-family-heading) !important;
   font-weight: 700 !important;
 }
-footer a { color: var(--wjs-footer-text-body) !important; text-decoration: none !important; transition: color 0.2s ease; }
-footer a:hover { color: var(--wjs-footer-text-hover) !important; }
-footer .w-10 {
+:where(.wjs-shell) > footer a { color: var(--wjs-footer-text-body) !important; text-decoration: none !important; transition: color 0.2s ease; }
+:where(.wjs-shell) > footer a:hover { color: var(--wjs-footer-text-hover) !important; }
+:where(.wjs-shell) > footer .w-10 {
   background-color: var(--wjs-footer-icon-bg) !important;
   color: var(--wjs-footer-icon-color) !important;
   border: 1px solid rgba(255, 255, 255, 0.08);
   transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
 }
-footer .w-10:hover {
+:where(.wjs-shell) > footer .w-10:hover {
   background: var(--wjs-gradient) !important;
   color: #ffffff !important;
   border-color: transparent !important;
@@ -922,7 +931,9 @@ footer .w-10:hover {
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-md) !important;
 }
-.wjs-block-audio-player div:first-child > div:first-child, .wp-block-audio-player div:first-child > div:first-child { background: var(--wjs-gradient) !important; color: #ffffff !important; }
+/* (A structural rule painted "the first div of the first div" with the brand gradient: it was the old
+   progress bar, and after the player moved to a native range input it caught the TITLE instead — the
+   track name sat on a full-width gradient strip. The range's fill already takes --wjs-color-primary.) */
 
 /* ===== Mobile (auto responsive pass) ===== */
 @media (max-width: 767.98px) {
@@ -961,6 +972,15 @@ footer .w-10:hover {
    width"), so a band can cross the whole screen while its text stays in a comfortable column.
    !important only because the layout's .px-4 utility (wordjs-ui.css) carries it. */
 #main-content:has(.puck-content) { max-width: none; padding-inline: 0 !important; padding-bottom: 0; }
+/* ...but only a SECTION (or a hero / particle field) is a band. A block placed at the top level of the
+   page — a Heading, Text or Button with no Section around it — got that full-bleed room too and
+   started at x = 1px, flush against the screen edge. Those keep the site's column (.container). */
+#main-content .puck-content > :not(.wjs-block-section, .wp-block-section, .wjs-block-hero, .wp-block-hero, .wjs-block-particle-field, .wp-block-particle-field, .wjs-motion-pause, .fixed):not(:has(> :is(.wjs-block-section, .wp-block-section, .wjs-block-hero, .wp-block-hero, .wjs-block-particle-field, .wp-block-particle-field))) {
+  max-width: 1100px;
+  margin-inline: auto;
+  padding-inline: 24px;
+  box-sizing: border-box;
+}
 html { scroll-padding-top: 6rem; }
 @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 

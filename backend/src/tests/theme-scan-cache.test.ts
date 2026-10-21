@@ -146,6 +146,20 @@ describe('theme scan memo + derived active_theme_version', () => {
         assert.ok(first.includes('alpha-theme'));
     });
 
+    it('reports the chrome compositions a theme ships, so the editor canvas fetches only those', () => {
+        invalidateThemeScanCache();
+        assert.deepStrictEqual(scanThemes().find((t: any) => t.slug === 'alpha-theme').chrome, []);
+        fs.mkdirSync(themePath('alpha-theme', 'chrome'), { recursive: true });
+        fs.writeFileSync(themePath('alpha-theme', 'chrome', 'footer.json'), '{"root":{"props":{}},"content":[]}');
+        invalidateThemeScanCache();
+        try {
+            assert.deepStrictEqual(scanThemes().find((t: any) => t.slug === 'alpha-theme').chrome, ['footer']);
+        } finally {
+            fs.rmSync(themePath('alpha-theme', 'chrome'), { recursive: true, force: true });
+            invalidateThemeScanCache();
+        }
+    });
+
     it('a cold scan after invalidation hits the filesystem again', () => {
         invalidateThemeScanCache();
         readdirCount = 0;

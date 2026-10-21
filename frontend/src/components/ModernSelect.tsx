@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { useDropdownPlacement } from '@/lib/useDropdownPlacement';
 import { ADMIN_Z } from '@/lib/adminLayers';
@@ -49,8 +49,13 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
     className = "",
     containerClassName = "",
     disabled = false,
-    ...props
+    ...containerProps
 }) => {
+    // The trigger is a <button>: the visible label is tied to it (it used to be a free-standing
+    // <label>), and an aria-label given to the component names it when there is no visible label —
+    // the editor's status picker announced only "Draft, collapsed".
+    const { "aria-label": ariaLabel, ...props } = containerProps as typeof containerProps & { "aria-label"?: string };
+    const triggerId = useId();
     const [isOpen, setIsOpen] = useState(false);
     const [highlight, setHighlight] = useState(0);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -95,9 +100,12 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`)?.scrollIntoView({ block: "nearest" });
     }, [highlight, isOpen]);
 
+    // Opened from inside the Verso editor, the portalled menu joins the editor's palette.
+    const [inEditor, setInEditor] = useState(false);
     const open = () => {
         if (disabled) return;
         updateCoords();
+        setInEditor(!!containerRef.current?.closest('.verso-container, .verso-editor-ui'));
         setIsOpen(true);
     };
 
@@ -134,7 +142,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
     return (
         <div className={`space-y-2 ${containerClassName}`} ref={containerRef} {...props}>
             {label && (
-                <label ref={labelRef} className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                <label ref={labelRef} htmlFor={triggerId} className="text-sm font-bold text-gray-700 flex items-center gap-2">
                     {icon && <i className={`${icon} text-blue-500/70`}></i>}
                     {label}
                 </label>
@@ -143,12 +151,15 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
             <div className="relative" ref={triggerRef}>
                 {/* Trigger Button */}
                 <button
+                    id={triggerId}
+                    aria-label={label ? undefined : ariaLabel}
                     type="button"
                     onClick={handleToggle}
                     onKeyDown={handleKeyDown}
                     disabled={disabled}
                     aria-haspopup="listbox"
                     aria-expanded={isOpen}
+                    data-modern-select=""
                     className={`
                         w-full flex items-center justify-between bg-gray-50 border-2 border-gray-100 text-gray-700 py-2.5 px-4 rounded-xl
                         focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50
@@ -170,6 +181,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                     <div
                         ref={dropdownRef}
                         data-dropdown-side={coords.side}
+                        data-modern-select-menu=""
                         style={{
                             position: 'fixed',
                             left: coords.left,
@@ -178,7 +190,9 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                             bottom: coords.bottom,
                             zIndex: ADMIN_Z.popover,
                         }}
-                        className="bg-white/95 backdrop-blur-xl border border-gray-100 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in duration-150"
+                        // Opened from the Verso editor, the menu (portalled out of it) joins the editor's
+                        // palette: in its dark mode a white list hung off a dark panel.
+                        className={`bg-white/95 backdrop-blur-xl border border-gray-100 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in duration-150${inEditor ? ' verso-editor-ui' : ''}`}
                     >
                         <div ref={listRef} className="py-1 overflow-y-auto overscroll-contain custom-scrollbar" style={{ maxHeight: coords.maxHeight }} role="listbox">
                             {options.length === 0 ? (

@@ -118,7 +118,9 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
                 </div>
 
                 {allGroups.length > 1 && (
-                    <div className="flex gap-1.5 mt-3 overflow-x-auto scrollbar-hide" aria-label={trStr("Categorías de bloques", language)}>
+                    <div role="group" className="flex flex-wrap gap-1.5 mt-3" aria-label={trStr("Categorías de bloques", language)}>
+                        {/* Wrap, not a hidden horizontal scroll: the last categories were cut at the panel
+                            edge ("Media | M…") with nothing saying there was more (QA M1-08). */}
                         {["", ...allGroups].map((g) => {
                             const active = activeGroup === g;
                             return (

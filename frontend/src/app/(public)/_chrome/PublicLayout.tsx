@@ -6,10 +6,8 @@
 import { redirect } from "next/navigation";
 import PublicLayoutShell from "@/components/public/PublicLayoutShell";
 import ViewTransitions from "@/components/public/ViewTransitions";
-import ChromeRenderer from "@/components/chrome/ChromeRenderer";
-import ChromeHeaderScroll from "@/components/chrome/ChromeHeaderScroll";
-import { buildChromeBindings, chromeRootOptions, resolveEffectiveChrome } from "@/lib/chromeData";
-import { parseThemeLayout } from "@/lib/themeLayout";
+import { buildChromeSlots } from "@/components/public/ChromeSlots";
+import { buildChromeBindings, resolveEffectiveChrome } from "@/lib/chromeData";
 import { footerStrings } from "@/lib/public/uiStrings";
 import { getSettings, getPublicAssets, getMenuByLocation, getThemeChrome, checkSetupRequired, assertBackendAnswered } from "@/lib/server-api";
 
@@ -81,61 +79,15 @@ export default async function PublicLayout({
     });
     const bindings = buildChromeBindings(settings, headerMenu?.items, footerMenu?.items);
 
-    // Composed chrome renders ON THE SERVER inside the same semantic landmarks + container hooks the
-    // default chrome uses, so theme CSS keeps applying. It carries .wjs-header too — the selector the
-    // theme contract maps `styles.header` to — so a declared header style applies to BOTH chromes.
-    //
-    // Positioning — the composition's root props decide, the theme's layout v2 only fills the gap:
-    //  • sticky (root.sticky, else the theme's `header.sticky`) is CSS position:sticky, not the client
-    //    Header's fixed: it needs no scroll listener and stays in flow, so the shell's
-    //    --wjs-header-offset:0 for a composed header remains correct.
-    //  • transparent (root.transparent) lays the header OVER the top of the page — absolute, or fixed
-    //    when also sticky — with no surface while the page sits at the top, so a hero shows through it.
-    //    The ChromeHeaderScroll island flips data-scrolled once the page moves, and wordjs-ui.css gives
-    //    the header its solid surface back from then on (readable over whatever scrolls beneath). A
-    //    page that does NOT open with a hero keeps the room the header needs (wordjs-ui.css, :has()).
-    //  • width "full" drops the centred container: the rows span the viewport edge to edge.
-    // `layout` is the RAW option here — the Shell is what normalizes it. Run the same normalizer
-    // rather than re-deriving the default (`sticky !== false`), so the two can't drift apart.
-    const headerRoot = chromeRootOptions(headerChrome.data);
-    const headerSticky = headerRoot.sticky ?? parseThemeLayout(layout).header.sticky;
-    const headerPos = headerRoot.transparent
-        ? (headerSticky ? "fixed top-0 inset-x-0" : "absolute top-0 inset-x-0")
-        : (headerSticky ? "sticky top-0" : "relative");
-    const containerClass = (root: { width: "container" | "full" }) => (root.width === "full" ? "w-full px-4 md:px-8" : "container mx-auto px-4");
-    const headerSlot = headerChrome.data ? (
-        <header
-            data-scrolled="false"
-            data-transparent={headerRoot.transparent ? "true" : undefined}
-            data-overlay-text={headerRoot.transparent ? headerRoot.overlayText : undefined}
-            data-sticky={headerSticky ? "true" : "false"}
-            className={`wjs-header wjs-chrome-header ${headerPos} z-50 transition-all duration-300 bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4`}
-        >
-            <div className={`wjs-header-container ${containerClass(headerRoot)}`}>
-                <ChromeRenderer data={headerChrome.data} bindings={bindings} />
-            </div>
-            {(headerRoot.transparent || headerSticky) && <ChromeHeaderScroll />}
-        </header>
-    ) : undefined;
-    const footerRoot = chromeRootOptions(footerChrome.data);
-    // Full-bleed band ABOVE the header: rendered outside any container so a theme can paint edge-to-edge
-    // (the hardcoded container wrapper on header/footer is exactly what made that impossible before). Its
-    // blocks are the presentational ones (ChromeText/ChromeButton/ChromeRow/…); ChromeNav is barred by
-    // the validator. Nothing renders when no composition survives resolution.
-    const announcementSlot = announcementChrome.data ? (
-        <aside className="wjs-chrome-announcement w-full bg-[var(--wjs-bg-announcement,var(--wjs-color-primary,#1f2937))] text-[var(--wjs-color-on-primary,#ffffff)] text-sm">
-            <div className="wjs-announcement-container container mx-auto px-4 py-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-center">
-                <ChromeRenderer data={announcementChrome.data} bindings={bindings} location="header" />
-            </div>
-        </aside>
-    ) : undefined;
-    const footerSlot = footerChrome.data ? (
-        <footer className="wjs-chrome-footer bg-[var(--wjs-bg-footer,rgb(17,24,39))] text-[var(--wjs-color-text-footer-main,white)] py-12 mt-auto border-t border-[var(--wjs-border-subtle,transparent)]">
-            <div className={`wjs-footer-container ${containerClass(footerRoot)}`}>
-                <ChromeRenderer data={footerChrome.data} bindings={bindings} />
-            </div>
-        </footer>
-    ) : undefined;
+    // Composed chrome renders ON THE SERVER — the slot markup is shared with the Verso canvas
+    // (components/public/ChromeSlots), so the editor shows the very header and footer the site does.
+    const { headerSlot, footerSlot, announcementSlot } = buildChromeSlots({
+        header: headerChrome.data,
+        footer: footerChrome.data,
+        announcement: announcementChrome.data,
+        bindings,
+        layout,
+    });
 
     return (
         <PublicLayoutShell

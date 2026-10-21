@@ -89,10 +89,33 @@ function fetchPublished(): Promise<Post[]> {
  * no re-fetchear el miss en la sesión. El nombre viene de la jerarquía cerrada ([a-z0-9-]) y aun
  * así pasa por encodeURIComponent — defensa en profundidad antes de aterrizar en la URL.
  */
+/**
+ * The template names the theme ships, asked once per theme and session. With it, a candidate the
+ * theme lacks is a miss WITHOUT a request: probing the hierarchy file by file put a 404 per missing
+ * name in the console every time the editor opened (single-post.json, single.json, page.json…).
+ * The listing needs the admin scope; for anyone else (or offline) it is null and the probe stays.
+ */
+const shippedTemplatesCache = new Map<string, Promise<Set<string> | null>>();
+function shippedTemplates(themeSlug: string): Promise<Set<string> | null> {
+    let p = shippedTemplatesCache.get(themeSlug);
+    if (!p) {
+        p = themesApi.listTemplates(themeSlug)
+            .then((r) => (Array.isArray(r?.templates) ? new Set(r.templates) : null))
+            .catch(() => null);
+        shippedTemplatesCache.set(themeSlug, p);
+    }
+    return p;
+}
+
 async function fetchTemplateRaw(themeSlug: string, name: string): Promise<string | null> {
     const key = `${themeSlug}|${name}`;
     const cached = templateRawCache.get(key);
     if (cached !== undefined) return cached;
+    const shipped = await shippedTemplates(themeSlug);
+    if (shipped && !shipped.has(name)) {
+        templateRawCache.set(key, null);
+        return null;
+    }
     try {
         const res = await fetch(`/themes/${encodeURIComponent(themeSlug)}/templates/${encodeURIComponent(name)}.json`, {
             credentials: "same-origin",

@@ -17,13 +17,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 const templates: Record<string, string> = {};
 const asked: string[] = [];
+let siteSettings: Record<string, unknown> = { template: 'my-theme' };
 const getThemeTemplate = vi.fn(async (_slug: string, name: string) => {
     asked.push(name);
     return templates[name] ?? null;
 });
 
 vi.mock('@/lib/server-api', () => ({
-    getSettings: async () => ({ template: 'my-theme' }),
+    getSettings: async () => siteSettings,
     getThemeTemplate: (...a: unknown[]) => getThemeTemplate(...(a as [string, string])),
     getPosts: async () => [],
     getMenuByLocation: async () => ({ items: [] }),
@@ -55,6 +56,7 @@ beforeEach(() => {
     asked.length = 0;
     for (const key of Object.keys(templates)) delete templates[key];
     getThemeTemplate.mockClear();
+    siteSettings = { template: 'my-theme' };
 });
 
 describe('ThemeTemplate', () => {
@@ -121,8 +123,24 @@ describe('ThemeTemplate', () => {
     it('the 404 route renders the not-found message INSIDE the theme arrangement', async () => {
         templates['404'] = TEMPLATE;
         const html = await renderServer(<PublicNotFound />);
-        expect(html).toContain('Contenido no encontrado');
-        expect(html).toMatch(/<section[^>]*themed[\s\S]*Contenido no encontrado/);
+        expect(html).toContain('Page not found');
+        expect(html).toMatch(/<section[^>]*themed[\s\S]*Page not found/);
+    });
+
+    it('the 404 texts follow the SITE language, never a hardcoded one', async () => {
+        siteSettings = { template: 'my-theme', WPLANG: 'es_ES' };
+        const es = await renderServer(<PublicNotFound />);
+        expect(es).toContain('Página no encontrada');
+        expect(es).toContain('Volver al inicio');
+        siteSettings = { template: 'my-theme' };
+        const en = await renderServer(<PublicNotFound />);
+        expect(en).toContain('Back to home');
+        expect(en).not.toMatch(/Contenido|VOLVER/);
+    });
+
+    it('the 404 button paints its label INLINE — a theme link rule can never recolour it to its background', async () => {
+        const html = await renderServer(<PublicNotFound />);
+        expect(html).toMatch(/<a [^>]*style="color:var\(--wjs-color-primary-text, #ffffff\);text-decoration:none/);
     });
 
     it('a theme shipping only page.json still reaches the 404 — every chain ends there', async () => {

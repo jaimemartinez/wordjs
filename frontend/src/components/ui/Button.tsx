@@ -21,8 +21,9 @@ const variantClasses: Record<ButtonVariant, string> = {
         "bg-white border-2 border-gray-100 text-gray-600 hover:border-blue-500 hover:text-blue-600 shadow-sm",
     danger:
         "bg-red-50 text-red-600 hover:bg-red-600 hover:text-white shadow-sm hover:shadow-red-200",
+    // gray-600, not gray-400: the quiet variant still has to be readable (gray-400 on white is 2.5:1).
     ghost:
-        "text-gray-400 hover:text-gray-600 hover:bg-gray-100",
+        "text-gray-600 hover:text-gray-900 hover:bg-gray-100",
     outline:
         "bg-transparent border-2 border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900",
 };

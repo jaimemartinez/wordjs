@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId, useRef } from "react";
+import { useDialogFocus } from "@/components/useDialogFocus";
 import { usersApi, User, userSaveErrorText } from "@/lib/api";
 import ModernSelect from "@/components/ModernSelect";
 import DialogLayer from "@/components/DialogLayer";
@@ -26,6 +27,10 @@ interface UserFormModalProps {
 
 export default function UserFormModal({ user, onClose, onSuccess }: UserFormModalProps) {
     const isNew = user === "new";
+    const panelRef = useRef<HTMLDivElement>(null);
+    const titleId = useId();
+    // A modal dialog: focus moves in, Tab stays in, Escape closes, focus returns to "New user".
+    useDialogFocus(panelRef, { open: !!user, onClose });
     const userId = isNew ? null : (user as User).id;
 
     const [formData, setFormData] = useState<{
@@ -94,11 +99,11 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
         // title and close button cut off. 90dvh, not 90vh: on iOS vh is the toolbar-less height, taller
         // than what is visible, and the footer (Save) started below the screen.
         <DialogLayer className="flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white rounded-3xl md:rounded-[40px] shadow-2xl w-full max-w-2xl max-h-[90dvh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-white/20">
+            <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-3xl md:rounded-[40px] shadow-2xl w-full max-w-2xl max-h-[90dvh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-white/20">
                 {/* Header */}
                 <div className="p-8 pb-0 flex justify-between items-start">
                     <div>
-                        <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter mb-2">
+                        <h2 id={titleId} className="text-3xl font-black text-gray-900 italic tracking-tighter mb-2">
                             {isNew ? t('user.edit.titleNew') : t('user.edit.titleEdit')}
                         </h2>
                         <p className="text-xs font-bold uppercase tracking-widest text-gray-500">
@@ -116,7 +121,17 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                 </div>
 
                 <div className="p-8 overflow-y-auto">
-                    <form id="user-form" onSubmit={handleSubmit} className="space-y-6">
+                    {/* The browser's own "required" bubble speaks the BROWSER's language; this one speaks the admin's. */}
+                    <form
+                        id="user-form"
+                        onSubmit={handleSubmit}
+                        onInvalidCapture={(e) => {
+                            const field = e.target as HTMLInputElement;
+                            if (field.validity?.valueMissing) field.setCustomValidity(t('form.required'));
+                        }}
+                        onInputCapture={(e) => (e.target as HTMLInputElement).setCustomValidity?.("")}
+                        className="space-y-6"
+                    >
                         <div>
                             <label htmlFor="user-form-field-1" className={FIELD_LABEL}>{t('user.edit.username')}</label>
                             <input id="user-form-field-1"

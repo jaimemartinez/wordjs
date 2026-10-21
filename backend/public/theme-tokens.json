@@ -3,7 +3,7 @@
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
     "tokens": 781,
-    "varUses": 1791,
+    "varUses": 1793,
     "elements": 51
   },
   "tokens": {
@@ -6943,6 +6943,10 @@
           "selector": ".wp-block-grid__items",
           "property": "grid-template-columns",
           "media": "(max-width: 767.98px)"
+        },
+        {
+          "selector": ".wp-block-grid__items",
+          "property": "grid-template-columns"
         }
       ]
     },
@@ -6957,6 +6961,10 @@
           "selector": ".wp-block-grid__items",
           "property": "grid-template-columns",
           "media": "(max-width: 1023.98px)"
+        },
+        {
+          "selector": ".wp-block-grid__items",
+          "property": "grid-template-columns"
         }
       ]
     },

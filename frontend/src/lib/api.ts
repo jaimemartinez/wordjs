@@ -1018,6 +1018,8 @@ export interface Theme {
     screenshot?: string;
     /** How many permissions the theme's functions.js declares (theme.json `permissions`). */
     declaredPermissions?: number;
+    /** Site-chrome compositions the theme ships (chrome/header.json, footer.json, announcement.json). */
+    chrome?: string[];
     active: boolean;
 }
 

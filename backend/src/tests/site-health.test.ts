@@ -98,6 +98,10 @@ describe('Site Health', () => {
             assert.ok(['ok', 'warn', 'fail', 'info'].includes(c.status), c.id);
             assert.ok(c.title && c.message && c.message.length > 10, c.id);
             if (c.fix) assert.match(c.fix.href, /^\/admin\//, c.id);
+            // The panel translates by key: every check names its title and its exact message variant.
+            assert.strictEqual(c.titleKey, `siteHealth.check.${c.id}.title`, c.id);
+            assert.match(String(c.messageKey), /^siteHealth\.check\.[\w.]+$/, c.id);
+            if (c.fix) assert.match(String(c.fix.labelKey), /^siteHealth\.fixLabel\.\w+$/, c.id);
         }
         const total = Object.values(res.body.summary).reduce((a: number, b: any) => a + Number(b), 0);
         assert.strictEqual(total, res.body.checks.length);

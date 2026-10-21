@@ -414,7 +414,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         type="button"
                         onClick={handleAdd}
                         disabled={!text.trim() || saving || !user}
-                        className="inline-flex items-center gap-1.5 px-4 h-10 rounded-full bg-[var(--ed-primary)] text-white text-[13px] font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 active:scale-95 transition-all"
+                        className="inline-flex items-center gap-1.5 px-4 h-10 rounded-full bg-[var(--ed-primary-solid)] text-white text-[13px] font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 active:scale-95 transition-all"
                     >
                         <MSym name="add_circle" size={18} />
                         {tr("Añadir comentario")}

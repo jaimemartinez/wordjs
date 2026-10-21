@@ -47,6 +47,17 @@ describe("VersoFieldControl — markup y accesibilidad por tipo", () => {
     expect(html).toContain(`id="${forId![1]}"`);
   });
 
+  it("text that holds a colour (bg, color, …Color): a swatch next to the text, the text still free", () => {
+    const hex = render({ type: "text", label: "Fondo (vacío = tema)" }, "#12ab34", { name: "bg" });
+    expect(hex).toContain('type="color"');
+    expect(hex).toContain('value="#12ab34"');
+    expect(hex).toContain('type="text"'); // var(--wjs-…), gradients and "empty = theme" keep working
+    const token = render({ type: "text", label: "Color" }, "var(--wjs-color-primary)", { name: "titleColor" });
+    expect(token).toContain('type="color"');
+    expect(token).toContain('value="var(--wjs-color-primary)"');
+    expect(render({ type: "text", label: "Título" }, "x", { name: "title" })).not.toContain('type="color"');
+  });
+
   it("textarea: valor y label", () => {
     const html = render({ type: "textarea", label: "Cuerpo" }, "línea");
     expect(html).toContain("<textarea");

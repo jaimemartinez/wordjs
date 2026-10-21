@@ -20,6 +20,9 @@ import {
 } from "./helpers";
 
 test("crear página: 3 bloques por paleta, editar props, guardar, recargar y verificar persistencia", async ({ page }) => {
+    // Movimiento arranca plegado salvo que el autor lo dejara abierto (verso_motion_dock = "open");
+    // esta prueba fija esa preferencia para cubrir la regresión de abajo.
+    await page.addInitScript(() => localStorage.setItem("verso_motion_dock", "open"));
     const frame = await openNewPageVerso(page);
     const stamp = Date.now().toString(36);
 

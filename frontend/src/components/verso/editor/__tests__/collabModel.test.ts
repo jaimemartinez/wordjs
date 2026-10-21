@@ -178,9 +178,9 @@ describe("texto accesible", () => {
         expect(real).not.toBe(imitador);
     });
     it("el anuncio del role=status dice el estado y quién está", () => {
-        expect(presenceAnnouncement("live", [])).toBe("En vivo. Nadie más está editando esta página.");
+        expect(presenceAnnouncement("live", [])).toBe("Conectado. Nadie más está editando esta página.");
         expect(presenceAnnouncement("live", [member({ name: "Ana" })])).toBe(
-            "En vivo. Ana está editando esta página.",
+            "Conectado. Ana está editando esta página.",
         );
         expect(
             presenceAnnouncement("degraded", [member({ name: "Ana" }), member({ siteId: "s2", name: "Beto" })]),

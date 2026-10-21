@@ -14,6 +14,9 @@ interface PageHeaderProps {
     };
 }
 
+/** Up to this many characters a subtitle is a label (capitals); longer, it is a sentence. */
+export const SUBTITLE_LABEL_MAX = 48;
+
 /**
  * PageHeader - Premium page header with consistent styling
  * Matches the visual identity of conference-manager/db-migration plugins
@@ -43,8 +46,12 @@ export function PageHeader({ title, subtitle, icon, actions, backButton }: PageH
                         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-gray-900 italic tracking-tighter break-words">
                             {title}
                         </h1>
+                        {/* A short tagline reads as a label in capitals; a SENTENCE in tracked capitals ran to
+                            4–6 lines on a phone and was hard to read (QA M1-10), so it keeps its case. */}
                         {subtitle && (
-                            <p className="text-xs font-bold uppercase tracking-wide sm:tracking-widest text-gray-500 mt-1 break-words">
+                            <p className={subtitle.length > SUBTITLE_LABEL_MAX
+                                ? "text-sm text-gray-500 mt-1.5 max-w-2xl break-words"
+                                : "text-xs font-bold uppercase tracking-wide sm:tracking-widest text-gray-500 mt-1 break-words"}>
                                 {subtitle}
                             </p>
                         )}

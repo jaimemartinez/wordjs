@@ -72,7 +72,13 @@ export default async function HomePage() {
             return (
                 <div className="space-y-4">
                     {siteJsonLd}
-                    <ThemeTemplate kind="home">
+                    {/* A static front page is a PAGE (front-page → page-{slug} → page), not the blog
+                        index: `home` stays the blog roll's template, below. */}
+                    <ThemeTemplate
+                        kind="frontPage"
+                        slug={page.slug}
+                        assignedTemplate={typeof page.meta?._wjs_template === "string" ? page.meta._wjs_template : undefined}
+                    >
                         <HomeContent post={withBlocks} settings={settings} shortcodes={shortcodes} />
                     </ThemeTemplate>
                 </div>

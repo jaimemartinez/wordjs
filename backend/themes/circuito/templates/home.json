@@ -11,8 +11,8 @@
           {
             "type": "SearchBar",
             "props": {
-              "placeholder": "> buscar en el circuito_",
-              "buttonText": "EJECUTAR",
+              "placeholder": "> search_",
+              "buttonText": "RUN",
               "align": "center",
               "width": "min(40rem, 100%)"
             }

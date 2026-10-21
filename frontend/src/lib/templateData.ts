@@ -212,7 +212,7 @@ export const TEMPLATE_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
  * lib/public/archiveRoute.tsx, which passes one of those four kinds here.
  */
 export type TemplateKind =
-    | 'home' | 'single' | 'page' | 'search' | 'notFound'
+    | 'home' | 'frontPage' | 'single' | 'page' | 'search' | 'notFound'
     | 'category' | 'tag' | 'author' | 'date';
 
 /** What the route knows that makes a name more specific: the thing's slug, and a post's type. */
@@ -260,6 +260,13 @@ export function templateCandidates(kind: TemplateKind, query: TemplateQuery = {}
     switch (kind) {
         case 'home':
             chain = ['home', 'archive', 'page'];
+            break;
+        case 'frontPage':
+            // A STATIC front page is a page, not the blog index: WordPress's front-page.php, then the
+            // page templates. It used to borrow the `home` chain, so a theme whose home.json lays out a
+            // post listing (a narrow card, half of a two-column grid) squeezed a composed full-width
+            // front page into that slot — words split letter by letter at 1440px.
+            chain = ['front-page', join('page', slug), 'page'];
             break;
         case 'single':
             chain = [join('single', type, slug), join('single', type), 'single', 'page'];

@@ -3,16 +3,16 @@
  * iframe height !important). Imported only by app/admin/layout.tsx — Next scopes the load to
  * /admin routes. The public body is owned by the wordjs-ui.css body rule. */
 
+/* The admin is a LIGHT design: every screen paints white cards with gray-900 text. It used to flip
+ * --foreground to #ededed under `prefers-color-scheme: dark`, so with the OS in dark mode any text
+ * that inherits its colour (Media storage's options, the Network legend, the Dashboard chart axes)
+ * went near-white on those white cards (1.17:1). `color-scheme: light` keeps the native controls
+ * (selects, date pickers, scrollbars) light as well. The Verso editor keeps its own dark palette,
+ * scoped to .verso-container (editor-theme.css), which sets its own color-scheme. */
 :root {
   --background: #ffffff;
   --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  color-scheme: light;
 }
 
 html {

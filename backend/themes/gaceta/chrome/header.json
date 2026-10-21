@@ -7,7 +7,7 @@
                 "align": "center",
                 "gap": "sm",
                 "items": [
-                    { "type": "ChromeText", "props": { "text": "Una gaceta de ideas — fundada en 2026" } }
+                    { "type": "ChromeText", "props": { "text": "A gazette of ideas — founded in 2026" } }
                 ]
             }
         },

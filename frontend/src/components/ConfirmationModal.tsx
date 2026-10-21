@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef } from "react";
 import DialogLayer from "./DialogLayer";
+import { useDialogFocus } from "./useDialogFocus";
 import { getStoredLanguage, t } from "@/lib/i18n";
 
 interface ConfirmationModalProps {
@@ -27,23 +28,11 @@ export default function ConfirmationModal({
 }: ConfirmationModalProps) {
     const titleId = useId();
     const cancelRef = useRef<HTMLButtonElement>(null);
+    const panelRef = useRef<HTMLDivElement>(null);
 
-    // Escape-to-close (mirrors CommandPalette's keyboard contract).
-    useEffect(() => {
-        if (!isOpen) return;
-        const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key === "Escape") { e.preventDefault(); onClose(); }
-        };
-        document.addEventListener("keydown", onKeyDown);
-        return () => document.removeEventListener("keydown", onKeyDown);
-    }, [isOpen, onClose]);
-
-    // Initial focus to Cancel (the non-destructive default) when it opens.
-    useEffect(() => {
-        if (!isOpen) return;
-        const t = setTimeout(() => cancelRef.current?.focus(), 20);
-        return () => clearTimeout(t);
-    }, [isOpen]);
+    // Escape closes, focus starts on Cancel (the non-destructive default), Tab stays inside, and
+    // closing hands focus back to whatever opened it (it used to land on <body>).
+    useDialogFocus(panelRef, { open: isOpen, onClose, initialFocus: cancelRef });
 
     // Lock body scroll while open; restore the prior value on close/unmount.
     useEffect(() => {
@@ -72,6 +61,7 @@ export default function ConfirmationModal({
         >
             <div
                 className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200"
+                ref={panelRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}

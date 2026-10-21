@@ -5,7 +5,7 @@
     {
       "type": "SearchBar",
       "props": {
-        "placeholder": "Buscar en el vergel…",
+        "placeholder": "Search the orchard…",
         "align": "center",
         "width": "36rem",
         "inputRadius": "999px",

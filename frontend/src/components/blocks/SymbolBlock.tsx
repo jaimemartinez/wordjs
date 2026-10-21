@@ -46,7 +46,7 @@ function SymbolPicker({ value, onChange }: { value: number; onChange: (v: number
             <select
                 value={String(value || 0)}
                 onChange={(e) => onChange(Number(e.target.value))}
-                className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
+                className="w-full px-2 py-1.5 bg-[var(--ed-surface-container-lowest,#fff)] border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
             >
                 <option value="0">{tr(symbols ? "— Elige un símbolo —" : "Cargando…")}</option>
                 {(symbols || []).map((s) => (

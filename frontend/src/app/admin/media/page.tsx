@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { mediaApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { plural } from "@/lib/i18n";
 import ConfirmationModal from "@/components/ConfirmationModal";
 import DialogLayer from "@/components/DialogLayer";
 import AiSuggestion from "@/components/AiSuggest";
@@ -476,7 +477,7 @@ export default function MediaPage() {
             {/* Header */}
             <PageHeader
                 title={t('media.title')}
-                subtitle={`${total} ${t('media.files.count')}`}
+                subtitle={`${total} ${plural(t, 'media.files.count', total)}`}
                 actions={
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap gap-3 md:gap-4 items-stretch lg:items-center w-full lg:w-auto">
                         {/* Search */}
@@ -526,7 +527,7 @@ export default function MediaPage() {
                         </div>
 
                         {/* View Toggles */}
-                        <div role="group" aria-label={t('media.list.view')} className="flex justify-center bg-white rounded-2xl p-1 border-2 border-gray-100 shadow-sm">
+                        <div role="group" aria-label={t('media.viewMode')} className="flex justify-center bg-white rounded-2xl p-1 border-2 border-gray-100 shadow-sm">
                             <button
                                 type="button"
                                 onClick={() => setViewMode('grid')}
@@ -534,7 +535,7 @@ export default function MediaPage() {
                                 aria-pressed={viewMode === 'grid'}
                                 className={`flex-1 lg:flex-none w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'grid' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
                             >
-                                <i className="fa-solid fa-grid-2"></i>
+                                <i className="fa-solid fa-table-cells-large" aria-hidden="true"></i>
                             </button>
                             <button
                                 type="button"
@@ -704,7 +705,7 @@ export default function MediaPage() {
                             totalPages={totalPages}
                             onChange={setPage}
                             className="border-t-0 bg-white"
-                            label={`${t('media.range').replace('{from}', String(range.from)).replace('{to}', String(range.to)).replace('{total}', String(range.total))} ${t('media.files.count')}`}
+                            label={`${t('media.range').replace('{from}', String(range.from)).replace('{to}', String(range.to)).replace('{total}', String(range.total))} ${plural(t, 'media.files.count', range.total)}`}
                         />
                     </div>
                 )}

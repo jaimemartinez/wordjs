@@ -217,7 +217,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                         />
                     </div>
                     <div className="space-y-2">
-                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.email')} <span className="text-gray-300 font-normal">{t('ssl.forLetsEncrypt')}</span></label>
+                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.email')} <span className="text-gray-500 font-normal">{t('ssl.forLetsEncrypt')}</span></label>
                         <input id="ssl-field-2"
                             type="email"
                             value={email}
@@ -230,61 +230,61 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             </div>
 
             <div className="space-y-4 pt-4">
-                <label htmlFor="ssl-field-3" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t('ssl.validationMethod')}</label>
+                <label htmlFor="ssl-field-3" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('ssl.validationMethod')}</label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div
                         onClick={() => setMethod("http")}
                         className={`p-5 rounded-xl border-2 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${method === "http"
-                            ? "border-blue-500 bg-blue-50 dark:bg-blue-900/40 dark:border-blue-500 shadow-md"
-                            : "border-gray-200 dark:border-gray-700 hover:border-blue-300 bg-white/50 dark:bg-gray-800/50"
+                            ? "border-blue-500 bg-blue-50 shadow-md"
+                            : "border-gray-200 hover:border-blue-300 bg-white/50"
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-2">
-                            <h4 className={`font-bold ${method === "http" ? "text-blue-700 dark:text-blue-300" : "text-gray-900 dark:text-gray-200"}`}>{t('ssl.method.httpTitle')}</h4>
+                            <h4 className={`font-bold ${method === "http" ? "text-blue-700" : "text-gray-900"}`}>{t('ssl.method.httpTitle')}</h4>
                         </div>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">{t('ssl.method.httpDesc')}</p>
+                        <p className="text-sm text-gray-500">{t('ssl.method.httpDesc')}</p>
                     </div>
                     <div
                         onClick={() => setMethod("dns")}
                         className={`p-5 rounded-xl border-2 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${method === "dns"
-                            ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/40 dark:border-indigo-500 shadow-md"
-                            : "border-gray-200 dark:border-gray-700 hover:border-indigo-300 bg-white/50 dark:bg-gray-800/50"
+                            ? "border-indigo-500 bg-indigo-50 shadow-md"
+                            : "border-gray-200 hover:border-indigo-300 bg-white/50"
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-2">
-                            <h4 className={`font-bold ${method === "dns" ? "text-indigo-700 dark:text-indigo-300" : "text-gray-900 dark:text-gray-200"}`}>{t('ssl.method.dnsTitle')}</h4>
+                            <h4 className={`font-bold ${method === "dns" ? "text-indigo-700" : "text-gray-900"}`}>{t('ssl.method.dnsTitle')}</h4>
                         </div>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">{t('ssl.method.dnsDesc')}</p>
+                        <p className="text-sm text-gray-500">{t('ssl.method.dnsDesc')}</p>
                     </div>
                     <div
                         onClick={() => setMethod("custom")}
                         className={`p-5 rounded-xl border-2 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${method === "custom"
-                            ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/40 dark:border-emerald-500 shadow-md"
-                            : "border-gray-200 dark:border-gray-700 hover:border-emerald-300 bg-white/50 dark:bg-gray-800/50"
+                            ? "border-emerald-500 bg-emerald-50 shadow-md"
+                            : "border-gray-200 hover:border-emerald-300 bg-white/50"
                             }`}
                     >
                         <div className="flex items-center gap-3 mb-2">
                             <i className={`fa-solid fa-upload ${method === "custom" ? "text-emerald-600" : "text-gray-400"}`}></i>
-                            <h4 className={`font-bold ${method === "custom" ? "text-emerald-700 dark:text-emerald-300" : "text-gray-900 dark:text-gray-200"}`}>{t('ssl.method.customTitle')}</h4>
+                            <h4 className={`font-bold ${method === "custom" ? "text-emerald-700" : "text-gray-900"}`}>{t('ssl.method.customTitle')}</h4>
                         </div>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">{t('ssl.method.customDesc')}</p>
+                        <p className="text-sm text-gray-500">{t('ssl.method.customDesc')}</p>
                     </div>
                 </div>
             </div>
 
             {/* Custom Upload Inputs */}
             {method === "custom" && (
-                <div className="bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-800 rounded-2xl p-6 space-y-4 animate-in fade-in slide-in-bottom duration-300">
-                    <h4 className="font-bold text-emerald-900 dark:text-emerald-300 flex items-center gap-2">
+                <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-6 space-y-4 animate-in fade-in slide-in-bottom duration-300">
+                    <h4 className="font-bold text-emerald-900 flex items-center gap-2">
                         <i className="fa-solid fa-file-arrow-up"></i> {t('ssl.upload.title')}
                     </h4>
-                    <p className="text-sm text-emerald-800 dark:text-emerald-200/80">
+                    <p className="text-sm text-emerald-800">
                         {t('ssl.upload.introBefore')} <strong>{t('ssl.upload.privateKey')}</strong> {t('ssl.upload.and')} <strong>{t('ssl.upload.certificate')}</strong> {t('ssl.upload.introAfter')}
                     </p>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">{t('ssl.upload.keyLabel')}</label>
+                            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.upload.keyLabel')}</label>
                             <input id="ssl-field-3"
                                 type="file"
                                 accept=".key,.pem,.txt"
@@ -294,19 +294,19 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                                         setKeyContent(content);
                                     }
                                 }}
-                                className="w-full text-sm text-gray-600 dark:text-gray-300
+                                className="w-full text-sm text-gray-600
                                 file:mr-4 file:py-2.5 file:px-4
                                 file:rounded-xl file:border-0
                                 file:text-sm file:font-bold
-                                file:bg-emerald-100 dark:file:bg-emerald-800 file:text-emerald-700 dark:file:text-emerald-300
-                                hover:file:bg-emerald-200 dark:hover:file:bg-emerald-700
+                                file:bg-emerald-100 file:text-emerald-700
+                                hover:file:bg-emerald-200
                                 cursor-pointer"
                             />
-                            {keyContent && <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.keyLoaded')}</p>}
+                            {keyContent && <p className="text-xs text-emerald-600 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.keyLoaded')}</p>}
                         </div>
 
                         <div className="space-y-2">
-                            <label htmlFor="ssl-field-4" className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">{t('ssl.upload.certLabel')}</label>
+                            <label htmlFor="ssl-field-4" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.upload.certLabel')}</label>
                             <input id="ssl-field-4"
                                 type="file"
                                 accept=".crt,.pem,.txt"
@@ -316,15 +316,15 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                                         setCertContent(content);
                                     }
                                 }}
-                                className="w-full text-sm text-gray-600 dark:text-gray-300
+                                className="w-full text-sm text-gray-600
                                 file:mr-4 file:py-2.5 file:px-4
                                 file:rounded-xl file:border-0
                                 file:text-sm file:font-bold
-                                file:bg-emerald-100 dark:file:bg-emerald-800 file:text-emerald-700 dark:file:text-emerald-300
-                                hover:file:bg-emerald-200 dark:hover:file:bg-emerald-700
+                                file:bg-emerald-100 file:text-emerald-700
+                                hover:file:bg-emerald-200
                                 cursor-pointer"
                             />
-                            {certContent && <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.certLoaded')}</p>}
+                            {certContent && <p className="text-xs text-emerald-600 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.certLoaded')}</p>}
                         </div>
                     </div>
                 </div>

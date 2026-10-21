@@ -130,10 +130,10 @@ function LoginForm() {
                 ) : (
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="login-username" className="block text-sm font-medium text-gray-700 mb-2">
                             {t('users.username')}
                         </label>
-                        <input
+                        <input id="login-username"
                             type="text"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
@@ -144,11 +144,11 @@ function LoginForm() {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-2">
                             {t('users.password')}
                         </label>
                         <div className="relative">
-                            <input
+                            <input id="login-password"
                                 type={showPassword ? "text" : "password"}
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}

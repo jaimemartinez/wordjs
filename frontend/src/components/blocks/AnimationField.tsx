@@ -76,7 +76,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
             <select
                 value={anim.type || ""}
                 onChange={(e) => onChange({ ...anim, type: e.target.value as AnimSpec["type"] })}
-                className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
+                className="w-full px-2 py-1.5 bg-[var(--ed-surface-container-lowest,#fff)] border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
             >
                 {EFFECTS.map((e) => (
                     <option key={e.value} value={e.value}>{tr(e.label)}</option>
@@ -94,7 +94,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                                     onClick={() => onChange({ ...anim, duration: d.value })}
                                     className={`flex-1 py-1 rounded text-[11px] font-medium transition ${
                                         selected
-                                            ? "bg-[var(--ed-primary)] text-white shadow-sm"
+                                            ? "bg-[var(--ed-primary-solid)] text-white shadow-sm"
                                             : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                                     }`}
                                 >
@@ -108,8 +108,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                         <select
                             value={String(anim.delay || 0)}
                             onChange={(e) => onChange({ ...anim, delay: parseInt(e.target.value, 10) || 0 })}
-                            className="flex-1 px-2 py-1 bg-white border border-[var(--ed-outline-variant)] rounded text-xs text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
-                            style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
+                            className="flex-1 px-2 py-1 bg-[var(--ed-surface-container-lowest,#fff)] border border-[var(--ed-outline-variant)] rounded text-xs text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
                         >
                             {DELAYS.map((d) => (
                                 <option key={d} value={d}>{d === 0 ? tr("Sin retardo") : `${d} ms`}</option>
@@ -132,7 +131,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                 <select
                     value={anim.scroll || ""}
                     onChange={(e) => onChange({ ...anim, scroll: e.target.value as AnimSpec["scroll"] })}
-                    className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
+                    className="w-full px-2 py-1.5 bg-[var(--ed-surface-container-lowest,#fff)] border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
                 >
                     {SCROLL_EFFECTS.map((e) => (
                         <option key={e.value} value={e.value}>{tr(e.label)}</option>

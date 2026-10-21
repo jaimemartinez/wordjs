@@ -29,7 +29,7 @@
                 "align": "center",
                 "gap": "sm",
                 "items": [
-                    { "type": "ChromeText", "props": { "text": "Impresa cada día en tinta y papel digital" } }
+                    { "type": "ChromeText", "props": { "text": "Printed every day in ink and digital paper" } }
                 ]
             }
         }

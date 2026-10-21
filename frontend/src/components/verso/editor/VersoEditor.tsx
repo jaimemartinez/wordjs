@@ -85,7 +85,7 @@ import { useStoreSlice, type VersoComponentMap } from "../render/context";
 import { nodeKeyFromTarget } from "../render/nodeKey";
 import FrameController from "../canvas/FrameController";
 import VersoThemeTemplate from "../canvas/VersoThemeTemplate";
-import PublicLayoutShell from "@/components/public/PublicLayoutShell";
+import CanvasPublicShell from "@/components/verso/canvas/CanvasPublicShell";
 import { useAreaSize } from "../canvas/ViewportControls";
 import { DEVICE_WIDTHS, type DeviceKind } from "../canvas/viewport";
 import { GeometryStore } from "../overlay/GeometryStore";
@@ -460,9 +460,13 @@ export default function VersoEditor({
             const doc = handle.getDoc();
             const selected = handle.getState().selection.nodeId;
             const node = selected ? doc.nodes[selected] : undefined;
-            const parentId = node ? node.parentId : ROOT_ID;
-            const slotKey = node ? node.slotKey : ROOT_SLOT;
-            const index = node ? node.index + 1 : doc.rootChildren.length;
+            // A selected CONTAINER with an empty zone receives the block INSIDE it: an empty Section or
+            // column could only be filled by dragging, which on a phone or tablet is the one gesture
+            // nothing offers (QA M1-08). With every zone filled, the block goes after it, as before.
+            const emptyZone = node ? Object.keys(node.slots || {}).find((k) => (node.slots[k] || []).length === 0) : undefined;
+            const parentId = node ? (emptyZone ? node.id : node.parentId) : ROOT_ID;
+            const slotKey = node ? (emptyZone ?? node.slotKey) : ROOT_SLOT;
+            const index = node ? (emptyZone ? 0 : node.index + 1) : doc.rootChildren.length;
             if (handle.transact((tx) => tx.insertNode(item, parentId, slotKey, index), { label: `Insertar ${type}` })) {
                 handle.select(id);
             }
@@ -1177,6 +1181,7 @@ export default function VersoEditor({
                                             : []),
                                     ]}
                                     placeholder={trStr("Select an option", language)}
+                                    aria-label={trStr("Estado de publicación", language)}
                                     className="!h-9 !py-1 !px-2.5 !bg-[var(--ed-surface-container)] !border-[var(--ed-outline-variant)] !rounded-lg !text-[11px] min-w-[108px]"
                                 />
                             </div>
@@ -1285,7 +1290,7 @@ export default function VersoEditor({
                                             <MSym name="dashboard_customize" size={18} /> {trStr("Plantillas", language)}
                                         </button>
                                         <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setCommentsOpen(false); setA11yOpen(false); setMediaOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
-                                            <MSym name="perm_media" size={18} /> {trStr("Biblioteca de medios", language)}
+                                            <MSym name="image" size={18} /> {trStr("Biblioteca de medios", language)}
                                         </button>
                                         {pageId && (
                                         <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setA11yOpen(false); setCommentsOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
@@ -1298,7 +1303,7 @@ export default function VersoEditor({
                                         </button>
                                         )}
                                         <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setCommentsOpen(false); setA11yOpen(true); runAudit(); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
-                                            <MSym name="accessibility_new" size={18} /> {trStr("Accesibilidad", language)}
+                                            <MSym name="check_circle" size={18} /> {trStr("Accesibilidad", language)}
                                         </button>
                                         <button type="button" onClick={() => { setMoreOpen(false); setCmdkOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
                                             <MSym name="search" size={18} /> {trStr("Buscar acciones y bloques", language)}
@@ -1547,7 +1552,7 @@ export default function VersoEditor({
                                                 jamás entra en _puck_data). Sin esto el canvas no enseñaba
                                                 header/footer y los espaciados del contenedor público
                                                 divergían (defecto reportado por el usuario). */}
-                                            <PublicLayoutShell stylesheets={false}>
+                                            <CanvasPublicShell>
                                                 <VersoThemeTemplate handle={handle} kind={templateKind} postType={templatePostType}>
                                                     <EditorRenderer
                                                         handle={handle}
@@ -1558,7 +1563,7 @@ export default function VersoEditor({
                                                         collabLive={collabLive}
                                                     />
                                                 </VersoThemeTemplate>
-                                            </PublicLayoutShell>
+                                            </CanvasPublicShell>
                                         </FrameController>
                                     </div>
                                 </div>
@@ -1614,6 +1619,7 @@ export default function VersoEditor({
                                 registry={registry}
                                 rootFields={rootFields}
                                 renderExternalPicker={renderExternalPicker}
+                                docLabel={templateKind === "single" ? "Entrada" : "Página"}
                                 onClose={() => {
                                     if (isCompact()) setMobileSheet(null);
                                     else setShowProperties(false);

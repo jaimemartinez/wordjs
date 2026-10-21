@@ -61,6 +61,8 @@ export interface VersoPropertiesPanelProps {
     renderExternalPicker?: RenderExternalPicker;
     onClose: () => void;
     mobileOpen?: boolean;
+    /** What the document IS, as a Spanish source label ("Página" | "Entrada"): a post said "Page". */
+    docLabel?: string;
 }
 
 /** Las tres secciones del inspector, en orden. Icono Material Symbol por sección. */
@@ -71,7 +73,7 @@ const SECTIONS: { key: PanelTab; icon: string; label: string }[] = [
     { key: "advanced", icon: "tune", label: "Avanzado" },
 ];
 
-export default function PropertiesPanel({ handle, registry, rootFields, renderExternalPicker, onClose, mobileOpen = false }: VersoPropertiesPanelProps) {
+export default function PropertiesPanel({ handle, registry, rootFields, renderExternalPicker, onClose, mobileOpen = false, docLabel = "Página" }: VersoPropertiesPanelProps) {
     const { t, language } = useI18n();
     const state = useStoreSlice(handle, selectState);
     const selectedId = state.selection.nodeId;
@@ -85,7 +87,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
     const msIcon = node ? (BLOCK_META[node.type]?.ms || "widgets") : "web";
     const label = node
         ? (def?.label ? trStr(def.label, language) : node.type)
-        : trStr("Página", language);
+        : trStr(docLabel, language);
     const blockId = node?.props.id as string | undefined;
     // Ruta de la selección (Página › Sección › … › bloque): cada eslabón selecciona su contenedor.
     const crumbs = node ? ancestorChain(state.doc, registry, node.id) : [];
@@ -168,12 +170,10 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                 </div>
                 <div className="min-w-0 flex-1">
                     <h3 className="text-[13px] font-semibold tracking-[0.01em] text-[var(--ed-on-surface)] leading-5 truncate">{label}</h3>
-                    <p
-                        className="text-[10px] leading-3 text-[var(--ed-outline)] truncate"
-                        style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
-                        title={blockId}
-                    >
-                        {blockId ? `ID: ${blockId}` : t('editor.properties')}
+                    {/* The block's internal id used to sit here ("ID: 1337eafd-…", in a monospace face):
+                        developer information on an author's screen. */}
+                    <p className="text-[10px] leading-3 text-[var(--ed-outline)] truncate">
+                        {t('editor.properties')}
                     </p>
                 </div>
                 <button
@@ -199,7 +199,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                         onClick={() => handle.select(null)}
                         className="shrink-0 px-1.5 py-0.5 rounded text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] hover:bg-[var(--ed-surface-container)] transition-colors"
                     >
-                        {trStr("Página", language)}
+                        {trStr(docLabel, language)}
                     </button>
                     {crumbs.map((c, i) => {
                         const current = i === crumbs.length - 1;
@@ -258,7 +258,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                                         {s.key === "content" && isContainer && (
                                             <p className="flex items-start gap-2 rounded-lg bg-[var(--ed-surface-container-low)] px-3 py-2 text-[12px] leading-5 text-[var(--ed-on-surface-variant)]">
                                                 <MSym name="info" size={16} className="shrink-0 mt-0.5" />
-                                                {trStr("Arrastra bloques dentro de este contenedor en el lienzo.", language)}
+                                                {trStr("Arrastra bloques dentro de este contenedor en el lienzo, o tócalos en la biblioteca con el contenedor seleccionado.", language)}
                                             </p>
                                         )}
                                         {visibleParts[s.key].map(([key, field]) => (

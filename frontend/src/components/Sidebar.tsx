@@ -6,7 +6,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useMenu } from "@/contexts/MenuContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import NotificationCenter from "./NotificationCenter";
 import { firstAllowedAdminPath, visibleSidebarSections, type AdminMenuItem } from "@/lib/adminAccess";
 import { roleDisplayName } from "@/lib/roleOptions";
@@ -32,13 +32,47 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     const [hoveredItem, setHoveredItem] = useState<{ label: string; top: number } | null>(null);
     const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
 
-    // The off-canvas menu (below lg) closes with Escape, like any other overlay.
+    const asideRef = useRef<HTMLElement>(null);
+    const closeRef = useRef<HTMLButtonElement>(null);
+    // Below lg the open sidebar is a modal drawer over the page. Above it, it is the page's own nav and
+    // isOpen never applies.
+    const [isDrawer, setIsDrawer] = useState(false);
     useEffect(() => {
-        if (!isOpen) return;
-        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+        if (!isOpen) { setIsDrawer(false); return; }
+        setIsDrawer(!window.matchMedia("(min-width: 1024px)").matches);
+    }, [isOpen]);
+
+    // The off-canvas menu behaves as a dialog: Escape closes it, focus moves INTO it on open (it used
+    // to stay on "Open menu", and Tab walked the page behind the overlay), Tab stays inside it, and
+    // focus goes back to the button that opened it on close.
+    useEffect(() => {
+        if (!isDrawer) return;
+        const opener = document.activeElement as HTMLElement | null;
+        // The drawer slides in with visibility still transitioning from hidden, and nothing inside a
+        // hidden box can take focus — so keep asking until it lands (or give up after ~3s).
+        let tries = 0;
+        const focusIn = window.setInterval(() => {
+            closeRef.current?.focus();
+            if (document.activeElement === closeRef.current || ++tries > 60) window.clearInterval(focusIn);
+        }, 50);
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") { onClose(); return; }
+            if (e.key !== "Tab" || !asideRef.current) return;
+            const items = [...asideRef.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input, select, [tabindex]:not([tabindex="-1"])')]
+                .filter((el) => el.offsetParent !== null);
+            if (!items.length) return;
+            const first = items[0], last = items[items.length - 1];
+            const active = document.activeElement as HTMLElement | null;
+            if (e.shiftKey && (active === first || !asideRef.current.contains(active))) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && (active === last || !asideRef.current.contains(active))) { e.preventDefault(); first.focus(); }
+        };
         document.addEventListener("keydown", onKey);
-        return () => document.removeEventListener("keydown", onKey);
-    }, [isOpen, onClose]);
+        return () => {
+            window.clearInterval(focusIn);
+            document.removeEventListener("keydown", onKey);
+            if (opener && document.contains(opener)) opener.focus();
+        };
+    }, [isDrawer, onClose]);
 
     const languages = [
         { code: 'es', label: 'Español' },
@@ -140,7 +174,12 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
 
             {/* h-dvh, not h-screen: on iOS 100vh is the LARGE viewport, so the bottom of the menu sat
                 under Safari's toolbar (same reason as the shell in DashboardLayoutClient). */}
-            <aside id="wjs-admin-sidebar" data-wjs-host-ui="" className={`
+            <aside
+                ref={asideRef}
+                id="wjs-admin-sidebar"
+                data-wjs-host-ui=""
+                {...(isDrawer ? { role: "dialog", "aria-modal": true, "aria-label": t("nav.menu") } : {})}
+                className={`
                 fixed inset-y-0 left-0 z-[5002] bg-[#0f172a] text-white h-dvh flex flex-col transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)] border-r border-white/5 lg:shadow-2xl
                 lg:relative lg:translate-x-0
                 ${isCollapsed ? "lg:w-28 w-80 max-w-[85vw]" : "lg:w-80 w-80 max-w-[85vw]"}
@@ -177,7 +216,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                         <div className="hidden lg:block">
                             <NotificationCenter variant="inline" isCollapsed={isCollapsed} />
                         </div>
-                        <button type="button" onClick={onClose} aria-label={t("nav.closeMenu")} className="lg:hidden w-11 h-11 shrink-0 flex items-center justify-center text-gray-400 hover:text-white transition-colors hover:bg-white/10 rounded-xl">
+                        <button ref={closeRef} type="button" onClick={onClose} aria-label={t("nav.closeMenu")} className="lg:hidden w-11 h-11 shrink-0 flex items-center justify-center text-gray-400 hover:text-white transition-colors hover:bg-white/10 rounded-xl">
                             <i className="fa-solid fa-xmark text-xl" aria-hidden="true"></i>
                         </button>
                     </div>

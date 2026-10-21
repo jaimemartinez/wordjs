@@ -270,6 +270,7 @@ export default function FontsPage() {
                             <input
                                 type="text"
                                 placeholder={t('fonts.searchPlaceholder')}
+                                aria-label={t('fonts.searchPlaceholder')}
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 className="w-full pl-12 pr-4 py-4 bg-white border-2 border-gray-100 rounded-2xl focus:outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-500 transition-all font-medium"

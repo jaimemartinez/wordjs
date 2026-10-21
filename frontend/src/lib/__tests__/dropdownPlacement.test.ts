@@ -356,7 +356,9 @@ describe("both portalled selects use it", () => {
         expect(contrastOf("text-gray-500", "black", "white/95")).toBeLessThan(AA); // why gray-600 and not gray-500
         const src = fs.readFileSync(path.resolve(__dirname, "../../components/ModernSelect.tsx"), "utf8");
         expect(src).toContain('<div role="presentation" className={GROUP_HEADING_CLASS} data-option-group="">');
-        expect(src).toContain('className="bg-white/95 backdrop-blur-xl'); // the surface the heading is measured on
+        // the surface the heading is measured on (a template literal: inside the Verso editor the menu
+        // also joins the editor's palette, components/editor-theme.css)
+        expect(src).toMatch(/className=\{?[`"]bg-white\/95 backdrop-blur-xl/);
     });
 
     it("ModernSelect's empty-list line (same menu surface) and the trigger's placeholder meet AA", () => {

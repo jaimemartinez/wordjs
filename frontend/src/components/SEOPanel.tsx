@@ -65,7 +65,7 @@ export default function SEOPanel({
     const descColor = descLength > 160 ? "text-red-500" : descLength > 140 ? "text-yellow-500" : "text-green-500";
 
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
             <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -74,16 +74,16 @@ export default function SEOPanel({
             </h3>
 
             {/* Google Preview */}
-            <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg border">
+            <div className="mb-4 p-3 bg-gray-50 rounded-lg border">
                 <p className="text-xs text-gray-500 mb-2">Vista previa de Google</p>
                 <div className="space-y-1">
-                    <p className="text-blue-600 dark:text-blue-400 text-lg hover:underline cursor-pointer truncate">
+                    <p className="text-blue-600 text-lg hover:underline cursor-pointer truncate">
                         {seoData.seo_title || title || "Título del post"}
                     </p>
-                    <p className="text-green-700 dark:text-green-500 text-sm truncate">
+                    <p className="text-green-700 text-sm truncate">
                         {previewUrl}
                     </p>
-                    <p className="text-gray-600 dark:text-gray-400 text-sm line-clamp-2">
+                    <p className="text-gray-600 text-sm line-clamp-2">
                         {seoData.seo_description || excerpt || "Descripción del post aparecerá aquí..."}
                     </p>
                 </div>
@@ -102,7 +102,7 @@ export default function SEOPanel({
                     value={seoData.seo_title}
                     onChange={(e) => handleChange("seo_title", e.target.value)}
                     placeholder={title || "Título para buscadores"}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"
+                    className="w-full px-3 py-2 border rounded-lg"
                     maxLength={70}
                 />
             </div>
@@ -119,7 +119,7 @@ export default function SEOPanel({
                     value={seoData.seo_description}
                     onChange={(e) => handleChange("seo_description", e.target.value)}
                     placeholder={excerpt || "Descripción para buscadores"}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 resize-none"
+                    className="w-full px-3 py-2 border rounded-lg resize-none"
                     rows={3}
                     maxLength={200}
                 />
@@ -146,7 +146,7 @@ export default function SEOPanel({
                             value={seoData.seo_keywords}
                             onChange={(e) => handleChange("seo_keywords", e.target.value)}
                             placeholder="palabra1, palabra2, palabra3"
-                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"
+                            className="w-full px-3 py-2 border rounded-lg"
                         />
                         <p className="text-xs text-gray-500 mt-1">Separadas por comas (opcional)</p>
                     </div>
@@ -161,7 +161,7 @@ export default function SEOPanel({
                             value={seoData.og_image}
                             onChange={(e) => handleChange("og_image", e.target.value)}
                             placeholder="https://ejemplo.com/imagen.jpg"
-                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"
+                            className="w-full px-3 py-2 border rounded-lg"
                         />
                         <p className="text-xs text-gray-500 mt-1">URL de imagen para Open Graph (1200x630px recomendado)</p>
                     </div>

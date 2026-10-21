@@ -6,8 +6,13 @@
 import React, { useState } from "react";
 import { bc, cx } from "@/components/blocks/blockVars";
 import { fmtTime } from "./SelfHostedVideo";
+import type { PublicUiStrings } from "@/lib/public/uiStrings";
 
-const AudioTransport = ({ src, title }: { src: string; title: string }) => {
+type MediaStrings = Pick<PublicUiStrings, "mediaPlay" | "mediaPause" | "mediaPosition" | "mediaPositionOf" | "mediaDownloadAudio">;
+
+// The control names follow the SITE language (lib/public/uiStrings); English where none reaches the
+// island (the editor canvas). They were fixed Spanish on every site.
+const AudioTransport = ({ src, title, ui }: { src: string; title: string; ui?: MediaStrings }) => {
     const ref = React.useRef<HTMLAudioElement | null>(null);
     const bodyRef = React.useRef<HTMLDivElement | null>(null);
     const labelRef = React.useRef<HTMLSpanElement | null>(null);
@@ -73,7 +78,7 @@ const AudioTransport = ({ src, title }: { src: string; title: string }) => {
                 type="button"
                 className={bc('audio-player__button')}
                 onClick={toggle}
-                aria-label={playing ? 'Pausar' : 'Reproducir'}
+                aria-label={playing ? (ui?.mediaPause || 'Pause') : (ui?.mediaPlay || 'Play')}
             >
                 <i className={cx('fa-solid', playing ? 'fa-pause' : 'fa-play')} aria-hidden="true"></i>
             </button>
@@ -94,8 +99,8 @@ const AudioTransport = ({ src, title }: { src: string; title: string }) => {
                     step="any"
                     value={now}
                     onChange={(e) => seek(parseFloat(e.target.value))}
-                    aria-label="Posición de reproducción"
-                    aria-valuetext={`${fmtTime(now)} de ${fmtTime(total)}`}
+                    aria-label={ui?.mediaPosition || 'Playback position'}
+                    aria-valuetext={(ui?.mediaPositionOf || '{now} of {total}').replace('{now}', fmtTime(now)).replace('{total}', fmtTime(total))}
                     style={{ ['--wjs-audio-progress-pct' as any]: `${pct}%` }}
                 />
                 <div className={bc('audio-player__times')}>
@@ -105,8 +110,8 @@ const AudioTransport = ({ src, title }: { src: string; title: string }) => {
             </div>
             {/* No `controls`: the transport above replaces it. Kept in the DOM as the media engine
                 and as the no-JS fallback. */}
-            <audio ref={ref} src={src} preload="metadata" className={bc('audio-player__engine')}>
-                <a href={src}>Descargar el audio</a>
+            <audio ref={ref} src={src || undefined} preload="metadata" className={bc('audio-player__engine')}>
+                <a href={src || undefined}>{ui?.mediaDownloadAudio || 'Download the audio'}</a>
             </audio>
         </>
     );

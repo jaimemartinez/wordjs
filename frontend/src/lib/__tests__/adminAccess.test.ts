@@ -183,7 +183,9 @@ describe("the route map", () => {
         const walk = (dir: string) => {
             for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
                 if (e.isDirectory()) { if (e.name !== "__tests__") walk(path.join(dir, e.name)); }
-                else if (e.name === "page.tsx") pages.push(dir);
+                // [...missing] is the admin 404 (it only calls notFound()): an address no screen answers.
+                // It has no rule on purpose — the guard sends a non-wildcard user to their own home.
+                else if (e.name === "page.tsx" && path.basename(dir) !== "[...missing]") pages.push(dir);
             }
         };
         walk(adminDir);
@@ -193,6 +195,13 @@ describe("the route map", () => {
         expect(routes.length).toBeGreaterThan(30);
         const unguarded = routes.filter((r) => !ruleFor(r));
         expect(unguarded).toEqual([]);
+    });
+
+    it("an address no admin screen answers: an administrator sees the panel's 404, anyone else goes home", () => {
+        const admin: AdminAccessUser = { role: "administrator", capabilities: ["*"] };
+        const editor: AdminAccessUser = { role: "editor", capabilities: ["read", "access_admin_panel", "edit_posts", "edit_others_posts", "edit_pages"] };
+        expect(decideAdminRoute({ pathname: "/admin/no-such-page", user: admin, pluginMenus: [], menusLoaded: true })).toEqual({ kind: "allow" });
+        expect(decideAdminRoute({ pathname: "/admin/no-such-page", user: editor, pluginMenus: [], menusLoaded: true }).kind).toBe("redirect");
     });
 
     it("every core sidebar entry is decided by the capability it is shown for", () => {
@@ -207,33 +216,38 @@ describe("the route map", () => {
 describe("the sidebar never draws a heading over an empty section", () => {
     const teamMember: AdminAccessUser = { role: "conference_manager_team", capabilities: ["read", "access_admin_panel"] };
 
-    it("a plugin team member whose plugin lost roles:declare: only «Sistema › Cuenta», no bare «Principal»", () => {
+    it("a plugin team member whose plugin lost roles:declare: only «Usuarios › Cuenta», no bare heading", () => {
         // The grant was revoked: the role confers only read/access_admin_panel and the server's plugin
         // menu no longer lists the plugin's entry for them.
         const sections = visibleSidebarSections(teamMember, []);
-        expect(sections.map((s) => s.key)).toEqual(["management"]);
-        expect(sections[0].labelKey).toBe("nav.sectionSystem");
+        expect(sections.map((s) => s.key)).toEqual(["people"]);
+        expect(sections[0].labelKey).toBe("nav.section.people");
         expect(sections[0].items.map((i) => i.href)).toEqual([ACCOUNT_PATH]);
     });
 
-    it("with its grant: the plugin entry under «Principal», the account under «Sistema»", () => {
+    it("with its grant: the plugin's main entry under «Contenido», the account under «Usuarios»", () => {
         const sections = visibleSidebarSections({ ...teamMember, capabilities: [...teamMember.capabilities!, "conference_manager_access"] }, [CM_ITEM]);
         expect(sections.map((s) => [s.key, s.items.map((i) => i.href)])).toEqual([
-            ["core", ["/admin/plugin/conference-manager"]],
-            ["management", [ACCOUNT_PATH]],
+            ["content", ["/admin/plugin/conference-manager"]],
+            ["people", [ACCOUNT_PATH]],
         ]);
     });
 
-    it("every existing role keeps both sections exactly as sidebarSections lists them", () => {
+    it("every role sees exactly sidebarSections' entries, regrouped by task (QA M1-04), none twice", () => {
         for (const user of [admin, editor, author, subscriber]) {
             const { core, management } = sidebarSections(user, []);
             const sections = visibleSidebarSections(user, []);
-            expect(sections.find((s) => s.key === "core")?.items ?? []).toEqual(core);
-            expect(sections.find((s) => s.key === "management")?.items ?? []).toEqual(management);
+            const shown = sections.flatMap((s) => s.items.map((i) => i.href));
+            expect([...shown].sort()).toEqual([...core, ...management].map((i) => i.href).sort());
+            expect(new Set(shown).size).toBe(shown.length);
             expect(sections.every((s) => s.items.length > 0)).toBe(true);
         }
-        // A subscriber has no core-section entry either.
-        expect(visibleSidebarSections(subscriber, []).map((s) => s.key)).toEqual(["management"]);
-        expect(visibleSidebarSections(admin, []).map((s) => s.key)).toEqual(["core", "management"]);
+        expect(visibleSidebarSections(subscriber, []).map((s) => s.key)).toEqual(["people"]);
+        expect(visibleSidebarSections(admin, []).map((s) => s.key)).toEqual(["content", "appearance", "people", "plugins", "settings", "advanced"]);
+        const groupOf = (href: string) => visibleSidebarSections(admin, []).find((s) => s.items.some((i) => i.href === href))?.key;
+        expect(groupOf("/admin/tags")).toBe("content");
+        expect(groupOf("/admin/themes")).toBe("appearance");
+        expect(groupOf("/admin/settings")).toBe("settings");
+        expect(groupOf("/admin/hooks")).toBe("advanced");
     });
 });

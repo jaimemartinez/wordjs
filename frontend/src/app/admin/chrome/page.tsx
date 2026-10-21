@@ -302,14 +302,16 @@ export default function ChromeEditorPage() {
                     <div className="h-8 w-px bg-gray-100 hidden md:block"></div>
 
                     {/* Part selector — toggle buttons, so the active part is exposed via aria-pressed */}
-                    <div role="group" aria-label={t("chrome.admin.partSelector")} className="flex items-center bg-gray-100 rounded-xl p-1 gap-1">
+                    {/* Full width on a phone, each part an equal share and a tighter tracking: at 375px the third
+                        part ("ANNOUNCEMENT") ran off the edge of the screen. */}
+                    <div role="group" aria-label={t("chrome.admin.partSelector")} className="flex items-center bg-gray-100 rounded-xl p-1 gap-1 w-full sm:w-auto">
                         {PARTS.map((p) => (
                             <button
                                 key={p}
                                 type="button"
                                 onClick={() => switchPart(p)}
                                 aria-pressed={part === p}
-                                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all ${part === p ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}
+                                className={`flex flex-1 sm:flex-none min-w-0 justify-center items-center gap-1 sm:gap-1.5 px-2 sm:px-4 min-h-11 sm:min-h-0 py-2 rounded-lg text-[11px] font-black uppercase tracking-normal sm:tracking-widest transition-all ${part === p ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}
                             >
                                 {/* Non-colour cue for the active part (the fill/colour swap alone is invisible
                                     under forced colours and to users who can't tell the two apart). */}

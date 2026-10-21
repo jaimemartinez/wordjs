@@ -305,26 +305,9 @@ export default function ThemesPage() {
                     subtitle={t('themes.subtitle')}
                     actions={
                         <>
-                            <a
-                                href="/admin/themes/customize"
-                                className="inline-flex items-center gap-2 min-h-11 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors"
-                            >
-                                <i className="fa-solid fa-sliders" aria-hidden="true"></i> {t('themes.customize')}
-                            </a>
-                            {/* Always available, not only while the banner is up: restoring is also
-                                how you undo a hand edit to themes/default that broke the stylesheet. */}
-                            <Button
-                                variant="secondary"
-                                onClick={handleRestoreDefault}
-                                disabled={restoring}
-                                loading={restoring}
-                                icon={restoring ? undefined : "fa-rotate-left"}
-                            >
-                                {restoring ? t('themes.restoring') : t('themes.restoreDefault')}
-                            </Button>
-                            <Button variant="secondary" onClick={() => setCreatingTheme(true)} icon="fa-swatchbook" data-testid="create-theme">
-                                {t('themes.create.open')}
-                            </Button>
+                            {/* One visual language (QA M1-12): the main action filled, the everyday ones
+                                outlined, and the destructive restore the quietest — it used to weigh the same
+                                as Customize. Customize stays a link (a page), styled as the secondary button. */}
                             <Button
                                 onClick={() => fileInputRef.current?.click()}
                                 disabled={uploading}
@@ -332,6 +315,26 @@ export default function ThemesPage() {
                                 icon={uploading ? undefined : "fa-plus-circle"}
                             >
                                 {uploading ? `${Math.round(uploadProgress)}%` : t('themes.install')}
+                            </Button>
+                            <Button variant="secondary" onClick={() => setCreatingTheme(true)} icon="fa-swatchbook" data-testid="create-theme">
+                                {t('themes.create.open')}
+                            </Button>
+                            <a
+                                href="/admin/themes/customize"
+                                className="inline-flex items-center justify-center gap-3 px-6 sm:px-8 py-4 text-[11px] rounded-2xl font-black uppercase tracking-widest transition-all duration-300 bg-white border-2 border-gray-100 text-gray-600 hover:border-blue-500 hover:text-blue-600 shadow-sm"
+                            >
+                                <i className="fa-solid fa-sliders" aria-hidden="true"></i> {t('themes.customize')}
+                            </a>
+                            {/* Always available, not only while the banner is up: restoring is also
+                                how you undo a hand edit to themes/default that broke the stylesheet. */}
+                            <Button
+                                variant="ghost"
+                                onClick={handleRestoreDefault}
+                                disabled={restoring}
+                                loading={restoring}
+                                icon={restoring ? undefined : "fa-rotate-left"}
+                            >
+                                {restoring ? t('themes.restoring') : t('themes.restoreDefault')}
                             </Button>
                             <input
                                 ref={fileInputRef}

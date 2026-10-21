@@ -13,8 +13,8 @@
           {
             "type": "SearchBar",
             "props": {
-              "placeholder": "> ruta no encontrada. buscar_",
-              "buttonText": "EJECUTAR",
+              "placeholder": "> search_",
+              "buttonText": "RUN",
               "align": "center",
               "width": "min(30rem, 100%)"
             }

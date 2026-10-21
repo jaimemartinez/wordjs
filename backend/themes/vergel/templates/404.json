@@ -16,7 +16,7 @@
     {
       "type": "SearchBar",
       "props": {
-        "placeholder": "Quizá esté por aquí…",
+        "placeholder": "Maybe it is around here…",
         "align": "center",
         "width": "30rem",
         "inputRadius": "999px",
