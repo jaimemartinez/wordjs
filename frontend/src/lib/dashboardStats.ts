@@ -121,5 +121,5 @@ export const QUICK_ACTIONS_GRID_CLASS = "grid gap-4 grid-cols-1 @min-[30rem]:gri
  * it (`gap-2`, `shrink-0`) instead of touching the last letter.
  */
 export const HEALTH_LABEL_ROW_CLASS = "flex items-start justify-between gap-2";
-export const HEALTH_LABEL_CLASS = "min-w-0 text-[10px] font-black uppercase tracking-widest text-gray-500 break-normal";
+export const HEALTH_LABEL_CLASS = "min-w-0 text-[11px] font-black uppercase tracking-widest text-gray-500 break-normal";
 export const HEALTH_DOT_CLASS = "mt-1 flex h-2 w-2 shrink-0 rounded-full";

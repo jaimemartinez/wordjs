@@ -152,7 +152,7 @@ export default function ToolsPage() {
 
     if (forbidden) {
         return (
-            <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+            <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
                 <PageHeader title={t("tools.title")} subtitle={t("tools.subtitle")} icon="fa-screwdriver-wrench" />
                 <Card variant="default" padding="none">
                     <EmptyState icon="fa-lock" title={t("tools.forbiddenTitle")} description={t("tools.forbiddenDescription")} />
@@ -162,7 +162,7 @@ export default function ToolsPage() {
     }
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader title={t("tools.title")} subtitle={t("tools.subtitle")} icon="fa-screwdriver-wrench" />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -178,7 +178,7 @@ export default function ToolsPage() {
                         </div>
                     </div>
 
-                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">{t("tools.export.include")}</h3>
+                    <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-400 mb-4">{t("tools.export.include")}</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
                         {EXPORT_SECTIONS.map((section) => {
                             const on = toggles[section];
@@ -211,7 +211,7 @@ export default function ToolsPage() {
 
                     {canExport ? (
                         <p className="text-xs text-gray-400 mb-6">
-                            <span className="font-bold uppercase tracking-widest text-[10px] text-gray-400">{t("tools.export.summary")}:</span>{" "}
+                            <span className="font-bold uppercase tracking-widest text-[11px] text-gray-400">{t("tools.export.summary")}:</span>{" "}
                             {chosen.map((section) => t(`tools.section.${section}`)).join(" · ")}
                         </p>
                     ) : (
@@ -256,7 +256,7 @@ export default function ToolsPage() {
                         </div>
                         <Link
                             href="/admin/import"
-                            className="inline-flex items-center justify-center gap-2 w-full px-6 py-3 rounded-xl bg-white border-2 border-gray-100 text-gray-600 hover:border-blue-500 hover:text-blue-600 shadow-sm font-black uppercase tracking-widest text-[10px] transition-all"
+                            className="inline-flex items-center justify-center gap-2 w-full px-6 py-3 rounded-xl bg-white border-2 border-gray-100 text-gray-600 hover:border-blue-500 hover:text-blue-600 shadow-sm font-black uppercase tracking-widest text-[11px] transition-all"
                         >
                             <i className="fa-solid fa-arrow-right"></i>
                             {t("tools.import.button")}

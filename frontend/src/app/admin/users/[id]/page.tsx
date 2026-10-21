@@ -111,7 +111,7 @@ export default function UserEditorPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 animate-in fade-in duration-500">
             {/* Premium Header */}
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12 flex-shrink-0">
                 <div>
@@ -131,11 +131,11 @@ export default function UserEditorPage() {
                 </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 max-w-2xl">
+            <form onSubmit={handleSubmit} className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-5 sm:p-8 max-w-2xl">
                 <div className="space-y-6">
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.username')}</label>
-                        <input
+                        <label htmlFor="user-edit-1" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.username')}</label>
+                        <input id="user-edit-1"
                             type="text"
                             value={formData.username}
                             onChange={(e) => setFormData({ ...formData, username: e.target.value })}
@@ -151,8 +151,8 @@ export default function UserEditorPage() {
                     />
                     <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.email')}</label>
-                        <input
+                        <label htmlFor="user-edit-2" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.email')}</label>
+                        <input id="user-edit-2"
                             type="email"
                             value={formData.email}
                             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
@@ -164,8 +164,8 @@ export default function UserEditorPage() {
                         />
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.personalEmail') || 'Personal / Recovery Email'}</label>
-                        <input
+                        <label htmlFor="user-edit-3" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.personalEmail') || 'Personal / Recovery Email'}</label>
+                        <input id="user-edit-3"
                             type="email"
                             value={formData.personalEmail}
                             onChange={(e) => setFormData({ ...formData, personalEmail: e.target.value })}
@@ -175,8 +175,8 @@ export default function UserEditorPage() {
                         <p className="text-[11px] text-gray-600 mt-2 leading-relaxed">{t('user.edit.personalEmail.help') || 'External address for password recovery & notifications — independent of the primary account email.'}</p>
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.displayName')}</label>
-                        <input
+                        <label htmlFor="user-edit-4" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.displayName')}</label>
+                        <input id="user-edit-4"
                             type="text"
                             value={formData.displayName}
                             onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
@@ -190,10 +190,10 @@ export default function UserEditorPage() {
                         options={roleOptions}
                     />
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">
+                        <label htmlFor="user-edit-5" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
                             {isNew ? t('user.edit.password') : t('user.edit.newPassword')}
                         </label>
-                        <input
+                        <input id="user-edit-5"
                             type="password"
                             value={formData.password}
                             onChange={(e) => setFormData({ ...formData, password: e.target.value })}
@@ -205,8 +205,8 @@ export default function UserEditorPage() {
                         the backend asks for the password exactly then. */}
                     {needsCurrentPassword && (
                         <div data-testid="self-current-password">
-                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('account.currentPassword')}</label>
-                            <input
+                            <label htmlFor="user-edit-6" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('account.currentPassword')}</label>
+                            <input id="user-edit-6"
                                 type="password"
                                 value={currentPassword}
                                 onChange={(e) => setCurrentPassword(e.target.value)}
@@ -244,7 +244,7 @@ export default function UserEditorPage() {
                     userId={userId}
                     username={formData.username}
                     targetRole={formData.role}
-                    className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 mt-6 max-w-2xl"
+                    className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-5 sm:p-8 mt-6 max-w-2xl"
                 />
             )}
         </div>

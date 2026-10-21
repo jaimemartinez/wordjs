@@ -79,9 +79,9 @@ export default function DeclaredRolesList({ roles, heading, state, capabilitiesL
                 return (
                     <span key={String(r.slug)} className="block mt-1 text-xs text-slate-600" data-declared-role={String(r.slug)}>
                         <span className="font-bold text-slate-800">{String(r.name ?? r.slug)}</span>{" "}
-                        <span className={`font-mono text-[10px] text-slate-600 ${TOKEN_WRAP_CLASS}`} data-declared-role-slug=""><BreakableToken text={String(r.slug)} /></span>
+                        <span className={`font-mono text-[11px] text-slate-600 ${TOKEN_WRAP_CLASS}`} data-declared-role-slug=""><BreakableToken text={String(r.slug)} /></span>
                         {Array.isArray(r.capabilities) && r.capabilities.length > 0 && (
-                            <span className="block text-[10px] text-slate-600" data-declared-role-capabilities="">
+                            <span className="block text-[11px] text-slate-600" data-declared-role-capabilities="">
                                 {capabilitiesLabel && <span className="font-bold">{capabilitiesLabel} </span>}
                                 {r.capabilities.map(String).map((cap, i, all) => (
                                     <Fragment key={`${i}:${cap}`}>

@@ -44,3 +44,30 @@ body {
 iframe {
   height: 100% !important;
 }
+
+/* Touch targets (WCAG 2.5.5): on a coarse pointer every control of a CORE admin screen is at least 44px.
+ * DashboardLayoutClient marks <main> with data-wjs-core-screen except on plugin pages, whose UI is the
+ * plugin's own. :where() keeps the specificity at zero, so a screen can still size a control on purpose;
+ * min-* never shrinks anything, and desktop (a fine pointer) is untouched. A switch keeps its pill: its
+ * hit area grows around it instead. Opt one control out with data-tap-exempt. */
+@media (pointer: coarse) {
+  :where([data-wjs-core-screen]) :where(button, select, summary, [role="tab"], [role="button"]):not([role="switch"], [data-tap-exempt]) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  :where([data-wjs-core-screen]) :where(input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], input[type="number"], input[type="tel"], input[type="date"], input[type="time"], input[type="datetime-local"]):not([data-tap-exempt]) {
+    min-height: 44px;
+  }
+  /* A checkbox or radio is reached through its label: the label is the target. */
+  :where([data-wjs-core-screen]) :where(label:has(input[type="checkbox"], input[type="radio"])) {
+    min-height: 44px;
+  }
+  :where([data-wjs-core-screen]) :where([role="switch"]) {
+    position: relative;
+  }
+  :where([data-wjs-core-screen]) :where([role="switch"])::after {
+    content: "";
+    position: absolute;
+    inset: -8px -4px;
+  }
+}

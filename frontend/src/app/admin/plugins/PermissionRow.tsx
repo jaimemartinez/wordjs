@@ -42,7 +42,7 @@ export function RiskBadge({ risk, adminEquivalent = false }: { risk: PermissionR
  * row's tint, under WCAG AA. It wraps only between its parts (render it through BreakableToken): it was
  * `break-all`, cut at any letter on a phone.
  */
-export const TOKEN_CLASS = `text-[10px] font-mono text-slate-600 font-semibold ${TOKEN_WRAP_CLASS}`;
+export const TOKEN_CLASS = `text-[11px] font-mono text-slate-600 font-semibold ${TOKEN_WRAP_CLASS}`;
 /**
  * A permission of the PERMISSIONS dialog (a toggle <button>): a grid of the title line and the switch on its
  * first row, the details (description, the plugin's reason, the declared roles) under them. Below 640 px the

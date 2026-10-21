@@ -21,8 +21,9 @@ import { NavCurrentLink } from "./NavCurrentLink";
 
 // Static literal maps so Tailwind sees every class (no interpolation).
 const LINK_CLASS: Record<"header" | "footer", string> = {
-    header: "text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors",
-    footer: "text-[var(--wjs-color-text-footer-dim,gray)] hover:text-[var(--wjs-color-primary,white)] transition-colors",
+// pointer-coarse: a finger needs 44px; a mouse keeps the theme's own line height.
+    header: "text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors pointer-coarse:inline-flex pointer-coarse:items-center pointer-coarse:min-h-11",
+    footer: "text-[var(--wjs-color-text-footer-dim,gray)] hover:text-[var(--wjs-color-primary,white)] transition-colors pointer-coarse:inline-flex pointer-coarse:items-center pointer-coarse:min-h-11",
 };
 
 // The dropdown surface for a horizontal (header/footer) submenu. Hidden until its parent <li> (the
@@ -177,10 +178,13 @@ export default function ChromeNav({ location, orientation, items, collapse = "mo
 
     // Horizontal in the HEADER: desktop row + mobile hamburger island (each hides itself on the other
     // side of the `collapse` breakpoint). `never` = the row at every width and no drawer at all.
+    // With the default `mobile` collapse, a menu WITH submenus keeps the drawer up to lg on a touch
+    // screen: its dropdowns open on hover or focus, and a tap on the parent link navigates first.
     const row = DESKTOP_ROW[collapse] ?? DESKTOP_ROW.mobile;
+    const touchSubmenus = hasSubmenus && collapse === "mobile";
     return (
         <>
-            <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-horizontal${hook} ${row} items-center gap-8`}>
+            <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-horizontal${hook} ${row}${touchSubmenus ? " pointer-coarse:max-lg:hidden" : ""} items-center gap-8`}>
                 {hasSubmenus ? <ul className="flex items-center gap-8 list-none m-0 p-0">{treeList}</ul> : flatLinks}
             </nav>
             {collapse !== "never" && <ChromeNavMobile items={tree} collapse={collapse} />}

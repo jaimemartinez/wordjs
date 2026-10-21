@@ -203,8 +203,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Domain Name</label>
-                        <input
+                        <label htmlFor="ssl-field-1" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Domain Name</label>
+                        <input id="ssl-field-1"
                             type="text"
                             value={domain}
                             onChange={e => setDomain(e.target.value)}
@@ -213,8 +213,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                         />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Email <span className="text-gray-300 font-normal">(for Let&apos;s Encrypt)</span></label>
-                        <input
+                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Email <span className="text-gray-300 font-normal">(for Let&apos;s Encrypt)</span></label>
+                        <input id="ssl-field-2"
                             type="email"
                             value={email}
                             onChange={e => setEmail(e.target.value)}
@@ -226,7 +226,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             </div>
 
             <div className="space-y-4 pt-4">
-                <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Validation Method</label>
+                <label htmlFor="ssl-field-3" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Validation Method</label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div
                         onClick={() => setMethod("http")}
@@ -281,7 +281,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-2">
                             <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">Private Key (.key / .pem)</label>
-                            <input
+                            <input id="ssl-field-3"
                                 type="file"
                                 accept=".key,.pem,.txt"
                                 onChange={async (e) => {
@@ -302,8 +302,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                         </div>
 
                         <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">Certificate (.crt / .pem)</label>
-                            <input
+                            <label htmlFor="ssl-field-4" className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide ml-1">Certificate (.crt / .pem)</label>
+                            <input id="ssl-field-4"
                                 type="file"
                                 accept=".crt,.pem,.txt"
                                 onChange={async (e) => {
