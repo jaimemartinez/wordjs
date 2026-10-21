@@ -1066,9 +1066,7 @@ the boot error links there too.
     original's title and slug. The editor's Slug field shows the entry's slug, a published entry keeps its URL
     when its title changes, and an entry created or saved without a category lands in the default category.
   - *Public site*: search shows the real number of results and pages through them; the «Latest posts»
-    front page pages at `/page/{n}`. The editor and pages with plugin blocks no longer request a block
-    bundle from every active plugin: `GET /plugins/registry` says which plugins ship one (`component`),
-    which removes one 404 per plugin without blocks on every load. OpenGraph and JSON-LD dates are ISO 8601
+    front page pages at `/page/{n}`. OpenGraph and JSON-LD dates are ISO 8601
     (from the UTC time) and carry `article:modified_time` / `dateModified`; a site with no icon of its own
     gets a bundled one instead of a `/favicon.ico` 404 on every page; a missing optional theme template is
     logged as information, not as a warning on every render.
