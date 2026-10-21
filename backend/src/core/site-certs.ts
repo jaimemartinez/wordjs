@@ -1,7 +1,7 @@
 /**
  * WordJS — one TLS certificate per site of a network (multisite).
  *
- * The main site keeps its certificate exactly as before (Settings → Certificates, `acme.domains`, the
+ * The main site keeps its certificate exactly as before (Security → Automatic Certificate Renewal, `acme.domains`, the
  * gateway's or the monolith's default certificate). Every other site gets a certificate of its own for
  * its main address, which the edge selects by SNI (gateway/src/site-certs.js, in the gateway and in the
  * monolith): a site never has to share a certificate — or a SAN list — with the sites around it.
@@ -43,7 +43,7 @@ function codedError(code: string, message: string, status = 400): Error & { code
 
 /** The secondary site `id` and its main host, or a coded error. */
 function siteFor(id: number) {
-    if (id === siteContext.PRIMARY_SITE_ID) throw codedError('network_primary_site', 'The main site keeps its certificate in Settings → Certificates.');
+    if (id === siteContext.PRIMARY_SITE_ID) throw codedError('network_primary_site', 'The main site keeps its certificate in Admin → Security.');
     const site = network().getSite(id);
     if (!site) throw codedError('network_site_not_found', 'No such site.', 404);
     if (!site.mainHost) throw codedError('network_invalid_url', 'The site has no address.');
@@ -121,7 +121,7 @@ async function issueSiteCertificate(id: number, opts: { actorUserId?: number | n
     const site = siteFor(id);
     const acme = (config as any).acme || {};
     const email = String(acme.email || '').trim();
-    if (!email) throw codedError('network_acme_unconfigured', 'Set the ACME email in Settings → Certificates first (the account every site certificate is issued with).', 409);
+    if (!email) throw codedError('network_acme_unconfigured', 'Set the ACME email in Security → Automatic Certificate Renewal first (the account every site certificate is issued with).', 409);
     if (issuing.has(site.mainHost)) throw codedError('network_acme_busy', 'A certificate for this address is already being issued.', 409);
     issuing.add(site.mainHost);
     try {

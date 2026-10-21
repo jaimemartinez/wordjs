@@ -319,6 +319,8 @@ if (cluster.isPrimary) {
     const edgeRefusals = hostEdge.createRefusalAggregate();
     // The protocol each worker reports it serves (GET /info → Admin → Security), src/tls-mode.js.
     const workerTransport = tlsMode.createTransportAggregate();
+    // target url → when the cluster certificate it registered with expires (GET /cluster).
+    const nodeCertExpiry = new Map();
 
     cluster.on('exit', (worker) => {
         logger.error(`[Gateway] Worker ${worker.process.pid} died. Respawning...`);
@@ -666,6 +668,8 @@ if (cluster.isPrimary) {
                     // url whose host the certificate covers. `req.body.name` is dropped entirely — the
                     // group's label is derived from the route and the authenticated CN.
                     handleRegistration({ url: targetUrl, routes: declared }, cn);
+                    // When the node's cluster certificate expires, for Admin → Servers (QA X1-08).
+                    if (cert && cert.valid_to) nodeCertExpiry.set(targetUrl, new Date(cert.valid_to).toISOString());
                     res.json({ success: true });
                 });
 
@@ -800,15 +804,30 @@ if (cluster.isPrimary) {
                 // node out. The backend has already checked who asks (password + two-factor code).
                 const TOKENS_FILE = path.resolve(__dirname, '../cluster-tokens.json');
                 const clusterInitialized = () => fs.existsSync(path.join(CERTS_DIR, 'cluster-ca.key'));
+                // The nodes with the expiry of the certificate each presented when it registered (null for a
+                // node not seen since this gateway started), and the gateway's own identity (QA X1-08).
+                const nodesWithCerts = () => clusterAdmin.describeNodes(registry, targetOwner)
+                    .map((n) => ({ ...n, certExpiresAt: nodeCertExpiry.get(n.url) || null }));
+                const certExpiry = (file) => {
+                    try { return new Date(new (require('crypto').X509Certificate)(fs.readFileSync(file)).validTo).toISOString(); } catch { return null; }
+                };
+                const gatewaySelf = () => ({
+                    advertiseHost: config.gatewayAdvertiseHost || null,
+                    port: parseInt(config.gatewayPort, 10) || FINAL_PORT,
+                    serving: workerTransport.summary(),
+                    certExpiresAt: certExpiry(MTLS_CERT),
+                    caExpiresAt: certExpiry(MTLS_CA),
+                });
                 const caFingerprintNow = () => clusterCa.caFingerprint(fs.readFileSync(path.join(CERTS_DIR, 'cluster-ca.crt'), 'utf8'));
                 internalApp.get('/cluster', requireIdentity(['backend']), (req, res) => {
-                    if (!clusterInitialized()) return res.json({ initialized: false, nodes: clusterAdmin.describeNodes(registry, targetOwner), tokens: [], removed: removedNodes.list() });
+                    if (!clusterInitialized()) return res.json({ initialized: false, gateway: gatewaySelf(), nodes: nodesWithCerts(), tokens: [], removed: removedNodes.list() });
                     res.json({
                         initialized: true,
                         advertiseHost: config.gatewayAdvertiseHost || null,
                         enrollPort: config.gatewayEnrollPort || ((config.gatewayInternalPort || 3100) + 1),
                         caFingerprint: caFingerprintNow(),
-                        nodes: clusterAdmin.describeNodes(registry, targetOwner),
+                        gateway: gatewaySelf(),
+                        nodes: nodesWithCerts(),
                         tokens: clusterCa.tokenStore(TOKENS_FILE).list().filter((t) => !t.used && !t.expired),
                         removed: removedNodes.list(),
                     });

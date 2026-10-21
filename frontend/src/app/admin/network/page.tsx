@@ -62,7 +62,7 @@ export default function NetworkPage() {
     const [quotaDraft, setQuotaDraft] = useState<Record<string, string>>({});
     const [busyQuota, setBusyQuota] = useState<string | null>(null);
     // Each site's own TLS certificate (served by SNI): its status, and the two ways to get one.
-    const [certs, setCerts] = useState<{ autoIssue: boolean; byId: Record<number, NetworkSiteCertificate> } | null>(null);
+    const [certs, setCerts] = useState<{ autoIssue: boolean; edgeServes: "https" | "http" | null; byId: Record<number, NetworkSiteCertificate> } | null>(null);
     const [busyCert, setBusyCert] = useState<number | null>(null);
     const [certUpload, setCertUpload] = useState<{ id: number; certPem: string; keyPem: string } | null>(null);
     // The site whose address is being changed, with the draft (main address + other host names, one per line).
@@ -70,6 +70,9 @@ export default function NetworkPage() {
     const [busyAddress, setBusyAddress] = useState<number | null>(null);
 
     const load = async () => {
+        // Every action re-reads the screen when it succeeds: the password it used is cleared with it, so
+        // typing it again for the next action does not append to the old one (QA X1-11).
+        setActionPassword("");
         try {
             const [{ sites, localAddresses: local }, { plugins }, q] = await Promise.all([networkApi.sites(), networkApi.plugins(), networkApi.quotas()]);
             setSites(sites);
@@ -83,7 +86,7 @@ export default function NetworkPage() {
             setCeilingDraft(Object.fromEntries(plugins.map((p) => [p.slug, p.ceiling ?? p.requestedPermissions])));
             try {
                 const c = await networkApi.certificates();
-                setCerts({ autoIssue: c.autoIssue, byId: Object.fromEntries(c.certificates.map((x) => [x.siteId, x])) });
+                setCerts({ autoIssue: c.autoIssue, edgeServes: c.edgeServes ?? null, byId: Object.fromEntries(c.certificates.map((x) => [x.siteId, x])) });
             } catch { setCerts(null); /* the rest of the screen still works */ }
         } catch (e: any) {
             addToast(e?.message || t("network.loadFailed"), "error");
@@ -122,8 +125,9 @@ export default function NetworkPage() {
         }
         setCreating(true);
         try {
-            const { site } = await networkApi.create(form);
+            const { site, warnings } = await networkApi.create(form);
             addToast(t("network.created").replace("{url}", site.url), "success");
+            if (warnings?.includes("network_https_not_served")) addToast(t("network.httpsNotServed").replace("{url}", site.url), "warning");
             setForm(EMPTY_FORM);
             await load();
         } catch (err: any) {
@@ -211,8 +215,9 @@ export default function NetworkPage() {
         setBusyAddress(site.id);
         try {
             const aliases = addressEdit.aliases.split(/[\s,]+/).map((a) => a.trim()).filter(Boolean);
-            const { site: moved } = await networkApi.changeAddress(site.id, addressEdit.url.trim(), aliases, actionPassword);
+            const { site: moved, warnings } = await networkApi.changeAddress(site.id, addressEdit.url.trim(), aliases, actionPassword);
             addToast(t("network.addressSaved").replace("{host}", moved.host), "success");
+            if (warnings?.includes("network_https_not_served")) addToast(t("network.httpsNotServed").replace("{url}", moved.url), "warning");
             setAddressEdit(null);
             await load();
         } catch (err: any) {
@@ -426,7 +431,7 @@ export default function NetworkPage() {
                                                 {t("network.addressOthers")}
                                                 <textarea className="mt-1 w-full h-20 font-mono text-xs rounded-lg border border-gray-200 p-2 bg-white text-gray-800" placeholder="www.example.com" value={addressEdit.aliases} onChange={(e) => setAddressEdit({ ...addressEdit, aliases: e.target.value })} autoComplete="off" />
                                             </label>
-                                            <p className="text-xs text-gray-500">{t("network.addressHint")}</p>
+                                            <p className="text-xs text-gray-500">{t("network.addressChangeHint")}</p>
                                             <div className="flex flex-wrap gap-2 justify-end">
                                                 <Button variant="secondary" size="sm" onClick={() => setAddressEdit(null)}>{t("common.cancel")}</Button>
                                                 <Button variant="primary" size="sm" icon="fa-check" loading={busyAddress === site.id} disabled={!addressEdit.url.trim()} onClick={() => saveAddress(site)} data-save-address={site.id}>{t("network.addressSave")}</Button>
@@ -456,7 +461,9 @@ export default function NetworkPage() {
                                                     <i className={`fa-solid ${c && c.installed ? "fa-lock" : "fa-lock-open"} mt-0.5`}></i>
                                                     {c && c.installed
                                                         ? t("network.certValid").replace("{date}", fmtDate(c.notAfter || "")).replace("{issuer}", c.issuer || "?")
-                                                        : t(certs.autoIssue ? "network.certPendingAuto" : "network.certNone")}
+                                                        : certs.edgeServes === "http"
+                                                            ? t("network.certEdgeHttp")
+                                                            : t(certs.autoIssue ? "network.certPendingAuto" : "network.certNone")}
                                                 </div>
                                                 <div className="mt-2 flex flex-wrap gap-2">
                                                     <Button variant="secondary" size="sm" icon="fa-certificate" loading={busyCert === site.id && !certUpload} onClick={() => certificateAction(site, "issue")}>{t("network.certIssue")}</Button>
@@ -507,12 +514,12 @@ export default function NetworkPage() {
                                             </div>
                                         )}
                                         {site.status !== "active" && deleting?.id === site.id && (
-                                            <div className="w-full sm:w-72 rounded-xl border border-red-100 bg-red-50 p-3 text-left" data-delete-confirm={site.id}>
+                                            <div className="w-full sm:w-96 rounded-xl border border-red-100 bg-red-50 p-3 text-left" data-delete-confirm={site.id}>
                                                 <p className="text-xs text-red-700 mb-2">{t("network.deleteWarning").replace("{slug}", site.slug)}</p>
                                                 <Input label={t("network.deleteConfirmLabel")} icon="fa-keyboard" value={deleting.slug} onChange={(e) => setDeleting({ id: site.id, slug: e.target.value })} autoComplete="off" />
                                                 <div className="mt-2 flex gap-2 justify-end">
                                                     <Button variant="secondary" onClick={() => setDeleting(null)}>{t("common.cancel")}</Button>
-                                                    <Button variant="danger" icon="fa-trash" loading={busyId === site.id} disabled={deleting.slug !== site.slug} onClick={() => removeSite(site)}>{t("network.deleteConfirm")}</Button>
+                                                    <Button variant="danger" icon="fa-trash" className="whitespace-nowrap" loading={busyId === site.id} disabled={deleting.slug !== site.slug} onClick={() => removeSite(site)}>{t("network.deleteConfirm")}</Button>
                                                 </div>
                                             </div>
                                         )}

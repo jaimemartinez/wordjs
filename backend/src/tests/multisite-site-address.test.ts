@@ -192,4 +192,22 @@ describe('moving a site to another address', () => {
         const page = await direct('get', `${API}/settings`, THREE);
         assert.strictEqual(page.body.blogname, 'Site Three', 'nothing moved');
     });
+    test('an https:// address the gateway does not serve over TLS is accepted with a warning; the certificate line says so (QA X1-10)', async () => {
+        const certManager = require('../core/cert-manager');
+        const realGet = certManager.getConfig;
+        certManager.getConfig = async () => ({ sslEnabled: false, serving: 'http', certInfo: null });
+        try {
+            const res = await addr(siteThree, { url: 'https://three-secure.example.com' });
+            assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+            assert.deepStrictEqual(res.body.warnings, ['network_https_not_served']);
+            const certs = await bearer('get', `${API}/network/certificates`, MAIN, tokens.net);
+            assert.strictEqual(certs.status, 200, JSON.stringify(certs.body));
+            assert.strictEqual(certs.body.edgeServes, 'http');
+            const plain = await addr(siteThree, { url: `http://${THREE}` });
+            assert.strictEqual(plain.status, 200, JSON.stringify(plain.body));
+            assert.strictEqual(plain.body.warnings, undefined, 'an http:// address needs no warning');
+        } finally {
+            certManager.getConfig = realGet;
+        }
+    });
 });

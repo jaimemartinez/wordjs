@@ -122,6 +122,20 @@ describe('the real gateway: a stored certificate with the switch OFF serves HTTP
         assert.strictEqual(edge.sslEnabled, false);
     });
 
+    it('GET /cluster names the gateway itself and when each node\'s certificate expires (X1-08)', async () => {
+        const reg = await internal(gw, ca, backendId, 'POST', '/register', { url: 'https://127.0.0.1:4999', routes: ['/api'] });
+        assert.strictEqual(reg.status, 200, reg.body);
+        const r = await internal(gw, ca, backendId, 'GET', '/cluster');
+        assert.strictEqual(r.status, 200, r.body);
+        const body = JSON.parse(r.body);
+        assert.ok(body.gateway, 'the gateway is listed');
+        assert.match(String(body.gateway.certExpiresAt), /^\d{4}-\d\d-\d\dT/);
+        assert.strictEqual(body.gateway.serving, 'http');
+        const node = body.nodes.find((n) => n.url === 'https://127.0.0.1:4999');
+        assert.ok(node, JSON.stringify(body.nodes));
+        assert.match(String(node.certExpiresAt), /^\d{4}-\d\d-\d\dT/);
+    });
+
     it('a browser asking for a page while the frontend is down gets an HTML page (X1-04)', async () => {
         await up.close();
         const r = await harness.request({ port: gw.port, path: '/', headers: { host: 'localhost', accept: NAV } });

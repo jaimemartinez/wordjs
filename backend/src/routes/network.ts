@@ -286,6 +286,32 @@ function publicSite(site: any) {
     };
 }
 
+/**
+ * What the public listener serves right now: 'https', 'http', or null when it cannot be told (a gateway
+ * from before `serving`, or one that does not answer). QA X1-10: a site created at https:// on a gateway
+ * that serves plain HTTP was accepted without a word, and its card claimed the main site's certificate
+ * was served for it when there was none.
+ */
+async function edgeServes(): Promise<'https' | 'http' | null> {
+    try {
+        const cfg: any = await Promise.race([
+            Promise.resolve(require('../core/cert-manager').getConfig()),
+            new Promise((resolve) => setTimeout(() => resolve(null), 2500).unref()),
+        ]);
+        if (!cfg || cfg.error) return null;
+        if (cfg.source === 'monolith') return cfg.sslEnabled ? 'https' : 'http';
+        return cfg.serving === 'https' || cfg.serving === 'http' ? cfg.serving : null;
+    } catch {
+        return null;
+    }
+}
+
+/** The warnings a site address deserves: an https:// address the edge does not serve over TLS. */
+async function addressWarnings(url: string): Promise<string[]> {
+    if (!/^https:/i.test(String(url || ''))) return [];
+    return (await edgeServes()) === 'http' ? ['network_https_not_served'] : [];
+}
+
 function siteIdParam(raw: unknown): number | null {
     const s = String(raw || '');
     if (!/^[1-9][0-9]{0,8}$/.test(s)) return null;
@@ -378,7 +404,8 @@ router.post('/sites', asyncHandler(async (req: Request, res: Response) => {
             adminPassword: b.adminPassword,
             actorUserId: Number(req.user.id),
         });
-        res.status(201).json({ site: publicSite(site) });
+        const warnings = await addressWarnings(site.mainUrl);
+        res.status(201).json({ site: publicSite(site), ...(warnings.length ? { warnings } : {}) });
     } catch (e: any) {
         return sendError(res, e);
     }
@@ -443,7 +470,8 @@ router.put('/sites/:id/address', asyncHandler(async (req: Request, res: Response
     const b = req.body || {};
     try {
         const site = await require('../core/network-sites').changeSiteAddress(id, { url: b.url, aliases: b.aliases, actorUserId: Number(req.user.id) });
-        return res.json({ site: publicSite(site) });
+        const warnings = await addressWarnings(site.mainUrl);
+        return res.json({ site: publicSite(site), ...(warnings.length ? { warnings } : {}) });
     } catch (e: any) {
         return sendError(res, e);
     }
@@ -665,7 +693,7 @@ router.delete('/sites/:id', asyncHandler(async (req: Request, res: Response) => 
  * /network/certificates:
  *   get:
  *     summary: The TLS certificate of every site other than the main one
- *     description: Each site of a network has its own certificate for its main address, served by SNI at the edge. autoIssue tells whether Let's Encrypt issues and renews them on its own (ACME enabled with http-01 and an email, in Settings → Certificates). Never returns a private key.
+ *     description: Each site of a network has its own certificate for its main address, served by SNI at the edge. autoIssue tells whether Let's Encrypt issues and renews them on its own (ACME enabled with http-01 and an email, in Security → Automatic Certificate Renewal). Never returns a private key.
  *     tags: [Network]
  *     security:
  *       - bearerAuth: []
@@ -752,7 +780,7 @@ router.get('/certificates', asyncHandler(async (req: Request, res: Response) => 
         try { certificates.push({ siteId: site.id, ...(await siteCerts.siteCertificateStatus(site.id)) }); }
         catch { certificates.push({ siteId: site.id, host: site.mainHost, installed: false }); }
     }
-    res.json({ autoIssue: siteCerts.autoIssueEnabled(), certificates });
+    res.json({ autoIssue: siteCerts.autoIssueEnabled(), edgeServes: await edgeServes(), certificates });
 }));
 
 router.post('/sites/:id/certificate', asyncHandler(async (req: Request, res: Response) => {

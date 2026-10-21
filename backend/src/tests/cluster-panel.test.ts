@@ -133,8 +133,12 @@ describe('Admin → Servers', () => {
     test('split mode relays the nodes; administrators only, never an API token', async () => {
         const res = await as('owner', 'get', `${API}/system/cluster`);
         assert.strictEqual(res.status, 200, JSON.stringify(res.body));
-        assert.strictEqual(res.body.mode, 'split');
+        // A node on another machine: the deployment is reported as separate, not split (QA X1-08).
+        assert.strictEqual(res.body.mode, 'separate');
         assert.strictEqual(res.body.nodes[0].status, 'up');
+        // Said up front: this session may use the writes, and where the main address is (QA X1-06).
+        assert.strictEqual(res.body.boundSession, false);
+        assert.strictEqual(res.body.mainAddress, `http://${MAIN}`);
         assert.strictEqual((await as('writer', 'get', `${API}/system/cluster`)).status, 403);
         const token = await (request(server) as any).get(`${API}/system/cluster`).set('Host', MAIN).set('Authorization', `Bearer ${tokens.apiToken}`);
         assert.strictEqual(token.status, 403, JSON.stringify(token.body));
@@ -157,6 +161,20 @@ describe('Admin → Servers', () => {
         assert.strictEqual(rows.length, 1);
         assert.doesNotMatch(String(rows[0].detail), /SECRET/, 'the token never reaches the audit log');
         assert.match(String(rows[0].detail), /10\.0\.0\.7/);
+    });
+
+    test('an invalid join-token request is refused BEFORE the two-factor code is spent (QA X1-08)', async () => {
+        calls.length = 0;
+        const code = freshCode();
+        for (const bad of [{ role: 'gateway' }, { role: 'backend', ttlMinutes: -3 }, { role: 'backend', host: 'bad host;rm -rf' }]) {
+            const r = await as('owner', 'post', `${API}/system/cluster/token`).send({ ...bad, currentPassword: PASSWORD, mfaCode: code });
+            assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+            assert.match(r.body.code, /^cluster_invalid_(role|ttl|host)$/);
+        }
+        assert.strictEqual(calls.length, 0);
+        // The same code still works for the corrected request.
+        const ok = await as('owner', 'post', `${API}/system/cluster/token`).send({ role: 'frontend', currentPassword: PASSWORD, mfaCode: code });
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     });
 
     test('removing a node takes the password and a fresh code; revoking tokens takes the password; both audited', async () => {

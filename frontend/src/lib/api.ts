@@ -1774,12 +1774,13 @@ export const networkApi = {
         api<{ slug: string; withdrawn: boolean; deactivatedOn: number[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { method: "DELETE", body: { currentPassword } }),
     /** localAddresses: the main site is on this computer, so a new site may use a <name>.localhost address. */
     sites: () => apiGet<{ sites: NetworkSite[]; localAddresses?: boolean }>("/network/sites"),
-    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
+    /** `warnings`: `network_https_not_served` when the address is https:// and the edge serves plain HTTP. */
+    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite; warnings?: string[] }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
     /** Move a site to another address and/or replace its other host names. */
     changeAddress: (id: number, url: string, aliases: string[], currentPassword: string) =>
-        apiPut<{ site: NetworkSite }>(`/network/sites/${id}/address`, { url, aliases, currentPassword }),
+        apiPut<{ site: NetworkSite; warnings?: string[] }>(`/network/sites/${id}/address`, { url, aliases, currentPassword }),
     /** Open a site's admin as administrator: a one-time URL on the site's address, valid for a minute. */
     handoff: (id: number, currentPassword: string) => apiPost<{ url: string; expiresAt: string }>(`/network/sites/${id}/handoff`, { currentPassword }),
     /** Delete a suspended site and everything it holds (confirmSlug repeats its slug). */
@@ -1787,7 +1788,8 @@ export const networkApi = {
         api<{ deleted: number }>(`/network/sites/${id}`, { method: "DELETE", body: { confirmSlug, currentPassword } }),
     quotas: () => apiGet<NetworkQuotas>("/network/quotas"),
     /** Every other site's TLS certificate (status only) and whether Let's Encrypt issues them on its own. */
-    certificates: () => apiGet<{ autoIssue: boolean; certificates: NetworkSiteCertificate[] }>("/network/certificates"),
+    /** `edgeServes`: what the public listener serves now ('https' | 'http'), null when it cannot be told. */
+    certificates: () => apiGet<{ autoIssue: boolean; edgeServes?: "https" | "http" | null; certificates: NetworkSiteCertificate[] }>("/network/certificates"),
     issueCertificate: (id: number, currentPassword: string) =>
         apiPost<{ certificate: NetworkSiteCertificate }>(`/network/sites/${id}/certificate`, { currentPassword }),
     installCertificate: (id: number, certPem: string, keyPem: string, currentPassword: string) =>

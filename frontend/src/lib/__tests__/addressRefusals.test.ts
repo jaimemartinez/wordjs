@@ -53,7 +53,7 @@ describe('siteAddressRefusalKey', () => {
 
     it('every key the screens use exists in every language', () => {
         const keys = ['siteAddress.networkAdminOnlySite', 'siteAddress.networkAdminOnlyMain', 'user.edit.boundSession', 'user.edit.boundSessionNoUrl',
-            'network.changeAddress', 'network.addressMain', 'network.addressOthers', 'network.addressHint', 'network.addressSave', 'network.addressSaved',
+            'network.changeAddress', 'network.addressMain', 'network.addressOthers', 'network.addressChangeHint', 'network.addressSave', 'network.addressSaved',
             'network.addressFailed', 'network.otherAddresses', 'security.gateway.servingNow', 'security.gateway.servingReloading',
             'security.gateway.servingMismatchOn', 'security.gateway.servingMismatchOff', 'security.gateway.noCertificateOn',
             'security.gateway.generateSelfSigned', 'security.gateway.generateFailed', 'security.gateway.confirmTitle',
