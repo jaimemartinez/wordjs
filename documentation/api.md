@@ -274,7 +274,8 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 | `GET`    | `/media`, `/media/:id` | Opt. | List / get library items (optional auth). `?visibility=all\|public\|private` (default `all`); private items are listed only to uploaders who may edit them, and an item attached to an entry only to callers who may read that entry — applied in the query, so `X-WP-Total`/`X-WP-TotalPages` count only visible items |
 | `GET`    | `/media/:id/file`   | Auth (may edit the item and read its entry) | Download a **private** item's file (attachment, `no-store`); 404 for a public item, or a caller who may not edit it or may not read the entry it is attached to |
 | `POST`   | `/media`            | `upload_files` | Upload a new media file; `?visibility=private` stores it as private |
-| `PUT`/`DELETE` | `/media/:id`  | `upload_files` | Update metadata (and `visibility`) / delete a media item; an item attached to an entry also needs the right to edit that entry (403), and one the caller may not read answers 404 |
+| `PUT`/`DELETE` | `/media/:id`  | `upload_files` | Update metadata (and `visibility`) / delete a media item; an item attached to an entry also needs the right to edit that entry (403), and one the caller may not read answers 404. Deleting an item removes it as the featured image (`_thumbnail_id`) of every entry that used it |
+| `GET`    | `/media/:id/usage` | `upload_files` | `{ featuredIn, entries: [{ id, title, type }] }` — the entries using the item as their featured image (titles only for entries the caller may edit), asked before a delete |
 
 > **Private media.** A media item can be **private** (`visibility: "private"`): its files are stored
 > under `config.uploads.privateDir` (default `data/private-uploads/`), which nothing serves, and the row

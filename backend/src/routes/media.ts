@@ -901,6 +901,49 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: R
  *       404:
  *         description: No such media item, or one this caller may not read (rest_post_invalid_id)
  */
+/**
+ * @swagger
+ * /media/{id}/usage:
+ *   get:
+ *     summary: Entries that use this media item as their featured image
+ *     description: >-
+ *       Asked before a delete, so the admin can say what the item is still used by. Deleting it removes
+ *       those featured-image references. Titles of entries the caller cannot edit are not listed, only counted.
+ *     tags: [Media]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: "{ featuredIn: number, entries: [{ id, title, type }] }"
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Missing upload_files
+ *       404:
+ *         description: No such media item (rest_post_invalid_id)
+ */
+router.get('/:id/usage', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const mediaId = Number(req.params.id);
+    const media = await Media.findById(mediaId);
+    if (!media) return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid media ID.', data: { status: 404 } });
+    const ids = await Media.featuredUsers(mediaId);
+    const entries: Array<{ id: number; title: string; type: string }> = [];
+    for (const id of ids.slice(0, 20)) {
+        const post = await Post.findById(id);
+        if (!post) continue;
+        const own = Number(post.authorId) === Number(req.user.id);
+        if (own ? req.user.can('edit_posts') : req.user.can('edit_others_posts')) {
+            entries.push({ id, title: String(post.postTitle || ''), type: String(post.postType || 'post') });
+        }
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ featuredIn: ids.length, entries });
+}));
+
 router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
     const mediaId = parseInt(String(req.params.id), 10);
     const media = await Media.findById(mediaId);

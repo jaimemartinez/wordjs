@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { mediaApi, settingsApi } from "@/lib/api";
+import { mediaApi, settingsApi, type MediaUsage } from "@/lib/api";
+import { deleteMessage } from "@/lib/mediaUsage";
 import { uploadSequentially, type UploadFailure } from "@/lib/uploadQueue";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural } from "@/lib/i18n";
@@ -431,6 +432,15 @@ export default function MediaPage() {
 
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
     const [mediaToDelete, setMediaToDelete] = useState<number | null>(null);
+    // What the item is still used by, asked when the delete dialog opens: deleting a featured image
+    // used to say nothing and leave the entry pointing at a missing file.
+    const [deleteUsage, setDeleteUsage] = useState<MediaUsage | null>(null);
+    useEffect(() => {
+        if (!deleteModalOpen || !mediaToDelete) return;
+        let alive = true;
+        mediaApi.usage(mediaToDelete).then((u) => { if (alive) setDeleteUsage(u); }).catch(() => { /* the plain warning stays */ });
+        return () => { alive = false; setDeleteUsage(null); };
+    }, [deleteModalOpen, mediaToDelete]);
 
     const confirmDelete = (e: React.MouseEvent, id: number) => {
         e.stopPropagation(); // Prevent opening preview
@@ -473,7 +483,7 @@ export default function MediaPage() {
                 onClose={() => setDeleteModalOpen(false)}
                 onConfirm={handleDelete}
                 title={t('media.delete.title')}
-                message={t('media.delete.message')}
+                message={deleteMessage(t('media.delete.message'), deleteUsage, t)}
                 confirmText={t('media.delete.confirm')}
                 isDanger={true}
             />

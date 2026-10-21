@@ -11,7 +11,10 @@ import type React from "react";
 import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import { publicUiStrings, membersGateStrings, notFoundStrings } from "@/lib/public/uiStrings";
+import { publicUiStrings, membersGateStrings, notFoundStrings, postTermsStrings } from "@/lib/public/uiStrings";
+import PostTerms from "@/components/public/PostTerms";
+import { featuredImageSrc } from "@/lib/mediaUsage";
+import { mediaBaseFromSettings } from "@/lib/mediaDelivery";
 import MembersOnlyGate from "./MembersOnlyGate";
 import { siteDateLanguage } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
@@ -100,6 +103,8 @@ export default function PostContent({ post, settings, category, showComments }: 
     const pageHtmlClass = "wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
     const postHtmlClass = "wjs-post-body wjs-content prose prose-lg mx-auto p-[min(var(--wjs-card-pad,2rem),1rem)] sm:p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
 
+    const featuredSrc = featuredImageSrc(post, mediaBaseFromSettings(settings));
+
     return (
         <div className="w-full">
             {/* Page identity for client-side blocks (the Form block stamps its submissions with it).
@@ -173,6 +178,13 @@ export default function PostContent({ post, settings, category, showComments }: 
                         <h1 className="wjs-post-title text-4xl md:text-5xl font-bold text-[var(--wjs-color-heading,#111827)] leading-tight mb-6 text-center">
                             {post.title}
                         </h1>
+                        {/* The featured image the author chose: it reached og:image but never the page itself. */}
+                        {featuredSrc && !isLocked && (
+                            <figure className="wjs-post-featured mb-2">
+                                {/* eslint-disable-next-line @next/next/no-img-element -- media library file, served as is (or from the media bucket) */}
+                                <img src={featuredSrc} alt="" decoding="async" className="w-full h-auto rounded-[var(--wjs-card-radius,1rem)]" />
+                            </figure>
+                        )}
                     </div>
                     {/* `wjs-post-body` names the body REGION on both paths — the manifest's
                         singlePost.body. It cannot be `.wjs-post .wjs-content`: `.wjs-content` is
@@ -196,6 +208,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                             ))}
                         </>
                     )}
+                    {!isLocked && <PostTerms categories={post.categories} tags={post.tags} strings={postTermsStrings(settings)} />}
                 </article>
             )}
 

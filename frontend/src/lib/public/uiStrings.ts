@@ -121,3 +121,14 @@ export function notFoundStringsFor(lang: Language): NotFoundStrings {
 export function notFoundStrings(settings: Record<string, unknown> | null | undefined): NotFoundStrings {
     return notFoundStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
 }
+
+/** The labels of a single post's category and tag links (components/public/PostTerms). */
+export interface PostTermsStrings {
+    categories: string;
+    tags: string;
+}
+
+export function postTermsStrings(settings: Record<string, unknown> | null | undefined): PostTermsStrings {
+    const lang = catalogueLanguage(resolveDocumentLanguage(settings).lang);
+    return { categories: t("public.post.categories", lang), tags: t("public.post.tags", lang) };
+}

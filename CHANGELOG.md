@@ -1095,6 +1095,13 @@ the boot error links there too.
     a confirmation message that does not exist, the logo and icon are stored as site-relative paths (they
     embedded the address the admin happened to use), and the dashboard counters show real totals. In a
     monolith the dashboard no longer reports «mTLS: OK / certificates valid» for a link that does not exist.
+  - *Single posts* show the featured image under the title and link their categories and tags. Deleting a
+    media item that is an entry's featured image says so first (`GET /media/:id/usage`) and removes the
+    reference, instead of leaving the entry announcing an image that no longer exists. The sitemap submits
+    the category, tag and author archives on every site (only very large, chunked sitemaps listed the
+    taxonomies). Settings refuse a site language the platform does not know (`xx_YY`) and a front page
+    that is not a published page. Authors and contributors see their own totals on the dashboard, and an
+    uninstalled site no longer writes an error to the log on every request.
   - *Categories*: the screen shows the hierarchy (children indented under their parent) and edits a
     category's name, slug, description and parent; the API refuses a parent that does not exist, the
     category itself or one of its subcategories (`rest_term_invalid_parent`).

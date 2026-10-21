@@ -1291,7 +1291,14 @@ const mediaListQuery = (opts: MediaListOptions): URLSearchParams => {
     return params;
 };
 
+/** GET /media/:id/usage — entries using the item as their featured image (titles only for editable ones). */
+export interface MediaUsage {
+    featuredIn: number;
+    entries: Array<{ id: number; title: string; type: string }>;
+}
+
 export const mediaApi = {
+    usage: (id: number) => apiGet<MediaUsage>(`/media/${id}/usage`),
     /**
      * The endpoint has ALWAYS paged (per_page defaults to 20, capped at 100), so the old no-argument
      * `list()` was silently showing only the first page of a library and calling it the whole thing.

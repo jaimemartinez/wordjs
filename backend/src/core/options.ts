@@ -87,7 +87,13 @@ async function getOption(name: string, defaultValue: any = null) {
             // A constant format string: the name can come from a request (a widget id, a setting
             // key), and inside the format position its '%s' would consume the next argument. The
             // values go in as arguments, each reduced to one line.
-            log.error({ option: logSafe(name), err: e }, 'Error getting option');
+            // Before installation there is no database at all: every request that reads an option (the
+            // MFA policy, settings, menus) failed here and wrote an error line, alarming whoever is
+            // installing. Not installed, the default IS the answer.
+            let installed = true;
+            try { installed = require('./configManager').isInstalled(); } catch { /* keep logging */ }
+            if (installed) log.error({ option: logSafe(name), err: e }, 'Error getting option');
+            else log.debug({ option: logSafe(name) }, 'Option read before installation; using the default');
             return defaultValue;
         }
     });

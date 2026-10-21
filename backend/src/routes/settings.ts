@@ -272,6 +272,37 @@ const VIEW_TRANSITION_STYLES = ['', 'off', 'fade', 'slide'];
 // character admitted ends up in an attribute.
 const LOCALE_RE = /^[A-Za-z]{2,3}([-_][A-Za-z]{4})?([-_]([A-Za-z]{2}|[0-9]{3}))?$/;
 
+/** The language subtag (and region, if any) of a LOCALE_RE tag are ones ICU can name. */
+function knownLocaleTag(tag: string): boolean {
+    try {
+        const parts = tag.split(/[-_]/);
+        const language = parts[0].toLowerCase();
+        const region = parts.find((p, i) => i > 0 && /^([A-Za-z]{2}|[0-9]{3})$/.test(p));
+        const names = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' });
+        if (!names.of(language)) return false;
+        if (region && !new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' }).of(region.toUpperCase())) return false;
+        return true;
+    } catch {
+        return true; // no locale data on this runtime: keep the syntax check only
+    }
+}
+
+/**
+ * Settings whose validity depends on stored data. `homepage_id` must name a published page: an id that
+ * does not exist (or a draft, or a post) was stored and the front page fell back without a word.
+ */
+async function settingDataProblem(key: string, value: any): Promise<string | null> {
+    if (key !== 'homepage_id') return null;
+    const raw = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+    if (raw === '' || raw === '0') return null; // "Latest posts"
+    if (!/^[0-9]{1,10}$/.test(raw)) return 'homepage_id must be the id of a published page (or empty for the latest posts).';
+    const page = await require('../models/Post').findById(Number(raw));
+    if (!page || page.postType !== 'page' || page.postStatus !== 'publish') {
+        return `homepage_id ${raw} is not a published page.`;
+    }
+    return null;
+}
+
 // Preajustes de interacción del sitio (`wjs_ix_presets`, motor F9). Se guardan como JSON y los
 // consume el compilador del frontend, que YA los trata como dato hostil: los pasa uno a uno por
 // `normalizeIxPreset` y descarta lo que no encaje (frontend/src/lib/verso/interactions/sitePresets).
@@ -405,6 +436,9 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
         if (typeof v !== 'string' || !LOCALE_RE.test(v)) {
             return 'WPLANG must be a language tag like "en", "es_ES" or "ar-SA".';
         }
+        // Well-formed is not enough: `xx_YY` reached <html lang="xx-YY">. The language (and the region,
+        // when given) must be one the platform's locale data knows.
+        if (!knownLocaleTag(v)) return `WPLANG "${v}" is not a known language.`;
         return null;
     },
     site_text_direction: (v: any) => {
@@ -628,7 +662,7 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // then 400'd would leave the site in a state the admin never asked for.
     for (const [key, value] of Object.entries(updates)) {
         if (!ALL_SETTINGS.includes(key) || DEDICATED_WRITE_API.has(key)) continue;
-        const problem = settingWriteProblem(key, value);
+        const problem = settingWriteProblem(key, value) || await settingDataProblem(key, value);
         if (problem) {
             return res.status(400).json({
                 code: 'rest_invalid_param',
@@ -714,7 +748,7 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
     const registration = await changedRegistrationSettings({ [key]: value });
     if (registration.length && refuseAccountAuthority(req, res, registration)) return;
 
-    const problem = settingWriteProblem(key, value);
+    const problem = settingWriteProblem(key, value) || await settingDataProblem(key, value);
     if (problem) {
         return res.status(400).json({
             code: 'rest_invalid_param',

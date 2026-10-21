@@ -889,7 +889,11 @@ it('below the threshold the sitemap is the single urlset it always was', async (
         const terms = await dbAsync.get(
             "SELECT COUNT(*) AS n FROM terms t JOIN term_taxonomy tt ON t.term_id = tt.term_id WHERE tt.taxonomy IN ('category', 'post_tag') AND tt.count > 0",
         );
-        assert.strictEqual(seen.length, Number(content.n) + Number(terms.n) + 1, 'children must hold every URL, plus the homepage');
+        // …and the author archives of everyone with a published, unprotected post.
+        const authors = await dbAsync.get(
+            "SELECT COUNT(*) AS n FROM users u WHERE EXISTS (SELECT 1 FROM posts p WHERE p.author_id = u.id AND p.post_type = 'post' AND p.post_status = 'publish' AND (p.post_password IS NULL OR p.post_password = ''))",
+        );
+        assert.strictEqual(seen.length, Number(content.n) + Number(terms.n) + Number(authors.n) + 1, 'children must hold every URL, plus the homepage');
         assert.strictEqual(new Set(seen).size, seen.length, 'no URL may be published by two children');
         assert.ok(seen.includes(`${SITE}/`), 'the homepage must still be submitted');
         assert.ok(seen.includes(`${SITE}/category/noticias`), 'a taxonomy archive is submitted in index mode');

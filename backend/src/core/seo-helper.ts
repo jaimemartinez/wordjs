@@ -9,6 +9,8 @@ interface SeoOptions {
     siteUrl?: string;
     siteName?: string;
     siteDescription?: string;
+    /** Archive URLs (categories, tags, authors) printed after the entries. */
+    extraEntries?: Array<{ loc: string; lastmod?: string | null; changefreq?: string; priority?: string }>;
 }
 
 /**
@@ -191,6 +193,15 @@ async function generateSitemap(posts: any[], options: SeoOptions = {}) {
         }
         xml += `    <changefreq>weekly</changefreq>\n`;
         xml += `    <priority>${priority}</priority>\n`;
+        xml += '  </url>\n';
+    }
+
+    for (const entry of options.extraEntries || []) {
+        xml += '  <url>\n';
+        xml += `    <loc>${escapeHtml(entry.loc)}</loc>\n`;
+        if (entry.lastmod) xml += `    <lastmod>${escapeHtml(entry.lastmod)}</lastmod>\n`;
+        if (entry.changefreq) xml += `    <changefreq>${escapeHtml(entry.changefreq)}</changefreq>\n`;
+        if (entry.priority) xml += `    <priority>${escapeHtml(entry.priority)}</priority>\n`;
         xml += '  </url>\n';
     }
 

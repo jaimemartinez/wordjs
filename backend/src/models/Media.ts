@@ -415,7 +415,22 @@ class Media {
         // Delete the post (and let the site's storage quota see the space it frees)
         const deleted = await Post.delete(id, true);
         require('../core/site-upload-quota').invalidateUsage();
+        // No entry keeps pointing at it as its featured image (WordPress drops _thumbnail_id too): the
+        // dangling id kept announcing an og:image that answered 404.
+        if (deleted) {
+            for (const postId of await Media.featuredUsers(id)) await Post.deleteMeta(postId, '_thumbnail_id');
+        }
         return deleted;
+    }
+
+    /** Ids of the entries (revisions excluded) that use attachment `id` as their featured image. */
+    static async featuredUsers(id: number): Promise<number[]> {
+        const rows = await dbAsync.all(
+            "SELECT DISTINCT pm.post_id FROM post_meta pm JOIN posts p ON p.id = pm.post_id " +
+            "WHERE pm.meta_key = '_thumbnail_id' AND pm.meta_value IN (?, ?) AND p.post_type <> 'revision'",
+            [String(id), JSON.stringify(String(id))]
+        );
+        return rows.map((r: any) => Number(r.post_id));
     }
 
     /**

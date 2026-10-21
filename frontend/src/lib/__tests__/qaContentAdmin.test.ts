@@ -25,6 +25,7 @@ import { seedRecordIdentity, slugFollowsTitle } from "@/lib/editorRootFields";
 import { canDeleteRole } from "@/app/admin/users/roles/PluginRole";
 import { ancestryMatches } from "@/lib/public/nestedPath";
 import { orderAsTree, selfAndDescendants } from "@/lib/categoryTree";
+import { deleteMessage, featuredImageSrc } from "@/lib/mediaUsage";
 
 describe("comment moderation actions", () => {
     it("REGRESSION: the API's status strings produce Approve / Unapprove", () => {
@@ -321,5 +322,26 @@ describe("category tree in the admin", () => {
     it("shows the members of a stored parent loop instead of losing them", () => {
         const loop = [{ id: 7, name: "X", parent: 8 }, { id: 8, name: "Y", parent: 7 }];
         expect(orderAsTree(loop).map(({ category }) => category.id).sort()).toEqual([7, 8]);
+    });
+});
+
+describe("media in use", () => {
+    const t = (k: string) => ({ "media.delete.featuredIn": "It is the featured image of {n} entry(ies):", "media.delete.featuredRemoved": "Deleting it leaves those entries without a featured image." } as Record<string, string>)[k] ?? k;
+
+    it("the delete confirmation names what still uses the item", () => {
+        expect(deleteMessage("Delete?", null, t)).toBe("Delete?");
+        expect(deleteMessage("Delete?", { featuredIn: 0, entries: [] }, t)).toBe("Delete?");
+        const msg = deleteMessage("Delete?", { featuredIn: 3, entries: [{ id: 1, title: "Hello", type: "post" }, { id: 2, title: "", type: "page" }] }, t);
+        expect(msg).toContain("featured image of 3");
+        expect(msg).toContain("«Hello», «#2»");
+        expect(msg).toContain("without a featured image");
+    });
+
+    it("the public featured image is served site-relative, or from the media bucket", () => {
+        expect(featuredImageSrc({ featuredMedia: null }, "")).toBeUndefined();
+        expect(featuredImageSrc({ featuredMedia: { url: "http://a.test/uploads/x.png", path: "/uploads/x.png" } }, "")).toBe("/uploads/x.png");
+        expect(featuredImageSrc({ featuredMedia: { url: "http://a.test/uploads/x.png", path: "/uploads/x.png" } }, "https://cdn.test/m")).toBe("https://cdn.test/m/x.png");
+        expect(featuredImageSrc({ featuredMedia: { url: "https://elsewhere.test/a.jpg" } }, "")).toBe("https://elsewhere.test/a.jpg");
+        expect(featuredImageSrc({ featuredMedia: { url: "javascript:alert(1)" } }, "")).toBeUndefined();
     });
 });

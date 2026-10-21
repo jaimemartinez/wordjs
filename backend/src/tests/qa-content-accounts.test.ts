@@ -538,3 +538,48 @@ test('the OpenAPI document matches the API: Post strings, list headers and page 
     assert.ok(!spec.paths['/network/status'].get.responses['404'], 'the switch routes answer on a single site');
     for (const p of ['/healthz', '/readyz', '/metrics', '/api']) assert.strictEqual(spec.paths[p].get.servers[0].url, '/');
 });
+
+test('WPLANG must be a known language and homepage_id a published page', async () => {
+    const put = (body: any) => request(app).put(`${B}/settings`).set(bearer('admin')).send(body);
+    assert.strictEqual((await put({ WPLANG: 'xx_YY' })).status, 400, 'xx_YY reached <html lang>');
+    assert.strictEqual((await put({ WPLANG: 'es_YY' })).status, 400, 'an unknown region');
+    for (const ok of ['es_ES', 'pt-BR', 'es-419', 'pa_Arab_PK', '']) assert.strictEqual((await put({ WPLANG: ok })).status, 200, ok);
+
+    const missing = await put({ homepage_id: '987654' });
+    assert.strictEqual(missing.status, 400, JSON.stringify(missing.body));
+    const draft = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Draft home', status: 'draft' });
+    assert.strictEqual((await put({ homepage_id: String(draft.body.id) })).status, 400, 'a draft cannot be the front page');
+    const page = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Home', status: 'publish' });
+    assert.strictEqual((await put({ homepage_id: String(page.body.id) })).status, 200);
+    assert.strictEqual((await put({ homepage_id: '' })).status, 200, 'empty = latest posts');
+});
+
+test('a media item in use as a featured image is reported before delete, and deleting it clears the reference', async () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    const up = await request(app).post(`${B}/media`).set(bearer('admin')).attach('file', png, { filename: 'feat.png', contentType: 'image/png' });
+    assert.strictEqual(up.status, 201, JSON.stringify(up.body));
+    const post = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ title: 'With image', status: 'publish', meta: { _thumbnail_id: up.body.id } });
+    assert.strictEqual(post.status, 201, JSON.stringify(post.body));
+
+    const usage = await request(app).get(`${B}/media/${up.body.id}/usage`).set(bearer('admin'));
+    assert.strictEqual(usage.status, 200, JSON.stringify(usage.body));
+    assert.strictEqual(usage.body.featuredIn, 1);
+    assert.strictEqual(usage.body.entries[0].title, 'With image');
+    assert.strictEqual((await request(app).get(`${B}/media/${up.body.id}/usage`).set(bearer('sub1'))).status, 403);
+
+    assert.strictEqual((await request(app).delete(`${B}/media/${up.body.id}`).set(bearer('admin'))).status, 200);
+    const after = await request(app).get(`${B}/posts/${post.body.id}`).set(bearer('admin'));
+    assert.ok(!after.body.meta || after.body.meta._thumbnail_id === undefined, `dangling _thumbnail_id: ${JSON.stringify(after.body.meta)}`);
+    assert.ok(!after.body.featuredMedia);
+});
+
+test('the single-file sitemap submits the category, tag and author archives too', async () => {
+    const cat = await request(app).post(`${B}/categories`).set(bearer('admin')).send({ name: 'Sitemap Cat' });
+    await request(app).post(`${B}/posts`).set(bearer('admin')).send({ title: 'In sitemap', status: 'publish', categories: [cat.body.id] });
+    const res = await request(app).get(`${B}/seo/sitemap.xml`);
+    assert.strictEqual(res.status, 200);
+    assert.match(res.text, /<urlset/);
+    assert.match(res.text, new RegExp(`/category/${cat.body.slug}</loc>`));
+    assert.match(res.text, /\/author\/[^<]+<\/loc>/);
+    assert.doesNotMatch(res.text, /\/author\/admin<\/loc>/, 'the author slug is never the login');
+});

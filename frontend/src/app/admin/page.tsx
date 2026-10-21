@@ -175,9 +175,16 @@ export default function DashboardPage() {
 
             // ... (keep rest of function)
 
+            // An author or contributor (no edit_others_posts) counts THEIR entries, in any status: the
+            // site's published totals described other people's work as theirs.
+            const ownOnly = !can('edit_others_posts') && !!user?.id;
+            const countOf = (type: "post" | "page") => ownOnly
+                ? apiGetPaged<unknown[]>(`/posts?type=${type}&status=any&author=${user!.id}&per_page=1`)
+                : postsApi.listPaged({ type, perPage: 1 });
+
             const [posts, pages, users, comments, system] = await Promise.all([
-                postsApi.listPaged({ type: "post", perPage: 1 }),
-                postsApi.listPaged({ type: "page", perPage: 1 }),
+                countOf("post"),
+                countOf("page"),
                 fetchUsers,
                 fetchComments,
                 fetchSystem
