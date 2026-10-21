@@ -396,6 +396,8 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/plugins/:slug/port-conflicts` | Admin | Which process holds the ports the plugin's manifest claims, and whether WordJS can free them |
 | `POST` | `/plugins/:slug/free-port`  | Admin | Body `{ port, allowDisable }`: disable the known system MTA squatting a **manifest-claimed** port (explicit consent required, else `409 CONSENT_REQUIRED`), then reload the plugin |
 | `POST` | `/plugins/sample`           | Admin | Write the `hello-world` example plugin into `backend/plugins/` |
+| `GET` | `/plugins/freed-services` | Admin | System mail services a `free-port` disabled: `{ services: [{ slug, port, service, label, at, pluginActive }] }` |
+| `POST` | `/plugins/freed-services/restore` | Admin | Body `{ service, allowEnable: true }`: turn a recorded service back on (`systemctl enable --now`); `409` while its plugin is active or without consent, `404` for a service WordJS did not disable |
 | `GET`  | `/plugins/menus`            | Auth  | Admin-menu items contributed by active plugins. Any logged-in user; visibility is filtered **per capability** (`item.cap`, default `manage_options`), so non-admin roles only see items whose capability they hold |
 | `GET`  | `/themes`                   | No    | List available themes (public)                      |
 | `POST` | `/themes/upload`            | Admin | Install a theme from ZIP; an installed one answers `409 theme_exists` |

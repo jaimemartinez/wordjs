@@ -18,6 +18,7 @@ import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
 import { t as translate } from "@/lib/i18n";
 import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
+import FreedServicesNotice from "./FreedServicesNotice";
 import MarketplaceTab from "./MarketplaceTab";
 
 // ---------------------------------------------------------------------------
@@ -461,6 +462,9 @@ export default function PluginsPage() {
     const togglePlugin = async (plugin: Plugin) => {
         try {
             if (plugin.active) {
+                // Deactivating stops everything the plugin runs (its pages, blocks, listeners — a mail
+                // server stops receiving mail), so it is confirmed like the other lifecycle actions.
+                if (!(await confirm(t('plugins.deactivate.confirm').replace('{name}', plugin.name), t('plugins.deactivate.confirmTitle').replace('{name}', plugin.name), true))) return;
                 await pluginsApi.deactivate(plugin.slug);
                 loadPlugins();
                 refreshMenus();
@@ -1287,6 +1291,7 @@ export default function PluginsPage() {
                 {siteScoped && (
                     <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="">{t('plugins.network.siteNote')}</p>
                 )}
+                <FreedServicesNotice refreshKey={plugins} />
                 {!siteScoped && mainSiteNonNetworkAdmin && (
                     <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="main">{t('plugins.network.mainSiteNote')}</p>
                 )}

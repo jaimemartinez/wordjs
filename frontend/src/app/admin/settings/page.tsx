@@ -90,6 +90,9 @@ export default function SettingsPage() {
         // el mismo payload de administración que el resto.
         require_email_verification: "0",
         comment_registration: "0",
+        // Settings → Discussion email notices (core/comment-notify); on by default, as in WordPress.
+        comments_notify: "1",
+        moderation_notify: "1",
         redis_cache_enabled: "0",
         // Settings → Media: the largest upload in MB ('' = the configured default). Zero config: it used
         // to be wordjs-config.json only.
@@ -192,6 +195,8 @@ export default function SettingsPage() {
                 default_role: data.default_role || "subscriber",
                 require_email_verification: boolSetting(data.require_email_verification, "0"),
                 comment_registration: boolSetting(data.comment_registration, "0"),
+                comments_notify: boolSetting(data.comments_notify, "1"),
+                moderation_notify: boolSetting(data.moderation_notify, "1"),
                 redis_cache_enabled: boolSetting(data.redis_cache_enabled, "0"),
                 upload_max_size_mb: data.upload_max_size_mb === undefined || data.upload_max_size_mb === null ? "" : String(data.upload_max_size_mb),
                 author_legacy_slugs: boolSetting(data.author_legacy_slugs, "0"),
@@ -694,6 +699,33 @@ export default function SettingsPage() {
                                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.comment_registration === "1" ? 'translate-x-6' : 'translate-x-1'}`}
                                     />
                                 </button>
+                            </div>
+
+                            <div className="p-5 bg-sky-50/50 rounded-2xl border border-sky-100 space-y-3" data-testid="comment-notify">
+                                <div className="flex gap-4 items-center">
+                                    <div className="bg-white p-3 rounded-xl shadow-sm border border-sky-200 text-sky-600">
+                                        <i className="fa-solid fa-envelope-open-text text-xl"></i>
+                                    </div>
+                                    <h4 className="text-sm font-bold text-gray-900">{t('settings.comments.notify')}</h4>
+                                </div>
+                                {([['moderation_notify', 'settings.comments.notifyModeration'], ['comments_notify', 'settings.comments.notifyAuthor']] as const).map(([key, label]) => (
+                                    <div key={key} className="flex items-center justify-between gap-6 pl-16">
+                                        <p className="text-xs text-gray-700">{t(label)}</p>
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={(settings as any)[key] === "1"}
+                                            aria-label={t(label)}
+                                            onClick={() => setSettings({ ...settings, [key]: (settings as any)[key] === "1" ? "0" : "1" })}
+                                            className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 ${(settings as any)[key] === "1" ? 'bg-sky-500' : 'bg-gray-200'}`}
+                                        >
+                                            <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${(settings as any)[key] === "1" ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+                                ))}
+                                {emailProviderAvailable === false && (
+                                    <p className="pl-16 text-xs text-amber-800"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>{t('settings.comments.notify.noMail')}</p>
+                                )}
                             </div>
 
                             {/*

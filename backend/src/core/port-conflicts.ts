@@ -231,9 +231,81 @@ async function freeClaimedPort(port: number, deps: Deps = {}): Promise<{ freed: 
     throw err;
 }
 
+// --- Giving the port back ----------------------------------------------------------------------
+//
+// Freeing a port is PERMANENT on purpose (the MTA must not return at boot and take the port back). The
+// flip side: once the plugin that asked for the port is deactivated or deleted, nothing listens there
+// any more and the machine silently stops receiving mail, with the system MTA still disabled. So every
+// liberation is RECORDED (which service, for which plugin and port) and the plugins screen offers to
+// turn that service back on while its plugin is not active: again only services from KNOWN_MTAS, again
+// only on the administrator's explicit confirmation.
+
+const FREED_OPTION = 'port_conflicts_freed';
+interface FreedRecord { slug: string; port: number; service: string; label: string; at: string }
+
+async function readFreed(): Promise<FreedRecord[]> {
+    try {
+        const { getOption } = require('./options');
+        const raw = await getOption(FREED_OPTION, '[]');
+        const list = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+        const known = new Set(Object.values(KNOWN_MTAS).map(m => m.service));
+        return (Array.isArray(list) ? list : []).filter((r: any) =>
+            r && typeof r.slug === 'string' && Number.isInteger(r.port) && known.has(r.service));
+    } catch { return []; }
+}
+async function writeFreed(list: FreedRecord[]): Promise<void> {
+    const { updateOption } = require('./options');
+    await updateOption(FREED_OPTION, JSON.stringify(list.slice(-20)));
+}
+
+/** Remember that `service` was disabled so `slug` could have `port`. */
+async function recordFreedService(slug: string, port: number, service: string, label: string): Promise<void> {
+    const list = (await readFreed()).filter(r => !(r.service === service && r.port === port));
+    list.push({ slug, port, service, label, at: new Date().toISOString() });
+    await writeFreed(list);
+}
+
+/** Every recorded liberation. */
+async function listFreedServices(): Promise<FreedRecord[]> {
+    return readFreed();
+}
+
+/**
+ * Turn a recorded service back on (systemctl enable --now) and forget the record. Only a service this
+ * module disabled and recorded, never a name from the request. Throws coded errors like freeClaimedPort.
+ */
+async function restoreFreedService(service: string, deps: Deps & { allowEnable?: boolean } = {}): Promise<{ restored: boolean; service: string; label: string; port: number }> {
+    const run = deps.execFileAsync || execFileAsyncReal;
+    const list = await readFreed();
+    const rec = list.find(r => r.service === service);
+    if (!rec) {
+        const err: any = new Error('There is no service disabled by WordJS under that name.');
+        err.code = 'NOT_FREED'; err.status = 404;
+        throw err;
+    }
+    if (!deps.allowEnable) {
+        const err: any = new Error(`Confirm before turning ${rec.label} back on.`);
+        err.code = 'CONSENT_REQUIRED'; err.status = 409;
+        throw err;
+    }
+    try {
+        await run('systemctl', ['enable', '--now', rec.service]);
+    } catch (e: any) {
+        const err: any = new Error(`Failed to turn ${rec.label} back on: ${e && e.message ? e.message : e}`);
+        err.code = 'ENABLE_FAILED'; err.status = 502;
+        throw err;
+    }
+    log.info({ port: rec.port }, `[port-conflicts] Re-enabled ${rec.service} (port ${rec.port}) with admin consent.`);
+    await writeFreed(list.filter(r => r !== rec));
+    return { restored: true, service: rec.service, label: rec.label, port: rec.port };
+}
+
 module.exports = {
     detectPortConflict,
     freeClaimedPort,
+    recordFreedService,
+    listFreedServices,
+    restoreFreedService,
     parseSsListeners,
     isLoopbackAddr,
     KNOWN_MTAS,

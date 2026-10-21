@@ -139,6 +139,13 @@ export default function AccountMailSettingsPage() {
                         <p className="text-sm text-gray-600 mt-1 leading-relaxed">
                             {status.route === "core" ? t("accountMail.routeCoreHelp") : status.route === "provider" ? t("accountMail.routeProviderHelp") : t("accountMail.routeNoneHelp")}
                         </p>
+                        {status.route === "provider" && !status.ready && (
+                            <p data-testid="account-mail-provider-not-ready" className="text-sm text-amber-800 mt-2 leading-relaxed">
+                                <i className="fa-solid fa-hourglass-half mr-1.5"></i>
+                                {t("accountMail.providerNotReady").replace("{plugin}", status.provider || "")}{" "}
+                                <Link href="/admin/plugins" className="text-blue-600 hover:underline">{t("accountMail.managePlugins")}</Link>
+                            </p>
+                        )}
                     </div>
                 </div>
             )}

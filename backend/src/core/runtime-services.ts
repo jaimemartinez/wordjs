@@ -62,6 +62,8 @@ async function startRuntimeServices(): Promise<void> {
 
     // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
     require('./webhooks').initWebhooks();
+    // Settings → Discussion: email the moderator / the entry's author about new comments.
+    require('./comment-notify').initCommentNotify();
     // F3 content outbox: pending events from this or a crashed peer are leased and delivered only
     // after their content transaction committed. Start it after hook consumers are registered.
     require('./content-outbox').initContentOutbox();
