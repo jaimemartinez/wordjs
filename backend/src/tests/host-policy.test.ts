@@ -1163,3 +1163,21 @@ describe('Forwarded for= values: linear scan, same answers as the pattern it rep
         }
     });
 });
+
+describe('hostGate: a loopback Host from a remote peer (QA X2-14)', () => {
+    test('a direct request from another machine naming localhost gets 421; the same from this machine passes', async () => {
+        const { app } = gateApp();
+        // supertest connects over loopback; the remote client is the same app with the peer address replaced.
+        const remote = express();
+        remote.use((req: any, _res: any, next: any) => { Object.defineProperty(req.socket, 'remoteAddress', { value: '203.0.113.9', configurable: true }); next(); });
+        remote.use(app);
+        for (const host of ['localhost', '127.0.0.1:3000', '[::1]']) {
+            const far = await request(remote).get('/').set('Host', host);
+            assert.strictEqual(far.status, 421, host);
+            const near = await request(app).get('/').set('Host', host);
+            assert.strictEqual(near.status, 200, host);
+            assert.strictEqual(near.body.siteHost.cls, 'loopback', host);
+        }
+        assert.strictEqual((await request(remote).get('/').set('Host', 'example.com')).status, 200);
+    });
+});

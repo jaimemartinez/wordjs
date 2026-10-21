@@ -41,7 +41,7 @@ ignored, as it always was.
 | **main** | The main address. | `siteUrl` in `wordjs-config.json`. |
 | **alias** | Another address the site answers on. Never used in links. Ignored once its `expiresAt` has passed. | `siteAliases` in `wordjs-config.json`, written by the admin screen or the CLI. |
 | **environment** | Extra addresses set by whoever runs the server. Read-only in the admin screen. | `WORDJS_ALLOWED_HOSTS` (comma-separated hosts or URLs). |
-| **loopback** | `localhost`, `127.0.0.0/8`, `[::1]`. In development also `*.localhost`. | Always accepted. |
+| **loopback** | `localhost`, `127.0.0.0/8`, `[::1]`. In development also `*.localhost`. | Always accepted from this machine (a browser on the server, a proxy on the server). A client on another machine that connects directly and names one of them gets `421`: only this machine can mean it. |
 | **IP address** | Any IPv4 or IPv6 literal (`http://192.168.1.50:3000`, `http://[2001:db8::5]`). | `hostPolicy.ipLiterals`: `any` (default), `own` (only the interface addresses of the server browsers connect to: this machine's, re-read every 5 s, or in split and separate mode the gateway's, which reach the backend in the gateway's answer to each policy push, so a change of the gateway's interfaces counts within about 40 seconds; see [the gateway](#split-and-separate-mode-the-gateway)) or `none`. `WORDJS_IP_HOSTS` overrides it. |
 | **development origin** | Named hosts for local development (a `.test` name, another machine's name). | `WORDJS_DEV_ORIGINS`, honoured only when `NODE_ENV=development`. |
 | **unknown** | Everything else. | Refused with 421. |

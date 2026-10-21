@@ -80,7 +80,8 @@ export type HostClass = 'canonical' | 'alias' | 'env' | 'loopback' | 'ip' | 'dev
 
 export type ClassifyReason =
     | 'canonical' | 'site' | 'alias' | 'env' | 'loopback' | 'localhost-subdomain' | 'ip-any' | 'ip-own' | 'dev-origin'
-    | 'invalid' | 'proxied-ip' | 'ip-not-own' | 'ip-literals-none' | 'expired-alias' | 'undeclared';
+    | 'invalid' | 'proxied-ip' | 'ip-not-own' | 'ip-literals-none' | 'expired-alias' | 'undeclared'
+    | 'loopback-remote';
 
 export interface Classification {
     cls: HostClass;
@@ -91,6 +92,8 @@ export interface Classification {
 export interface ClassifyContext {
     /** REDTEAM R4: the authority came from Host on a request with proxy headers from an untrusted peer. */
     proxied?: boolean;
+    /** QA X2-14: the TCP peer is not loopback and no trusted hop relayed it: a loopback Host is not believed. */
+    remotePeer?: boolean;
     /** Epoch ms for alias expiry; defaults to Date.now(). */
     now?: number;
 }
@@ -112,6 +115,8 @@ export interface RequestAuthority {
      */
     source: 'host' | 'x-forwarded-host';
     proxied: boolean;
+    /** QA X2-14: a direct (no trusted hop) request from a non-loopback TCP peer. */
+    remotePeer: boolean;
 }
 
 /** Anything carrying the operator's explicit trust setting: a HostPolicy or `{ trustProxy }`. */

@@ -620,7 +620,11 @@ router.post('/check', async (req: Request, res: Response) => {
  *     summary: Update the gateway's port and TLS switch
  *     description: >-
  *       Pushed to the gateway over mTLS. Turning SSL on additionally ensures a certificate exists,
- *       generating a self-signed one if necessary. Administrator only.
+ *       generating a self-signed one if necessary. In a monolith there is no gateway: the port is saved
+ *       to wordjs-config.json, the switch to gateway-config.json, and the process restarts itself to
+ *       listen with them (`restart` in the answer); a value pinned by the service's environment (PORT,
+ *       WORDJS_HTTP=1) answers 409 `monolith_env_pinned`, an invalid port 400 `monolith_invalid_port`.
+ *       Administrator only.
  *     tags: [Certificates]
  *     security:
  *       - bearerAuth: []
@@ -682,6 +686,10 @@ router.post('/check', async (req: Request, res: Response) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       400:
+ *         description: "Monolith: the port is not one (monolith_invalid_port)."
+ *       409:
+ *         description: "Monolith: the port or HTTPS is pinned by the service's environment (monolith_env_pinned)."
  *       500:
  *         description: The gateway configuration could not be updated.
  *         content:
@@ -692,10 +700,20 @@ router.post('/check', async (req: Request, res: Response) => {
 router.post('/config', async (req: Request, res: Response) => {
     try {
         const { port, sslEnabled } = req.body;
-        const result = await certManager.updateGatewayConfig(port, sslEnabled);
+        let result: any;
+        try {
+            result = await certManager.updateGatewayConfig(port, sslEnabled);
+        } catch (e: any) {
+            // A monolith refuses a value pinned in the service's environment, or a port that is not one.
+            if (e && (e.code === 'monolith_env_pinned' || e.code === 'monolith_invalid_port')) {
+                return res.status(e.code === 'monolith_env_pinned' ? 409 : 400).json({ code: e.code, error: e.message });
+            }
+            throw e;
+        }
 
-        // If SSL is being enabled, automatically ensure a certificate exists
-        if (sslEnabled) {
+        // If SSL is being enabled, automatically ensure a certificate exists. Not in a monolith: it restarts
+        // to apply the switch and makes its own self-signed pair at start when it has none (monolith.js).
+        if (sslEnabled && !(result && result.monolith)) {
             await certManager.ensureGatewayCert();
         }
 

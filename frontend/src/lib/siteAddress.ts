@@ -871,17 +871,20 @@ export async function afterGatewayConfigSave(
     res: unknown,
     io: { alert: (message: string) => unknown; navigate: (href: string) => void },
 ): Promise<GatewayAddressOutcome | null> {
-    // The gateway reloads its workers by itself (gateway/src/index.js, POST /config-update).
-    const restart = "The gateway reloads itself in a few seconds.";
+    // The gateway reloads its workers by itself (gateway/src/index.js, POST /config-update); a monolith
+    // restarts its one process (core/cert-manager updateMonolithConfig).
+    const monolith = !!(res && typeof res === "object" && (res as { monolith?: unknown }).monolith === true);
+    const restart = monolith ? "WordJS restarts by itself in a few seconds to apply it." : "The gateway reloads itself in a few seconds.";
+    const server = monolith ? "WordJS" : "The gateway";
     const outcome = gatewayAddressOutcome(res);
     if (outcome?.kind === "upgraded") {
         const notes = outcome.warnings.length ? ` Note: ${outcome.warnings.join(" ")}` : "";
         await io.alert(`Settings saved. The main address is now ${outcome.address}: emails, feeds and the sitemap link to it from now on.${notes} ${restart}`);
     } else if (outcome?.kind === "downgraded") {
         const notes = outcome.warnings.length ? ` Note: ${outcome.warnings.join(" ")}` : "";
-        await io.alert(`Settings saved. The gateway now serves plain HTTP and the main address is ${outcome.address}: open the panel there to keep working.${notes} ${restart}`);
+        await io.alert(`Settings saved. ${server} now serves plain HTTP and the main address is ${outcome.address}: open the panel there to keep working.${notes} ${restart}`);
     } else if (outcome?.kind === "suggest") {
-        await io.alert(`Settings saved. The gateway now serves the site at ${outcome.address}, which is not the main address. Review it in Settings → Site address. ${restart}`);
+        await io.alert(`Settings saved. ${server} now serves the site at ${outcome.address}, which is not the main address. Review it in Settings → Site address. ${restart}`);
         io.navigate(outcome.href);
     } else {
         await io.alert(`Settings saved. ${restart}`);

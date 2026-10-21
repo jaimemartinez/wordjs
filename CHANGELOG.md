@@ -13,6 +13,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   protocol v1 line so the receiver can still see the client's address. In separate mode the mail server's SMTP listener
   lives on the backend machine, and mail sent to the site's public address never reached it without a NAT rule
   configured by hand.
+- **The monolith's port and HTTPS switch from the panel.** In a monolith, Admin → Security used to show the
+  public port and HTTPS as read-only (set by environment variables or `gateway-config.json`, then a restart by
+  hand). Both are now saved there: the port to `gatewayPort`, the switch to `gateway-config.json`, and WordJS
+  restarts itself to listen with them; the main address follows when it named the old port or scheme. A value
+  the service's environment sets (`PORT`, `WORDJS_HTTP=1`) is shown locked, because the next start takes it again.
+  Installing a certificate in a monolith keeps the HTTPS switch as it was.
 - **Change a network site's address from the panel.** Admin → Network → *Change address* moves a site to
   another main address and sets its other host names (the `www.` twin, an old domain kept during a move),
   checked as at creation; the site's own address options follow, the certificate of the old address is
@@ -991,6 +997,13 @@ the boot error links there too.
   (for example resolving which accounts hold its capabilities) the server listed the installed plugins under
   that plugin's sandbox rules; the read was refused, logged on every pass and came back empty. It now runs as
   the server's own read.
+
+- **`localhost` is only local from this machine.** A client on another machine that connected directly with
+  `Host: localhost`, `127.0.0.1` or `[::1]` was treated like a request from the server itself. Such a request is
+  now refused with `421`, at the gateway and in the monolith; a browser or a proxy on the server is unaffected.
+
+- **Site address no longer says signing in over an IP is impossible when the main address is an IP.** The
+  note now says the main address is the exception, which is how sign-in already worked.
 
 - **A second monolith on other ports keeps them after install.** Started with `PORT` and `WORDJS_LOOPBACK_PORT`
   (another install beside one already running), the wizard recorded the default ports 3000 and 4000, so after a

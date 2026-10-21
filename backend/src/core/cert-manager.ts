@@ -42,6 +42,18 @@ function writePrivateKey(filePath: string, content: any) {
     try { fs.chmodSync(filePath, 0o600); } catch { /* chmod is a no-op on some filesystems (e.g. Windows) */ }
 }
 
+/** The gateway directory next to this backend: in a monolith, where monolith.js reads gateway-config.json. */
+let MONOLITH_GATEWAY_DIR = path.resolve(__dirname, '../../../gateway');
+/** Tests only: point the monolith's gateway directory at a temporary one. */
+function setMonolithGatewayDirForTests(dir: string): void { MONOLITH_GATEWAY_DIR = dir; }
+
+/** A refusal of a monolith port/TLS change, answered as 400/409 by routes/certs.ts. */
+function codedMonolithError(code: string, message: string): Error & { code: string } {
+    const e = new Error(message) as Error & { code: string };
+    e.code = code;
+    return e;
+}
+
 /**
  * THE GATEWAY'S CONTROL PLANE — every call this module makes to the gateway (certificate upload, the
  * TLS/port switch, the main address, the host policy, the info probe) goes through ONE dialler.
@@ -643,7 +655,7 @@ class CertManager {
      * HTTPS server in-process via a reload hook the monolith installs (so no restart is needed).
      */
     async installCertEmbedded(keyContent: any, certContent: any) {
-        const gwDir = path.resolve(__dirname, '../../../gateway');
+        const gwDir = MONOLITH_GATEWAY_DIR;
         const importedDir = path.join(gwDir, 'ssl', 'live', 'imported');
         fs.mkdirSync(importedDir, { recursive: true, mode: 0o700 });
         writePrivateKey(path.join(importedDir, 'privkey.pem'), keyContent);
@@ -653,7 +665,11 @@ class CertManager {
         try {
             const gwCfgPath = path.join(gwDir, 'gateway-config.json');
             const gwCfg = fs.existsSync(gwCfgPath) ? JSON.parse(fs.readFileSync(gwCfgPath, 'utf8')) : {};
-            gwCfg.ssl = { ...(gwCfg.ssl || {}), key: './ssl/live/imported/privkey.pem', cert: './ssl/live/imported/fullchain.pem', enabled: true };
+            // The certificate is stored; the HTTPS switch stays as the administrator set it (like the gateway's
+            // /cert-upload). A config that never set the switch served any pair it had, so it stays on.
+            const tlsMode = require('../../../gateway/src/tls-mode.js');
+            const enabled = gwCfg.ssl === undefined ? true : tlsMode.sslSwitchedOn(gwCfg.ssl);
+            gwCfg.ssl = { ...tlsMode.normalizeSsl(gwCfg.ssl), key: './ssl/live/imported/privkey.pem', cert: './ssl/live/imported/fullchain.pem', enabled };
             // gateway-config.json holds gatewaySecret: owner-only, like the gateway's own writes.
             writePrivateKey(gwCfgPath, JSON.stringify(gwCfg, null, 2));
         } catch (e: any) {
@@ -884,20 +900,36 @@ class CertManager {
      */
     getMonolithConfig(defaultResult: any): any {
         const httpOnly = process.env.WORDJS_HTTP === '1';
+        const served = (global as any).__WORDJS_MONO_SERVING__;
+        const serving = served === 'https' || served === 'http' ? served : null;
+        // The switch as stored (gateway-config.json `ssl`, read like the gateway does). A config that never
+        // set it is "on when a certificate is there" (monolith.js resolveSSL), so it reads as what is served.
+        let stored: unknown;
+        try { stored = JSON.parse(fs.readFileSync(path.join(MONOLITH_GATEWAY_DIR, 'gateway-config.json'), 'utf8')).ssl; } catch { stored = undefined; }
+        const switchOn = stored === undefined ? serving !== 'http' : require('../../../gateway/src/tls-mode.js').sslSwitchedOn(stored);
         const result: any = {
             ...defaultResult,
             gatewayPort: Number(process.env.PORT) || defaultResult.gatewayPort,
-            sslEnabled: !httpOnly,
+            sslEnabled: !httpOnly && switchOn,
+            serving,
             source: 'monolith',
+            // What the operator fixed in the environment: the panel shows it and cannot change it, because
+            // the next start would pick the variable again (QA M2-15: everything else is set from here).
+            pinned: { port: process.env.WORDJS_MONO_PORT_PINNED === '1', tls: httpOnly },
         };
 
         if (httpOnly) {
-            result.certInfo = { message: 'Serving plain HTTP this session (WORDJS_HTTP=1) — no TLS certificate in use.' };
+            result.certInfo = { code: 'plain-http-env', message: 'Serving plain HTTP this session (WORDJS_HTTP=1) — no TLS certificate in use.' };
+            return result;
+        }
+        if (serving === 'http') {
+            // HTTPS switched off, or never on with no certificate to serve: nothing is presented.
+            result.certInfo = { code: 'plain-http', message: 'Serving plain HTTP — no TLS certificate in use.' };
             return result;
         }
 
         try {
-            const GATEWAY = path.resolve(__dirname, '../../../gateway');
+            const GATEWAY = MONOLITH_GATEWAY_DIR;
             let certPath: string | null = null;
 
             // 1) An operator-configured cert referenced by gateway-config.json, then 2) the shared
@@ -925,12 +957,54 @@ class CertManager {
                 else if (issuer === subject) type = 'self-signed';
                 result.certInfo = { commonName: cn, issuer: issuerCn, validTo: x509.validTo, type };
             } else {
-                result.certInfo = { message: 'HTTPS is on but the served certificate could not be located on disk.' };
+                result.certInfo = { code: 'cert-missing', message: 'HTTPS is on but the served certificate could not be located on disk.' };
             }
         } catch {
-            result.certInfo = { message: 'HTTPS is on (certificate details unavailable in monolith mode).' };
+            result.certInfo = { code: 'cert-unreadable', message: 'HTTPS is on (certificate details unavailable in monolith mode).' };
         }
         return result;
+    }
+
+    /**
+     * Monolith: the public port and the HTTPS switch from Admin → Security (QA M2-15). There is no gateway
+     * process to push to: the port goes to wordjs-config.json (`gatewayPort`, which monolith.js reads
+     * first), the switch to gateway-config.json (`ssl`, read like the gateway does), and the monolith
+     * restarts itself to listen with them. A value the operator pinned in the environment (PORT,
+     * WORDJS_HTTP=1) is refused: the next start would take the variable again. Answers what the gateway's
+     * /config-update answers, `siteUrl` included (the address the listener will have), plus `restart`.
+     */
+    updateMonolithConfig(port: unknown, sslEnabled: unknown) {
+        const tlsMode = require('../../../gateway/src/tls-mode.js');
+        const current = this.getMonolithConfig({ gatewayPort: 3000, sslEnabled: false, certInfo: null, siteUrl: null });
+        const n = port === undefined || port === null || port === '' ? null : Number(port);
+        if (n !== null && !(Number.isInteger(n) && n >= 1 && n <= 65535)) throw codedMonolithError('monolith_invalid_port', 'The port must be a whole number from 1 to 65535.');
+        const newPort = n === null ? current.gatewayPort : n;
+        const newSsl = typeof sslEnabled === 'boolean' ? sslEnabled : current.sslEnabled;
+        if (newPort !== current.gatewayPort && current.pinned.port) {
+            throw codedMonolithError('monolith_env_pinned', 'The port is set by the PORT environment variable of the service; change it there.');
+        }
+        if (newSsl !== current.sslEnabled && current.pinned.tls) {
+            throw codedMonolithError('monolith_env_pinned', 'HTTPS is switched off by the WORDJS_HTTP=1 environment variable of the service; remove it there.');
+        }
+        const changed = newPort !== current.gatewayPort || newSsl !== current.sslEnabled;
+        if (newSsl !== current.sslEnabled) {
+            const gwPath = path.join(MONOLITH_GATEWAY_DIR, 'gateway-config.json');
+            let gw: any;
+            try { gw = JSON.parse(fs.readFileSync(gwPath, 'utf8')); } catch { gw = {}; }
+            gw.ssl = { ...tlsMode.normalizeSsl(gw.ssl), enabled: newSsl };
+            writePrivateKey(gwPath, JSON.stringify(gw, null, 2)); // it holds gatewaySecret: owner-only
+        }
+        if (newPort !== current.gatewayPort) {
+            const written = require('./configManager').updateConfig((c: any) => ({ ...c, gatewayPort: newPort }));
+            if (written && written.ok === false) throw new Error(`the port could not be saved (${written.reason || 'config write refused'})`);
+        }
+        // The main address as the file holds it now (the in-memory config is the one this process started with).
+        const mainAddress = (require('./configManager').getConfig() || {}).siteUrl || require('../config/app').siteUrl;
+        const siteUrl = mainAddress
+            ? tlsMode.followGatewaySiteUrl(String(mainAddress), { oldPort: current.gatewayPort, newPort, https: newSsl })
+            : null;
+        const restart = changed ? require('./restart').scheduleRestart('the public port or HTTPS changed in Admin → Security', { delayMs: 1500 }) : null;
+        return { success: true, monolith: true, siteUrl, ...(restart ? { restart } : {}) };
     }
 
     /**
@@ -1165,6 +1239,9 @@ class CertManager {
      * Update Gateway Config (Push Only - No Local Storage)
      */
     async updateGatewayConfig(port: any, sslEnabled: any) {
+        if (process.env.WORDJS_MODE === 'mono' || process.env.WORDJS_EMBEDDED === '1') {
+            return this.updateMonolithConfig(port, typeof sslEnabled !== 'undefined' ? !!sslEnabled : undefined);
+        }
         try {
             const { status, text } = await gatewayControlRequest('POST', '/config-update', {
                 port: port ? parseInt(port) : undefined,
@@ -1185,3 +1262,4 @@ class CertManager {
 module.exports = new CertManager();
 // The backend's mTLS control channel to the gateway, for the cluster screen (routes/cluster.ts).
 module.exports.gatewayControlRequest = gatewayControlRequest;
+module.exports.setMonolithGatewayDirForTests = setMonolithGatewayDirForTests;

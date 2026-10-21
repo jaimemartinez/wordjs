@@ -372,7 +372,7 @@ function createHostEdge(opts) {
         if (!parsed) return { action: 'invalid' };
         const p = requestPath(req);
 
-        const verdict = hp.classify(parsed, pol, { proxied: authority.proxied, now: now() });
+        const verdict = hp.classify(parsed, pol, { proxied: authority.proxied, remotePeer: authority.remotePeer, now: now() });
         if (verdict.cls === 'unknown') {
             const hint = hp.refusalHint(parsed, pol, verdict.reason);
             if (refused.record(parsed.hostname, hint, 'edge')) {
@@ -570,7 +570,7 @@ function acmeRedirectLocation(req, opts) {
         hostname = pol.canonical.hostname;
         if (parsed) {
             const now = typeof o.now === 'function' ? o.now() : Date.now();
-            const v = hp.classify(parsed, pol, { proxied: authority.proxied, now });
+            const v = hp.classify(parsed, pol, { proxied: authority.proxied, remotePeer: authority.remotePeer, now });
             const redirectAlias = v.cls === 'alias' && v.entry && v.entry.mode === 'redirect';
             if (v.cls !== 'unknown' && !redirectAlias) hostname = parsed.hostname;
         }

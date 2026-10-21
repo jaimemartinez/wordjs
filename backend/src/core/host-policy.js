@@ -322,6 +322,13 @@ function socketOf(req) {
     return (req && (req.socket || req.connection)) || null;
 }
 
+// A peer address that is known and not this machine's. No address (a synthetic request, a socket already
+// gone) is not evidence of a remote client, so it keeps the old reading.
+function isRemotePeer(socket) {
+    const addr = socket && socket.remoteAddress;
+    return typeof addr === 'string' && addr !== '' && !isLoopbackIp(addr);
+}
+
 function peerCN(socket) {
     try {
         const cert = socket && typeof socket.getPeerCertificate === 'function' ? socket.getPeerCertificate() : null;
@@ -426,6 +433,9 @@ function requestAuthority(req, opts) {
         viaTrustedHop: hop !== null,
         source: fromForwarded ? 'x-forwarded-host' : 'host',
         proxied: hop === null && hasProxyMarkers(req),
+        // A client on ANOTHER machine that reached this listener directly (no hop relayed it). Its Host
+        // header is its own word, so `localhost` from it does not make the request local (classify).
+        remotePeer: hop === null && isRemotePeer(socketOf(req)),
     };
     if (raw === '') return Object.assign({ parsed: null, absent: true }, base);
     return Object.assign({ parsed: parseHost(raw), absent: false }, base);
@@ -514,7 +524,13 @@ function classify(p, pol, ctx) {
     if (networkSite) return { cls: 'canonical', reason: 'site', entry: networkSite };
     const envEntry = pol.envHosts && pol.envHosts.get(h);
     if (envEntry) return { cls: 'env', reason: 'env', entry: envEntry };
-    if (isLoopbackAuthority(p)) return { cls: 'loopback', reason: 'loopback', entry: null };
+    if (isLoopbackAuthority(p)) {
+        // `Host: localhost` / `127.0.0.1` names THIS machine, which only a client on this machine (or a local
+        // proxy, whose own connection is local) can mean. From a remote peer it is a forged name, and taking
+        // it as loopback gave that client the loopback class (no address binding, sign-in allowed) — QA X2-14.
+        if (c.remotePeer === true) return { cls: 'unknown', reason: 'loopback-remote', entry: null };
+        return { cls: 'loopback', reason: 'loopback', entry: null };
+    }
     if (pol.dev && p.kind === 'dns' && h.endsWith('.localhost')) return { cls: 'loopback', reason: 'localhost-subdomain', entry: null };
     if (p.kind !== 'dns') {
         if (c.proxied) return { cls: 'unknown', reason: 'proxied-ip', entry: null };
@@ -1349,7 +1365,7 @@ function hostGateFactory(opts) {
 
         const parsed = authority.parsed;
         const t = now();
-        const verdict = classify(parsed, pol, { proxied: authority.proxied, now: t });
+        const verdict = classify(parsed, pol, { proxied: authority.proxied, remotePeer: authority.remotePeer, now: t });
         if (verdict.cls === 'unknown') {
             // A proxy-topology mistake is recorded as 'forward-host' for the admin page (whose hint codes
             // are a closed set): adding the address it names would be the wrong fix. The log line, which

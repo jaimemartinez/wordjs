@@ -59,6 +59,10 @@ function applyMonolithEnvironment() {
     process.env.WORDJS_EMBEDDED = '1';
     process.env.WORDJS_MODE = 'mono';
     process.env.WORDJS_MONO_ORIGIN = `http://127.0.0.1:${LOOPBACK_PORT}`;
+    // Whether the OPERATOR chose the public port (PORT in the environment): Admin → Security can then only
+    // show it, since the next start would pick that variable again over anything the panel saves. PORT is
+    // overwritten just below with the port in force, so this is the only place that still knows.
+    if (Number(process.env.PORT)) process.env.WORDJS_MONO_PORT_PINNED = '1';
     process.env.PORT = String(PUBLIC_PORT);
     // Backend resolves config/uploads/themes/plugins/data/certs relative to cwd, exactly like
     // `cd backend && npm start` does in split mode.
@@ -90,6 +94,8 @@ const isBackendPath = (url) => {
 // (plus the gateway's byte-identical host-policy.js), so requiring this file still boots nothing.
 const hostEdge = require('./gateway/src/host-edge.js');
 const hostPolicy = require('./gateway/src/host-policy.js');
+// The gateway's reading of the `ssl` switch, so Admin → Security means the same thing in both modes.
+const tlsMode = require('./gateway/src/tls-mode.js');
 
 // Skip compression for SSE streams (parity with the gateway's shouldCompress). `compression` is
 // required inside main() (see applyMonolithEnvironment), so it is passed in rather than closed over.
@@ -104,6 +110,11 @@ async function resolveSSL() {
     if (process.env.WORDJS_HTTP === '1') return null;
     try {
         const ssl = gwConfig.ssl;
+        // The switch Admin → Security writes (QA M2-15). Switched off explicitly (`false` or
+        // `{ enabled: false }`), the monolith serves HTTP even with a certificate on disk — the gateway
+        // reads it the same way (gateway/src/tls-mode.js). A config that never set it keeps the old
+        // reading: a stored or auto-generated pair is served.
+        if (ssl !== undefined && !tlsMode.sslSwitchedOn(ssl)) return null;
         if (ssl && ssl.key && ssl.cert) {
             const keyPath = path.resolve(GATEWAY, ssl.key);
             const certPath = path.resolve(GATEWAY, ssl.cert);
@@ -463,6 +474,9 @@ async function main() {
     });
     // Let ACME auto-renewal hot-swap the live TLS cert in-process (no restart). cert-manager calls
     // this after writing a renewed cert in embedded mode. Only meaningful when serving HTTPS.
+    // What this listener speaks, for Admin → Security (cert-manager getMonolithConfig): the switch says
+    // what was asked, this says what is served.
+    global.__WORDJS_MONO_SERVING__ = ssl ? 'https' : 'http';
     if (ssl) {
         global.__WORDJS_RELOAD_TLS__ = (key, cert) => {
             try { server.setSecureContext({ key, cert }); console.log('[monolith] TLS certificate hot-reloaded.'); }
