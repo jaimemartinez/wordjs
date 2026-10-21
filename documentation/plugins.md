@@ -1303,9 +1303,15 @@ Plugins can add blocks to the visual page builder (**Verso**). This is how it ac
 >
 > Your render component also still receives the legacy **`puck` prop** —
 > `{ isEditing, metadata, dragRef, renderDropZone }` — with `renderDropZone({ zone })` mapped onto the
-> engine's slots (`frontend/src/lib/verso/pluginBlocks.tsx`). Of the first-party marketplace blocks only
-> `table-of-contents` reads it, and a third-party bundle compiled against the old contract keeps working
-> without a recompile.
+> engine's slots (`frontend/src/lib/verso/pluginBlocks.tsx`). A third-party bundle compiled against the
+> old contract keeps working without a recompile.
+>
+> **Setup hints are for the editor.** In the editor a block also receives `isEditing: true`; on a public
+> page it is absent. Read `isEditing || puck?.isEditing`: a block that is not configured yet (no form, poll
+> or gallery chosen, nothing to list) shows its hint — "choose a form in the block panel" — only in the
+> editor, and renders nothing for visitors, who must never read admin instructions. The first-party blocks
+> (contact-forms, polls, card-gallery, photo-carousel, video-gallery, youtube-videos, digital-downloads,
+> event-tickets, social-share, memberships, table-of-contents) all follow this.
 >
 > The one name that is *not* changing is the post-meta key `_puck_data`, where a page's document is
 > stored. It is not a name in our source — it is a **value already written into the `postmeta` table of

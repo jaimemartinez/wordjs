@@ -1240,6 +1240,31 @@ the boot error links there too.
   is why password recovery is still off. Deactivating a plugin asks for confirmation. bookings 1.0.3: the
   confirmation link opens the booking page even when the visitor used another accepted address. memberships
   1.2.1: the newsletter confirmation names the site, not its host.
+- **Plugins: install, update and permissions.** An update is offered only when the catalog has a *newer* version
+  (an installed build newer than the catalog's was offered a downgrade). Release packages no longer include the
+  two development fixture plugins. The activation dialog has a switch per requested permission, so a permission
+  can be left off before the plugin first starts. A plugin request refused for a missing permission answers
+  `403 plugin_permission_denied` naming the permission and where to grant it, instead of "Isolated plugin
+  error". A plugin screen that could not be fetched while the server restarts says it is temporarily
+  unavailable, with a retry, instead of "Plugin not found".
+- **Plugin blocks on public pages.** Blocks that are not configured yet (contact form, poll, card gallery, photo
+  carousel, video gallery, YouTube videos, digital downloads, event tickets, social share) show their setup hint
+  in the editor only and render nothing for visitors. The store search, store orders and share buttons no longer
+  touch the edge of the screen. In the editor palette plugin blocks are grouped with the core blocks (Media,
+  Marketing, Dynamic…) with their group's icon, instead of all under *More*. video-gallery **1.1.0** offers its
+  block in the editor, with the gallery picked from a list.
+- **Admin menus follow the admin language.** Plugin menu entries can carry a label per language and every
+  marketplace plugin does (English, Spanish, Portuguese). The core form-submissions screen is *Form submissions* and the contact-forms
+  plugin's is *Contact forms*, instead of two entries called "Forms".
+- **Payments and forms plugins.** memberships: the paywall no longer offers *Create account* when registration is
+  closed, nor *Subscribe* when no payment provider is set up; the settings warn about both. Switching the
+  payment provider after a key was refused no longer re-sends the refused key. bookings: the *New service* window
+  is no longer partly hidden behind the sidebar. contact-forms: a failed *Save form* (no connection) says so next
+  to the button. Updated: analytics-tag 1.0.2, auctions 1.1.2, card-gallery 1.0.2, cookie-consent 1.0.2,
+  digital-downloads 1.1.2, donations 1.0.3, event-tickets 1.1.2, events-calendar 1.0.2, faq 1.0.2, image-lightbox
+  1.0.2, invoices 1.0.2, job-board 1.0.2, notification-bar 1.0.2, online-store 2.0.3, photo-carousel 2.1.1, polls
+  1.0.2, popup-builder 1.0.2, restaurant-menu 2.0.3, social-share 1.0.2, testimonials 1.0.2, vendor-marketplace
+  1.0.4, youtube-videos 1.0.4.
 
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
