@@ -331,6 +331,9 @@ export interface Category {
     name: string;
     slug: string;
     count: number;
+    description?: string;
+    /** The parent category's id; 0 at the top level. */
+    parent?: number;
 }
 
 export interface User {
@@ -621,7 +624,8 @@ async function listAllCategories(
 export const categoriesApi = {
     listPaged: listCategoriesPaged,
     listAll: listAllCategories,
-    create: (data: { name: string; slug?: string }) => apiPost<Category>("/categories", data),
+    create: (data: { name: string; slug?: string; description?: string; parent?: number }) => apiPost<Category>("/categories", data),
+    update: (id: number, data: { name?: string; slug?: string; description?: string; parent?: number }) => apiPut<Category>(`/categories/${id}`, data),
     delete: (id: number) => apiDelete(`/categories/${id}`),
 };
 

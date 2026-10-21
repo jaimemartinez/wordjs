@@ -179,6 +179,8 @@ function commonPrefix(schemas: Schema[]): string[] {
         // metadata reads it for article:modified_time / dateModified.
         '    modified?: string;',
         '    modifiedGmt?: string;',
+        '    /** The parent entry (hierarchical types such as pages); 0 at the top level. */',
+        '    parent?: number;',
         // `slug` is user_nicename, falling back to user_login — the identity the author feed resolves
         // and the one `GET /posts?author=` accepts, so a public page can link an author archive and
         // list it with the SAME value the record handed it.

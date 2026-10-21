@@ -101,6 +101,19 @@ if (specs.paths?.['/posts/{id}']?.put) {
     };
 }
 
+// THE NETWORK ROUTES DO NOT EXIST ON A SINGLE-SITE INSTALL. The tag says so, but a client reading one
+// operation saw only 200/401/403 and took the 404 rest_no_route it got for a broken URL. Every
+// operation behind the network-administrator gate states it; the switch routes (status/setup/
+// enable/disable) answer on a single site and are left alone.
+const NETWORK_SWITCH_PATHS = new Set(['/network/status', '/network/setup', '/network/enable', '/network/disable']);
+for (const [path, item] of Object.entries<any>(specs.paths || {})) {
+    if (!path.startsWith('/network/') || NETWORK_SWITCH_PATHS.has(path)) continue;
+    for (const op of Object.values<any>(item)) {
+        if (!op || typeof op !== 'object' || !op.responses || op.responses['404']) continue;
+        op.responses['404'] = { description: 'rest_no_route — the network (multisite) is not enabled on this install, or the request is not on the main site.' };
+    }
+}
+
 module.exports = specs;
 
 /**

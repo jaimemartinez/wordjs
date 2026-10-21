@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
-import { getCategoryPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
+import { permanentRedirect } from "next/navigation";
+import { getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
+import { resolveCategoryPost } from "@/lib/public/categoryPostRoute";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 
@@ -14,11 +16,12 @@ interface RouteParams {
 }
 
 export async function generateMetadata({ params }: { params: Promise<RouteParams> }): Promise<Metadata> {
-    const { postSlug } = await params;
+    const { slug, postSlug } = await params;
     // The POST of that slug first (getCategoryPostBySlug): a page sharing the slug owns the bare /<slug>,
     // not this category URL.
-    const post = await getCategoryPostBySlug(postSlug);
-    if (!post) return { title: "Not found", robots: { index: false } };
+    const resolved = await resolveCategoryPost(slug, postSlug);
+    if (!resolved || !("post" in resolved)) return { title: "Not found", robots: { index: false } };
+    const post = resolved.post;
     const settings = await getSettings();
     // Canonical resolves to the post's primary URL (/slug), not the category path, so the two URLs
     // don't compete as duplicate content.
@@ -31,8 +34,10 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 
 export default async function CategoryPostPage({ params }: { params: Promise<RouteParams> }) {
     const { slug, postSlug } = await params;
-    const [post, settings, base] = await Promise.all([getCategoryPostBySlug(postSlug), getSettings(), resolveSiteBase()]);
-    if (!post) contentNotFound();
+    const [resolved, settings, base] = await Promise.all([resolveCategoryPost(slug, postSlug), getSettings(), resolveSiteBase()]);
+    if (!resolved) contentNotFound();
+    if ("redirect" in resolved) permanentRedirect(resolved.redirect);
+    const post = resolved.post;
     // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
     const withBlocks = await withResolvedBlocks(post);
     return (

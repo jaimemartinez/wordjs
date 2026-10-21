@@ -171,7 +171,14 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     // SECURITY: Block SVG uploads for non-admins (SVGs can contain JavaScript)
     if (file.mimetype === 'image/svg+xml') {
         if (!req.user || req.user.getRole() !== 'administrator') {
-            return cb(new UploadRejectedError(403, 'rest_upload_svg_forbidden', 'SVG uploads are restricted to administrators only.'), false);
+            // An administrator's AI agent reports the synthetic role `agent` (core/agent-capabilities) and
+            // is refused here too; telling it "administrators only" when its user IS one left it nothing
+            // to ask for.
+            const viaAgent = !!req.user && req.user.getRole() === 'agent';
+            const message = viaAgent
+                ? 'SVG uploads are never accepted from an AI agent connection (SVG can carry scripts) — upload a PNG, JPEG or WebP instead, or ask an administrator to upload the SVG from the panel.'
+                : 'SVG uploads are restricted to administrators only.';
+            return cb(new UploadRejectedError(403, 'rest_upload_svg_forbidden', message), false);
         }
     }
 

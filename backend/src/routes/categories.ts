@@ -25,6 +25,34 @@ const TAXONOMY = 'category';
 router.param('id', requireRouteId({ code: 'rest_term_invalid', message: 'Invalid category ID.' }));
 
 /**
+ * THE PARENT OF A CATEGORY must be 0 (top level) or an existing category, and never the category itself
+ * or one of its descendants. Neither route checked: `parent: 999` stored a dangling id, and moving a
+ * category under its own child made a loop that every hierarchy walk (the admin tree, breadcrumbs,
+ * `getHierarchy`) followed. Returns the parsed id, or a refusal message.
+ */
+async function resolveParent(raw: unknown, termId: number | null): Promise<{ parent: number } | { problem: string }> {
+    if (raw === undefined || raw === null || raw === '' || raw === 0 || raw === '0') return { parent: 0 };
+    const parent = typeof raw === 'number' ? raw : /^d+$/.test(String(raw)) ? parseInt(String(raw), 10) : NaN;
+    if (!Number.isSafeInteger(parent) || parent < 0) return { problem: 'parent must be a category ID (0 for none).' };
+    if (termId !== null && parent === termId) return { problem: 'A category cannot be its own parent.' };
+    // Walk up from the proposed parent: it must exist, and the chain must not pass through this category.
+    let cursor = parent;
+    for (let depth = 0; cursor && depth < 100; depth++) {
+        const node = await Term.findById(cursor, TAXONOMY);
+        if (!node) return { problem: depth === 0 ? `Category ${parent} does not exist.` : 'The parent chain is broken.' };
+        if (termId !== null && Number(node.termId) === termId) {
+            return { problem: 'A category cannot be moved under one of its own subcategories.' };
+        }
+        cursor = Number(node.parent) || 0;
+    }
+    return { parent };
+}
+
+function parentRefusal(res: Response, message: string) {
+    return res.status(400).json({ code: 'rest_term_invalid_parent', message, data: { status: 400 } });
+}
+
+/**
  * Every query parameter GET /categories reads, each a scalar in this API's contract. Twin of
  * TAG_LIST_QUERY_FIELDS in routes/tags.ts — `parent` is the one extra field this taxonomy takes, and
  * `hide_empty` is the flag a repeat used to switch off silently.
@@ -162,7 +190,9 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
  *       201:
  *         description: Category created
  *       400:
- *         description: Validation error
+ *         description: >-
+ *           rest_missing_param (no name), rest_term_exists (the name or slug is taken) or
+ *           rest_term_invalid_parent (parent is not an existing category).
  */
 router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
     const { name, slug, description, parent } = req.body;
@@ -177,13 +207,16 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
         });
     }
 
+    const resolved = await resolveParent(parent, null);
+    if ('problem' in resolved) return parentRefusal(res, resolved.problem);
+
     try {
         const term = await Term.create({
             name,
             taxonomy: TAXONOMY,
             slug,
             description,
-            parent: parent ? parseInt(parent, 10) : 0
+            parent: resolved.parent
         });
 
         await recordAudit(req.user.id, 'term.create', 'term', term.termId, { taxonomy: TAXONOMY });
@@ -231,6 +264,10 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
  *     responses:
  *       200:
  *         description: Category updated
+ *       400:
+ *         description: >-
+ *           rest_term_exists (the name or slug is taken) or rest_term_invalid_parent (parent is not an
+ *           existing category, is the category itself, or is one of its subcategories).
  *       404:
  *         description: Category not found
  */
@@ -248,12 +285,27 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
 
     const { name, slug, description, parent } = req.body;
 
-    const updated = await Term.update(termId, TAXONOMY, {
-        name,
-        slug,
-        description,
-        parent: parent !== undefined ? parseInt(parent, 10) : undefined
-    });
+    let nextParent: number | undefined;
+    if (parent !== undefined) {
+        const resolved = await resolveParent(parent, termId);
+        if ('problem' in resolved) return parentRefusal(res, resolved.problem);
+        nextParent = resolved.parent;
+    }
+
+    let updated;
+    try {
+        updated = await Term.update(termId, TAXONOMY, {
+            name,
+            slug,
+            description,
+            parent: nextParent
+        });
+    } catch (error: any) {
+        if (String(error && error.message).includes('already exists')) {
+            return res.status(400).json({ code: 'rest_term_exists', message: error.message, data: { status: 400 } });
+        }
+        throw error;
+    }
 
     await recordAudit(req.user.id, 'term.update', 'term', termId, { taxonomy: TAXONOMY });
     res.json(updated.toJSON());

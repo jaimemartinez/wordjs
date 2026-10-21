@@ -1095,6 +1095,23 @@ the boot error links there too.
     a confirmation message that does not exist, the logo and icon are stored as site-relative paths (they
     embedded the address the admin happened to use), and the dashboard counters show real totals. In a
     monolith the dashboard no longer reports «mTLS: OK / certificates valid» for a link that does not exist.
+  - *Categories*: the screen shows the hierarchy (children indented under their parent) and edits a
+    category's name, slug, description and parent; the API refuses a parent that does not exist, the
+    category itself or one of its subcategories (`rest_term_invalid_parent`).
+  - *Old WordPress addresses*: a nested page address (`/level-1/level-2/level-3`) and a nested category
+    address (`/category/parent/child`) redirect to the page's or category's own address when they name its
+    ancestry exactly; any other prefix is a 404 (`/anything/<page>` used to serve the page under every
+    prefix). The comments screen's «In response to» opens the entry (it linked to a route that does not exist).
+- **Public API: answers and documentation agree.** An `Authorization: Bearer` token that is invalid, expired
+  or revoked is answered `401 rest_token_invalid` with `WWW-Authenticate` on public reads and on GraphQL (it
+  silently read as a visitor, so a client whose token expired stopped seeing its drafts without being told); a
+  stale session cookie still reads as a visitor. An MCP client that sends no token gets the MCP `401` with
+  `WWW-Authenticate` instead of a CSRF `403`. `GET /comments` accepts `status=all`, `approved` and `hold`.
+  The OpenAPI document describes `title` and `content` as the strings the API returns, documents
+  `X-WP-Total` / `X-WP-TotalPages` and the 1–100 page size on `GET /posts`, marks `POST /setup/migrate` as
+  deprecated, and states that the network routes answer 404 on a single-site install. The API tokens screen
+  links the REST reference and the GraphQL endpoint and has the GraphQL introspection switch; AI agents
+  keeps a refused «Create connection» on screen with its reason, and an agent's refused SVG upload says why.
 
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL

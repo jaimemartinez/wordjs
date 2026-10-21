@@ -230,7 +230,8 @@ function buildMcpServer(ctx: AgentCallContext): any {
     /** A write tool's REST call, folded into {response, __audit} for `guarded`. */
     const audited = (objectType: string, objectId: unknown, r: { status: number; body: any }, okResponse: () => any) => {
         const success = r.status >= 200 && r.status < 300;
-        const id = objectId ?? (success && r.body && r.body.id);
+        // `success && …` put the boolean `false` in the audit row of every refused call ("objectId":"false").
+        const id = objectId ?? (success && r.body ? r.body.id : undefined);
         return {
             response: success ? okResponse() : fail(restError(r.status, r.body)),
             __audit: {

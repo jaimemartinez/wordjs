@@ -455,3 +455,86 @@ test('a missing optional theme template is logged as information, other 4xx as w
     assert.strictEqual(levelForStatus(500, 'GET', '/themes/x'), 'error');
     assert.strictEqual(levelForStatus(200), 'info');
 });
+
+// ── public API (REST / GraphQL / OpenAPI) ─────────────────────────────────────────────────────────
+
+test('an Authorization: Bearer that resolves to nobody is 401 on public reads; a dead cookie still reads as a visitor', async () => {
+    for (const value of ['Bearer garbage', 'Bearer wjt_bogus0000000000000000', `Bearer ${jwt.sign({ userId: 999999, username: 'ghost' }, config.jwt.secret, { algorithm: 'HS256', expiresIn: '1h' })}`]) {
+        const res = await request(app).get(`${B}/posts`).set('Authorization', value);
+        assert.strictEqual(res.status, 401, `${value}: ${res.status} ${JSON.stringify(res.body)}`);
+        assert.strictEqual(res.body.code, 'rest_token_invalid');
+        assert.match(String(res.headers['www-authenticate']), /error="invalid_token"/);
+    }
+    const expired = jwt.sign({ userId: ids.admin, username: 'admin' }, config.jwt.secret, { algorithm: 'HS256', expiresIn: -10 });
+    assert.strictEqual((await request(app).get(`${B}/posts`).set('Authorization', `Bearer ${expired}`)).status, 401);
+    // The browser's ambient cookie is not a claim the caller made: still a visitor.
+    const cookie = await request(app).get(`${B}/posts`).set('Cookie', `${SESSION_COOKIE}=not-a-session`);
+    assert.strictEqual(cookie.status, 200, JSON.stringify(cookie.body));
+    // A valid bearer and no credential at all are unchanged.
+    assert.strictEqual((await request(app).get(`${B}/posts?status=draft`).set(bearer('admin'))).status, 200);
+    assert.strictEqual((await request(app).get(`${B}/posts`)).status, 200);
+});
+
+test('GraphQL refuses a dead Bearer the same way instead of answering viewer: null', async () => {
+    const bad = await request(app).get(`${B}/graphql`).query({ query: '{ viewer { id } }' }).set('Authorization', 'Bearer garbage');
+    assert.strictEqual(bad.status, 401, JSON.stringify(bad.body));
+    assert.strictEqual(bad.body.code, 'rest_token_invalid');
+    const anon = await request(app).get(`${B}/graphql`).query({ query: '{ viewer { id } }' });
+    assert.strictEqual(anon.status, 200, JSON.stringify(anon.body));
+    assert.strictEqual(anon.body.data.viewer, null);
+    const me = await request(app).get(`${B}/graphql`).query({ query: '{ viewer { id } }' }).set(bearer('admin'));
+    assert.strictEqual(me.status, 200, JSON.stringify(me.body));
+    assert.strictEqual(Number(me.body.data.viewer.id), ids.admin);
+});
+
+test('GET /comments takes the WordPress status spellings (all, approved, hold)', async () => {
+    const { normalizeCommentStatusQuery } = require('../routes/comments');
+    assert.strictEqual(normalizeCommentStatusQuery('all'), 'any');
+    assert.strictEqual(normalizeCommentStatusQuery('approved'), '1');
+    assert.strictEqual(normalizeCommentStatusQuery('hold'), '0');
+    assert.strictEqual(normalizeCommentStatusQuery('spam'), 'spam');
+    const any = await request(app).get(`${B}/comments?status=any&per_page=100`).set(bearer('admin'));
+    const all = await request(app).get(`${B}/comments?status=all&per_page=100`).set(bearer('admin'));
+    assert.strictEqual(all.status, 200);
+    assert.ok(any.body.length > 0, 'the comments above exist');
+    assert.deepStrictEqual(all.body.map((c: any) => c.id), any.body.map((c: any) => c.id));
+});
+
+test('a category parent must exist and can never be the category itself or one of its subcategories', async () => {
+    const mk = async (name: string, parent?: number) => request(app).post(`${B}/categories`).set(bearer('admin')).send({ name, ...(parent !== undefined ? { parent } : {}) });
+    const top = await mk('QA Top');
+    assert.strictEqual(top.status, 201, JSON.stringify(top.body));
+    const child = await mk('QA Child', top.body.id);
+    assert.strictEqual(child.status, 201, JSON.stringify(child.body));
+    assert.strictEqual(child.body.parent, top.body.id);
+    const dangling = await mk('QA Dangling', 987654);
+    assert.strictEqual(dangling.status, 400);
+    assert.strictEqual(dangling.body.code, 'rest_term_invalid_parent');
+
+    const self = await request(app).put(`${B}/categories/${top.body.id}`).set(bearer('admin')).send({ parent: top.body.id });
+    assert.strictEqual(self.status, 400);
+    const loop = await request(app).put(`${B}/categories/${top.body.id}`).set(bearer('admin')).send({ parent: child.body.id });
+    assert.strictEqual(loop.status, 400, 'moving a category under its own child would make a loop');
+    assert.strictEqual(loop.body.code, 'rest_term_invalid_parent');
+
+    const edit = await request(app).put(`${B}/categories/${child.body.id}`).set(bearer('admin')).send({ name: 'QA Child Renamed', description: 'd', parent: 0 });
+    assert.strictEqual(edit.status, 200, JSON.stringify(edit.body));
+    assert.strictEqual(edit.body.parent, 0);
+    assert.strictEqual(edit.body.description, 'd');
+});
+
+test('the OpenAPI document matches the API: Post strings, list headers and page size, removed and multisite-only routes', () => {
+    const spec = require('../config/swagger');
+    const post = spec.components.schemas.Post.properties;
+    assert.strictEqual(post.title.type, 'string');
+    assert.strictEqual(post.content.type, 'string');
+    const list = spec.paths['/posts'].get;
+    assert.ok(list.responses['200'].headers['X-WP-Total']);
+    assert.ok(list.responses['200'].headers['X-WP-TotalPages']);
+    const perPage = list.parameters.find((p: any) => p.name === 'per_page');
+    assert.strictEqual(perPage.schema.maximum, 100);
+    assert.strictEqual(spec.paths['/setup/migrate'].post.deprecated, true);
+    assert.match(spec.paths['/network/audit'].get.responses['404'].description, /multisite/);
+    assert.ok(!spec.paths['/network/status'].get.responses['404'], 'the switch routes answer on a single site');
+    for (const p of ['/healthz', '/readyz', '/metrics', '/api']) assert.strictEqual(spec.paths[p].get.servers[0].url, '/');
+});

@@ -27,3 +27,25 @@ export function commentActions(status: unknown): CommentActionKey[] {
         case "trash": return ["restore", "deletePermanently"];
     }
 }
+
+/** The record a comment answers, as the moderation list shows it. */
+export interface CommentTarget {
+    title: string;
+    slug: string;
+    type: string;
+    status: string;
+}
+
+/**
+ * Where «In response to» opens: the public page of a published post or page (new tab), otherwise the
+ * editor of a post or page. Null for anything else (a draft of another type has no page and no editor
+ * link here). The list used to point at `/post/<id>`, a route that does not exist.
+ */
+export function commentTargetLink(postId: number, target: CommentTarget): { url: string; external: boolean } | null {
+    if (target.status === "publish" && target.slug) {
+        return { url: `/${encodeURIComponent(target.slug)}`, external: true };
+    }
+    if (target.type === "post") return { url: `/admin/posts/${postId}`, external: false };
+    if (target.type === "page") return { url: `/admin/pages/${postId}`, external: false };
+    return null;
+}

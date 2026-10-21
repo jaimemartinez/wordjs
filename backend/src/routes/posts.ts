@@ -650,18 +650,29 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         id:
  *           type: integer
  *         title:
- *           type: object
- *           properties:
- *             rendered:
- *               type: string
+ *           type: string
+ *           description: The title as stored (a plain string — not a WordPress-style `{rendered}` object).
+ *         slug:
+ *           type: string
+ *         type:
+ *           type: string
  *         content:
- *           type: object
- *           properties:
- *             rendered:
- *               type: string
+ *           type: string
+ *           description: The stored HTML (a plain string). Visual-editor documents live in `meta._puck_data`.
+ *         excerpt:
+ *           type: string
  *         date:
  *           type: string
- *           format: date-time
+ *           description: Server-local time, `YYYY-MM-DD HH:MM:SS` without a zone; read `dateGmt` for the exact instant.
+ *         dateGmt:
+ *           type: string
+ *           description: The same instant in UTC, `YYYY-MM-DD HH:MM:SS`.
+ *         modified:
+ *           type: string
+ *         modifiedGmt:
+ *           type: string
+ *         commentStatus:
+ *           type: string
  *         status:
  *           type: string
  *           enum: [publish, draft, pending, private, trash]
@@ -708,8 +719,15 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *           type: integer
  *       - in: query
  *         name: per_page
+ *         description: >-
+ *           Page size, 1 to 100 (default 10). A larger value is capped at 100, a negative one raised to 1,
+ *           and 0 or a non-number means the default — the list is never unbounded. X-WP-TotalPages is
+ *           computed with the size actually used.
  *         schema:
  *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 10
  *       - in: query
  *         name: search
  *         schema:
@@ -719,7 +737,9 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         description: >-
  *           publish (default), draft, pending, private, future, or any. A caller who may not read
  *           unpublished entries of the type gets only their own; an anonymous caller asking for a
- *           non-published status gets an empty list (any lists the published entries).
+ *           non-published status gets an empty list (any lists the published entries). Any other value
+ *           is a status no row carries yet (plugins may register their own) and lists nothing — an empty
+ *           200, not a 400.
  *         schema:
  *           type: string
  *       - in: query
@@ -746,7 +766,8 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         description: >-
  *           Comma-separated category term IDs and/or slugs. A post matches when it carries ANY of
  *           them; combining this with `tags` requires BOTH taxonomies to match. Applied to the rows
- *           and to X-WP-Total alike. A malformed element answers 400 rest_invalid_param.
+ *           and to X-WP-Total alike. A malformed element answers 400 rest_invalid_param; a well-formed
+ *           id or slug that names no term (`abc`) is a valid question with no match — an empty 200.
  *         schema:
  *           type: string
  *         example: news,3
@@ -771,6 +792,15 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *     responses:
  *       200:
  *         description: A list of posts
+ *         headers:
+ *           X-WP-Total:
+ *             description: Entries matching the query across all pages.
+ *             schema:
+ *               type: integer
+ *           X-WP-TotalPages:
+ *             description: Pages at the page size used.
+ *             schema:
+ *               type: integer
  *         content:
  *           application/json:
  *             schema:

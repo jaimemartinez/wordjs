@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { commentsApi, Comment } from "@/lib/api";
+import { commentsApi, Comment, postsApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, EmptyState, DataTable, Pagination } from "@/components/ui";
 import type { DataTableAction } from "@/components/ui";
 import { sanitizeHTML } from "@/lib/sanitize";
-import { commentActions, commentState, type CommentActionKey } from "@/lib/commentModeration";
+import { commentActions, commentState, commentTargetLink, type CommentActionKey, type CommentTarget } from "@/lib/commentModeration";
 import { formatServerDateTime } from "@/lib/serverDate";
 
 type Tab = 'all' | 'pending' | 'approved' | 'spam' | 'trash';
@@ -32,6 +32,8 @@ function avatarColor(name: string): string {
 
 export default function CommentsPage() {
     const [comments, setComments] = useState<Comment[]>([]);
+    // The record each comment answers (title + where to open it), keyed by post id; filled after the list loads.
+    const [targets, setTargets] = useState<Record<number, CommentTarget | null>>({});
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<Tab>('all');
     const [page, setPage] = useState(1);
@@ -65,6 +67,7 @@ export default function CommentsPage() {
                 per_page: PER_PAGE
             });
             setComments(data);
+            void loadTargets(data);
             // A full page implies there may be more; a short page is the last one.
             setHasMore(data.length === PER_PAGE);
         } catch (err) {
@@ -72,6 +75,20 @@ export default function CommentsPage() {
         } finally {
             setLoading(false);
         }
+    };
+
+    const loadTargets = async (list: Comment[]) => {
+        const ids = [...new Set(list.map((c) => c.postId))].filter((id) => id > 0 && !(id in targets));
+        if (ids.length === 0) return;
+        const found = await Promise.all(ids.map(async (id) => {
+            try {
+                const post = await postsApi.get(id);
+                return [id, { title: post.title, slug: post.slug, type: post.type, status: post.status }] as const;
+            } catch {
+                return [id, null] as const; // deleted, or not readable by this account
+            }
+        }));
+        setTargets((prev) => ({ ...prev, ...Object.fromEntries(found) }));
     };
 
     const handleAction = async (id: number, action: Exclude<CommentActionKey, 'deletePermanently'>) => {
@@ -208,11 +225,17 @@ export default function CommentsPage() {
                                 key: "post",
                                 header: t('comments.column.inResponseTo'),
                                 className: "lg:w-48",
-                                cell: (comment) => (
-                                    <a href={`/post/${comment.postId}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center pointer-coarse:min-h-11 text-sm text-gray-600 hover:text-blue-600 hover:underline">
-                                        {t('comments.viewPost')} #{comment.postId}
-                                    </a>
-                                ),
+                                cell: (comment) => {
+                                    const target = targets[comment.postId];
+                                    const href = target ? commentTargetLink(comment.postId, target) : null;
+                                    const label = target?.title?.trim() || `${t('comments.viewPost')} #${comment.postId}`;
+                                    if (!href) return <span className="text-sm text-gray-500">{label}</span>;
+                                    return (
+                                        <a href={href.url} {...(href.external ? { target: "_blank", rel: "noopener noreferrer" } : {})} className="inline-flex items-center pointer-coarse:min-h-11 text-sm text-gray-600 hover:text-blue-600 hover:underline">
+                                            {label}
+                                        </a>
+                                    );
+                                },
                             },
                             {
                                 key: "date",

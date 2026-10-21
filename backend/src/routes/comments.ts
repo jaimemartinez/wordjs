@@ -57,6 +57,16 @@ const { isValidAddress } = require('../core/email-address');
 const { recordAudit } = require('../core/audit');
 const { publicDisplayName } = require('../core/public-identity');
 
+const COMMENT_STATUS_ALIASES: Record<string, string> = Object.assign(Object.create(null), {
+    all: 'any', approve: '1', approved: '1', hold: '0', pending: '0',
+});
+
+/** A list `?status=` value in the stored spelling (WordPress aliases folded; anything else as given). */
+function normalizeCommentStatusQuery(status: unknown): unknown {
+    if (typeof status !== 'string') return status;
+    return COMMENT_STATUS_ALIASES[status.toLowerCase()] ?? status;
+}
+
 /**
  * One audit row per moderation write, naming the most specific transition — `comment.approve`,
  * `comment.spam`, `comment.trash` — or `comment.update` for an edit that is none of those (a content
@@ -488,9 +498,13 @@ async function isDuplicateComment(draft: any, storedContent: string) {
  *           type: integer
  *       - in: query
  *         name: status
+ *         description: >-
+ *           `1` approved, `0` pending, `spam`, `trash` or `any` (moderators only; everyone else sees
+ *           approved comments). The WordPress spellings `approve`/`approved`, `hold`/`pending` and `all`
+ *           are accepted as the same values.
  *         schema:
  *           type: string
- *           enum: ['1', '0', 'spam', 'trash', 'any']
+ *           enum: ['1', '0', 'spam', 'trash', 'any', 'approve', 'approved', 'hold', 'pending', 'all']
 *       - in: query
  *         name: per_page
  *         schema:
@@ -558,7 +572,9 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // the two `commentStatus === 'any'` reads below and into the model. It is a string here because
     // requireScalarQuery refused anything else at the top of the handler — not because `status` is
     // typed one.
-    let commentStatus = status;
+    // The WordPress spellings mean the same rows (`?status=all` answered an empty list: no row is
+    // stored as 'all').
+    let commentStatus = normalizeCommentStatusQuery(status);
     if (!canModerate) {
         commentStatus = '1';
     }
@@ -1442,6 +1458,7 @@ module.exports.COMMENT_RATE_MAX_AUTH = COMMENT_RATE_MAX_AUTH;
 module.exports.COMMENT_RATE_OPTION_ANON = COMMENT_RATE_OPTION_ANON;
 module.exports.COMMENT_RATE_OPTION_AUTH = COMMENT_RATE_OPTION_AUTH;
 module.exports.COMMENT_HONEYPOT_FIELD = HONEYPOT_FIELD;
+module.exports.normalizeCommentStatusQuery = normalizeCommentStatusQuery;
 module.exports.COMMENT_PRE_INSERT_FILTER = COMMENT_PRE_INSERT_FILTER;
 module.exports.COMMENT_DUPLICATE_WINDOW_MS = DUPLICATE_WINDOW_MS;
 module.exports.COMMENT_DUPLICATE_SCAN_LIMIT = DUPLICATE_SCAN_LIMIT;

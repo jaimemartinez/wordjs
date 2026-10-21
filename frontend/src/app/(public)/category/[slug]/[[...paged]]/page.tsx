@@ -1,4 +1,6 @@
 import { contentNotFound } from "@/lib/server-api";
+import { permanentRedirect } from "next/navigation";
+import { ancestryMatches } from "@/lib/public/nestedPath";
 import type { Metadata } from "next";
 import ArchivePage, { archiveMetadata, type ArchiveSpec } from "@/lib/public/archiveRoute";
 import {
@@ -77,6 +79,27 @@ async function resolveRoute(params: Promise<RouteParams>): Promise<ArchiveSpec |
     };
 }
 
+/**
+ * `/category/parent/child` (and `…/child/page/2`) — WordPress's nested category address. A category has
+ * one address here, `/category/<its slug>`, so a path naming exactly the term's ancestry redirects there
+ * permanently; any other extra segment stays a 404.
+ */
+async function nestedCategoryTarget(params: Promise<RouteParams>): Promise<string | null> {
+    const { slug, paged } = await params;
+    if (!paged || paged.length === 0) return null;
+    const segments = [slug, ...paged];
+    const pageAt = segments.indexOf("page");
+    const path = pageAt === -1 ? segments : segments.slice(0, pageAt);
+    const pageTail = pageAt === -1 ? [] : segments.slice(pageAt);
+    if (path.length < 2 || (pageTail.length > 0 && parsePagedSegments(pageTail) === null)) return null;
+    const terms = await getTerms("category");
+    const term = await findTermBySlug("category", path[path.length - 1]);
+    if (!term) return null;
+    const byId = async (id: number) => terms.find((t) => t.id === id) || null;
+    if (!(await ancestryMatches(term, path.slice(0, -1), byId))) return null;
+    return `/category/${encodeURIComponent(term.slug)}${pageTail.length ? `/${pageTail.join("/")}` : ""}`;
+}
+
 export async function generateMetadata({ params }: { params: Promise<RouteParams> }): Promise<Metadata> {
     const spec = await resolveRoute(params);
     if (!spec) return { title: "Not found", robots: { index: false } };
@@ -85,6 +108,10 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 
 export default async function CategoryArchive({ params }: { params: Promise<RouteParams> }) {
     const spec = await resolveRoute(params);
-    if (!spec) contentNotFound();
+    if (!spec) {
+        const nested = await nestedCategoryTarget(params);
+        if (nested) permanentRedirect(nested);
+        contentNotFound();
+    }
     return <ArchivePage {...spec} />;
 }

@@ -139,6 +139,9 @@ export default function AgentsPage() {
     const [boundUser, setBoundUser] = useState("");
     const [expiry, setExpiry] = useState("");
     const [creating, setCreating] = useState(false);
+    // The last refusal of "Create connection", kept on screen under the button: a toast alone was easy to
+    // miss (a session opened at a secondary address is refused with 403 and the form looked inert).
+    const [createError, setCreateError] = useState<string | null>(null);
     const [reveal, setReveal] = useState<{ token: string; url: string; fresh: boolean } | null>(null);
 
     const [reviewing, setReviewing] = useState<number | null>(null);
@@ -191,6 +194,7 @@ export default function AgentsPage() {
         e.preventDefault();
         if (requested.size === 0) { addToast(t("agents.requestRequired"), "error"); return; }
         setCreating(true);
+        setCreateError(null);
         try {
             const res = await agentsApi.create({
                 name: name.trim() || "AI agent",
@@ -209,7 +213,11 @@ export default function AgentsPage() {
             if (canGrant) startReview(res.connection);
         } catch (e: any) {
             if (createStepUp.absorb(e)) addToast(e?.code === "rest_mfa_step_up_required" ? t("agents.stepUpHelp") : t("stepUp.passwordHelp"), "info");
-            else addToast(e?.message || t("agents.createFailed"), "error");
+            else {
+                const reason = e?.message || t("agents.createFailed");
+                setCreateError(reason);
+                addToast(reason, "error");
+            }
         } finally {
             setCreating(false);
         }
@@ -321,7 +329,7 @@ export default function AgentsPage() {
                                     const implied = !requested.has(c) && withImplied(requested).has(c);
                                     return (
                                         <label key={c} className={`flex items-start gap-3 rounded-xl border px-3 py-2 cursor-pointer transition-colors ${requested.has(c) || implied ? "border-blue-200 bg-blue-50/40" : "border-gray-100 hover:bg-gray-50"}`}>
-                                            <input type="checkbox" className="mt-1" checked={requested.has(c) || implied} disabled={implied} onChange={() => setRequested(toggle(requested, c))} />
+                                            <input type="checkbox" className="mt-1" aria-label={t(`agents.cap.${capKey(c)}`)} checked={requested.has(c) || implied} disabled={implied} onChange={() => setRequested(toggle(requested, c))} />
                                             <span>
                                                 <span className="text-xs font-bold text-gray-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                                                     <i className={`fa-solid ${CAP_ICONS[c]} text-gray-300 w-4 text-center`}></i>{t(`agents.cap.${capKey(c)}`)}
@@ -360,6 +368,12 @@ export default function AgentsPage() {
                         </div>
                         <MfaStepUpFields stepUp={createStepUp} codeHelp={t("agents.stepUpHelp")} />
                         <Button type="submit" icon="fa-plus" className="w-full" loading={creating}>{t("agents.create")}</Button>
+                        {createError && (
+                            <p role="alert" className="text-xs text-red-600 leading-relaxed flex items-start gap-2">
+                                <i className="fa-solid fa-circle-exclamation mt-0.5 shrink-0" aria-hidden="true"></i>
+                                <span>{createError}</span>
+                            </p>
+                        )}
                     </form>
                 </Card>
 
@@ -480,7 +494,7 @@ export default function AgentsPage() {
                                                 const implied = !draftGrant.has(cap) && withImplied(draftGrant).has(cap);
                                                 return (
                                                     <label key={cap} className="flex items-center gap-2 text-xs font-bold text-gray-700 bg-white rounded-xl border border-gray-100 px-3 py-2 cursor-pointer">
-                                                        <input type="checkbox" checked={draftGrant.has(cap) || implied} disabled={implied} onChange={() => setDraftGrant(toggle(draftGrant, cap))} />
+                                                        <input type="checkbox" aria-label={t(`agents.cap.${capKey(cap)}`)} checked={draftGrant.has(cap) || implied} disabled={implied} onChange={() => setDraftGrant(toggle(draftGrant, cap))} />
                                                         <i className={`fa-solid ${CAP_ICONS[cap]} text-gray-300 w-4 text-center`}></i>
                                                         {t(`agents.cap.${capKey(cap)}`)}
                                                     </label>

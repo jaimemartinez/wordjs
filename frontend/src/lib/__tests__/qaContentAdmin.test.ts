@@ -12,7 +12,7 @@
  *   • optionFlags / errorText / signupRoles / symbols / editor identity seeding.
  */
 import { describe, it, expect } from "vitest";
-import { commentActions, commentState } from "@/lib/commentModeration";
+import { commentActions, commentState, commentTargetLink } from "@/lib/commentModeration";
 import { parseServerDate, formatServerDateTime } from "@/lib/serverDate";
 import { buildDuplicatePayload, retitleEditorDocument } from "@/lib/duplicateContent";
 import { uploadSequentially } from "@/lib/uploadQueue";
@@ -23,6 +23,8 @@ import { isSignupSafeRole } from "@/lib/signupRoles";
 import { symbolTypeState, symbolSlug, SYMBOL_TYPE_DEFINITION } from "@/lib/symbols";
 import { seedRecordIdentity, slugFollowsTitle } from "@/lib/editorRootFields";
 import { canDeleteRole } from "@/app/admin/users/roles/PluginRole";
+import { ancestryMatches } from "@/lib/public/nestedPath";
+import { orderAsTree, selfAndDescendants } from "@/lib/categoryTree";
 
 describe("comment moderation actions", () => {
     it("REGRESSION: the API's status strings produce Approve / Unapprove", () => {
@@ -37,6 +39,15 @@ describe("comment moderation actions", () => {
     it("the Spam tab is no longer a dead end; the trash restores or deletes", () => {
         expect(commentActions("spam")).toEqual(["notSpam", "deletePermanently"]);
         expect(commentActions("trash")).toEqual(["restore", "deletePermanently"]);
+    });
+});
+
+describe("comment «In response to» link", () => {
+    it("opens the public page of a published record and the editor otherwise — never /post/<id>", () => {
+        expect(commentTargetLink(7, { title: "Hola", slug: "hola-mundo", type: "post", status: "publish" })).toEqual({ url: "/hola-mundo", external: true });
+        expect(commentTargetLink(7, { title: "D", slug: "d", type: "post", status: "draft" })).toEqual({ url: "/admin/posts/7", external: false });
+        expect(commentTargetLink(9, { title: "P", slug: "", type: "page", status: "private" })).toEqual({ url: "/admin/pages/9", external: false });
+        expect(commentTargetLink(3, { title: "X", slug: "x", type: "event", status: "draft" })).toBeNull();
     });
 });
 
@@ -253,5 +264,62 @@ describe("avatar initial", () => {
         expect(avatarInitial("ñandú")).toBe("Ñ");
         expect(avatarInitial("  ", "7even")).toBe("7");
         expect(avatarInitial(null, undefined)).toBe("?");
+    });
+});
+
+describe("WordPress nested addresses (pages and categories)", () => {
+    // level-1 (1) > level-2 (2) > level-3 (3); other (9) is top level.
+    const nodes = new Map([
+        [1, { id: 1, slug: "level-1", parent: 0 }],
+        [2, { id: 2, slug: "level-2", parent: 1 }],
+        [3, { id: 3, slug: "level-3", parent: 2 }],
+        [9, { id: 9, slug: "other", parent: 0 }],
+    ]);
+    const byId = async (id: number) => nodes.get(id) ?? null;
+
+    it("accepts exactly the ancestry, outermost first", async () => {
+        expect(await ancestryMatches(nodes.get(3)!, ["level-1", "level-2"], byId)).toBe(true);
+        expect(await ancestryMatches(nodes.get(2)!, ["level-1"], byId)).toBe(true);
+        expect(await ancestryMatches(nodes.get(2)!, ["LEVEL-1"], byId)).toBe(true);
+    });
+
+    it("refuses any other prefix — no duplicate of a page under /anything/<page>", async () => {
+        expect(await ancestryMatches(nodes.get(2)!, ["x"], byId)).toBe(false);
+        expect(await ancestryMatches(nodes.get(3)!, ["level-2"], byId)).toBe(false); // a suffix of the ancestry
+        expect(await ancestryMatches(nodes.get(3)!, ["other", "level-1", "level-2"], byId)).toBe(false);
+        expect(await ancestryMatches(nodes.get(9)!, ["level-1"], byId)).toBe(false); // top-level entry
+        expect(await ancestryMatches(nodes.get(2)!, [], byId)).toBe(false);
+    });
+
+    it("cannot loop on a parent cycle in stored data", async () => {
+        const loop = new Map([[5, { id: 5, slug: "a", parent: 6 }], [6, { id: 6, slug: "b", parent: 5 }]]);
+        expect(await ancestryMatches(loop.get(5)!, ["a", "b"], async (id) => loop.get(id) ?? null)).toBe(false);
+    });
+});
+
+describe("category tree in the admin", () => {
+    const cats = [
+        { id: 1, name: "Parent", parent: 0 },
+        { id: 2, name: "Child B", parent: 1 },
+        { id: 3, name: "child a", parent: 1 },
+        { id: 4, name: "Grandchild", parent: 3 },
+        { id: 5, name: "Alpha", parent: 0 },
+        { id: 6, name: "Orphan", parent: 99 },
+    ];
+
+    it("lists every category after its parent, indented, children alphabetical", () => {
+        expect(orderAsTree(cats).map(({ category, depth }) => `${depth}:${category.name}`)).toEqual([
+            "0:Alpha", "0:Orphan", "0:Parent", "1:child a", "2:Grandchild", "1:Child B",
+        ]);
+    });
+
+    it("never offers a category or its descendants as its own parent", () => {
+        expect([...selfAndDescendants(cats, 1)].sort()).toEqual([1, 2, 3, 4]);
+        expect([...selfAndDescendants(cats, 3)].sort()).toEqual([3, 4]);
+    });
+
+    it("shows the members of a stored parent loop instead of losing them", () => {
+        const loop = [{ id: 7, name: "X", parent: 8 }, { id: 8, name: "Y", parent: 7 }];
+        expect(orderAsTree(loop).map(({ category }) => category.id).sort()).toEqual([7, 8]);
     });
 });
