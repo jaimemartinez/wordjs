@@ -84,3 +84,23 @@ export function membersGateStrings(settings: Record<string, unknown> | null | un
         checking: t("public.members.checking", lang),
     };
 }
+
+/** The 404 page's own texts (components/NotFoundState). */
+export interface NotFoundStrings {
+    title: string;
+    message: string;
+    back: string;
+}
+
+export function notFoundStringsFor(lang: Language): NotFoundStrings {
+    return {
+        title: t("public.notFound.title", lang),
+        message: t("public.notFound.message", lang),
+        back: t("public.backHome", lang),
+    };
+}
+
+/** 404 texts for a site, from its settings (`WPLANG`; nothing configured → English). */
+export function notFoundStrings(settings: Record<string, unknown> | null | undefined): NotFoundStrings {
+    return notFoundStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
+}

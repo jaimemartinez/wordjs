@@ -11,7 +11,7 @@ import type React from "react";
 import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import { publicUiStrings, membersGateStrings } from "@/lib/public/uiStrings";
+import { publicUiStrings, membersGateStrings, notFoundStrings } from "@/lib/public/uiStrings";
 import MembersOnlyGate from "./MembersOnlyGate";
 import { siteDateLanguage } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
@@ -200,7 +200,7 @@ export default function PostContent({ post, settings, category, showComments }: 
 
             <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)] flex justify-between items-center px-4">
                 <Link href="/" className="text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] font-medium flex items-center gap-2">
-                    <i className="fa-solid fa-arrow-left"></i> Back to Home
+                    <i className="fa-solid fa-arrow-left" aria-hidden="true"></i> {notFoundStrings(settings).back}
                 </Link>
             </div>
         </div>

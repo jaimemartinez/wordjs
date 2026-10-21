@@ -1285,7 +1285,7 @@ export default function VersoEditor({
                                             <MSym name="dashboard_customize" size={18} /> {trStr("Plantillas", language)}
                                         </button>
                                         <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setCommentsOpen(false); setA11yOpen(false); setMediaOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
-                                            <MSym name="perm_media" size={18} /> {trStr("Biblioteca de medios", language)}
+                                            <MSym name="image" size={18} /> {trStr("Biblioteca de medios", language)}
                                         </button>
                                         {pageId && (
                                         <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setA11yOpen(false); setCommentsOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
@@ -1298,7 +1298,7 @@ export default function VersoEditor({
                                         </button>
                                         )}
                                         <button type="button" onClick={() => { setMoreOpen(false); setShowRevisions(false); setCommentsOpen(false); setA11yOpen(true); runAudit(); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
-                                            <MSym name="accessibility_new" size={18} /> {trStr("Accesibilidad", language)}
+                                            <MSym name="check_circle" size={18} /> {trStr("Accesibilidad", language)}
                                         </button>
                                         <button type="button" onClick={() => { setMoreOpen(false); setCmdkOpen(true); }} className="min-h-11 px-3 rounded-lg flex items-center gap-2 text-left text-[13px] text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)]">
                                             <MSym name="search" size={18} /> {trStr("Buscar acciones y bloques", language)}

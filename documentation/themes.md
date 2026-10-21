@@ -1266,7 +1266,8 @@ a route's own slug and post type, and nothing else.
 
 | Route | File | Tried in order |
 | --- | --- | --- |
-| Home (blog roll or static front page) | `page.tsx` | `home.json` → `archive.json` → `page.json` |
+| Home — the blog roll (no static front page set) | `page.tsx` | `home.json` → `archive.json` → `page.json` |
+| Home — a static front page (Settings → Reading) | `page.tsx` | `front-page.json` → `page-{slug}.json` → `page.json` |
 | Single post, `/{slug}` and `/{category}/{slug}` | `[slug]/page.tsx`, `[slug]/[postSlug]/page.tsx` | `single-{post_type}-{slug}.json` → `single-{post_type}.json` → `single.json` → `page.json` |
 | Page, `/pages/{slug}` | `pages/[slug]/page.tsx` | `page-{slug}.json` → `page.json` |
 | Search | `search/page.tsx` | `search.json` → `archive.json` → `page.json` |
@@ -1276,7 +1277,7 @@ a route's own slug and post type, and nothing else.
 | Date archive, `/archive/{yyyy}[/{mm}]` | `archive/[...segments]/page.tsx` | `date.json` → `archive.json` → `page.json` |
 | **404** | `not-found.tsx` | `404.json` → `page.json` |
 
-`archive.json` is the shared fallback for **home, search and all four archives** — ship it when you
+`archive.json` is the shared fallback for **the blog roll, search and all four archives** — ship it when you
 want every listing on the site to look alike without touching single posts and pages, and add
 `category.json` / `tag.json` / `author.json` / `date.json` only where one of them must differ.
 

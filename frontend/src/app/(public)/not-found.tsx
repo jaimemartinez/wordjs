@@ -1,5 +1,7 @@
 import NotFoundState from "@/components/NotFoundState";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
+import { notFoundStrings } from "@/lib/public/uiStrings";
+import { getSettings } from "@/lib/server-api";
 
 /**
  * Not-found boundary for the public site. Rendered (with a real HTTP 404 status) whenever a public
@@ -17,12 +19,12 @@ import ThemeTemplate from "@/components/content/ThemeTemplate";
  *     no 404.json and no page.json renders exactly what this file rendered before.
  */
 export default async function PublicNotFound() {
+    // The texts follow the SITE language (WPLANG, like <html lang>); getSettings is cache()d — the
+    // layout already fetched it for this request.
+    const strings = notFoundStrings(await getSettings().catch(() => null));
     return (
         <ThemeTemplate kind="notFound">
-            <NotFoundState
-                title="Contenido no encontrado"
-                message="El contenido que buscas no existe o ha sido movido."
-            />
+            <NotFoundState title={strings.title} message={strings.message} backLabel={strings.back} />
         </ThemeTemplate>
     );
 }

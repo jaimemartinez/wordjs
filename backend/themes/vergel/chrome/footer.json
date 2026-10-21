@@ -9,7 +9,7 @@
         "wrap": true,
         "items": [
           { "type": "ChromeSocials", "props": { "source": "settings" } },
-          { "type": "ChromeText", "props": { "text": "Cultivado con calma en el vergel." } }
+          { "type": "ChromeText", "props": { "text": "Grown slowly, in the orchard." } }
         ]
       }
     }

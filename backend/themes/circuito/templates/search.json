@@ -10,8 +10,8 @@
           {
             "type": "SearchBar",
             "props": {
-              "placeholder": "> refinar busqueda_",
-              "buttonText": "EJECUTAR",
+              "placeholder": "> refine_",
+              "buttonText": "RUN",
               "align": "center",
               "width": "min(36rem, 100%)"
             }

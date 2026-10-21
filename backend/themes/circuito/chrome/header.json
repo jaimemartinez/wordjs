@@ -15,7 +15,7 @@
               "gap": "md",
               "items": [
                 { "type": "ChromeNav", "props": { "location": "header", "orientation": "horizontal" } },
-                { "type": "ChromeButton", "props": { "label": "CONECTAR", "href": "/pages/contacto", "variant": "primary" } }
+                { "type": "ChromeButton", "props": { "label": "SEARCH", "href": "/search", "variant": "primary" } }
               ]
             }
           }

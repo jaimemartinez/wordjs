@@ -7,7 +7,7 @@
             "props": {
                 "maxWidth": "40rem",
                 "items": [
-                    { "type": "SearchBar", "props": { "align": "center", "width": "100%", "placeholder": "Buscar en la gaceta…", "buttonText": "Buscar" } }
+                    { "type": "SearchBar", "props": { "align": "center", "width": "100%", "placeholder": "Search the gazette…", "buttonText": "Search" } }
                 ]
             }
         },

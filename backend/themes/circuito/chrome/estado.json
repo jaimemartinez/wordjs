@@ -8,7 +8,7 @@
         "gap": "sm",
         "wrap": true,
         "items": [
-          { "type": "ChromeText", "props": { "text": "// sistema: en linea · circuito v1" } },
+          { "type": "ChromeText", "props": { "text": "// system: online · circuito v1" } },
           { "type": "ChromeSocials", "props": { "source": "settings" } }
         ]
       }

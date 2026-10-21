@@ -28,19 +28,37 @@
 
 /* ── Palette: the default theme's indigo → violet, plus two accents for gradients ────────────────── */
 const C = {
-    ink: '#0b1120',
-    text: '#1e293b',
-    muted: '#64748b',
     indigo: '#4f46e5',
     violet: '#7c3aed',
     purple: '#a855f7',
     pink: '#ec4899',
     cyan: '#06b6d4',
-    soft: '#f1f2fb',
-    line: '#e6e8f4',
     night: '#0b1120',
     nightText: '#f8f9ff',
     nightMuted: '#a5b4fc',
+};
+
+/* ── Theme tokens for the page's LIGHT surfaces and the text on them ─────────────────────────────────
+ * Every value below is exactly what the default theme defines for that token (#f8f9ff, #ffffff,
+ * #f1f2fb, #1e293b, #64748b, #e6e8f4, #4f46e5, #7c3aed), so under the default theme the page is
+ * unchanged but for the hero's corner tint (#ede9fe → #edecfc). Hardcoded, they made the
+ * page a white island under any other theme while its headings, forms, pricing table and FAQ still
+ * took that theme's colours: under the dark Circuito theme every heading came out lavender on white
+ * (1.46:1). Through the tokens each band follows the active theme's surfaces and text. The coloured
+ * bands (the night scene, the gradient ribbon and call to action) keep explicit colours: they are
+ * the same in every theme on purpose, and their text is set explicitly too. */
+const T = {
+    canvas: 'var(--wjs-bg-canvas)',
+    surface: 'var(--wjs-bg-surface)',
+    /** The hero's lavender corner: #edecfc in the default theme (it was #ede9fe). */
+    tint: 'color-mix(in srgb, var(--wjs-color-primary) 10%, var(--wjs-bg-surface))',
+    soft: 'var(--wjs-bg-muted)',
+    text: 'var(--wjs-color-text-main)',
+    muted: 'var(--wjs-color-text-muted)',
+    line: 'var(--wjs-border-subtle)',
+    /** Accents on those surfaces: #4f46e5 and #7c3aed in the default theme. */
+    accent: 'var(--wjs-color-primary)',
+    accent2: 'var(--wjs-color-link-hover)',
 };
 
 /* ── Motion (Verso interaction engine) ────────────────────────────────────────────────────────────── */
@@ -228,7 +246,7 @@ const icon = (name: string) => `<i class="fa-solid ${name}" aria-hidden="true"><
 const eyebrow = (key: string, text: string, opts: { color?: string; align?: string; ix?: any } = {}) =>
     B('Text', key, {
         content: p(`<strong>${text}</strong>`),
-        color: opts.color || C.indigo,
+        color: opts.color || T.accent,
         size: '13',
         look: { align: opts.align || 'center', letterSpacing: 3, transform: 'uppercase', mb: 14 },
         ...(opts.ix ? { ix: opts.ix } : {}),
@@ -248,7 +266,7 @@ const sectionTitle = (key: string, title: string, opts: { align?: string; anchor
 const lead = (key: string, html: string, opts: { align?: string; mb?: number; delay?: 0 | 120 | 240 } = {}) =>
     B('Text', key, {
         content: p(html),
-        color: C.muted,
+        color: T.muted,
         size: 'clamp(17px, 1.5vw, 19px)',
         leading: '1.7',
         measure: '640',
@@ -259,9 +277,10 @@ const lead = (key: string, html: string, opts: { align?: string; mb?: number; de
 
 const chip = (key: string, html: string) => B('Text', key, {
     content: p(html),
-    color: C.muted,
+    color: T.muted,
     size: '14',
-    look: { bg: 'color', bgColor: 'rgba(255,255,255,.75)', radius: 999, padY: 8, padX: 16, borderWidth: 1, borderStyle: 'solid', borderColor: C.line },
+    // rgba(255,255,255,.75) in the default theme.
+    look: { bg: 'color', bgColor: 'color-mix(in srgb, var(--wjs-bg-surface) 75%, transparent)', radius: 999, padY: 8, padX: 16, borderWidth: 1, borderStyle: 'solid', borderColor: T.line },
 });
 
 /* ── 1 · HERO ─────────────────────────────────────────────────────────────────────────────────────── */
@@ -269,7 +288,7 @@ function hero(siteName: string): Block {
     return B('Section', 'hero', {
         maxWidth: '100%',
         pad: '0',
-        look: { bg: 'gradient', gradFrom: '#f8f9ff', gradVia: '#ffffff', gradTo: '#ede9fe', gradAngle: 160, gradAnimate: true },
+        look: { bg: 'gradient', gradFrom: T.canvas, gradVia: T.surface, gradTo: T.tint, gradAngle: 160, gradAnimate: true },
         css: { minHeight: 'calc(100svh - 80px)', display: 'flex', alignItems: 'center', overflow: 'hidden' },
         children: [
             { type: 'ParticleField', props: { id: 'showcase-ParticleField-hero', count: 50, color: C.purple, speed: 'slow', linkLines: 'true', linkDistance: 120, pointer: 'true', css: {} } },
@@ -302,7 +321,7 @@ function hero(siteName: string): Block {
                     }),
                     B('Text', 'hero-lead', {
                         content: p('This whole page was built in the <strong>WordJS visual editor</strong> — without a single line of code. Every heading, card, animation and scroll effect you see is a block you can open, change or delete.'),
-                        color: C.muted,
+                        color: T.muted,
                         size: 'clamp(17px, 1.6vw, 20px)',
                         leading: '1.6',
                         measure: '660',
@@ -405,7 +424,7 @@ const card = (key: string, i: number, iconName: string, title: string, text: str
     pad: 'clamp(26px, 3vw, 34px) clamp(22px, 2.6vw, 30px)',
     look: {
         bg: accent ? 'gradient' : 'color',
-        bgColor: '#ffffff',
+        bgColor: T.surface,
         gradFrom: C.indigo,
         gradVia: C.violet,
         gradTo: C.purple,
@@ -414,24 +433,24 @@ const card = (key: string, i: number, iconName: string, title: string, text: str
         radius: 26,
         borderWidth: accent ? 0 : 1,
         borderStyle: 'solid',
-        borderColor: C.line,
+        borderColor: T.line,
         shadow: accent ? 'lg' : 'soft',
         hover: 'lift',
         hoverAmount: 6,
-        color: accent ? '#ffffff' : C.text,
+        color: accent ? '#ffffff' : T.text,
     },
     ix: ixFlipView(i),
     children: [
         B('Text', `${key}-icon`, {
             content: p(icon(iconName)),
-            color: accent ? '#ffffff' : C.indigo,
+            color: accent ? '#ffffff' : T.accent,
             size: '22',
             leading: '1',
-            css: { width: '52px', height: '52px', borderRadius: '16px', backgroundColor: accent ? 'rgba(255,255,255,.18)' : C.soft, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+            css: { width: '52px', height: '52px', borderRadius: '16px', backgroundColor: accent ? 'rgba(255,255,255,.18)' : T.soft, display: 'flex', alignItems: 'center', justifyContent: 'center' },
             look: { mb: 20 },
         }),
         B('Heading', `${key}-title`, { title, level: 'h3', size: '21', color: accent ? '#ffffff' : '', look: { mb: 10 } }),
-        B('Text', `${key}-text`, { content: p(text), color: accent ? 'rgba(255,255,255,.9)' : C.muted, size: '16', leading: '1.65' }),
+        B('Text', `${key}-text`, { content: p(text), color: accent ? 'rgba(255,255,255,.9)' : T.muted, size: '16', leading: '1.65' }),
     ],
 });
 
@@ -448,7 +467,7 @@ const FEATURES: Array<[string, string, string]> = [
 const features = B('Section', 'features', {
     maxWidth: '100%',
     pad: 'clamp(72px, 9vw, 120px) 20px',
-    bg: '#ffffff',
+    bg: T.surface,
     children: [
         B('Section', 'features-inner', {
             maxWidth: '1240px',
@@ -539,7 +558,7 @@ const USE_CASES: Array<[string, string, string, string]> = [
 const slide = (n: number, [ic, title, text, uses]: [string, string, string, string]) => B('Section', `slide-${n}`, {
     maxWidth: '100%',
     pad: 'clamp(26px, 2.8vw, 34px) clamp(22px, 2.4vw, 28px)',
-    look: { bg: 'color', bgColor: '#ffffff', radius: 26, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, shadow: 'soft', hover: 'lift', hoverAmount: 6 },
+    look: { bg: 'color', bgColor: T.surface, radius: 26, borderWidth: 1, borderStyle: 'solid', borderColor: T.line, shadow: 'soft', hover: 'lift', hoverAmount: 6 },
     ix: ixFlipView(n - 1),
     children: [
         B('Text', `slide-${n}-icon`, {
@@ -552,14 +571,14 @@ const slide = (n: number, [ic, title, text, uses]: [string, string, string, stri
             look: { mb: 20 },
         }),
         B('Heading', `slide-${n}-title`, { title, level: 'h3', size: '22', look: { mb: 10 } }),
-        B('Text', `slide-${n}-text`, { content: p(text), color: C.muted, size: '16', leading: '1.65', look: { mb: 16 } }),
-        B('Text', `slide-${n}-uses`, { content: p(`<strong>${uses}</strong>`), color: C.violet, size: '13', leading: '1.5' }),
+        B('Text', `slide-${n}-text`, { content: p(text), color: T.muted, size: '16', leading: '1.65', look: { mb: 16 } }),
+        B('Text', `slide-${n}-uses`, { content: p(`<strong>${uses}</strong>`), color: T.accent2, size: '13', leading: '1.5' }),
     ],
 });
 const showcase = B('Section', 'showcase', {
     maxWidth: '100%',
     pad: 'clamp(80px, 9vw, 130px) 20px',
-    bg: C.soft,
+    bg: T.soft,
     children: [
         B('Section', 'showcase-inner', {
             maxWidth: '1240px',
@@ -578,7 +597,7 @@ const showcase = B('Section', 'showcase', {
                 }),
                 B('Text', 'showcase-swipe', {
                     content: p('Swipe to see more &nbsp;→'),
-                    color: C.muted,
+                    color: T.muted,
                     size: '14',
                     hide: { desktop: true },
                     look: { align: 'center', mt: 6 },
@@ -673,7 +692,7 @@ const tabs = B('Section', 'tabs', {
 const pricing = B('Section', 'pricing', {
     maxWidth: '100%',
     pad: 'clamp(80px, 9vw, 130px) 20px',
-    bg: C.soft,
+    bg: T.soft,
     children: [
         B('Section', 'pricing-inner', {
             maxWidth: '1140px',
@@ -733,11 +752,11 @@ const contact = B('Section', 'contact', {
                 B('Section', 'contact-card', {
                     maxWidth: '100%',
                     pad: 'clamp(28px, 3.4vw, 40px)',
-                    look: { bg: 'color', bgColor: '#ffffff', radius: 28, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, shadow: 'lg' },
+                    look: { bg: 'color', bgColor: T.surface, radius: 28, borderWidth: 1, borderStyle: 'solid', borderColor: T.line, shadow: 'lg' },
                     ix: ixFlipView(1),
                     children: [
                         B('Heading', 'contact-title', { title: 'Get in touch', level: 'h3', elementId: 'contact', size: '28', look: { mb: 8 } }),
-                        B('Text', 'contact-text', { content: p('A real form: submissions arrive in <strong>Admin → Forms</strong>.'), color: C.muted, size: '15', look: { mb: 22 } }),
+                        B('Text', 'contact-text', { content: p('A real form: submissions arrive in <strong>Admin → Forms</strong>.'), color: T.muted, size: '15', look: { mb: 22 } }),
                         B('Form', 'contact-form', {
                             formName: 'Contact',
                             fields: [
@@ -787,8 +806,8 @@ const final = B('Section', 'final', {
             ],
             align: 'center',
             size: '50',
-            bg: C.soft,
-            color: C.indigo,
+            bg: T.soft,
+            color: T.accent,
             hoverBg: '#e0e7ff',
             gap: '14',
             look: { mt: 40 },

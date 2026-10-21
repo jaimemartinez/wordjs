@@ -77,11 +77,11 @@ export default function ServerSettingsPanel() {
 
     if (!data) return <p className="text-sm text-gray-500">{message?.text || t("loading")}</p>;
 
-    const input = "w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl outline-none text-gray-800 dark:text-gray-200";
+    const input = "w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-gray-800";
     return (
         <form onSubmit={save} className="space-y-6" data-testid="server-settings">
             <div className="space-y-2">
-                <label htmlFor="server-trust" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t("server.trust.label")}</label>
+                <label htmlFor="server-trust" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t("server.trust.label")}</label>
                 <select id="server-trust" value={choice} onChange={(e) => setChoice(e.target.value)} className={input}>
                     {PRESETS.map((p) => <option key={p.value} value={p.value}>{t(p.key)}</option>)}
                 </select>
@@ -93,7 +93,7 @@ export default function ServerSettingsPanel() {
                 {data.trustProxy.fromEnvironment && <p className="text-xs text-amber-700">{t("server.trust.env")}</p>}
             </div>
             <div className="space-y-2">
-                <label htmlFor="server-log-level" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t("server.log.label")}</label>
+                <label htmlFor="server-log-level" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t("server.log.label")}</label>
                 <select id="server-log-level" value={level} onChange={(e) => setLevel(e.target.value)} className={input} disabled={data.logLevel.fromEnvironment}>
                     <option value="">{t("server.log.default")}</option>
                     <option value="error">error</option>
@@ -104,7 +104,7 @@ export default function ServerSettingsPanel() {
                 <p className="text-xs text-gray-500">{data.logLevel.fromEnvironment ? t("server.log.env").replace("{level}", data.logLevel.inForce) : t("server.log.help")}</p>
             </div>
             <div className="space-y-2 md:w-80">
-                <label htmlFor="server-password" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t("network.currentPassword")}</label>
+                <label htmlFor="server-password" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t("network.currentPassword")}</label>
                 <input id="server-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={input} required />
             </div>
             {message && (

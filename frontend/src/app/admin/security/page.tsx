@@ -23,7 +23,7 @@ export default function SecurityPage() {
     }, []);
 
     return (
-        <div className="relative min-h-full w-full overflow-hidden bg-gray-50 dark:bg-gray-900 transition-colors duration-500">
+        <div className="relative min-h-full w-full overflow-hidden bg-gray-50 transition-colors duration-500">
             {/* Animated Background */}
             <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
                 <div className="absolute top-[-10%] right-[10%] w-96 h-96 bg-blue-300/30 rounded-full mix-blend-multiply filter blur-3xl opacity-60 animate-blob"></div>
@@ -34,13 +34,13 @@ export default function SecurityPage() {
             <div className="relative z-10 w-full max-w-5xl mx-auto px-6 py-10 h-full overflow-y-auto custom-scrollbar">
 
                 <div className="mb-10 text-center md:text-left animate-in slide-in-bottom fade-in duration-700">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white mb-3 font-oswald tracking-wide flex items-center justify-center md:justify-start gap-4">
-                        <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-2xl shadow-sm">
-                            <i className="fa-solid fa-shield-halved text-blue-600 dark:text-blue-400"></i>
+                    <h1 className="text-4xl font-bold text-gray-800 mb-3 font-oswald tracking-wide flex items-center justify-center md:justify-start gap-4">
+                        <div className="p-3 bg-blue-100 rounded-2xl shadow-sm">
+                            <i className="fa-solid fa-shield-halved text-blue-600"></i>
                         </div>
                         {t('security.title')}
                     </h1>
-                    <p className="text-gray-600 dark:text-gray-300 text-lg max-w-2xl">
+                    <p className="text-gray-600 text-lg max-w-2xl">
                         {t('security.intro')}
                     </p>
                 </div>
@@ -52,21 +52,21 @@ export default function SecurityPage() {
                     {/* SSL / HTTPS Settings Section */}
                     <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-blue-500 transition-all hover:shadow-blue-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
-                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
                                 <i className="fa-solid fa-lock text-emerald-500 text-xl"></i>
                                 {t('security.ssl.title')}
                             </h2>
                         </div>
-                        <div className="p-8 md:p-10 space-y-8 bg-white/40 dark:bg-black/20">
+                        <div className="p-8 md:p-10 space-y-8 bg-white/40">
 
-                            <div className="bg-blue-50/50 dark:bg-blue-900/10 rounded-2xl border border-blue-100 dark:border-blue-800 p-8 shadow-inner">
+                            <div className="bg-blue-50/50 rounded-2xl border border-blue-100 p-8 shadow-inner">
                                 <div className="flex items-start gap-4 mb-6">
-                                    <div className="bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-200 w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+                                    <div className="bg-blue-100 text-blue-600 w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
                                         <i className="fa-solid fa-certificate"></i>
                                     </div>
                                     <div>
-                                        <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-1">{t('security.certManagement.title')}</h3>
-                                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                                        <h3 className="text-lg font-bold text-gray-900 mb-1">{t('security.certManagement.title')}</h3>
+                                        <p className="text-sm text-gray-600">
                                             {t('security.certManagement.description')}
                                         </p>
                                     </div>
@@ -81,12 +81,12 @@ export default function SecurityPage() {
                     {/* Auto-Renewal (ACME) Section */}
                     <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-amber-500 transition-all hover:shadow-amber-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
-                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
                                 <i className="fa-solid fa-arrows-rotate text-amber-500 text-xl"></i>
                                 {t('security.autoRenewal.title')}
                             </h2>
                         </div>
-                        <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
+                        <div className="p-8 md:p-10 bg-white/40">
                             <AutoRenewalPanel adminEmail={adminEmail} />
                         </div>
                     </div>
@@ -94,12 +94,12 @@ export default function SecurityPage() {
                     {/* Gateway Configuration */}
                     <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-indigo-500 transition-all hover:shadow-indigo-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
-                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
                                 <i className="fa-solid fa-server text-indigo-500 text-xl"></i>
                                 {t('security.gateway.title')}
                             </h2>
                         </div>
-                        <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
+                        <div className="p-8 md:p-10 bg-white/40">
                             <GatewayConfigForm />
                         </div>
                     </div>
@@ -107,12 +107,12 @@ export default function SecurityPage() {
                     {/* Server: reverse-proxy trust and log level, from the panel instead of the config file */}
                     <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-sky-500 transition-all hover:shadow-sky-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
-                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
                                 <i className="fa-solid fa-network-wired text-sky-500 text-xl"></i>
                                 {t('server.title')}
                             </h2>
                         </div>
-                        <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
+                        <div className="p-8 md:p-10 bg-white/40">
                             <ServerSettingsPanel />
                         </div>
                     </div>
@@ -122,12 +122,12 @@ export default function SecurityPage() {
                     {/* Two-Factor Enforcement Policy */}
                     <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-emerald-500 transition-all hover:shadow-emerald-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
-                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
                                 <i className="fa-solid fa-shield-halved text-emerald-500 text-xl"></i>
                                 {t('security.mfa.title')}
                             </h2>
                         </div>
-                        <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
+                        <div className="p-8 md:p-10 bg-white/40">
                             <MfaPolicyForm />
                         </div>
                     </div>
@@ -235,12 +235,12 @@ function GatewayConfigForm() {
 
     if (config.error) {
         return (
-            <div className="p-6 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl border border-red-100 dark:border-red-800 flex items-start gap-4">
+            <div className="p-6 bg-red-50 text-red-600 rounded-2xl border border-red-100 flex items-start gap-4">
                 <i className="fa-solid fa-triangle-exclamation text-2xl mt-1"></i>
                 <div>
                     <h3 className="font-bold text-lg mb-1">{t('security.gateway.loadError')}</h3>
                     <p className="text-sm opacity-90">{config.error}</p>
-                    <button onClick={() => window.location.reload()} className="text-sm font-bold underline mt-3 hover:text-red-800 dark:hover:text-red-300">{t('security.gateway.retry')}</button>
+                    <button onClick={() => window.location.reload()} className="text-sm font-bold underline mt-3 hover:text-red-800">{t('security.gateway.retry')}</button>
                 </div>
             </div>
         );
@@ -254,24 +254,24 @@ function GatewayConfigForm() {
         const ci = config.certInfo || {};
         return (
             <div className="space-y-6">
-                <div className="p-5 bg-indigo-50/70 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 flex items-start gap-4">
+                <div className="p-5 bg-indigo-50/70 rounded-2xl border border-indigo-100 flex items-start gap-4">
                     <i className="fa-solid fa-circle-info text-xl text-indigo-500 mt-0.5"></i>
-                    <div className="text-sm text-indigo-900/90 dark:text-indigo-200">
+                    <div className="text-sm text-indigo-900/90">
                         <h3 className="font-bold text-base mb-1">{t('security.monolith.title')}</h3>
                         <p className="opacity-90 leading-relaxed">
-                            {t('security.monolith.intro')} <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">PORT</code> {t('security.monolith.and')}{" "}
-                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">WORDJS_HTTP</code> {t('security.monolith.envVarsOr')}{" "}
-                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">gateway-config.json</code>{t('security.monolith.outro')}
+                            {t('security.monolith.intro')} <code className="font-mono text-xs bg-white/60 px-1.5 py-0.5 rounded">PORT</code> {t('security.monolith.and')}{" "}
+                            <code className="font-mono text-xs bg-white/60 px-1.5 py-0.5 rounded">WORDJS_HTTP</code> {t('security.monolith.envVarsOr')}{" "}
+                            <code className="font-mono text-xs bg-white/60 px-1.5 py-0.5 rounded">gateway-config.json</code>{t('security.monolith.outro')}
                         </p>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-2xl border border-gray-100 dark:border-gray-700">
+                    <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                         <span className="block text-xs uppercase tracking-wider text-gray-400 font-bold mb-1">{t('security.gateway.publicPort')}</span>
-                        <span className="font-mono font-bold text-gray-800 dark:text-gray-200 text-lg">:{config.gatewayPort ?? 3000}</span>
+                        <span className="font-mono font-bold text-gray-800 text-lg">:{config.gatewayPort ?? 3000}</span>
                     </div>
-                    <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-2xl border border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                    <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 flex items-center justify-between">
                         <div>
                             <span className="block text-xs uppercase tracking-wider text-gray-400 font-bold mb-1">TLS</span>
                             <span className={`font-bold ${config.sslEnabled ? 'text-emerald-600' : 'text-gray-500'}`}>
@@ -282,33 +282,33 @@ function GatewayConfigForm() {
                     </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-indigo-50/80 to-purple-50/80 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 p-6 shadow-sm">
-                    <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 mb-4 flex items-center gap-2 uppercase tracking-wide">
+                <div className="bg-gradient-to-br from-indigo-50/80 to-purple-50/80 rounded-2xl border border-indigo-100 p-6 shadow-sm">
+                    <h4 className="text-sm font-bold text-indigo-900 mb-4 flex items-center gap-2 uppercase tracking-wide">
                         <i className="fa-solid fa-certificate"></i> {t('security.cert.current')}
                     </h4>
                     {ci.commonName ? (
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 text-sm">
-                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                            <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                 <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.domain')}</span>
-                                <span className="font-bold text-gray-800 dark:text-gray-200 truncate block" title={ci.commonName}>{ci.commonName}</span>
+                                <span className="font-bold text-gray-800 truncate block" title={ci.commonName}>{ci.commonName}</span>
                             </div>
-                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                            <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                 <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.issuer')}</span>
-                                <span className="font-medium text-gray-700 dark:text-gray-300 truncate block" title={ci.issuer}>{ci.issuer}</span>
+                                <span className="font-medium text-gray-700 truncate block" title={ci.issuer}>{ci.issuer}</span>
                             </div>
-                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                            <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                 <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.expiry')}</span>
                                 <span className={`font-bold ${ci.validTo && new Date(ci.validTo) < new Date() ? 'text-red-600' : 'text-emerald-600'}`}>
                                     {ci.validTo ? new Date(ci.validTo).toLocaleDateString() : '-'}
                                 </span>
                             </div>
-                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                            <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                 <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.type')}</span>
-                                <span className={`font-bold capitalize ${ci.type === 'letsencrypt' ? 'text-blue-600' : 'text-gray-700 dark:text-gray-300'}`}>{ci.type}</span>
+                                <span className={`font-bold capitalize ${ci.type === 'letsencrypt' ? 'text-blue-600' : 'text-gray-700'}`}>{ci.type}</span>
                             </div>
                         </div>
                     ) : (
-                        <p className="text-gray-500 dark:text-gray-400 font-medium italic">{ci.message || t('security.cert.noDetails')}</p>
+                        <p className="text-gray-500 font-medium italic">{ci.message || t('security.cert.noDetails')}</p>
                     )}
                 </div>
             </div>
@@ -344,8 +344,8 @@ function GatewayConfigForm() {
                 </div>
             )}
             {config.certInfo && (
-                <div className="md:col-span-2 bg-gradient-to-br from-indigo-50/80 to-purple-50/80 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 p-6 shadow-sm">
-                    <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 mb-4 flex items-center gap-2 uppercase tracking-wide">
+                <div className="md:col-span-2 bg-gradient-to-br from-indigo-50/80 to-purple-50/80 rounded-2xl border border-indigo-100 p-6 shadow-sm">
+                    <h4 className="text-sm font-bold text-indigo-900 mb-4 flex items-center gap-2 uppercase tracking-wide">
                         <i className="fa-solid fa-certificate"></i> {t('security.cert.current')}
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 text-sm">
@@ -355,23 +355,23 @@ function GatewayConfigForm() {
                             <div className="col-span-4 text-gray-500 font-medium italic">{config.certInfo.message}</div>
                         ) : config.certInfo.commonName ? (
                             <>
-                                <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                     <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.domain')}</span>
-                                    <span className="font-bold text-gray-800 dark:text-gray-200 truncate block" title={config.certInfo.commonName}>{config.certInfo.commonName}</span>
+                                    <span className="font-bold text-gray-800 truncate block" title={config.certInfo.commonName}>{config.certInfo.commonName}</span>
                                 </div>
-                                <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                     <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.issuer')}</span>
-                                    <span className="font-medium text-gray-700 dark:text-gray-300 truncate block" title={config.certInfo.issuer}>{config.certInfo.issuer}</span>
+                                    <span className="font-medium text-gray-700 truncate block" title={config.certInfo.issuer}>{config.certInfo.issuer}</span>
                                 </div>
-                                <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                     <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.expiry')}</span>
                                     <span className={`font-bold ${config.certInfo.validTo && new Date(config.certInfo.validTo) < new Date() ? 'text-red-600' : 'text-emerald-600'}`}>
                                         {config.certInfo.validTo ? new Date(config.certInfo.validTo).toLocaleDateString() : '-'}
                                     </span>
                                 </div>
-                                <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
                                     <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">{t('security.cert.type')}</span>
-                                    <span className={`font-bold capitalize ${config.certInfo.type === 'letsencrypt' ? 'text-blue-600' : 'text-gray-700 dark:text-gray-300'}`}>
+                                    <span className={`font-bold capitalize ${config.certInfo.type === 'letsencrypt' ? 'text-blue-600' : 'text-gray-700'}`}>
                                         {config.certInfo.type}
                                     </span>
                                 </div>
@@ -384,32 +384,32 @@ function GatewayConfigForm() {
             )}
 
             <div className="space-y-3">
-                <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t('security.gateway.port')}</label>
+                <label className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('security.gateway.port')}</label>
                 <div className="relative">
                     <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-bold">:</span>
                     <input
                         type="number"
                         value={config.gatewayPort ?? 3000}
                         onChange={e => setConfig({ ...config, gatewayPort: e.target.value })}
-                        className="w-full pl-8 pr-4 py-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-mono text-gray-800 dark:text-gray-200"
+                        className="w-full pl-8 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-mono text-gray-800"
                         placeholder="3000"
                     />
                 </div>
                 <p className="text-xs text-gray-500 ml-1">{t('security.gateway.portHint')}</p>
             </div>
 
-            <div className="p-6 bg-emerald-50 dark:bg-emerald-900/10 rounded-2xl border border-emerald-100 dark:border-emerald-800 flex items-center justify-between gap-6 group hover:bg-emerald-100/50 dark:hover:bg-emerald-900/20 transition-all cursor-pointer shadow-sm" onClick={() => setConfig({ ...config, sslEnabled: !config.sslEnabled })}>
+            <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-center justify-between gap-6 group hover:bg-emerald-100/50 transition-all cursor-pointer shadow-sm" onClick={() => setConfig({ ...config, sslEnabled: !config.sslEnabled })}>
                 <div className="flex gap-4 items-center">
-                    <div className="bg-white dark:bg-emerald-800/50 p-3 rounded-xl shadow-sm border border-emerald-200 dark:border-emerald-700 text-emerald-600 dark:text-emerald-400 group-hover:scale-110 transition-transform">
+                    <div className="bg-white p-3 rounded-xl shadow-sm border border-emerald-200 text-emerald-600 group-hover:scale-110 transition-transform">
                         <i className={`fa-solid ${config.sslEnabled ? 'fa-lock' : 'fa-lock-open'} text-xl`}></i>
                     </div>
                     <div>
-                        <h4 className="text-base font-bold text-gray-900 dark:text-white">{t('security.gateway.enableSsl')}</h4>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t('security.gateway.enableSslHint')}</p>
+                        <h4 className="text-base font-bold text-gray-900">{t('security.gateway.enableSsl')}</h4>
+                        <p className="text-xs text-gray-500 mt-1">{t('security.gateway.enableSslHint')}</p>
                     </div>
                 </div>
                 <div
-                    className={`relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${config.sslEnabled ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-700'}`}
+                    className={`relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${config.sslEnabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
                 >
                     <span
                         className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform duration-200 ease-in-out shadow-md ${config.sslEnabled ? 'translate-x-7' : 'translate-x-1'}`}
@@ -417,11 +417,11 @@ function GatewayConfigForm() {
                 </div>
             </div>
 
-            <div className="md:col-span-2 flex justify-end pt-4 border-t border-gray-100 dark:border-gray-800">
+            <div className="md:col-span-2 flex justify-end pt-4 border-t border-gray-100">
                 <button
                     type="submit"
                     disabled={saving}
-                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-lg px-10 py-4 rounded-xl transition-all shadow-xl shadow-indigo-200 dark:shadow-none hover:shadow-2xl transform hover:-translate-y-1 active:translate-y-0"
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-lg px-10 py-4 rounded-xl transition-all shadow-xl shadow-indigo-200 hover:shadow-2xl transform hover:-translate-y-1 active:translate-y-0"
                 >
                     {saving ? (
                         <span className="flex items-center gap-2">
@@ -514,7 +514,7 @@ function MfaPolicyForm() {
 
     return (
         <div className="space-y-6">
-            <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+            <p className="text-sm text-gray-600 leading-relaxed">
                 {t('security.mfa.intro')}
             </p>
 
@@ -528,11 +528,11 @@ function MfaPolicyForm() {
                             onClick={() => toggle(slug)}
                             aria-pressed={on}
                             className={`flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border-2 text-left transition-all ${on
-                                ? "border-emerald-500 bg-emerald-50/60 dark:bg-emerald-500/10"
-                                : "border-gray-200 dark:border-gray-700 hover:border-gray-300 bg-white/40 dark:bg-black/10"}`}
+                                ? "border-emerald-500 bg-emerald-50/60"
+                                : "border-gray-200 hover:border-gray-300 bg-white/40"}`}
                         >
                             <span>
-                                <span className="block font-bold text-gray-800 dark:text-gray-100">{role.name || slug}</span>
+                                <span className="block font-bold text-gray-800">{role.name || slug}</span>
                                 <span className="block text-[11px] font-mono text-gray-400">{slug}</span>
                             </span>
                             <i className={`fa-solid ${on ? "fa-circle-check text-emerald-500" : "fa-circle text-gray-300"} text-lg`}></i>
@@ -541,7 +541,7 @@ function MfaPolicyForm() {
                 })}
             </div>
 
-            <label className="flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-200 dark:border-gray-700 bg-white/40 dark:bg-black/10 cursor-pointer">
+            <label className="flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-200 bg-white/40 cursor-pointer">
                 <input
                     type="checkbox"
                     checked={enforceForApiTokens}
@@ -549,7 +549,7 @@ function MfaPolicyForm() {
                     className="mt-0.5 w-4 h-4 accent-emerald-600"
                 />
                 <span>
-                    <span className="block font-bold text-gray-800 dark:text-gray-100">{t('security.mfa.enforceTokens')}</span>
+                    <span className="block font-bold text-gray-800">{t('security.mfa.enforceTokens')}</span>
                     <span className="block text-[11px] text-gray-400 mt-0.5">
                         {t('security.mfa.enforceTokensHelpBefore')} <code>Bearer wjt_…</code>{" "}
                         {t('security.mfa.enforceTokensHelpAfter')}
@@ -561,7 +561,7 @@ function MfaPolicyForm() {
                 <div
                     role="status"
                     data-testid="mfa-token-exemption-notice"
-                    className="flex items-start gap-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-2xl px-4 py-3 text-sm text-amber-800 dark:text-amber-300"
+                    className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-sm text-amber-800"
                 >
                     <i className="fa-solid fa-key mt-0.5"></i>
                     <span>
@@ -590,7 +590,7 @@ function MfaPolicyForm() {
                         min={0}
                         value={graceDays}
                         onChange={(e) => setGraceDays(Math.max(0, Number(e.target.value)))}
-                        className="w-40 px-4 py-3 bg-white/60 dark:bg-black/20 border-2 border-gray-200 dark:border-gray-700 rounded-2xl focus:ring-4 focus:ring-emerald-100 focus:border-emerald-500 outline-none font-bold"
+                        className="w-40 px-4 py-3 bg-white/60 border-2 border-gray-200 rounded-2xl focus:ring-4 focus:ring-emerald-100 focus:border-emerald-500 outline-none font-bold"
                     />
                     <p className="text-[11px] text-gray-400 mt-1.5">{t('security.mfa.graceHint')}</p>
                 </div>
@@ -604,7 +604,7 @@ function MfaPolicyForm() {
             </div>
 
             {selfAtRisk && (
-                <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-2xl px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-sm text-amber-800">
                     <i className="fa-solid fa-triangle-exclamation mt-0.5"></i>
                     <span>
                         {t('security.mfa.selfRiskBefore')}<strong>{roles[user!.role]?.name || user!.role}</strong>{t('security.mfa.selfRiskAfter')}{" "}

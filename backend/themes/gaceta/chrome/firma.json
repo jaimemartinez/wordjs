@@ -7,7 +7,7 @@
                 "align": "center",
                 "gap": "sm",
                 "items": [
-                    { "type": "ChromeText", "props": { "text": "— La Redacción de la Gaceta —" } }
+                    { "type": "ChromeText", "props": { "text": "— The Gaceta editors —" } }
                 ]
             }
         }

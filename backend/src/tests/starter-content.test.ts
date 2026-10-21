@@ -94,6 +94,25 @@ describe('starter content seeder', () => {
         collect(puck.content);
         assert.ok(units.size > 10 && units.size <= 30, `distinct interactions within the page budget (${units.size}/30)`);
 
+        // The page's light surfaces and the text on them come from the THEME's tokens (the default
+        // theme defines them with the very values the page used to hardcode). Hardcoded white surfaces
+        // kept the page white under a dark theme while its headings, forms and FAQ took that theme's
+        // light text — lavender on white under Circuito, 1.46:1.
+        const LIGHT = /^#(?:fff|ffffff|f1f2fb|f8f9ff|ede9fe)$/i;
+        const hardcoded: string[] = [];
+        const surfaces = (node: any) => {
+            if (Array.isArray(node)) { node.forEach(surfaces); return; }
+            if (!node || typeof node !== 'object' || !node.props) return;
+            const look = node.props.look || {};
+            const paints: Array<[string, unknown]> = [['bg', node.props.bg], ['look.bgColor', look.bgColor],
+                ['look.gradFrom', look.gradFrom], ['look.gradVia', look.gradVia], ['look.gradTo', look.gradTo]];
+            for (const [k, v] of paints) if (typeof v === 'string' && LIGHT.test(v)) hardcoded.push(`${node.props.id} ${k}=${v}`);
+            for (const v of Object.values(node.props)) if (Array.isArray(v)) surfaces(v);
+        };
+        surfaces(puck.content);
+        assert.deepStrictEqual(hardcoded, [], 'light surfaces use theme tokens');
+        assert.ok(meta.meta_value.includes('var(--wjs-bg-surface)'), 'the bands paint the theme surface');
+
         // Welcome post + About page.
         const post = await dbAsync.get("SELECT * FROM posts WHERE post_name = 'welcome-to-wordjs' AND post_type = 'post'");
         assert.ok(post, 'welcome post exists');

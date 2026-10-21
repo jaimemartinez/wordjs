@@ -174,7 +174,7 @@ describe('parseTemplate', () => {
     });
 });
 
-const ALL_KINDS = ['home', 'single', 'page', 'search', 'notFound', 'category', 'tag', 'author', 'date'] as const;
+const ALL_KINDS = ['home', 'frontPage', 'single', 'page', 'search', 'notFound', 'category', 'tag', 'author', 'date'] as const;
 
 describe('templateCandidates — the template hierarchy', () => {
     it('goes most specific first, WordPress-style, and always ends at page', () => {
@@ -185,6 +185,9 @@ describe('templateCandidates — the template hierarchy', () => {
         expect(templateCandidates('tag', { slug: 'js' })).toEqual(['tag-js', 'tag', 'archive', 'page']);
         expect(templateCandidates('author', { slug: 'ada' })).toEqual(['author-ada', 'author', 'archive', 'page']);
         expect(templateCandidates('home')).toEqual(['home', 'archive', 'page']);
+        // A static front page is a page (front-page.php → page templates), never the blog index's home.json.
+        expect(templateCandidates('frontPage', { slug: 'welcome' })).toEqual(['front-page', 'page-welcome', 'page']);
+        expect(templateCandidates('frontPage')).toEqual(['front-page', 'page']);
         expect(templateCandidates('search')).toEqual(['search', 'archive', 'page']);
         expect(templateCandidates('date')).toEqual(['date', 'archive', 'page']);
         expect(templateCandidates('notFound')).toEqual(['404', 'page']);

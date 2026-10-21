@@ -2701,6 +2701,29 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
 }
 @media (max-width: 767.98px) { .wjs-block-stats, .wp-block-stats { grid-template-columns: 1fr; } }
 
+/* ------------------------------------------------------ CONTENT-AREA WIDTH - *
+ * The Grid, Columns and Stats breakpoints above follow the VIEWPORT. A theme with a narrow content
+ * column (Vergel's 880px main, a template that puts the page in half of a grid) gives a 4-column grid
+ * a desktop viewport and a tablet-sized room: the tracks shrank to ~190px and headings split mid-word
+ * ("Multi / lingual"). These rules follow the room the page content actually has — the same tablet /
+ * mobile layouts the author already chose, applied when the CONTENT AREA is that narrow. In the
+ * default theme the content area at a desktop viewport is wider than 900px, so nothing changes there.
+ * `container-type: inline-size` applies no layout containment: position: fixed blocks (Back to top,
+ * Side drawer) inside the content still anchor to the viewport. */
+.puck-content { container: wjs-content / inline-size; }
+@container wjs-content (max-width: 899.98px) {
+  .wjs-block-grid__items, .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-tablet, 2), minmax(0, 1fr)); }
+  /* Stats has no tablet count of its own: four or more figures go two by two (a 64px "30+" stacked
+   * its "+" under the "30" in a 180px track); three still fit side by side. */
+  .wjs-block-stats:has(> :nth-child(4)), .wp-block-stats:has(> :nth-child(4)) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container wjs-content (max-width: 599.98px) {
+  .wjs-block-grid__items, .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-mobile, 1), minmax(0, 1fr)); }
+  .wjs-block-columns, .wp-block-columns { grid-template-columns: 1fr; }
+  .wjs-block-stats, .wp-block-stats,
+  .wjs-block-stats:has(> :nth-child(4)), .wp-block-stats:has(> :nth-child(4)) { grid-template-columns: 1fr; }
+}
+
 /* ---------------------------------------------------------------- HTML EMBED - */
 .wjs-block-html-embed, .wp-block-html-embed { color: var(--wjs-html-color, inherit); }
 .wjs-block-html-embed > :first-child, .wp-block-html-embed > :first-child { margin-top: 0; }
