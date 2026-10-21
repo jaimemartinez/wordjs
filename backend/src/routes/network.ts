@@ -2,6 +2,12 @@
  * WordJS — the network screen's API (multisite): the sites of the network and their status.
  *
  *   GET  /network/status                 { enabled, networkAdmin } — any signed-in user of the main site
+ *   GET  /network/setup                  what turning the network on needs (main-site administrators while off)
+ *   POST /network/enable                 turn it on and restart (re-authenticates: password + two-factor code)
+ *   POST /network/disable                turn it off and restart, while the main site is the only site (same)
+ *   GET  /network/admins                 the main site's administrators, and which are network administrators
+ *   POST /network/admins                 make one a network administrator (re-authenticates)
+ *   DELETE /network/admins/:id           take that away again, never from the last one (re-authenticates)
  *   GET  /network/sites                  every site
  *   POST /network/sites                  create a site (re-authenticates: currentPassword)
  *   POST /network/sites/:id/suspend      suspend a site (re-authenticates)
@@ -19,14 +25,14 @@
  *   PUT  /network/quotas/default         the quota a site without its own follows (re-authenticates)
  *   PUT  /network/sites/:id/quota        one site's own quota (re-authenticates)
  *
- * Everything but /status is for NETWORK administrators (core/network-auth), on the main site only, with
+ * Everything but /status, /setup, /enable and /disable is for NETWORK administrators (core/network-auth), on the main site only, with
  * a session (never an API token): a token minted for automation must not be able to create sites.
  */
 import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
-const { authenticate, sessionOnly, sessionMfaVerified } = require('../middleware/auth');
+const { authenticate, sessionOnly, sessionMfaVerified, accountAuthorityOnly } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { requireSudoPassword } = require('./users');
 const { isNetworkAdminRequest, requireNetworkAdmin } = require('../core/network-auth');
@@ -83,6 +89,185 @@ router.get('/status', authenticate, (req: Request, res: Response) => {
     res.json({ enabled, networkAdmin: enabled && isNetworkAdminRequest(req) });
 });
 
+// ── Turning the network on and off from the panel (Settings → Network) ──────────────────────────────
+// Zero config: everything `npm run network -- enable|disable` does, from the admin panel, followed by the
+// restart the switch needs (core/restart), on every backend node. These routes are declared BEFORE the
+// network-administrator gate below because while the network is off there is no network administrator
+// yet: they are for the main site's administrators then, and for network administrators once it is on.
+
+/** Who may see and use the switch: an administrator of the main site (a network administrator once on). */
+function refuseSetupCaller(req: Request, res: Response): boolean {
+    if (siteContext.multisiteEnabled()) {
+        if (siteContext.currentSiteIdOrNull() !== siteContext.PRIMARY_SITE_ID) {
+            res.status(404).json({ code: 'rest_no_route', message: 'No route was found matching the URL and request method.', data: { status: 404 } });
+            return true;
+        }
+        if (!isNetworkAdminRequest(req)) {
+            res.status(403).json({ code: 'rest_forbidden_network', message: 'Only a network administrator can do this.', data: { status: 403 } });
+            return true;
+        }
+        return false;
+    }
+    const role = req.user && (typeof req.user.getRole === 'function' ? req.user.getRole() : req.user.role);
+    if (role !== 'administrator') {
+        res.status(403).json({ code: 'rest_forbidden', message: 'Only an administrator of the main site can turn the network on.', data: { status: 403 } });
+        return true;
+    }
+    return false;
+}
+
+/**
+ * The second factor for the switch: the account must have two-factor authentication, and the request must
+ * carry a current code (`mfaCode`) even when the session signed in with one — a fresh proof, like the
+ * password. Returns the assurance recorded in the audit log, or null when it has answered the request.
+ */
+async function requireStepUp(req: Request, res: Response): Promise<string | null> {
+    const mfa = require('../core/mfa');
+    if (!(await mfa.isEnabled(req.user.id))) {
+        res.status(403).json({
+            code: 'network_mfa_enrollment_required',
+            message: 'Turn on two-factor authentication for your account first (Profile → Two-factor authentication). Switching the network on or off asks for a code.',
+            data: { status: 403 },
+        });
+        return null;
+    }
+    const code = (req.body || {}).mfaCode;
+    if (typeof code !== 'string' || !code.trim()) {
+        res.status(403).json({ code: 'rest_mfa_step_up_required', message: 'Enter a current authentication code from your authenticator app.', data: { status: 403 } });
+        return null;
+    }
+    const ok = await require('./auth').verifyManagedMfaCode(req, res, code);
+    return ok ? 'step_up' : null;
+}
+
+/**
+ * @swagger
+ * /network/setup:
+ *   get:
+ *     summary: What turning the network on needs, and who can run it
+ *     description: For the main site's administrators while multisite is off, for network administrators once it is on (404 on any other site). Lists each requirement in plain words with how to fix it from the panel (the database engine, the database user's CREATE right, the main address, whether WordJS can restart itself), the main site's administrators (the candidates for network administrator), whether the caller has two-factor authentication (the switch asks for a code), and the restart state (bootId changes on every boot).
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ enabled, ready, requirements, administrators, mfaEnrolled, driver, otherSites, restart }"
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator of the main site (rest_forbidden), not a network administrator once on (rest_forbidden_network), or an API token
+ *       404:
+ *         description: Another site of the network
+ * /network/enable:
+ *   post:
+ *     summary: Turn the network on and restart
+ *     description: Records the main site as site 1, makes the chosen administrators of the main site network administrators, sets multisite.enabled, audits it, and restarts the backend (every node). Interactive session at the main address only; re-authenticates with currentPassword and a current two-factor code.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [admins, currentPassword, mfaCode]
+ *             properties:
+ *               admins:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 description: User ids of administrators of the main site.
+ *               currentPassword:
+ *                 type: string
+ *               mfaCode:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ enabled: true, admins, restart } — restart is supervisor, watch or service (it restarts itself) or manual (restart it by hand)"
+ *       400:
+ *         description: No administrator chosen (network_admins_required), one is not an administrator of the main site (network_admin_not_administrator), or a wrong mfaCode (rest_mfa_invalid)
+ *       403:
+ *         description: Not an administrator, a wrong currentPassword (rest_bad_current_password), no two-factor authentication (network_mfa_enrollment_required), no code (rest_mfa_step_up_required)
+ *       409:
+ *         description: Already on (network_already_enabled), or a requirement is not met (network_requirements_unmet)
+ * /network/disable:
+ *   post:
+ *     summary: Turn the network off and restart
+ *     description: Only while the main site is the only site. Network administrators; re-authenticates with currentPassword and a current two-factor code; audited; restarts the backend (every node).
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword, mfaCode]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *               mfaCode:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ enabled: false, restart }"
+ *       403:
+ *         description: Not a network administrator, a wrong currentPassword, no two-factor authentication or no code
+ *       404:
+ *         description: Another site of the network
+ *       409:
+ *         description: Already off (network_not_enabled), or other sites exist (network_has_sites)
+ */
+router.get('/setup', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
+    if (refuseSetupCaller(req, res)) return;
+    const setup = require('../core/network-setup');
+    const requirements = await setup.requirements();
+    const enabled = siteContext.multisiteEnabled();
+    let otherSites = 0;
+    if (enabled) { try { otherSites = require('../core/network').listSites().filter((s: any) => s.id !== siteContext.PRIMARY_SITE_ID).length; } catch { /* store not readable */ } }
+    res.set('Cache-Control', 'no-store');
+    res.json({
+        enabled,
+        ready: requirements.every((r: any) => !r.blocking || r.ok),
+        requirements,
+        administrators: await setup.mainSiteAdministrators(),
+        mfaEnrolled: await require('../core/mfa').isEnabled(req.user.id),
+        driver: String(require('../config/app').dbDriver || 'sqlite-native'),
+        otherSites,
+        restart: require('../core/restart').restartInfo(),
+    });
+}));
+
+router.post('/enable', authenticate, sessionOnly, accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
+    if (refuseSetupCaller(req, res)) return;
+    if (siteContext.multisiteEnabled()) return res.status(409).json({ code: 'network_already_enabled', message: 'The network is already on.', data: { status: 409 } });
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const mfa = await requireStepUp(req, res);
+    if (!mfa) return;
+    try {
+        const r = await require('../core/network-setup').enableNetwork({ adminIds: (req.body || {}).admins, actorUserId: Number(req.user.id), mfa });
+        res.json({ enabled: true, admins: r.admins, restart: r.restart });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
+router.post('/disable', authenticate, sessionOnly, accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
+    if (refuseSetupCaller(req, res)) return;
+    if (!siteContext.multisiteEnabled()) return res.status(409).json({ code: 'network_not_enabled', message: 'The network is already off.', data: { status: 409 } });
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const mfa = await requireStepUp(req, res);
+    if (!mfa) return;
+    try {
+        const r = await require('../core/network-setup').disableNetwork({ actorUserId: Number(req.user.id), mfa });
+        res.json({ enabled: false, restart: r.restart });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
 router.use(authenticate, sessionOnly, requireNetworkAdmin);
 
 /** What the screen shows of a site: never its file paths. */
@@ -122,7 +307,7 @@ function sendError(res: Response, e: any) {
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: "{ sites: NetworkSite[] }, the main site first"
+ *         description: "{ sites: NetworkSite[], localAddresses }, the main site first; localAddresses is true when the main site is on this computer (localhost), so new sites may use <name>.localhost addresses"
  *       401:
  *         description: Not signed in (rest_not_logged_in)
  *       403:
@@ -131,7 +316,7 @@ function sendError(res: Response, e: any) {
  *         description: Multisite is off, or this is not the main site
  *   post:
  *     summary: Create a site
- *     description: Provisions the site end to end - its record and address, its database, its uploads directory, its default options and its first administrator - or nothing at all. The address must be a domain name that no site of the network answers yet.
+ *     description: Provisions the site end to end - its record and address, its database, its uploads directory, its default options and its first administrator - or nothing at all. The address must be a domain name that no site of the network answers yet; while the main site is on this computer (localhost), a <name>.localhost address is accepted too.
  *     tags: [Network]
  *     security:
  *       - bearerAuth: []
@@ -174,7 +359,8 @@ function sendError(res: Response, e: any) {
  */
 router.get('/sites', (req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store');
-    res.json({ sites: require('../core/network').listSites().map(publicSite) });
+    // localAddresses: the main site is on this computer, so new sites may use <name>.localhost addresses.
+    res.json({ sites: require('../core/network').listSites().map(publicSite), localAddresses: require('../core/network-sites').mainSiteIsLocal() });
 });
 
 router.post('/sites', asyncHandler(async (req: Request, res: Response) => {
@@ -832,6 +1018,113 @@ router.put('/sites/:id/quota', asyncHandler(async (req: Request, res: Response) 
     } catch (e: any) {
         return sendError(res, e);
     }
+}));
+
+// ── Network administrators (the panel's path for `npm run network -- admins add|remove`) ────────────
+
+/**
+ * @swagger
+ * /network/admins:
+ *   get:
+ *     summary: The main site's administrators, and which of them are network administrators
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ administrators: [{ id, login, displayName, networkAdmin }] }"
+ *       403:
+ *         description: Not a network administrator
+ *   post:
+ *     summary: Make an administrator of the main site a network administrator
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [userId, currentPassword]
+ *             properties:
+ *               userId:
+ *                 type: integer
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ administrators }"
+ *       400:
+ *         description: Not an administrator of the main site (network_admin_not_administrator)
+ *       403:
+ *         description: Not a network administrator, or a wrong currentPassword
+ * /network/admins/{id}:
+ *   delete:
+ *     summary: Stop a user being a network administrator (never the last one)
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ administrators }"
+ *       403:
+ *         description: Not a network administrator, or a wrong currentPassword
+ *       404:
+ *         description: Not a network administrator (network_admin_not_found)
+ *       409:
+ *         description: The last network administrator (network_last_admin)
+ */
+router.get('/admins', asyncHandler(async (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ administrators: await require('../core/network-setup').mainSiteAdministrators() });
+}));
+
+router.post('/admins', asyncHandler(async (req: Request, res: Response) => {
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const setup = require('../core/network-setup');
+    try {
+        const [admin] = await setup.checkedAdministrators([(req.body || {}).userId]);
+        const network = require('../core/network');
+        await network.addNetworkAdmin(admin.id, admin.login);
+        await network.audit('network.admin.added', { actor: Number(req.user.id), detail: { login: admin.login, via: 'panel' } });
+        await require('../core/audit').recordAudit(req.user.id, 'network.admin.add', 'user', admin.id, { login: admin.login });
+        res.json({ administrators: await setup.mainSiteAdministrators() });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
+router.delete('/admins/:id', asyncHandler(async (req: Request, res: Response) => {
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const id = siteIdParam(req.params.id);
+    const network = require('../core/network');
+    if (id === null || !network.listNetworkAdmins().includes(id)) {
+        return res.status(404).json({ code: 'network_admin_not_found', message: 'That user is not a network administrator.', data: { status: 404 } });
+    }
+    if (network.listNetworkAdmins().length <= 1) {
+        return res.status(409).json({ code: 'network_last_admin', message: 'The network needs at least one network administrator. Add another one first.', data: { status: 409 } });
+    }
+    await network.removeNetworkAdmin(id);
+    await network.audit('network.admin.removed', { actor: Number(req.user.id), detail: { userId: id, via: 'panel' } });
+    await require('../core/audit').recordAudit(req.user.id, 'network.admin.remove', 'user', id, {});
+    res.json({ administrators: await require('../core/network-setup').mainSiteAdministrators() });
 }));
 
 module.exports = router;

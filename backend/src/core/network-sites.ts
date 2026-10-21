@@ -76,17 +76,41 @@ function codedError(code: string, message: string, status = 400): Error & { code
     return e;
 }
 
+/** A name under `.localhost` (RFC 6761): every browser resolves it to this computer, no DNS needed. */
+function isLocalhostSubdomain(hostname: string): boolean {
+    return hostname.endsWith('.localhost') && hostname.length > '.localhost'.length;
+}
+
+/**
+ * Is the main site itself on this computer (localhost, a loopback IP or a `*.localhost` name)? Then the
+ * network is a local or development install, and its other sites may live on `<name>.localhost`
+ * addresses: they need no DNS and no certificate, and they reach nobody but this computer.
+ */
+function mainSiteIsLocal(): boolean {
+    const hostPolicy = require('./host-policy');
+    const main = hostPolicy.parseSiteUrl((require('./configManager').getConfig() || {}).siteUrl);
+    if (!main) return false;
+    return hostPolicy.isLoopbackAuthority(main) || (main.kind === 'dns' && isLocalhostSubdomain(main.hostname));
+}
+
 /**
  * Is `hostname` free for a new site? It must be a DNS name (an IP literal or `localhost` names the
  * machine, not a site), and no address the main site answers (its main address, aliases, the
- * environment's hosts) — the registry's own uniqueness covers the other sites.
+ * environment's hosts) — the registry's own uniqueness covers the other sites. A `*.localhost` name is
+ * accepted while the main site is local too (mainSiteIsLocal), and only then: on a public install it
+ * would be an address nobody but the server itself can open.
  */
 function assertHostAvailable(url: string): { url: string; hostname: string } {
     const hostPolicy = require('./host-policy');
     const parsed = hostPolicy.parseSiteUrl(url);
     if (!parsed) throw codedError('network_invalid_url', 'The site address must be http(s)://host[:port], with no path.');
     if (parsed.kind !== 'dns' || parsed.hostname === 'localhost') {
-        throw codedError('network_invalid_url', 'A site address must be a domain name, not an IP address or localhost.');
+        throw codedError('network_invalid_url', mainSiteIsLocal()
+            ? 'A site address must be a name, not an IP address or localhost itself. On this computer, use a name under .localhost, such as http://blog.localhost:3000.'
+            : 'A site address must be a domain name, not an IP address or localhost.');
+    }
+    if (isLocalhostSubdomain(parsed.hostname) && !mainSiteIsLocal()) {
+        throw codedError('network_invalid_url', 'A .localhost address opens only on the computer that types it. This network is public: give the site a domain name that points at this server.');
     }
     const policy = require('../middleware/auth').siteHostPolicy.get();
     const verdict = hostPolicy.classify(hostPolicy.parseHost(parsed.hostname), policy);
@@ -161,7 +185,8 @@ async function createSite(input: CreateSiteInput) {
     // may not point here yet, in which case the renewal pass tries again later.
     try {
         const siteCerts = require('./site-certs');
-        if (siteCerts.autoIssueEnabled()) {
+        // A .localhost name has no public DNS: no CA can validate it.
+        if (siteCerts.autoIssueEnabled() && !isLocalhostSubdomain(address.hostname)) {
             siteCerts.issueSiteCertificate(record.id).catch((e: any) => log.warn(`[multisite] site ${record.id}: certificate not issued yet (${e && e.message})`));
         }
     } catch { /* certificates are optional */ }
@@ -362,4 +387,6 @@ module.exports = {
     whenPrepared: (id: number) => prepared.get(id) || null,
     forEachSecondarySite,
     assertHostAvailable,
+    mainSiteIsLocal,
+    isLocalhostSubdomain,
 };

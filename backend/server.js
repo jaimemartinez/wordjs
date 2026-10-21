@@ -29,6 +29,9 @@ const TS_ENTRY = path.join(__dirname, 'src', 'index.ts');
 const RUN_COMPILED = fs.existsSync(DIST_ENTRY);
 const APP_ARGS = RUN_COMPILED ? [DIST_ENTRY] : ['-r', 'ts-node/register', TS_ENTRY];
 const MAX_RESTARTS_FAST = 5;
+// The app asks for a restart (a setting it reads at boot changed from the admin panel) by exiting with
+// this code: started again at once, and never counted as a crash. Same value as core/restart.ts.
+const RESTART_EXIT_CODE = 75;
 const FAST_RESET_TIME = 10000; // 10 seconds
 
 let restartCount = 0;
@@ -40,11 +43,17 @@ function startApp() {
     // Spawn the actual server
     const child = spawn('node', APP_ARGS, {
         stdio: 'inherit', // Pipe logs directly to console
-        env: process.env, // Pass environment variables
+        // Pass environment variables, and tell the app a supervisor restarts it (core/restart.ts).
+        env: { ...process.env, WORDJS_SUPERVISED: '1' },
         cwd: __dirname
     });
 
     child.on('exit', (code) => {
+        if (code === RESTART_EXIT_CODE) {
+            console.log('🔄 Supervisor: App asked for a restart. Starting it again...');
+            setTimeout(startApp, 250);
+            return;
+        }
         if (code === 0) {
             console.log('🛑 Supervisor: App stopped gracefully. Exiting.');
             process.exit(0);

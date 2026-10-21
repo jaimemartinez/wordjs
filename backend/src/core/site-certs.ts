@@ -158,6 +158,8 @@ async function renewSiteCertificatesIfDue(): Promise<{ issued: string[]; failed:
     const before = Number(((config as any).acme || {}).renewBeforeDays) || 30;
     for (const site of network().listSites()) {
         if (site.id === siteContext.PRIMARY_SITE_ID || site.status !== 'active' || !site.mainHost) continue;
+        // A local network's <name>.localhost sites have no public DNS: no CA can validate them.
+        if (site.mainHost.endsWith('.localhost')) { out.skipped.push(site.mainHost); continue; }
         try {
             const status: any = await siteCertificateStatus(site.id);
             if (status.installed && status.daysLeft > before) { out.skipped.push(site.mainHost); continue; }

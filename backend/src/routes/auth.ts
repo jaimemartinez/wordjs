@@ -3148,4 +3148,7 @@ module.exports.payFailureDelay = payFailureDelay;
 // The MFA rule for minting a headless credential, shared with routes/agents.ts so an agent connection
 // cannot be created or granted under a looser rule than an API token. See requireMfaForMachineCredential.
 module.exports.requireMfaForMachineCredential = requireMfaForMachineCredential;
+// The code check of the session-reachable account doors (its throttle and ceiling), shared with the
+// network switch (routes/network.ts), which asks for a fresh code on top of the password.
+module.exports.verifyManagedMfaCode = verifyManagedMfaCode;
 module.exports.MFA_MANAGE_PASSWORD_AFTER = MFA_MANAGE_PASSWORD_AFTER;

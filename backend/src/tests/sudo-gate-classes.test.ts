@@ -98,9 +98,9 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
-const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff'];
+const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
 const CEILING_DOOR_PERSONAS = ['doorMfaDisable', 'doorMfaBackup', 'doorTokenStepUp', 'doorAgentCreate', 'doorAgentGrant'];
 
@@ -915,6 +915,35 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites/999/handoff`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw })),
             alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        },
+        // Turning the network on and off from the panel (Settings → Network): the password comes first,
+        // then the second factor — these accounts have none, so the right password reaches that refusal
+        // and nothing is switched.
+        {
+            site: 'network.ts POST /enable', name: 'POST /network/enable', persona: 'doorNetworkEnable',
+            send: (p: string, pw: string) => request(app).post(`${B}/network/enable`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, admins: [U[p]] }),
+            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+        },
+        {
+            site: 'network.ts POST /disable', name: 'POST /network/disable', persona: 'doorNetworkDisable',
+            send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/disable`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+        },
+        // Network administrators from the panel: the password first; an account that is not an
+        // administrator of the main site is then refused, and one that is not listed is a 404.
+        {
+            site: 'network.ts POST /admins', name: 'POST /network/admins', persona: 'doorNetworkAdminAdd',
+            send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/admins`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, userId: 999999 })),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'network_admin_not_administrator',
+        },
+        {
+            site: 'network.ts DELETE /admins/:id', name: 'DELETE /network/admins/:id', persona: 'doorNetworkAdminRemove',
+            send: (p: string, pw: string) => withMultisite(() => request(app).delete(`${B}/network/admins/999999`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_admin_not_found',
         },
     ];
 

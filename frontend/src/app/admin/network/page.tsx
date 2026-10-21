@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { networkApi, type NetworkPlugin, type NetworkQuotas, type NetworkSite, type NetworkSiteCertificate } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -41,6 +42,9 @@ export default function NetworkPage() {
     const { addToast } = useToast();
     const { t } = useI18n();
     const [allowed, setAllowed] = useState<boolean | null>(null);
+    const [networkOff, setNetworkOff] = useState(false);
+    // The main site is on this computer: a new site may use a <name>.localhost address (explained on the form).
+    const [localAddresses, setLocalAddresses] = useState(false);
     const [sites, setSites] = useState<NetworkSite[]>([]);
     const [loading, setLoading] = useState(true);
     const [form, setForm] = useState(EMPTY_FORM);
@@ -64,8 +68,9 @@ export default function NetworkPage() {
 
     const load = async () => {
         try {
-            const [{ sites }, { plugins }, q] = await Promise.all([networkApi.sites(), networkApi.plugins(), networkApi.quotas()]);
+            const [{ sites, localAddresses: local }, { plugins }, q] = await Promise.all([networkApi.sites(), networkApi.plugins(), networkApi.quotas()]);
             setSites(sites);
+            setLocalAddresses(local === true);
             setQuotas(q);
             setQuotaDraft({
                 default: toMbField(q.defaultQuota),
@@ -88,11 +93,19 @@ export default function NetworkPage() {
         networkApi.status()
             .then((s) => {
                 const ok = s.enabled && s.networkAdmin;
+                setNetworkOff(!s.enabled);
                 setAllowed(ok);
                 if (ok) load(); else setLoading(false);
             })
             .catch(() => { setAllowed(false); setLoading(false); });
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // The example of a local address keeps the main site's port: a .localhost site is served by the same listener.
+    // Read after mount: the server render has no window, and both renders must agree.
+    const [localExample, setLocalExample] = useState("http://blog.localhost");
+    useEffect(() => {
+        setLocalExample(`${window.location.protocol}//blog.localhost${window.location.port ? `:${window.location.port}` : ""}`);
     }, []);
 
     const set = (key: keyof typeof EMPTY_FORM) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [key]: e.target.value }));
@@ -273,11 +286,21 @@ export default function NetworkPage() {
     };
 
     if (allowed === false) {
+        // With the network off there is nothing to manage here: it is turned on in Settings → Network.
         return (
             <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full">
                 <PageHeader title={t("network.title")} subtitle={t("network.subtitle")} icon="fa-sitemap" />
                 <Card variant="default" padding="none">
-                    <EmptyState icon="fa-lock" title={t("network.notAllowedTitle")} description={t("network.notAllowedDescription")} />
+                    {networkOff ? (
+                        <div className="p-8 text-center">
+                            <EmptyState icon="fa-power-off" title={t("network.title")} description={t("network.notEnabledDescription")} />
+                            <Link href="/admin/settings/network" className="mt-2 inline-flex items-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-bold text-white hover:bg-gray-800">
+                                {t("network.openSetup")} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                            </Link>
+                        </div>
+                    ) : (
+                        <EmptyState icon="fa-lock" title={t("network.notAllowedTitle")} description={t("network.notAllowedDescription")} />
+                    )}
                 </Card>
             </div>
         );
@@ -294,11 +317,16 @@ export default function NetworkPage() {
                 </h2>
                 <form onSubmit={handleCreate} className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <Input label={t("network.address")} icon="fa-globe" value={form.url} onChange={set("url")} placeholder="https://blog.example.com" type="url" required />
+                        <Input label={t("network.address")} icon="fa-globe" value={form.url} onChange={set("url")} placeholder={localAddresses ? localExample : "https://blog.example.com"} type="url" required />
                         <Input label={t("network.slug")} icon="fa-tag" value={form.slug} onChange={set("slug")} placeholder="blog" required />
                         <Input label={t("network.siteTitle")} icon="fa-heading" value={form.title} onChange={set("title")} required />
                     </div>
                     <p className="text-xs text-gray-500">{t("network.addressHint")}</p>
+                    {localAddresses && (
+                        <p className="text-xs text-blue-700 rounded-xl bg-blue-50 border border-blue-100 px-3 py-2" data-testid="network-local-address-hint">
+                            <i className="fa-solid fa-laptop mr-2" aria-hidden="true"></i>{t("network.addressHintLocal").replace("{example}", localExample)}
+                        </p>
+                    )}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <Input label={t("network.adminUsername")} icon="fa-user" value={form.adminUsername} onChange={set("adminUsername")} autoComplete="off" required />
                         <Input label={t("network.adminEmail")} icon="fa-envelope" value={form.adminEmail} onChange={set("adminEmail")} type="email" autoComplete="off" required />

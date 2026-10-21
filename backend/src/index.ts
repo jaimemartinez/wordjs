@@ -1631,6 +1631,16 @@ async function initializeMainSite() {
         log.info('⚙️  Setting up default options...');
         await initDefaultOptions(config);
 
+        // Zero config: turning the network on or off from the panel restarts every backend node by itself
+        // (core/restart). Follow the other nodes' announcements, and a switch made while this node was down
+        // (Postgres/MySQL keep it in the shared network store; core/network-setup).
+        require('./core/restart').followClusterRestarts();
+        try {
+            await require('./core/network-setup').followStoredSwitch();
+        } catch (e: any) {
+            log.warn(`Multisite: could not check the network switch recorded by the other nodes (${e && e.message}).`);
+        }
+
         // Multisite: keep site 1's record in the network store in step with its main address. The other
         // sites open on their first request. A store that cannot be read leaves only the main site
         // answered (the host policy then lists no other site), which is the fail-closed direction.

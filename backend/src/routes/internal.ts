@@ -142,11 +142,9 @@ router.post('/gateway-update', (req: Request, res: Response) => {
     if (success) {
         res.json({ success: true, message: 'Configuration updated. Backend restarting...' });
 
-        // Trigger Restart (Supervisor/Server.js will respawn us)
-        setTimeout(() => {
-            log.info('[Backend] 🛑 Restarting process to apply new Gateway config...');
-            process.exit(0);
-        }, 1000);
+        // Restart to apply it (core/restart: the supervisor starts us again). A plain exit(0) here was
+        // read by backend/server.js as "stopped on purpose" and the backend stayed down.
+        require('../core/restart').scheduleRestart('new gateway configuration', { delayMs: 1000 });
     } else {
         res.status(500).json({ error: 'Failed to write config' });
     }

@@ -1664,6 +1664,28 @@ export interface NetworkSite {
     createdAt: string;
     updatedAt: string;
 }
+/** One thing a network needs, checked by the server (GET /network/setup), in plain words. */
+export interface NetworkRequirement {
+    id: "installed" | "driver" | "db_create" | "site_address" | "restart";
+    ok: boolean;
+    /** Blocks turning the network on (a failed `restart` only means "restart it by hand"). */
+    blocking: boolean;
+    message: string;
+    fix?: { action: "migrate_sqlite_native" | "site_address" | "db_grant" | "restart_by_hand"; detail?: string };
+}
+export interface NetworkAdministrator { id: number; login: string; displayName: string; networkAdmin: boolean }
+/** How the backend restarts after a change it reads at boot; bootId changes on every boot. */
+export interface RestartInfo { mode: "supervisor" | "watch" | "service" | "manual"; automatic: boolean; bootId: string; bootedAt: string }
+export interface NetworkSetup {
+    enabled: boolean;
+    ready: boolean;
+    requirements: NetworkRequirement[];
+    administrators: NetworkAdministrator[];
+    mfaEnrolled: boolean;
+    driver: string;
+    otherSites: number;
+    restart: RestartInfo;
+}
 /** Media storage quotas of the network (bytes; null = none / no limit). `used` is null when a site cannot be read. */
 export interface NetworkQuotas {
     defaultQuota: number | null;
@@ -1700,12 +1722,24 @@ export interface NetworkSiteCertificate {
 
 export const networkApi = {
     status: () => apiGet<{ enabled: boolean; networkAdmin: boolean }>("/network/status"),
+    /** Settings → Network: what turning the network on needs, and who can run it. */
+    setup: () => apiGet<NetworkSetup>("/network/setup"),
+    /** Turn the network on (password + a current two-factor code); the backend then restarts itself. */
+    enable: (admins: number[], currentPassword: string, mfaCode: string) =>
+        apiPost<{ enabled: true; admins: Array<{ id: number; login: string }>; restart: RestartInfo["mode"] }>("/network/enable", { admins, currentPassword, mfaCode }),
+    disable: (currentPassword: string, mfaCode: string) =>
+        apiPost<{ enabled: false; restart: RestartInfo["mode"] }>("/network/disable", { currentPassword, mfaCode }),
+    admins: () => apiGet<{ administrators: NetworkAdministrator[] }>("/network/admins"),
+    addAdmin: (userId: number, currentPassword: string) => apiPost<{ administrators: NetworkAdministrator[] }>("/network/admins", { userId, currentPassword }),
+    removeAdmin: (userId: number, currentPassword: string) =>
+        api<{ administrators: NetworkAdministrator[] }>(`/network/admins/${userId}`, { method: "DELETE", body: { currentPassword } }),
     plugins: () => apiGet<{ plugins: NetworkPlugin[] }>("/network/plugins"),
     offerPlugin: (slug: string, tokens: string[], currentPassword: string) =>
         apiPut<{ slug: string; ceiling: string[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { tokens, currentPassword }),
     withdrawPlugin: (slug: string, currentPassword: string) =>
         api<{ slug: string; withdrawn: boolean; deactivatedOn: number[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { method: "DELETE", body: { currentPassword } }),
-    sites: () => apiGet<{ sites: NetworkSite[] }>("/network/sites"),
+    /** localAddresses: the main site is on this computer, so a new site may use a <name>.localhost address. */
+    sites: () => apiGet<{ sites: NetworkSite[]; localAddresses?: boolean }>("/network/sites"),
     create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
