@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, apiPost, accountBoundSessionAddress } from "@/lib/api";
+import { apiGet, apiPost, apiPut, accountBoundSessionAddress } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -28,6 +28,8 @@ interface ClusterState {
     nodes: Node[];
     tokens: Array<{ role: string; host: string | null; expiresAt: string }>;
     removed: string[];
+    /** TCP ports the gateway forwards to the backend node, as listening now (gateway/src/tcp-forward.js). */
+    forwards?: Forward[];
 }
 
 export default function ClusterPage() {
@@ -43,6 +45,8 @@ export default function ClusterPage() {
     const [code, setCode] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
     const [minted, setMinted] = useState<{ command: string; expiresAt: string } | null>(null);
+    // The forwards being edited; null while the list shows what the gateway reported.
+    const [forwardDraft, setForwardDraft] = useState<Forward[] | null>(null);
 
     /** A refused write, in words: a session from a secondary address says where to sign in (QA X1-06). */
     const failure = (err: any, fallback: string) => {
@@ -81,6 +85,25 @@ export default function ClusterPage() {
             setPassword(""); setCode("");
             await load();
         } catch (err: any) { addToast(failure(err, "cluster.removeFailed"), "error"); }
+        finally { setBusy(null); }
+    };
+
+    /** Replace the forwarded ports (password only, like revoking: nothing new is admitted to the cluster). */
+    const saveForwards = async () => {
+        if (!forwardDraft) return;
+        if (!password) { addToast(t("network.passwordRequired"), "error"); return; }
+        setBusy("forwards");
+        try {
+            const r = await apiPut<{ forwards: Forward[] }>("/system/cluster/forwards", {
+                currentPassword: password,
+                forwards: forwardDraft.map((f) => ({ port: Number(f.port), targetPort: Number(f.targetPort), proxyProtocol: f.proxyProtocol })),
+            });
+            setPassword("");
+            setForwardDraft(null);
+            const failed = r.forwards.filter((f) => !f.listening);
+            addToast(failed.length ? t("cluster.forwardsSavedWithErrors").replace("{n}", String(failed.length)) : t("cluster.forwardsSaved"), failed.length ? "warning" : "success");
+            await load();
+        } catch (err: any) { addToast(failure(err, "cluster.forwardsFailed"), "error"); }
         finally { setBusy(null); }
     };
 
@@ -212,5 +235,56 @@ export default function ClusterPage() {
                 {state.caFingerprint && <p className="mt-2 text-xs text-gray-400 break-all">{t("cluster.fingerprint")}: {state.caFingerprint}</p>}
             </Card>
         )}
+
+        {Array.isArray(state.forwards) && (
+            <Card variant="default" padding="lg">
+                <div data-testid="cluster-forwards" className="space-y-4">
+                    <h2 className="text-xs font-black uppercase tracking-widest text-gray-400">{t("cluster.forwardsTitle")}</h2>
+                    <p className="text-sm text-gray-500">
+                        {t("cluster.forwardsHelp").replace("{gateway}", state.gateway?.advertiseHost || state.advertiseHost || t("cluster.gatewayRow"))}
+                    </p>
+                    {forwardDraft === null ? (
+                        <>
+                            {state.forwards.length === 0 ? <p className="text-sm text-gray-500">{t("cluster.forwardsNone")}</p> : (
+                                <ul className="divide-y divide-gray-100">
+                                    {state.forwards.map((f) => (
+                                        <li key={f.port} className="py-2 text-sm">
+                                            <span className="font-mono text-gray-900">:{f.port} → backend:{f.targetPort}</span>
+                                            <span className="text-xs text-gray-500">{f.proxyProtocol ? ` · ${t("cluster.forwardProxy")}` : ""}</span>
+                                            {" · "}
+                                            {f.listening
+                                                ? <span className="text-xs font-bold text-emerald-600">{t("cluster.forwardListening")}</span>
+                                                : <span className="text-xs font-bold text-red-600">{f.error || t("cluster.forwardNotListening")}</span>}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                            <Button variant="secondary" size="sm" icon="fa-pen" onClick={() => setForwardDraft(state.forwards!.map((f) => ({ port: f.port, targetPort: f.targetPort, proxyProtocol: f.proxyProtocol })))} data-testid="cluster-forwards-edit">{t("cluster.forwardsEdit")}</Button>
+                        </>
+                    ) : (
+                        <div className="space-y-3">
+                            {forwardDraft.map((f, i) => (
+                                <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto_auto] gap-3 items-end">
+                                    <Input label={t("cluster.forwardPort")} type="number" min={1} max={65535} value={String(f.port ?? "")} onChange={(e) => setForwardDraft(forwardDraft.map((x, j) => (j === i ? { ...x, port: e.target.value as any } : x)))} />
+                                    <Input label={t("cluster.forwardTargetPort")} type="number" min={1} max={65535} value={String(f.targetPort ?? "")} onChange={(e) => setForwardDraft(forwardDraft.map((x, j) => (j === i ? { ...x, targetPort: e.target.value as any } : x)))} />
+                                    <label className="flex items-center gap-2 text-sm text-gray-700 pb-3">
+                                        <input type="checkbox" checked={f.proxyProtocol} onChange={(e) => setForwardDraft(forwardDraft.map((x, j) => (j === i ? { ...x, proxyProtocol: e.target.checked } : x)))} />
+                                        {t("cluster.forwardProxy")}
+                                    </label>
+                                    <Button variant="ghost" size="sm" icon="fa-trash" onClick={() => setForwardDraft(forwardDraft.filter((_, j) => j !== i))}>{t("cluster.forwardRemove")}</Button>
+                                </div>
+                            ))}
+                            <div className="flex flex-wrap gap-2">
+                                <Button variant="secondary" size="sm" icon="fa-plus" onClick={() => setForwardDraft([...forwardDraft, { port: 25, targetPort: 2525, proxyProtocol: true }])}>{t("cluster.forwardAdd")}</Button>
+                                <Button variant="secondary" size="sm" onClick={() => setForwardDraft(null)}>{t("common.cancel")}</Button>
+                                <Button variant="primary" size="sm" icon="fa-check" loading={busy === "forwards"} onClick={saveForwards} data-testid="cluster-forwards-save">{t("cluster.forwardsSave")}</Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </Card>
+        )}
     </>);
 }
+
+interface Forward { port: number; targetPort: number; proxyProtocol: boolean; listening?: boolean; error?: string | null }

@@ -8,6 +8,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **The gateway can forward a port to the backend node.** Admin → Servers → *Ports the gateway forwards to the
+  backend* makes the gateway listen on a port and pipe each connection to a port of the backend machine, with a PROXY
+  protocol v1 line so the receiver can still see the client's address. In separate mode the mail server's SMTP listener
+  lives on the backend machine, and mail sent to the site's public address never reached it without a NAT rule
+  configured by hand.
 - **Change a network site's address from the panel.** Admin → Network → *Change address* moves a site to
   another main address and sets its other host names (the `www.` twin, an old domain kept during a move),
   checked as at creation; the site's own address options follow, the certificate of the old address is

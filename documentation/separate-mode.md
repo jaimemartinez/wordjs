@@ -206,6 +206,16 @@ cert is issued from the cluster CA, so SSR fetches validate — `start-frontend.
 `NODE_EXTRA_CA_CERTS` to the cluster CA automatically). The node follows later changes of the gateway's address, port and TLS switch on its own
 (see the table below), and reads `internalApiUrl` from the file at every request: no restart.
 
+## Services on the backend machine (incoming mail)
+
+The gateway is the cluster's only public address, but some services listen on the backend node: the mail server's
+SMTP listener is the usual one. Admin → Servers → *Ports the gateway forwards to the backend* makes the gateway listen
+on a port (25, say) and pipe every connection to a port of the backend node (the one the mail server reports, 2525 when
+25 is taken there), with a PROXY protocol v1 line first. Add the gateway's address to the mail server's trusted proxies
+so it judges the real sender's address. The gateway needs the privilege to bind a port below 1024 (it runs as root
+under the `create-wordjs --systemd` unit; otherwise grant `CAP_NET_BIND_SERVICE`); the screen says when it cannot.
+Point the MX record at the gateway's public address.
+
 ## Verify
 
 On the gateway, `gateway/gateway-registry.json` should list the **real** node IPs (not `127.0.0.1`):

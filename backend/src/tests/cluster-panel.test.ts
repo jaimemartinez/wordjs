@@ -47,6 +47,7 @@ certManager.gatewayControlRequest = async (method: string, urlPath: string, body
     if (urlPath === '/cluster') return { status: 200, text: JSON.stringify({ initialized: true, advertiseHost: '10.0.0.1', enrollPort: 3101, caFingerprint: 'AA', nodes: [{ url: 'https://10.0.0.2:4000', role: 'backend', routes: ['/api'], status: 'up' }], tokens: [], removed: [] }) };
     if (urlPath === '/cluster/token') return { status: 200, text: JSON.stringify({ token: 'wjc.backend.SECRET', role: body.role, host: body.host || null, expiresAt: '2026-01-01T00:15:00.000Z', command: 'node scripts/node-join.js …', readmitted: 0 }) };
     if (urlPath === '/cluster/tokens/revoke') return { status: 200, text: '{"revoked":true}' };
+    if (urlPath === '/tcp-forwards') return { status: 200, text: JSON.stringify({ forwards: body.forwards.map((f: any) => ({ ...f, listening: true, error: null })) }) };
     if (urlPath === '/cluster/nodes/remove') return body.url === 'https://10.0.0.2:4000' ? { status: 200, text: '{"removed":"https://10.0.0.2:4000","routes":1}' } : { status: 404, text: '{"code":"cluster_node_not_found"}' };
     return { status: 404, text: '{}' };
 };
@@ -195,5 +196,22 @@ describe('Admin → Servers', () => {
         const revoke = await as('owner', 'post', `${API}/system/cluster/tokens/revoke`).send({ currentPassword: PASSWORD });
         assert.strictEqual(revoke.status, 200);
         assert.strictEqual((await audit('cluster.tokens.revoke')).length, 1);
+    });
+});
+
+describe('Admin → Servers: ports forwarded to the backend node (QA X4-01)', () => {
+    test('the password is asked, the list reaches the gateway as typed, and the change is audited', async () => {
+        calls.length = 0;
+        const bad = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: 'nope', forwards: [] });
+        assert.strictEqual(bad.status, 403);
+        assert.strictEqual(calls.length, 0);
+        const notList = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: 'x' });
+        assert.strictEqual(notList.status, 400);
+        const ok = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: [{ port: 25, targetPort: 2525 }, { port: 587, targetPort: 2587, proxyProtocol: false }] });
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+        assert.deepStrictEqual(calls, [{ method: 'POST', path: '/tcp-forwards', body: { forwards: [{ port: 25, targetPort: 2525, proxyProtocol: true }, { port: 587, targetPort: 2587, proxyProtocol: false }] } }]);
+        assert.strictEqual(ok.body.forwards[0].listening, true);
+        assert.strictEqual((await audit('cluster.forwards.set')).length, 1);
+        assert.strictEqual((await as('writer', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: [] })).status, 403);
     });
 });

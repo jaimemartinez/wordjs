@@ -7,6 +7,7 @@
  *   POST /system/cluster/token            mint a short-lived, single-use join token (password + 2FA code)
  *   POST /system/cluster/tokens/revoke    burn every outstanding token (password)
  *   POST /system/cluster/nodes/remove     take a node out of the cluster (password + 2FA code)
+ *   PUT  /system/cluster/forwards         the TCP ports the gateway forwards to the backend node (password)
  *
  * The gateway owns the cluster (its CA, its tokens, its registry); this route asks it over the backend's
  * mTLS control channel (core/cert-manager gatewayControlRequest → gateway /cluster*). A monolith has no
@@ -149,6 +150,48 @@ function relay(res: Response, r: { status: number; body: any }) {
  *         description: Not an administrator, a wrong password, no two-factor authentication or no code
  *       409:
  *         description: A monolith (cluster_monolith) or a gateway without a cluster CA (cluster_not_initialized)
+ * /system/cluster/forwards:
+ *   put:
+ *     summary: Set the TCP ports the gateway forwards to the backend node
+ *     description: >-
+ *       Replaces the list. Each forward makes the gateway listen on `port` (every interface) and pipe each
+ *       connection to `targetPort` on the registered backend node, with a PROXY protocol v1 line first
+ *       unless `proxyProtocol` is false — so a service on the backend machine (the mail server's SMTP
+ *       listener in separate mode) is reachable at the cluster's public address. The gateway refuses its
+ *       own ports. The answer says, per forward, whether it listens or why not.
+ *     tags: [System]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [forwards, currentPassword]
+ *             properties:
+ *               forwards:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     port:
+ *                       type: integer
+ *                     targetPort:
+ *                       type: integer
+ *                     proxyProtocol:
+ *                       type: boolean
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ forwards: [{ port, targetPort, proxyProtocol, listening, error }] }"
+ *       400:
+ *         description: An invalid list (cluster_invalid_forward)
+ *       403:
+ *         description: Not an administrator, a wrong password, or a session started at another address
+ *       409:
+ *         description: A monolith (cluster_monolith)
  * /system/cluster/tokens/revoke:
  *   post:
  *     summary: Revoke every outstanding join token
@@ -220,6 +263,20 @@ router.post('/token', accountAuthorityOnly, asyncHandler(async (req: Request, re
         await recordAudit(req.user && req.user.id, 'cluster.token.create', 'cluster', String(r.body.role || ''), { role: r.body.role, host: r.body.host || null, expiresAt: r.body.expiresAt, mfa });
     }
     res.set('Cache-Control', 'no-store');
+    return relay(res, r);
+}));
+
+router.put('/forwards', accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
+    if (deploymentMode() === 'monolith') return res.status(409).json({ code: 'cluster_monolith', error: 'This install runs as one process (the monolith); its own port is the public one.' });
+    const b = req.body || {};
+    if (await requireSudoPassword(req, res, b.currentPassword)) return;
+    if (!Array.isArray(b.forwards)) return res.status(400).json({ code: 'cluster_invalid_forward', error: 'forwards must be a list' });
+    const forwards = b.forwards.slice(0, 20).map((f: any) => ({ port: f && f.port, targetPort: f && f.targetPort, proxyProtocol: !(f && f.proxyProtocol === false) }));
+    const r = await gateway('POST', '/tcp-forwards', { forwards });
+    if (r.status === 200) {
+        await recordAudit(req.user && req.user.id, 'cluster.forwards.set', 'cluster', '',
+            { forwards: (r.body.forwards || []).map((f: any) => ({ port: f.port, targetPort: f.targetPort, proxyProtocol: f.proxyProtocol })) });
+    }
     return relay(res, r);
 }));
 
