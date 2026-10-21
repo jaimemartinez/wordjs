@@ -84,11 +84,11 @@ describe("admin shell sizing on mobile", () => {
         expect(header).not.toContain("sticky");
         expect(header).toContain("relative");
         expect(header).toContain("z-[5000]");
-        expect(header).toContain("pt-[max(1rem,env(safe-area-inset-top))]");
+        expect(header).toContain("pt-[max(0.5rem,env(safe-area-inset-top))]");
     });
 
     it("moves the desktop collapse toggle with the safe-area padding so it still straddles the sidebar edge", async () => {
-        const toggle = classesOf(await renderShell(), /<button[^>]*title="Collapse Sidebar"[^>]*>/);
+        const toggle = classesOf(await renderShell(), /<button[^>]*title="nav.collapseSidebar"[^>]*>/);
         expect(toggle).toContain("left-[calc(304px+env(safe-area-inset-left))]");
     });
 });
@@ -145,9 +145,9 @@ describe("the shell's edges on a phone (live review, iPhone SE / 13)", () => {
         expect(aside).toContain("-translate-x-full");      // rendered closed
         expect(aside).toContain("shadow-none");
         expect(aside).not.toContain("shadow-2xl");
-        expect(aside).toContain("md:shadow-2xl");           // the desktop sidebar keeps it
+        expect(aside).toContain("lg:shadow-2xl");           // the desktop sidebar keeps it
         const src = fs.readFileSync(path.resolve(ADMIN_DIR, "../../components/Sidebar.tsx"), "utf8");
-        expect(src).toContain('${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full shadow-none"}');
+        expect(src).toContain('${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full shadow-none max-lg:invisible"}');
     });
 
     it("the logo keeps its square beside a long site name, and its glow is not clipped", async () => {

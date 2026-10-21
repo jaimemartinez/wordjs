@@ -7,7 +7,7 @@ import ConfirmationModal from "@/components/ConfirmationModal";
 import DialogLayer from "@/components/DialogLayer";
 import AiSuggestion from "@/components/AiSuggest";
 import { useToast } from "@/contexts/ToastContext";
-import { PageHeader, Button, EmptyState } from "@/components/ui";
+import { PageHeader, Button, EmptyState, DataTable, Pagination } from "@/components/ui";
 import {
     LIBRARY_PAGE_SIZE,
     buildMediaQuery,
@@ -26,37 +26,48 @@ const SEARCH_DEBOUNCE_MS = 400;
  * ('image') filtra todo `image/*`, un tipo completo ('application/pdf') filtra exacto. '' = sin filtro.
  * Se limita a las familias que la biblioteca puede recibir de verdad (ver Media.getAllowedMimeTypes).
  */
-const MIME_FILTERS: Array<{ label: string; value: string }> = [
-    { label: "Todos los tipos", value: "" },
-    { label: "Imágenes", value: "image" },
-    { label: "Vídeo", value: "video" },
-    { label: "Audio", value: "audio" },
-    { label: "PDF", value: "application/pdf" },
-    { label: "Texto", value: "text" },
+const MIME_FILTERS: Array<{ labelKey: string; value: string }> = [
+    { labelKey: "media.filter.allTypes", value: "" },
+    { labelKey: "media.filter.images", value: "image" },
+    { labelKey: "media.filter.video", value: "video" },
+    { labelKey: "media.filter.audio", value: "audio" },
+    { labelKey: "media.filter.pdf", value: "application/pdf" },
+    { labelKey: "media.filter.text", value: "text" },
 ];
 
 /**
  * Visibility filter. PRIVATE items live outside the public uploads folder and never appear in a public
  * listing; only people who may upload see them here (backend/src/core/private-media.ts).
  */
-const VISIBILITY_FILTERS: Array<{ label: string; value: "" | "public" | "private" }> = [
-    { label: "Públicos y privados", value: "" },
-    { label: "Solo públicos", value: "public" },
-    { label: "Solo privados", value: "private" },
+const VISIBILITY_FILTERS: Array<{ labelKey: string; value: "" | "public" | "private" }> = [
+    { labelKey: "media.filter.anyVisibility", value: "" },
+    { labelKey: "media.filter.publicOnly", value: "public" },
+    { labelKey: "media.filter.privateOnly", value: "private" },
 ];
 
 /** Small "Privado" badge shown on private items. */
 function PrivateBadge() {
+    const { t } = useI18n();
     return (
-        <span className="inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-violet-700 bg-violet-50 border border-violet-100 px-2 py-1 rounded-lg">
-            <i className="fa-solid fa-lock"></i> Privado
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-violet-700 bg-violet-50 border border-violet-100 px-2 py-1 rounded-lg">
+            <i className="fa-solid fa-lock" aria-hidden="true"></i> {t('media.private')}
         </span>
     );
 }
 
 const fieldClass =
     "w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-2xl text-sm font-medium text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300";
-const labelClass = "text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-1.5";
+const labelClass = "text-[11px] font-black uppercase tracking-widest text-gray-500 block mb-1.5";
+
+/** An image without alt text is invisible until someone audits the site; the library says so. */
+function MissingAltBadge() {
+    const { t } = useI18n();
+    return (
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg">
+            <i className="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {t('media.missingAlt')}
+        </span>
+    );
+}
 
 /**
  * File detail panel: preview + the four metadata fields `PUT /media/:id` accepts.
@@ -91,10 +102,10 @@ function MediaDetailModal({
         try {
             const updated = await mediaApi.update(item.id, { visibility: isPrivate ? "public" : "private" });
             onSaved(updated as EditableMediaItem);
-            addToast(isPrivate ? "El archivo ahora es público" : "El archivo ahora es privado", "success");
+            addToast(isPrivate ? t('media.nowPublic') : t('media.nowPrivate'), "success");
         } catch (error) {
             console.error("Failed to change media visibility:", error);
-            const message = error instanceof Error && error.message ? error.message : "No se pudo cambiar la visibilidad";
+            const message = error instanceof Error && error.message ? error.message : t('media.visibilityFailed');
             addToast(message, "error");
         } finally {
             setChangingVisibility(false);
@@ -119,12 +130,12 @@ function MediaDetailModal({
         try {
             const updated = await mediaApi.update(item.id, payload);
             onSaved(updated as EditableMediaItem);
-            addToast("Detalles del archivo guardados", "success");
+            addToast(t('media.detailsSaved'), "success");
         } catch (error) {
             console.error("Failed to update media:", error);
             // The backend answers a 403 `rest_forbidden` with a human message when the file belongs to
             // another user; show it instead of a generic error so nobody retries a denied edit.
-            const message = error instanceof Error && error.message ? error.message : "No se pudieron guardar los cambios";
+            const message = error instanceof Error && error.message ? error.message : t('media.saveFailed');
             addToast(message, "error");
         } finally {
             setSaving(false);
@@ -135,52 +146,52 @@ function MediaDetailModal({
         setDraft((d) => ({ ...d, [key]: e.target.value }));
 
     return (
-        <DialogLayer className="flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
+        <DialogLayer className="flex items-center justify-center p-3 sm:p-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
             <div className="absolute inset-0" onClick={onClose}></div>
-            <div className="relative bg-white rounded-[40px] overflow-y-auto md:overflow-hidden shadow-2xl max-w-5xl w-full max-h-[85dvh] flex flex-col md:flex-row animate-in zoom-in-95 duration-300">
-                <div className="flex-1 bg-gray-100/50 flex items-center justify-center p-8 min-h-[300px] relative">
+            <div role="dialog" aria-modal="true" aria-label={item.title} className="relative bg-white rounded-3xl md:rounded-[40px] overflow-y-auto md:overflow-hidden shadow-2xl max-w-5xl w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[85dvh] flex flex-col md:flex-row animate-in zoom-in-95 duration-300">
+                <div className="shrink-0 md:shrink md:flex-1 bg-gray-100/50 flex items-center justify-center p-4 sm:p-8 min-h-[200px] sm:min-h-[300px] relative">
                     <div className="absolute inset-0 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] opacity-50"></div>
                     {item.mimeType.startsWith('image/') ? (
                         <div className="relative w-full h-full flex items-center justify-center z-10">
                             <img
                                 src={item.sourceUrl}
                                 alt={item.alt || item.title}
-                                className="max-w-full max-h-[60vh] object-contain shadow-2xl rounded-2xl"
+                                className="max-w-full max-h-[40dvh] md:max-h-[60vh] object-contain shadow-2xl rounded-2xl"
                             />
                         </div>
                     ) : (
                         <i className="fa-solid fa-file text-9xl text-gray-300 relative z-10"></i>
                     )}
                 </div>
-                <div className="w-full md:w-[26rem] p-8 bg-white border-l border-gray-100 flex flex-col h-full overflow-y-auto">
-                    <button onClick={onClose} aria-label={t('common.close')} className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-900 flex items-center justify-center transition-colors">
+                <div className="w-full md:w-[26rem] p-5 sm:p-8 bg-white md:border-l border-gray-100 flex flex-col md:h-full md:overflow-y-auto">
+                    <button type="button" onClick={onClose} aria-label={t('common.close')} className="absolute top-3 right-3 sm:top-6 sm:right-6 z-20 w-11 h-11 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-900 flex items-center justify-center transition-colors">
                         <i className="fa-solid fa-xmark text-lg"></i>
                     </button>
 
                     <h3 className="text-2xl font-black text-gray-900 italic tracking-tighter mb-1 pr-12 break-words" title={item.title}>
                         {item.title}
                     </h3>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-6">Detalles del archivo</p>
+                    <p className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-6">{t('media.detailsTitle')}</p>
 
                     {/* Editable metadata — the four fields PUT /media/:id accepts. */}
                     <div className="space-y-4">
                         <div>
-                            <label className={labelClass} htmlFor="media-title">Título</label>
+                            <label className={labelClass} htmlFor="media-title">{t('media.field.title')}</label>
                             <input id="media-title" type="text" className={fieldClass} value={draft.title} onChange={setField("title")} />
                         </div>
                         <div>
-                            <label className={labelClass} htmlFor="media-alt">Texto alternativo</label>
+                            <label className={labelClass} htmlFor="media-alt">{t('media.field.alt')}</label>
                             <input
                                 id="media-alt"
                                 type="text"
                                 className={fieldClass}
                                 value={draft.alt}
                                 onChange={setField("alt")}
-                                placeholder="Describe la imagen para quien no puede verla"
+                                placeholder={t('media.field.altPlaceholder')}
                                 aria-describedby="media-alt-help"
                             />
-                            <p id="media-alt-help" className="text-[11px] font-medium text-gray-400 mt-1.5 leading-snug">
-                                Lo que anuncian los lectores de pantalla. Déjalo vacío solo si la imagen es decorativa.
+                            <p id="media-alt-help" className="text-[11px] font-medium text-gray-500 mt-1.5 leading-snug">
+                                {t('media.field.altHelp')}
                             </p>
                             {/^image\/(png|jpe?g|webp|gif|avif)$/i.test(item.mimeType) && (
                                 <div className="mt-2">
@@ -194,31 +205,29 @@ function MediaDetailModal({
                             )}
                         </div>
                         <div>
-                            <label className={labelClass} htmlFor="media-caption">Leyenda</label>
+                            <label className={labelClass} htmlFor="media-caption">{t('media.field.caption')}</label>
                             <input id="media-caption" type="text" className={fieldClass} value={draft.caption} onChange={setField("caption")} />
                         </div>
                         <div>
-                            <label className={labelClass} htmlFor="media-description">Descripción</label>
+                            <label className={labelClass} htmlFor="media-description">{t('media.field.description')}</label>
                             <textarea id="media-description" rows={3} className={`${fieldClass} resize-y`} value={draft.description} onChange={setField("description")} />
                         </div>
                     </div>
 
                     <div className="mt-6">
-                        <label className="flex items-start gap-3 cursor-pointer">
+                        <label className="flex items-start gap-3 cursor-pointer min-h-11">
                             <input
                                 type="checkbox"
-                                className="mt-1"
+                                className="mt-1 h-5 w-5 shrink-0"
                                 checked={isPrivate}
                                 disabled={changingVisibility}
                                 onChange={toggleVisibility}
                                 aria-describedby="media-private-help"
                             />
                             <span>
-                                <span className="text-sm font-bold text-gray-700">Archivo privado</span>
-                                <span id="media-private-help" className="block text-[11px] font-medium text-gray-400 mt-1 leading-snug">
-                                    Se guarda fuera de la carpeta pública: no tiene URL pública ni aparece en listados públicos.
-                                    Solo lo descargan los editores o un plugin autorizado (p. ej. descargas de pago). Si el archivo
-                                    fue público antes, su antigua URL pudo quedar en cachés o navegadores.
+                                <span className="text-sm font-bold text-gray-700">{t('media.field.private')}</span>
+                                <span id="media-private-help" className="block text-[11px] font-medium text-gray-500 mt-1 leading-snug">
+                                    {t('media.field.privateHelp')}
                                 </span>
                             </span>
                         </label>
@@ -249,7 +258,7 @@ function MediaDetailModal({
                             onClick={handleSave}
                             className="w-full"
                         >
-                            {saving ? t('common.saving') : "Guardar cambios"}
+                            {saving ? t('common.saving') : t('media.saveChanges')}
                         </Button>
                         <button
                             onClick={copyUrl}
@@ -425,7 +434,7 @@ export default function MediaPage() {
 
     return (
         <div
-            className="p-8 md:p-12 h-full w-full overflow-auto bg-gray-50/50 flex flex-col relative"
+            className="px-4 py-6 sm:p-8 md:p-12 h-full w-full overflow-auto bg-gray-50/50 flex flex-col relative"
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
@@ -456,7 +465,7 @@ export default function MediaPage() {
             {/* Drag Overlay */}
             {isDragging && (
                 <div className="absolute inset-0 z-[5000] bg-blue-600/90 flex flex-col items-center justify-center text-white backdrop-blur-md animate-in fade-in duration-300">
-                    <div className="w-40 h-40 shrink-0 rounded-[40px] border-4 border-dashed border-white/50 flex items-center justify-center mb-8 animate-bounce">
+                    <div className="w-40 h-40 shrink-0 rounded-3xl md:rounded-[40px] border-4 border-dashed border-white/50 flex items-center justify-center mb-8 animate-bounce">
                         <i className="fa-solid fa-cloud-arrow-up text-6xl"></i>
                     </div>
                     <h2 className="text-5xl font-black italic tracking-tighter mb-4">{t('media.drop.file')}</h2>
@@ -469,16 +478,17 @@ export default function MediaPage() {
                 title={t('media.title')}
                 subtitle={`${total} ${t('media.files.count')}`}
                 actions={
-                    <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap gap-3 md:gap-4 items-stretch lg:items-center w-full lg:w-auto">
                         {/* Search */}
                         <div className="relative group">
                             <i className="fa-solid fa-search absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
                             <input
-                                type="text"
+                                type="search"
+                                aria-label={t('media.search.placeholder')}
                                 placeholder={t('media.search.placeholder')}
                                 value={searchInput}
                                 onChange={(e) => setSearchInput(e.target.value)}
-                                className="w-full md:w-64 pl-12 pr-6 py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300 shadow-sm"
+                                className="w-full lg:w-64 pl-12 pr-6 py-3.5 lg:py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300 shadow-sm"
                             />
                         </div>
 
@@ -486,15 +496,15 @@ export default function MediaPage() {
                             el total y el paginador se recalculan con el filtro puesto. */}
                         <div className="relative group">
                             <i className="fa-solid fa-filter absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors pointer-events-none"></i>
-                            <label className="sr-only" htmlFor="media-type-filter">Filtrar por tipo de archivo</label>
+                            <label className="sr-only" htmlFor="media-type-filter">{t('media.filter.byType')}</label>
                             <select
                                 id="media-type-filter"
                                 value={mimeType}
                                 onChange={(e) => { setMimeType(e.target.value); setPage(1); }}
-                                className="w-full md:w-52 pl-12 pr-6 py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-sm appearance-none cursor-pointer"
+                                className="w-full lg:w-52 pl-12 pr-6 py-3.5 lg:py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-sm appearance-none cursor-pointer"
                             >
                                 {MIME_FILTERS.map((option) => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
                                 ))}
                             </select>
                         </div>
@@ -502,32 +512,36 @@ export default function MediaPage() {
                         {/* Visibility filter (public / private items). */}
                         <div className="relative group">
                             <i className="fa-solid fa-lock absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors pointer-events-none"></i>
-                            <label className="sr-only" htmlFor="media-visibility-filter">Filtrar por visibilidad</label>
+                            <label className="sr-only" htmlFor="media-visibility-filter">{t('media.filter.byVisibility')}</label>
                             <select
                                 id="media-visibility-filter"
                                 value={visibility}
                                 onChange={(e) => { setVisibility(e.target.value as "" | "public" | "private"); setPage(1); }}
-                                className="w-full md:w-52 pl-12 pr-6 py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-sm appearance-none cursor-pointer"
+                                className="w-full lg:w-52 pl-12 pr-6 py-3.5 lg:py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-sm appearance-none cursor-pointer"
                             >
                                 {VISIBILITY_FILTERS.map((option) => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
                                 ))}
                             </select>
                         </div>
 
                         {/* View Toggles */}
-                        <div className="flex bg-white rounded-2xl p-1.5 border-2 border-gray-100 shadow-sm">
+                        <div role="group" aria-label={t('media.list.view')} className="flex justify-center bg-white rounded-2xl p-1 border-2 border-gray-100 shadow-sm">
                             <button
+                                type="button"
                                 onClick={() => setViewMode('grid')}
                                 aria-label={t('media.grid.view')}
-                                className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'grid' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
+                                aria-pressed={viewMode === 'grid'}
+                                className={`flex-1 lg:flex-none w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'grid' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
                             >
                                 <i className="fa-solid fa-grid-2"></i>
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setViewMode('list')}
                                 aria-label={t('media.list.view')}
-                                className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'list' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
+                                aria-pressed={viewMode === 'list'}
+                                className={`flex-1 lg:flex-none w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'list' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
                             >
                                 <i className="fa-solid fa-list"></i>
                             </button>
@@ -543,9 +557,9 @@ export default function MediaPage() {
                         >
                             {uploading ? t('media.uploading') : t('media.upload')}
                         </Button>
-                        <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer whitespace-nowrap">
-                            <input type="checkbox" checked={uploadPrivate} onChange={(e) => setUploadPrivate(e.target.checked)} />
-                            Subir como privado
+                        <label className="flex items-center gap-2 min-h-11 text-xs font-bold text-gray-600 cursor-pointer whitespace-nowrap">
+                            <input type="checkbox" className="h-5 w-5" checked={uploadPrivate} onChange={(e) => setUploadPrivate(e.target.checked)} />
+                            {t('media.uploadPrivate')}
                         </label>
                         <input ref={fileInputRef} type="file" onChange={handleInputChange} className="hidden" multiple accept="image/*,video/*,application/pdf" />
                     </div>
@@ -567,9 +581,9 @@ export default function MediaPage() {
             {/* Content Area */}
             <div className="flex-1 pb-20">
                 {loading ? (
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6" role="status" aria-label={t('loading')}>
                         {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
-                            <div key={i} className="aspect-square bg-white rounded-[32px] animate-pulse border-2 border-gray-100"></div>
+                            <div key={i} className="aspect-square bg-white rounded-3xl md:rounded-[32px] animate-pulse border-2 border-gray-100"></div>
                         ))}
                     </div>
                 ) : media.length === 0 ? (
@@ -577,156 +591,121 @@ export default function MediaPage() {
                         icon="fa-images"
                         title={t('media.no.files.found')}
                         description={t('media.upload.new')}
+                        action={!search && !mimeType && !visibility ? (
+                            <Button icon="fa-cloud-arrow-up" onClick={() => fileInputRef.current?.click()}>{t('media.upload')}</Button>
+                        ) : (
+                            <Button variant="secondary" icon="fa-filter-circle-xmark" onClick={() => { setSearchInput(''); setSearch(''); setMimeType(''); setVisibility(''); setPage(1); }}>
+                                {t('table.clearFilters')}
+                            </Button>
+                        )}
                     />
                 ) : viewMode === 'grid' ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
+                    <ul className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-6" aria-label={t('media.title')}>
                         {media.map((item) => (
-                            <div
+                            <li
                                 key={item.id}
-                                onClick={() => setPreviewItem(item)}
-                                className="group relative bg-white border-2 border-gray-50 rounded-[32px] overflow-hidden shadow-lg shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-2 hover:border-blue-100 transition-all duration-500 cursor-pointer"
+                                className="group relative bg-white border-2 border-gray-50 rounded-3xl md:rounded-[32px] overflow-hidden shadow-lg shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:border-blue-100 transition-all duration-500 focus-within:ring-2 focus-within:ring-blue-400"
                             >
-                                <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden relative">
-                                    {item.mimeType.startsWith('image/') ? (
-                                        <div className="relative w-full h-full">
-                                            <img src={item.sourceUrl} alt={item.alt || item.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
-                                            <div className="absolute inset-0 bg-blue-900/0 group-hover:bg-blue-900/20 transition-colors duration-500"></div>
-                                        </div>
-                                    ) : (
-                                        <div className="w-full h-full flex items-center justify-center bg-gray-50 group-hover:bg-blue-50 transition-colors duration-500">
-                                            <i className="fa-solid fa-file-pdf text-5xl text-gray-300 group-hover:text-blue-500 group-hover:scale-110 transition-transform duration-500"></i>
-                                        </div>
-                                    )}
-
-                                    {/* Quick Actions Overlay */}
-                                    <div className="absolute inset-0 flex items-center justify-center opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-300 gap-3">
-                                        <button
-                                            onClick={(e) => confirmDelete(e, item.id)}
-                                            className="w-12 h-12 shrink-0 bg-white text-red-500 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 hover:scale-110 hover:bg-red-50"
-                                            title={t('common.delete')}
-                                            aria-label={t('common.delete')}
-                                        >
-                                            <i className="fa-solid fa-trash-can"></i>
-                                        </button>
-                                        <button
-                                            className="w-12 h-12 shrink-0 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
-                                            title={t('common.edit')}
-                                            aria-label={t('common.edit')}
-                                        >
-                                            <i className="fa-solid fa-pen-to-square"></i>
-                                        </button>
+                                {/* The whole card opens the file's details: one real button, so it is reachable by keyboard. */}
+                                <button type="button" onClick={() => setPreviewItem(item)} className="block w-full text-left outline-none" aria-label={`${t('media.details')}: ${item.title}`}>
+                                    <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden relative">
+                                        {item.mimeType.startsWith('image/') ? (
+                                            <img src={item.sourceUrl} alt="" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                                        ) : (
+                                            <i className="fa-solid fa-file-pdf text-5xl text-gray-300 group-hover:text-blue-500 transition-colors duration-500" aria-hidden="true"></i>
+                                        )}
                                     </div>
-                                </div>
-
-                                <div className="p-5">
-                                    <h4 className="text-sm font-bold text-gray-900 truncate mb-1" title={item.title}>{item.title}</h4>
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-[9px] uppercase font-black text-gray-400 tracking-wider bg-gray-100 px-2 py-1 rounded-lg">
-                                            {item.mimeType.split('/')[1]}
-                                        </span>
-                                        <span className="text-[10px] font-bold text-gray-400">
-                                            {new Date(item.date).toLocaleDateString()}
-                                        </span>
+                                    <div className="p-3 sm:p-5">
+                                        <h4 className="text-sm font-bold text-gray-900 truncate mb-1" title={item.title}>{item.title}</h4>
+                                        <div className="flex flex-wrap justify-between items-center gap-1">
+                                            <span className="text-[11px] uppercase font-black text-gray-500 tracking-wider bg-gray-100 px-2 py-1 rounded-lg">
+                                                {item.mimeType.split('/')[1]}
+                                            </span>
+                                            <span className="text-[11px] font-bold text-gray-500">
+                                                {new Date(item.date).toLocaleDateString()}
+                                            </span>
+                                        </div>
+                                        {item.visibility === "private" && <div className="mt-2"><PrivateBadge /></div>}
+                                        {item.mimeType.startsWith('image/') && !item.alt && <div className="mt-2"><MissingAltBadge /></div>}
                                     </div>
-                                    {item.visibility === "private" && <div className="mt-2"><PrivateBadge /></div>}
-                                    {/* Missing alt text is invisible until someone audits the site; surface it here. */}
-                                    {item.mimeType.startsWith('image/') && !item.alt && (
-                                        <span className="mt-2 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg">
-                                            <i className="fa-solid fa-triangle-exclamation"></i> Sin texto alternativo
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
+                                </button>
+                                {/* Delete sits on the image corner: always visible where nothing can hover. */}
+                                <button
+                                    type="button"
+                                    onClick={(e) => confirmDelete(e, item.id)}
+                                    className="absolute top-2 right-2 w-11 h-11 shrink-0 bg-white/95 text-red-500 rounded-2xl shadow-xl flex items-center justify-center opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity duration-300 hover:bg-red-50"
+                                    title={t('common.delete')}
+                                    aria-label={`${t('common.delete')}: ${item.title}`}
+                                >
+                                    <i className="fa-solid fa-trash-can" aria-hidden="true"></i>
+                                </button>
+                            </li>
                         ))}
-                    </div>
+                    </ul>
                 ) : (
-                    <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left">
-                                <thead className="bg-gray-50/50 border-b border-gray-100">
-                                    <tr>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.preview')}</th>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.name')}</th>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('media.type')}</th>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.date')}</th>
-                                        <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.actions')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-50">
-                                    {media.map((item) => (
-                                        <tr key={item.id} className="group hover:bg-blue-50/5 transition-colors cursor-pointer" onClick={() => setPreviewItem(item)}>
-                                            <td className="px-8 py-4 w-32">
-                                                <div className="w-16 h-16 shrink-0 bg-gray-100 rounded-2xl overflow-hidden shadow-sm group-hover:shadow-md transition-all flex items-center justify-center">
-                                                    {item.mimeType.startsWith('image/') ? (
-                                                        <img src={item.sourceUrl} alt={item.alt || item.title} className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <i className="fa-solid fa-file text-gray-300 text-xl"></i>
-                                                    )}
-                                                </div>
-                                            </td>
-                                            <td className="px-8 py-4">
-                                                <span className="font-bold text-gray-700 group-hover:text-blue-600 transition-colors italic tracking-tight text-lg">{item.title}</span>
-                                                {item.visibility === "private" && <span className="ml-3 align-middle"><PrivateBadge /></span>}
-                                                {item.mimeType.startsWith('image/') && !item.alt && (
-                                                    <span className="ml-3 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg align-middle">
-                                                        <i className="fa-solid fa-triangle-exclamation"></i> Sin texto alternativo
-                                                    </span>
+                    <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
+                        <DataTable
+                            rows={media}
+                            rowKey={(item) => item.id}
+                            caption={t('media.title')}
+                            rowLabel={(item) => item.title}
+                            actionsLabel={t('common.actions')}
+                            columns={[
+                                {
+                                    key: "name",
+                                    header: t('common.name'),
+                                    primary: true,
+                                    cell: (item) => (
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-14 h-14 md:w-16 md:h-16 shrink-0 bg-gray-100 rounded-2xl overflow-hidden shadow-sm flex items-center justify-center">
+                                                {item.mimeType.startsWith('image/') ? (
+                                                    <img src={item.sourceUrl} alt="" className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <i className="fa-solid fa-file text-gray-300 text-xl" aria-hidden="true"></i>
                                                 )}
-                                            </td>
-                                            <td className="px-8 py-4">
-                                                <span className="bg-gray-100 text-gray-500 px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wide">
-                                                    {item.mimeType}
-                                                </span>
-                                            </td>
-                                            <td className="px-8 py-4 font-bold text-gray-400 text-sm">{new Date(item.date).toLocaleDateString()}</td>
-                                            <td className="px-8 py-4 text-right">
-                                                <button
-                                                    onClick={(e) => confirmDelete(e, item.id)}
-                                                    aria-label={t('common.delete')}
-                                                    title={t('common.delete')}
-                                                    className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 ml-auto opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 translate-x-0 [@media(hover:hover)]:translate-x-2 group-hover:translate-x-0 group-focus-within:translate-x-0 duration-300"
-                                                >
-                                                    <i className="fa-solid fa-trash-can text-sm"></i>
+                                            </div>
+                                            <div className="min-w-0">
+                                                <button type="button" onClick={() => setPreviewItem(item)} className="text-left font-bold text-gray-700 hover:text-blue-600 transition-colors italic tracking-tight text-base md:text-lg break-all">
+                                                    {item.title}
                                                 </button>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                                <div className="flex flex-wrap gap-2 mt-1">
+                                                    {item.visibility === "private" && <PrivateBadge />}
+                                                    {item.mimeType.startsWith('image/') && !item.alt && <MissingAltBadge />}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ),
+                                },
+                                {
+                                    key: "type",
+                                    header: t('media.type'),
+                                    cell: (item) => <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wide break-all">{item.mimeType}</span>,
+                                },
+                                {
+                                    key: "date",
+                                    header: t('common.date'),
+                                    cell: (item) => <span className="font-bold text-gray-500 text-sm">{new Date(item.date).toLocaleDateString()}</span>,
+                                },
+                            ]}
+                            actions={(item) => [
+                                { key: "details", label: t('media.details'), icon: "fa-pen-to-square", onClick: () => setPreviewItem(item), tone: "primary" },
+                                { key: "delete", label: t('common.delete'), icon: "fa-trash-can", onClick: () => { setMediaToDelete(item.id); setDeleteModalOpen(true); }, tone: "danger" },
+                            ]}
+                        />
                     </div>
                 )}
 
                 {/* Pager — the counter and the page count come from the server's X-WP-Total headers, so
                     they describe the whole library and not the slice currently on screen. */}
                 {!loading && total > 0 && (
-                    <div className="mt-8 bg-white rounded-[28px] border-2 border-gray-50 shadow-sm px-6 py-4 flex items-center justify-between gap-4">
-                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                            {range.from}–{range.to} de {range.total} {t('media.files.count')}
-                        </span>
-                        {totalPages > 1 && (
-                            <div className="flex items-center gap-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                                    disabled={page <= 1}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                                >
-                                    <i className="fa-solid fa-chevron-left mr-2"></i>{t('table.previous')}
-                                </button>
-                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">
-                                    {t('table.pageOf').replace('{page}', String(page)).replace('{total}', String(totalPages))}
-                                </span>
-                                <button
-                                    type="button"
-                                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                                    disabled={page >= totalPages}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                                >
-                                    {t('table.next')}<i className="fa-solid fa-chevron-right ml-2"></i>
-                                </button>
-                            </div>
-                        )}
+                    <div className="mt-6 md:mt-8 bg-white rounded-3xl md:rounded-[28px] border-2 border-gray-50 shadow-sm overflow-hidden">
+                        <Pagination
+                            page={page}
+                            totalPages={totalPages}
+                            onChange={setPage}
+                            className="border-t-0 bg-white"
+                            label={`${t('media.range').replace('{from}', String(range.from)).replace('{to}', String(range.to)).replace('{total}', String(range.total))} ${t('media.files.count')}`}
+                        />
                     </div>
                 )}
             </div>

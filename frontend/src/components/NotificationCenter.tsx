@@ -286,7 +286,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                 {unreadCount > 0 && (
                     <span className={`absolute -top-1 -right-1 flex ${variant === 'floating' ? 'h-6 w-6' : 'h-4 w-4'}`}>
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                        <span className={`relative inline-flex shrink-0 rounded-full bg-rose-500 text-white font-bold items-center justify-center border-2 border-white ${variant === 'floating' ? 'h-6 w-6 text-[10px]' : 'h-4 w-4 text-[7px]'}`}>
+                        <span className={`relative inline-flex shrink-0 rounded-full bg-rose-500 text-white font-bold items-center justify-center border-2 border-white ${variant === 'floating' ? 'h-6 w-6 text-[11px]' : 'h-4 w-4 text-[7px]'}`}>
                             {unreadCount > 9 ? '9+' : unreadCount}
                         </span>
                     </span>
@@ -419,7 +419,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
 
                     {notifications.length > 0 && (
                         <div className="px-10 py-8 bg-gray-50/30 flex items-center justify-center border-t border-gray-50/50">
-                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.25em]">
+                            <p className="text-[11px] font-black text-gray-400 uppercase tracking-[0.25em]">
                                 {t('notif.historyEnd')}
                             </p>
                         </div>

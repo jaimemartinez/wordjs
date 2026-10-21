@@ -214,7 +214,7 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
             <div className="max-w-4xl mx-auto">
                 <PageHeader
                     title={t('settings.title')}
@@ -316,7 +316,7 @@ export default function SettingsPage() {
 
                 <form onSubmit={handleSubmit} className="space-y-8">
                     {/* General Settings Section */}
-                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
+                    <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
                             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                                 <i className="fa-solid fa-gear text-blue-500"></i> {t('settings.general')}
@@ -344,7 +344,7 @@ export default function SettingsPage() {
                                     ) : (
                                         <div className="h-32 w-32 shrink-0 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-blue-400 group-hover:bg-blue-50/30 transition-all">
                                             <i className="fa-solid fa-image text-3xl mb-2"></i>
-                                            <span className="text-[10px] uppercase font-bold tracking-widest">{t('settings.no.logo')}</span>
+                                            <span className="text-[11px] uppercase font-bold tracking-widest">{t('settings.no.logo')}</span>
                                         </div>
                                     )}
                                 </div>
@@ -377,13 +377,13 @@ export default function SettingsPage() {
                                                 onClick={() => setSettings({ ...settings, site_icon: "" })}
                                                 className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow-lg opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity transform hover:scale-110"
                                             >
-                                                <i className="fa-solid fa-xmark text-[10px]"></i>
+                                                <i className="fa-solid fa-xmark text-[11px]"></i>
                                             </button>
                                         </div>
                                     ) : (
                                         <div className="h-20 w-20 shrink-0 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-purple-400 group-hover:bg-purple-50/30 transition-all">
                                             <i className="fa-solid fa-gem text-xl mb-1"></i>
-                                            <span className="text-[8px] uppercase font-bold tracking-widest text-center">{t('settings.no.icon')}</span>
+                                            <span className="text-[11px] leading-tight uppercase font-bold tracking-wide text-center">{t('settings.no.icon')}</span>
                                         </div>
                                     )}
                                 </div>
@@ -486,7 +486,7 @@ export default function SettingsPage() {
                     </div>
 
                     {/* Content Settings Section */}
-                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
+                    <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
                             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                                 <i className="fa-solid fa-book-open text-purple-500"></i> {t('settings.reading.discussion')}
@@ -700,7 +700,7 @@ export default function SettingsPage() {
                         </div>
                     </div>
                     {/* Performance Section */}
-                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
+                    <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
                             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                                 <i className="fa-solid fa-bolt text-amber-500"></i> {t('settings.performance.cache')}

@@ -265,7 +265,7 @@ export default function MenusPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 flex flex-col pb-20">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 flex flex-col pb-20">
             <ConfirmationModal
                 isOpen={deleteModalOpen}
                 onClose={() => setDeleteModalOpen(false)}
@@ -296,7 +296,7 @@ export default function MenusPage() {
                 <div className="lg:col-span-4 space-y-6">
 
                     {/* Selector & Create */}
-                    <div className="bg-white p-8 rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 relative overflow-hidden group hover:border-blue-50 transition-all duration-300">
+                    <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 relative overflow-hidden group hover:border-blue-50 transition-all duration-300">
                         {/* Background Blob */}
                         <div className="absolute -right-10 -top-10 w-40 h-40 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full blur-[60px] opacity-10 group-hover:opacity-20 transition-opacity duration-700 pointer-events-none"></div>
 
@@ -320,7 +320,7 @@ export default function MenusPage() {
                         </div>
 
                         <div className="border-t border-gray-100 pt-6">
-                            <h4 className="text-[10px] font-black text-gray-400 uppercase mb-3 tracking-widest">{t('menus.createNewMenu')}</h4>
+                            <h4 className="text-[11px] font-black text-gray-400 uppercase mb-3 tracking-widest">{t('menus.createNewMenu')}</h4>
                             <form onSubmit={handleCreateMenu} className="flex gap-2">
                                 <input
                                     type="text"
@@ -338,7 +338,7 @@ export default function MenusPage() {
                     </div>
 
                     {/* Add Items Tools */}
-                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
+                    <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="p-6 bg-gray-50/50 border-b border-gray-100">
                             <h3 className="font-black text-lg text-gray-900 italic tracking-tight">{t('menus.addItems')}</h3>
                         </div>
@@ -460,7 +460,7 @@ export default function MenusPage() {
 
                 {/* RIGHT COLUMN - STRUCTURE */}
                 <div className="lg:col-span-8">
-                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 h-[800px] flex flex-col overflow-hidden relative">
+                    <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 h-[800px] flex flex-col overflow-hidden relative">
                         {/* Background Decoration */}
                         <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-bl from-gray-50 to-transparent rounded-bl-[100px] pointer-events-none opacity-50"></div>
 
@@ -488,7 +488,7 @@ export default function MenusPage() {
                                                     checked={locations[loc.key] === activeMenu.id}
                                                     onChange={(e) => toggleLocation(loc.key, e.target.checked)}
                                                 />
-                                                <i className="fa-solid fa-check absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white text-[10px] opacity-0 peer-checked:opacity-100 pointer-events-none"></i>
+                                                <i className="fa-solid fa-check absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white text-[11px] opacity-0 peer-checked:opacity-100 pointer-events-none"></i>
                                             </div>
                                             <span className="text-xs font-black uppercase tracking-wider text-gray-500 group-hover:text-blue-700 transition-colors">
                                                 {loc.label}
@@ -510,7 +510,7 @@ export default function MenusPage() {
                                 </div>
                             ) : activeMenu.items.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-8 border-4 border-dashed border-gray-100 rounded-[32px]">
-                                    <div className="w-20 h-20 shrink-0 bg-blue-50 rounded-[40px] flex items-center justify-center mb-6 text-blue-300 animate-pulse">
+                                    <div className="w-20 h-20 shrink-0 bg-blue-50 rounded-3xl md:rounded-[40px] flex items-center justify-center mb-6 text-blue-300 animate-pulse">
                                         <i className="fa-solid fa-layer-group text-3xl"></i>
                                     </div>
                                     <h3 className="text-xl font-black text-gray-900 mb-2 italic tracking-tight">{t('menus.emptyMenu')}</h3>
@@ -526,9 +526,10 @@ export default function MenusPage() {
                                             className={`group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 ${editingItemId === item.id ? 'border-2 border-blue-500 ring-4 ring-blue-500/10 z-20 relative scale-[1.02]' : 'border border-gray-100 hover:border-blue-200 hover:-translate-y-1'}`}
                                         >
                                             {/* Item Header */}
-                                            <div className="p-4 pl-6 flex items-center justify-between">
-                                                <div className="flex items-center gap-5">
-                                                    <div className="flex flex-col">
+                                            <div className="p-3 sm:p-4 sm:pl-6 flex items-center justify-between gap-2">
+                                                <div className="flex items-center gap-2 sm:gap-5 min-w-0">
+                                                    {/* Stacked arrows for a mouse; side by side where each needs a finger's room. */}
+                                                    <div className="flex flex-col pointer-coarse:flex-row shrink-0">
                                                         <button
                                                             onClick={() => moveItem(item, 'up')}
                                                             disabled={index === 0}
@@ -548,7 +549,7 @@ export default function MenusPage() {
                                                     </div>
                                                     <div>
                                                         <span className="font-bold text-gray-800 block text-base mb-1">{item.title}</span>
-                                                        <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg ${item.type === 'post' ? 'bg-indigo-50 text-indigo-500' : 'bg-blue-50 text-blue-500'}`}>
+                                                        <span className={`text-[11px] font-black uppercase tracking-widest px-2 py-1 rounded-lg ${item.type === 'post' ? 'bg-indigo-50 text-indigo-500' : 'bg-blue-50 text-blue-500'}`}>
                                                             {item.type === 'post' ? t('menus.typePage') : t('menus.typeLink')}
                                                         </span>
                                                     </div>
@@ -556,14 +557,21 @@ export default function MenusPage() {
 
                                                 <div className="flex items-center gap-2">
                                                     <button
+                                                        type="button"
                                                         onClick={() => startEditing(item)}
-                                                        className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center transition-all ${editingItemId === item.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white hover:shadow-md'}`}
+                                                        aria-label={editingItemId === item.id ? t('common.close') : t('common.edit')}
+                                                        aria-expanded={editingItemId === item.id}
+                                                        title={editingItemId === item.id ? t('common.close') : t('common.edit')}
+                                                        className={`w-11 h-11 shrink-0 rounded-xl flex items-center justify-center transition-all ${editingItemId === item.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white hover:shadow-md'}`}
                                                     >
                                                         <i className={`fa-solid ${editingItemId === item.id ? 'fa-xmark' : 'fa-pen'}`}></i>
                                                     </button>
                                                     <button
+                                                        type="button"
                                                         onClick={() => confirmDeleteItem(item.id)}
-                                                        className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:shadow-md"
+                                                        aria-label={t('common.delete')}
+                                                        title={t('common.delete')}
+                                                        className="w-11 h-11 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:shadow-md"
                                                     >
                                                         <i className="fa-solid fa-trash-can"></i>
                                                     </button>
@@ -575,7 +583,7 @@ export default function MenusPage() {
                                                 <div className="px-6 pb-6 pt-2 animate-in slide-in-from-top-4 duration-300">
                                                     <div className="bg-gray-50 rounded-xl p-6 border-2 border-gray-100 space-y-5">
                                                         <div>
-                                                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('menus.navigationLabel')}</label>
+                                                            <label className="block text-[11px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('menus.navigationLabel')}</label>
                                                             <input
                                                                 type="text"
                                                                 className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-sm font-bold text-gray-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all"
@@ -585,8 +593,8 @@ export default function MenusPage() {
                                                         </div>
                                                         {item.type === 'custom' && (
                                                             <div>
-                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('menus.url')}</label>
-                                                                <input
+                                                                <label htmlFor={`menu-item-url-${item.id}`} className="block text-[11px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('menus.url')}</label>
+                                                                <input id={`menu-item-url-${item.id}`}
                                                                     type="text"
                                                                     className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-600 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all"
                                                                     value={editFormData.url || ''}

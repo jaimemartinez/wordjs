@@ -5,7 +5,7 @@ import { usersApi, User } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader, Button, EmptyState, StatusBadge } from "@/components/ui";
+import { PageHeader, Button, EmptyState, StatusBadge, DataTable } from "@/components/ui";
 import UserFormModal from "./UserFormModal";
 import { useRolesMap } from "@/lib/useRoleOptions";
 import { roleDisplayName, roleNameFrom } from "@/lib/roleOptions";
@@ -55,105 +55,84 @@ export default function UsersPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
 
             <PageHeader
                 title={type === "subscribers" ? t('users.subscribers') : t('users.team.members')}
-                subtitle={`${users.length} ${type === "subscribers" ? "subscribers" : "team members"}`}
+                subtitle={(type === "subscribers" ? t("users.count.subscribers") : t("users.count.team")).replace("{n}", String(users.length))}
                 actions={
                     <Button icon="fa-plus" onClick={() => setSelectedUser("new")}>{t('users.new')}</Button>
                 }
             />
 
-            {/* Premium Table Container */}
-            <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
+            <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
                 {loading ? (
-                    <div className="p-20 text-center">
-                        <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <div className="p-20 text-center" role="status">
+                        <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" aria-hidden="true"></div>
                         <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{t('loading')}</p>
                     </div>
                 ) : users.length === 0 ? (
                     <EmptyState
                         icon="fa-users"
                         title={t('users.not.found') || "No users found"}
-                        description="Create your first user to get started."
+                        description={t('users.empty.description')}
                         action={
                             <Button icon="fa-plus" onClick={() => setSelectedUser("new")}>{t('users.new')}</Button>
                         }
                     />
                 ) : (
-                    <div className="overflow-x-auto">
-                        <table className="w-full">
-                            <thead>
-                                <tr className="border-b border-gray-100/50 bg-gray-50/30">
-                                    <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                        {t('users.title')}
-                                    </th>
-                                    <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                        {t('users.email')}
-                                    </th>
-                                    <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                        {t('users.role')}
-                                    </th>
-                                    <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                        {t('actions')}
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-50">
-                                {users.map((user) => (
-                                    <tr key={user.id} className="group hover:bg-blue-50/5 transition-colors">
-                                        <td className="px-8 py-6">
-                                            <div className="flex items-center gap-4">
-                                                <div className="w-12 h-12 shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-200 group-hover:scale-110 transition-transform">
-                                                    {user.displayName?.[0]?.toUpperCase() || user.username[0]?.toUpperCase()}
-                                                </div>
-                                                <div>
-                                                    <button onClick={() => setSelectedUser(user)} className="text-left">
-                                                        <span className="text-lg font-bold text-gray-700 group-hover:text-blue-600 transition-colors italic tracking-tight">
-                                                            {user.displayName || user.username}
-                                                        </span>
-                                                    </button>
-                                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mt-0.5">
-                                                        @{user.username}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td className="px-8 py-6">
-                                            <span className="text-sm font-bold text-gray-500">{user.email}</span>
-                                        </td>
-                                        <td className="px-8 py-6">
-                                            {/* The role's name (lib/roleOptions.ts roleDisplayName), not its slug:
-                                                «conference_manager_team» for a plugin team member. */}
-                                            <StatusBadge
-                                                status={user.role === "administrator" ? "success" : user.role === "editor" ? "info" : "neutral"}
-                                                label={roleDisplayName({ role: user.role, roleName: roleNameFrom(roles, user.role) }, t)}
-                                            />
-                                        </td>
-                                        <td className="px-8 py-6 text-right">
-                                            <div className="flex items-center justify-end gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity translate-x-0 [@media(hover:hover)]:translate-x-4 group-hover:translate-x-0 focus-within:translate-x-0 duration-300">
-                                                <button
-                                                    onClick={() => setSelectedUser(user)}
-                                                    className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-blue-200"
-                                                    title={t('users.edit')}
-                                                >
-                                                    <i className="fa-solid fa-pen text-xs"></i>
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDelete(user.id)}
-                                                    className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200"
-                                                    title="Delete"
-                                                >
-                                                    <i className="fa-solid fa-trash text-xs"></i>
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    <DataTable
+                        rows={users}
+                        rowKey={(u) => u.id}
+                        caption={type === "subscribers" ? t('users.subscribers') : t('users.team.members')}
+                        rowLabel={(u) => u.displayName || u.username}
+                        actionsLabel={t('actions')}
+                        columns={[
+                            {
+                                key: "user",
+                                header: t('users.title'),
+                                primary: true,
+                                cell: (user) => (
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-11 h-11 md:w-12 md:h-12 shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-200" aria-hidden="true">
+                                            {user.displayName?.[0]?.toUpperCase() || user.username[0]?.toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <button type="button" onClick={() => setSelectedUser(user)} className="text-left pointer-coarse:min-h-11">
+                                                <span className="text-base md:text-lg font-bold text-gray-700 hover:text-blue-600 transition-colors italic tracking-tight break-words">
+                                                    {user.displayName || user.username}
+                                                </span>
+                                            </button>
+                                            <span className="text-[11px] font-bold text-gray-400 tracking-wider block break-all">
+                                                @{user.username}
+                                            </span>
+                                        </div>
+                                    </div>
+                                ),
+                            },
+                            {
+                                key: "email",
+                                header: t('users.email'),
+                                cell: (user) => <span className="text-sm font-bold text-gray-500 break-all">{user.email}</span>,
+                            },
+                            {
+                                key: "role",
+                                header: t('users.role'),
+                                // The role's name (lib/roleOptions.ts roleDisplayName), not its slug:
+                                // «conference_manager_team» for a plugin team member.
+                                cell: (user) => (
+                                    <StatusBadge
+                                        status={user.role === "administrator" ? "success" : user.role === "editor" ? "info" : "neutral"}
+                                        label={roleDisplayName({ role: user.role, roleName: roleNameFrom(roles, user.role) }, t)}
+                                    />
+                                ),
+                            },
+                        ]}
+                        actions={(user) => [
+                            { key: "edit", label: t('users.edit'), icon: "fa-pen", onClick: () => setSelectedUser(user), tone: "primary" },
+                            { key: "delete", label: t('delete'), icon: "fa-trash", onClick: () => handleDelete(user.id), tone: "danger" },
+                        ]}
+                    />
                 )}
             </div>
 

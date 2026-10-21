@@ -15,7 +15,8 @@ import { postsApi, Post } from "@/lib/api";
 import { previewHref } from "@/lib/previewHref";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
-import { Button, EmptyState, StatusBadge } from "@/components/ui";
+import { Button, DataTable, EmptyState, Pagination, StatusBadge } from "@/components/ui";
+import type { DataTableAction, DataTableColumn } from "@/components/ui";
 
 const PER_PAGE = 20;
 
@@ -125,160 +126,136 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
     // A draft opens its preview AS ITS TYPE (lib/previewHref): a page sharing the slug must not answer for it.
     const viewHref = (p: Post) => p.status === "publish" ? `/${p.slug || p.id}` : previewHref(p.slug || p.id, p.type);
 
+    const filtered = !!search || status !== 'any';
+
+    const columns: DataTableColumn<Post>[] = [
+        {
+            key: "title",
+            header: t('posts.title.field'),
+            primary: true,
+            cell: (post) => (
+                <Link href={`${basePath}/${post.id}`} className="block min-h-11 py-1 group/title">
+                    <span className="text-base md:text-lg font-bold text-gray-700 group-hover/title:text-blue-600 transition-colors line-clamp-2 xl:line-clamp-1 italic tracking-tight">
+                        {post.title || t('table.untitled')}
+                    </span>
+                    <span className="block text-[11px] font-bold text-gray-400 tracking-wide break-all">
+                        /{post.slug || post.id}
+                    </span>
+                </Link>
+            ),
+        },
+        {
+            key: "author",
+            header: t('posts.author'),
+            showFrom: "lg",
+            cell: (post) => (
+                <div className="flex items-center justify-end md:justify-start gap-3">
+                    <div className="w-8 h-8 shrink-0 rounded-xl bg-gray-100 hidden md:flex items-center justify-center text-xs font-bold text-gray-500" aria-hidden="true">
+                        {post.author?.displayName?.[0] || 'U'}
+                    </div>
+                    <span className="text-sm font-bold text-gray-600">{post.author?.displayName || t('table.unknownAuthor')}</span>
+                </div>
+            ),
+        },
+        { key: "status", header: t('posts.status'), cell: (post) => <StatusBadge {...statusBadgeView(post.status, t)} /> },
+        {
+            key: "date",
+            header: t('posts.date'),
+            className: "whitespace-nowrap",
+            cell: (post) => <span className="text-sm font-bold text-gray-500">{new Date(post.date).toLocaleDateString()}</span>,
+        },
+    ];
+
+    const rowActions = (post: Post): DataTableAction[] => [
+        { key: "edit", label: t('edit'), icon: "fa-pen", href: `${basePath}/${post.id}`, tone: "primary" },
+        { key: "view", label: post.status === 'publish' ? t('common.view') : t('table.previewDraft'), icon: "fa-eye", href: viewHref(post), external: true, tone: "success" },
+        { key: "duplicate", label: t('table.duplicate'), icon: "fa-copy", onClick: () => handleDuplicate(post), disabled: busy, tone: "warning", menu: true },
+        { key: "delete", label: t('delete'), icon: "fa-trash", onClick: () => handleDelete([post.id]), disabled: busy, tone: "danger", menu: true },
+    ];
+
     return (
-        <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
-            {/* Toolbar: search + status tabs */}
-            <div className="px-8 pt-6 pb-4 flex flex-wrap items-center gap-4 border-b border-gray-100/50 bg-gray-50/30">
-                <div className="relative flex-1 min-w-[220px] max-w-sm">
-                    <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 text-xs"></i>
+        <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
+            {/* Toolbar: search + status filter. Wraps on a phone instead of scrolling. */}
+            <div className="px-4 sm:px-8 pt-5 pb-4 flex flex-wrap items-center gap-3 border-b border-gray-100/50 bg-gray-50/30">
+                <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-[220px] sm:max-w-sm">
+                    <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 text-xs" aria-hidden="true"></i>
                     <input
-                        type="text"
+                        type="search"
                         value={searchInput}
                         onChange={(e) => setSearchInput(e.target.value)}
                         placeholder={t('search') || 'Search…'}
                         aria-label={t('search') || 'Search…'}
-                        className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300"
+                        className="w-full h-11 pl-10 pr-4 rounded-xl border border-gray-200 bg-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300"
                     />
                 </div>
-                <div className="flex items-center gap-1 bg-white border border-gray-100 rounded-xl p-1">
+                <div role="group" aria-label={t('posts.status')} className="w-full sm:w-auto flex flex-wrap items-center gap-1 bg-white border border-gray-100 rounded-xl p-1">
                     {STATUS_TABS.map((tab) => (
                         <button
                             key={tab.key}
+                            type="button"
+                            aria-pressed={status === tab.key}
                             onClick={() => { setStatus(tab.key); setPage(1); }}
-                            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${status === tab.key ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-600'}`}
+                            className={`flex-1 sm:flex-none min-h-11 px-3 sm:px-4 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${status === tab.key ? 'bg-blue-600 text-white shadow' : 'text-gray-500 hover:text-gray-700'}`}
                         >
                             {t(tab.labelKey)}
                         </button>
                     ))}
                 </div>
-                <span className="ml-auto text-[10px] font-black text-gray-400 uppercase tracking-widest">{total} {t('table.total')}</span>
+                <span className="ml-auto text-[11px] font-black text-gray-500 uppercase tracking-widest" aria-live="polite">{total} {t('table.total')}</span>
             </div>
 
             {/* Bulk bar */}
             {selected.size > 0 && (
-                <div className="px-8 py-3 bg-blue-50/60 border-b border-blue-100 flex items-center gap-4 animate-in fade-in duration-200">
+                <div className="px-4 sm:px-8 py-3 bg-blue-50/60 border-b border-blue-100 flex flex-wrap items-center gap-3 animate-in fade-in duration-200">
                     <span className="text-xs font-bold text-blue-700">{selected.size} {t('table.selected')}</span>
                     <button
+                        type="button"
                         onClick={() => handleDelete(Array.from(selected))}
                         disabled={busy}
-                        className="px-4 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50 transition-all"
+                        className="min-h-11 px-4 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50 transition-all"
                     >
-                        <i className="fa-solid fa-trash mr-1.5"></i>{t('delete') || 'Delete'}
+                        <i className="fa-solid fa-trash mr-1.5" aria-hidden="true"></i>{t('delete') || 'Delete'}
                     </button>
-                    <button onClick={() => setSelected(new Set())} className="text-xs font-bold text-gray-400 hover:text-gray-600">{t('table.clear')}</button>
+                    <button type="button" onClick={() => setSelected(new Set())} className="min-h-11 px-3 text-xs font-bold text-gray-500 hover:text-gray-700">{t('table.clear')}</button>
                 </div>
             )}
 
             {loading ? (
-                <div className="p-20 text-center">
-                    <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <div className="p-20 text-center" role="status">
+                    <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" aria-hidden="true"></div>
                     <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{t('loading')}</p>
                 </div>
             ) : items.length === 0 ? (
                 <EmptyState
-                    icon={emptyIcon}
-                    title={search || status !== 'any' ? (t('no.results') || 'Nothing matches your filters.') : emptyTitle}
-                    description={search || status !== 'any' ? '' : (t('no.posts.desc') || 'Create your first one to get started.')}
-                    action={
+                    icon={filtered ? "fa-filter" : emptyIcon}
+                    title={filtered ? (t('no.results') || 'Nothing matches your filters.') : emptyTitle}
+                    description={filtered ? '' : (t('no.posts.desc') || 'Create your first one to get started.')}
+                    action={filtered ? (
+                        <Button variant="secondary" icon="fa-filter-circle-xmark" onClick={() => { setSearchInput(''); setSearch(''); setStatus('any'); setPage(1); }}>
+                            {t('table.clearFilters')}
+                        </Button>
+                    ) : (
                         <Link href={`${basePath}/new`}>
                             <Button icon="fa-plus">{newLabel}</Button>
                         </Link>
-                    }
+                    )}
                 />
             ) : (
-                <div className="overflow-x-auto">
-                    <table className="w-full">
-                        <thead>
-                            <tr className="border-b border-gray-100/50 bg-gray-50/30">
-                                <th className="pl-8 pr-2 py-6 w-10">
-                                    <input type="checkbox" checked={selected.size === items.length && items.length > 0} onChange={toggleAll}
-                                        aria-label={t('table.selectAll')}
-                                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400" />
-                                </th>
-                                <th className="px-6 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('posts.title.field')}</th>
-                                <th className="px-6 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('posts.author')}</th>
-                                <th className="px-6 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('posts.status')}</th>
-                                <th className="px-6 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('posts.date')}</th>
-                                <th className="px-6 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('actions')}</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                            {items.map((post) => (
-                                <tr key={post.id} className={`group transition-colors ${selected.has(post.id) ? 'bg-blue-50/40' : 'hover:bg-blue-50/5'}`}>
-                                    <td className="pl-8 pr-2 py-6">
-                                        <input type="checkbox" checked={selected.has(post.id)} onChange={() => toggle(post.id)}
-                                            aria-label={t('table.selectRow').replace('{title}', post.title || `#${post.id}`)}
-                                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400" />
-                                    </td>
-                                    <td className="px-6 py-6">
-                                        <Link href={`${basePath}/${post.id}`} className="block">
-                                            <span className="text-lg font-bold text-gray-700 group-hover:text-blue-600 transition-colors line-clamp-1 italic tracking-tight">
-                                                {post.title || '(untitled)'}
-                                            </span>
-                                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-blue-400 transition-colors">
-                                                /{post.slug || post.id}
-                                            </span>
-                                        </Link>
-                                    </td>
-                                    <td className="px-6 py-6">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 shrink-0 rounded-xl bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500">
-                                                {post.author?.displayName?.[0] || 'U'}
-                                            </div>
-                                            <span className="text-sm font-bold text-gray-600">{post.author?.displayName || "Unknown"}</span>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-6">
-                                        <StatusBadge {...statusBadgeView(post.status, t)} />
-                                    </td>
-                                    <td className="px-6 py-6">
-                                        <span className="text-sm font-bold text-gray-500">{new Date(post.date).toLocaleDateString()}</span>
-                                    </td>
-                                    <td className="px-6 py-6 text-right">
-                                        <div className="flex items-center justify-end gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity translate-x-0 [@media(hover:hover)]:translate-x-4 group-hover:translate-x-0 group-focus-within:translate-x-0 duration-300">
-                                            <a href={viewHref(post)} target="_blank" rel="noopener noreferrer"
-                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
-                                                title={post.status === 'publish' ? 'View' : 'Preview draft'}>
-                                                <i className="fa-solid fa-eye text-xs"></i>
-                                            </a>
-                                            <button onClick={() => handleDuplicate(post)} disabled={busy}
-                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-amber-500 hover:text-white flex items-center justify-center transition-all shadow-sm disabled:opacity-50"
-                                                title="Duplicate">
-                                                <i className="fa-solid fa-copy text-xs"></i>
-                                            </button>
-                                            <Link href={`${basePath}/${post.id}`}
-                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
-                                                title={t('edit')}>
-                                                <i className="fa-solid fa-pen text-xs"></i>
-                                            </Link>
-                                            <button onClick={() => handleDelete([post.id])} disabled={busy}
-                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm disabled:opacity-50"
-                                                title={t('delete')}>
-                                                <i className="fa-solid fa-trash text-xs"></i>
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                <DataTable
+                    rows={items}
+                    rowKey={(p) => p.id}
+                    columns={columns}
+                    caption={t(type === 'page' ? 'nav.pages' : 'nav.posts')}
+                    actions={rowActions}
+                    actionsLabel={t('actions')}
+                    moreActionsLabel={t('table.moreActions')}
+                    rowLabel={(p) => p.title || `#${p.id}`}
+                    selectRowLabel={t('table.selectRow')}
+                    selection={{ selected, onToggle: toggle, onToggleAll: toggleAll, allLabel: t('table.selectAll') }}
+                />
             )}
 
-            {/* Pager */}
-            {!loading && totalPages > 1 && (
-                <div className="px-8 py-5 border-t border-gray-100/50 bg-gray-50/30 flex items-center justify-between">
-                    <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
-                        className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all">
-                        <i className="fa-solid fa-chevron-left mr-2"></i>{t('table.previous')}
-                    </button>
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('table.pageOf').replace('{page}', String(page)).replace('{total}', String(totalPages))}</span>
-                    <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
-                        className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all">
-                        {t('table.next')}<i className="fa-solid fa-chevron-right ml-2"></i>
-                    </button>
-                </div>
-            )}
+            {!loading && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
         </div>
     );
 }

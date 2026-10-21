@@ -9,7 +9,7 @@ export function RefusedByLabel({ source, t }: { source: RefusalSource | null; t:
     const key = refusedByKey(source);
     if (!key) return null;
     return (
-        <span className="ml-2 rounded-md bg-gray-100 px-1.5 py-0.5 font-sans text-[10px] font-bold uppercase tracking-wider text-gray-500" title={t("siteAddress.refusedBy.help")}>
+        <span className="ml-2 rounded-md bg-gray-100 px-1.5 py-0.5 font-sans text-[11px] font-bold uppercase tracking-wider text-gray-500" title={t("siteAddress.refusedBy.help")}>
             {t(key)}
         </span>
     );

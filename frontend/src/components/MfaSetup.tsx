@@ -151,7 +151,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                     <p className="text-xs text-gray-400">{t("mfa.subtitle")}</p>
                 </div>
                 {status && (
-                    <span className={`ml-auto text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${status.enabled ? "bg-emerald-50 text-emerald-600" : "bg-gray-100 text-gray-400"}`}>
+                    <span className={`ml-auto text-[11px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${status.enabled ? "bg-emerald-50 text-emerald-600" : "bg-gray-100 text-gray-400"}`}>
                         {status.enabled ? t("mfa.statusEnabled") : t("mfa.statusOff")}
                     </span>
                 )}
@@ -167,9 +167,9 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={enroll.qr} alt={t("mfa.qrAlt")} width={180} height={180} className="rounded-xl border border-gray-100" />
                         <div className="flex-1 w-full">
-                            <label htmlFor={manualKeyId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.manualKey")}</label>
+                            <label htmlFor={manualKeyId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.manualKey")}</label>
                             <code id={manualKeyId} className="block break-all bg-gray-50 rounded-xl px-3 py-2 font-mono text-xs text-gray-600 mb-4">{enroll.secret}</code>
-                            <label htmlFor={enrollCodeId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.codeLabel")}</label>
+                            <label htmlFor={enrollCodeId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.codeLabel")}</label>
                             <input id={enrollCodeId} value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" className={codeInput} required />
                         </div>
                     </div>
@@ -185,7 +185,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                         {(status.backupCodesRemaining === 1 ? t("mfa.backupRemaining.one") : t("mfa.backupRemaining.other")).replace("{count}", String(status.backupCodesRemaining))}
                     </p>
                     <div>
-                        <label htmlFor={manageCodeId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.enterCurrentCode")}</label>
+                        <label htmlFor={manageCodeId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.enterCurrentCode")}</label>
                         <input id={manageCodeId} value={manageCode} onChange={(e) => setManageCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder={t("mfa.codePlaceholder")} className={codeInput} />
                     </div>
                     <MfaStepUpFields stepUp={manageStepUp} withCode={false} />
@@ -199,7 +199,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                 <form onSubmit={startEnroll} className="mt-6 space-y-4">
                     <p className="text-sm text-gray-500">{t("mfa.offDescription")}</p>
                     <div>
-                        <label htmlFor={enrollPasswordId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
+                        <label htmlFor={enrollPasswordId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">
                             {tf("mfa.currentPassword", "Your current password")}
                         </label>
                         <input

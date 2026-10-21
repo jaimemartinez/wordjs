@@ -69,9 +69,9 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     { href: "/admin/chrome", label: "nav.chrome", icon: "fa-window-maximize", cap: "edit_theme_options" },
     { href: "/admin/widgets", label: "nav.widgets", icon: "fa-shapes", cap: "edit_theme_options" },
     { href: "/admin/comments", label: "nav.comments", icon: "fa-comments", cap: "moderate_comments" },
-    // Form submissions viewer — literal label (its page registers forms.* i18n keys at runtime, which
-    // cannot cover this pre-navigation render); manage_options mirrors the backend gate on /forms/*.
-    { href: "/admin/forms", label: "Formularios", icon: "fa-envelope-open-text", cap: "manage_options" },
+    // Form submissions viewer — its label lives in the core catalogue (the page's own forms.* keys are
+    // registered at runtime, too late for the menu); manage_options mirrors the backend gate on /forms/*.
+    { href: "/admin/forms", label: "nav.forms", icon: "fa-envelope-open-text", cap: "manage_options" },
     { href: "/admin/users", label: "nav.users", icon: "fa-users", cap: "list_users" },
     { href: "/admin/users?type=subscribers", label: "nav.subscribers", icon: "fa-user-group", cap: "list_users" },
     { href: "/admin/users/roles", label: "nav.roles", icon: "fa-shield-halved", cap: "manage_options" },

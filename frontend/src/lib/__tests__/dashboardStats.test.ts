@@ -144,7 +144,7 @@ describe("the dashboard's grids leave every word whole", () => {
         expect(dashboardMainSpanClass(true)).toBe("@min-[50rem]:col-span-2");
         expect(dashboardMainSpanClass(false)).toBe("@min-[50rem]:col-span-3");
         const src = fs.readFileSync(path.resolve(__dirname, "../../app/admin/page.tsx"), "utf8");
-        expect(src).toMatch(/<div className="@container p-8 md:p-12[^"]*" data-dashboard-root="">/);
+        expect(src).toMatch(/<div className="@container px-4 py-6 sm:p-8 md:p-12[^"]*" data-dashboard-root="">/);
         expect(src).toContain('<div className={DASHBOARD_COLUMNS_CLASS} data-dashboard-columns="">');
         expect(src).toContain('<div className={`${dashboardMainSpanClass(sections.recentComments)} space-y-8`} data-dashboard-main="">');
         expect(src).not.toMatch(/lg:grid-cols-3|lg:col-span-[23]/);
