@@ -35,7 +35,7 @@ const SUITE_HOOK = `
 ;module.exports.__qaSuite = {
     get Email() { return Email; },
     resetRateLimits() { _outboundUsage.clear(); },
-    captureWire(fn) { deliverDirect = async (recipient, mail) => { fn(recipient, mail); return { mx: 'mx.test', response: '250 OK' }; }; },
+    captureWire(fn) { deliverDirect = async (recipient, mail) => { await fn(recipient, mail); return { mx: 'mx.test', response: '250 OK' }; }; },
     parseSearchQuery,
     siteSenderAddress,
     isGtube,
@@ -449,4 +449,28 @@ test('DNS records: the A record proposes this node\'s public IPv4 when it has on
     const nat = buildDnsRecords(DOMAIN, 'default', '', { addresses: { public: [], private: ['192.168.182.183'] } });
     assert.equal(nat.a.detected, false);
     assert.match(nat.a.note, /forward TCP port 25 to 192\.168\.182\.183/);
+});
+
+test('two queue passes that overlap send a pending message once (a slow relay used to deliver it twice)', async () => {
+    const b = await boot();
+    try {
+        let release: () => void = () => { };
+        const gate = new Promise<void>((r) => { release = r; });
+        let calls = 0;
+        // A delivery that takes longer than the 15 s tick: hold it until both passes have started.
+        b.suite.captureWire(async () => { calls++; await gate; });
+        const row = await b.suite.Email.create({
+            fromAddress: ALICE.userEmail, fromName: 'Alice', toAddress: 'client@outside-corp.com', subject: 'Once', bodyText: 'x',
+            bodyHtml: '<p>x</p>', rawContent: 'x', isDraft: 0, isSent: 1, userId: ALICE.id,
+        });
+        await b.db.run(`UPDATE ${PREFIX}received_emails SET delivery_status = 'retry', delivery_attempts = 1, next_attempt_at = ? WHERE id = ?`,
+            [new Date(Date.now() - 1000).toISOString(), row.id]);
+        const first = b.tick();
+        await new Promise((r) => setTimeout(r, 50));
+        const second = b.tick(); // the next interval fires while the first pass is still delivering
+        await new Promise((r) => setTimeout(r, 50));
+        release();
+        await Promise.all([first, second]);
+        assert.equal(calls, 1, 'delivered exactly once');
+    } finally { b.plugin.deactivate(); }
 });

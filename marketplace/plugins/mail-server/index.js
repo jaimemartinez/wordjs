@@ -119,6 +119,7 @@ async function dnsblListed(ip, zone = DNSBL_ZONE) {
 // === Bridge-backed module state (set in init) ===
 let wordjs = null;        // the injected capability bridge
 let Email = null;         // plugin-local email store backed by wordjs.db
+let queueTickRunning = false; // see the queue interval below
 let Admin = null;         // aliases / quotas / stats / queue (lib/mail-admin-store)
 let getOption = null;     // wordjs.options.get
 let updateOption = null;  // wordjs.options.set
@@ -3530,7 +3531,8 @@ exports.init = async function (bridge) {
     // Process Scheduled Emails every minute.
     // Guard against double-start (re-activate) leaking a second timer.
     if (queueInterval) clearInterval(queueInterval);
-    queueInterval = setInterval(async () => {
+    queueTickRunning = false;
+    const queueTick = async () => {
         try {
             const pending = await Email.getPendingScheduled();
             if (pending.length > 0) console.log(`[MailServer] Processing ${pending.length} scheduled emails...`);
@@ -3691,6 +3693,13 @@ exports.init = async function (bridge) {
         // 15s tick (was 60s): the queue drives UNDO SEND (a message sits in the outbox for
         // ~10s before dispatch), so a 60s tick would stretch "sending…" to over a minute. All the
         // sweeps above are indexed probes that no-op when there's nothing pending.
+    };
+    // ONE pass at a time: a slow delivery (a relay doing STARTTLS, a remote MX taking its time) used to
+    // overlap the next 15 s tick, which picked the same still-pending row and sent it a second time.
+    queueInterval = setInterval(async () => {
+        if (queueTickRunning) return;
+        queueTickRunning = true;
+        try { await queueTick(); } finally { queueTickRunning = false; }
     }, 15 * 1000);
 
     // === API ROUTES — namespaced by the host under /api/v1/plugin/mail-server/* ===
