@@ -283,7 +283,10 @@ export function DataTable<T, K extends React.Key = React.Key>({
                                 key={c.key}
                                 role="columnheader"
                                 scope="col"
-                                className={`${headPad} text-[11px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap ${ALIGN[c.align ?? "left"]} ${showFromCls(c)} ${c.headerClassName ?? ""}`}
+                                // The primary column (the row's name) takes the free width: in an auto-layout table it
+                                // got the same share as the hover-only actions, and a page title was clamped to
+                                // "Welcome …" next to half a table of empty space.
+                                className={`${headPad} text-[11px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap ${c.primary ? "w-full" : ""} ${ALIGN[c.align ?? "left"]} ${showFromCls(c)} ${c.headerClassName ?? ""}`}
                             >
                                 {c.header}
                             </th>

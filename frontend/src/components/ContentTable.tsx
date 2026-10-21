@@ -135,10 +135,10 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
             primary: true,
             cell: (post) => (
                 <Link href={`${basePath}/${post.id}`} className="block min-h-11 py-1 group/title">
-                    <span className="text-base md:text-lg font-bold text-gray-700 group-hover/title:text-blue-600 transition-colors line-clamp-2 xl:line-clamp-1 italic tracking-tight">
+                    <span className="text-base md:text-lg font-bold text-gray-700 group-hover/title:text-blue-600 transition-colors line-clamp-2 italic tracking-tight">
                         {post.title || t('table.untitled')}
                     </span>
-                    <span className="block text-[11px] font-bold text-gray-400 tracking-wide break-all">
+                    <span className="block text-[11px] font-bold text-gray-400 tracking-wide break-words">
                         /{post.slug || post.id}
                     </span>
                 </Link>

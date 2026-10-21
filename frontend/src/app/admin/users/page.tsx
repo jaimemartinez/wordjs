@@ -105,7 +105,7 @@ export default function UsersPage() {
                                                     {user.displayName || user.username}
                                                 </span>
                                             </button>
-                                            <span className="text-[11px] font-bold text-gray-400 tracking-wider block break-all">
+                                            <span className="text-[11px] font-bold text-gray-400 tracking-wider block break-words">
                                                 @{user.username}
                                             </span>
                                         </div>
@@ -115,7 +115,7 @@ export default function UsersPage() {
                             {
                                 key: "email",
                                 header: t('users.email'),
-                                cell: (user) => <span className="text-sm font-bold text-gray-500 break-all">{user.email}</span>,
+                                cell: (user) => <span className="text-sm font-bold text-gray-500 break-words">{user.email}</span>,
                             },
                             {
                                 key: "role",

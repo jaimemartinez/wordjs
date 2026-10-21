@@ -472,7 +472,7 @@ export default function TagsPage() {
                                         {
                                             key: "slug",
                                             header: t("tags.column.slug"),
-                                            cell: (tag) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-all">{tag.slug}</span>,
+                                            cell: (tag) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-words">{tag.slug}</span>,
                                         },
                                         {
                                             key: "count",

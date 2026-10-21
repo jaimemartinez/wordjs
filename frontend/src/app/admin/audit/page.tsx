@@ -272,7 +272,7 @@ export default function AuditPage() {
                                         const actionKey = auditActionKey(entry.action);
                                         // Known action → translated label; unknown → the raw identifier AS TEXT.
                                         return (
-                                            <span className={`inline-block text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-md break-all ${TONE_CLASS[auditTone(entry.action)]}`}>
+                                            <span className={`inline-block text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-md break-words ${TONE_CLASS[auditTone(entry.action)]}`}>
                                                 {actionKey ? t(actionKey) : entry.action}
                                             </span>
                                         );
@@ -282,7 +282,7 @@ export default function AuditPage() {
                                     key: "target",
                                     header: t("audit.column.target"),
                                     cell: (entry) => (
-                                        <span className="inline-flex items-center gap-2 break-all text-sm text-gray-600">
+                                        <span className="inline-flex items-center gap-2 break-words text-sm text-gray-600 whitespace-nowrap">
                                             <i className={`fa-solid ${auditTargetIcon(entry.targetType)} text-gray-300`} aria-hidden="true"></i>
                                             {auditTargetLabel(entry)}
                                         </span>
@@ -299,7 +299,7 @@ export default function AuditPage() {
                                         ) : (
                                             <div className="flex flex-wrap justify-end lg:justify-start gap-x-4 gap-y-1 text-sm text-gray-700">
                                                 {summary.pairs.map((pair) => (
-                                                    <span key={pair.key} className="break-all">
+                                                    <span key={pair.key} className="break-words">
                                                         <span className="text-xs font-bold text-gray-500">{pair.key}:</span> {pair.value}
                                                     </span>
                                                 ))}
