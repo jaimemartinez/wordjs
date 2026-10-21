@@ -88,9 +88,9 @@ test("un _puck_data sin `content`: dos contextos colaboran sin que el onChange l
 
         await openPostEditor(a, id);
         await openPostEditor(b, id);
-        // Los dos en la sala: el chip dice "En vivo" (el `welcome` ya se aplicó en ambos).
-        await expect(presence(a)).toContainText(/en vivo/i, { timeout: 30_000 });
-        await expect(presence(b)).toContainText(/en vivo/i, { timeout: 30_000 });
+        // Los dos en la sala: el chip dice "Conectado" (el `welcome` ya se aplicó en ambos).
+        await expect(presence(a)).toContainText(/conectado/i, { timeout: 30_000 });
+        await expect(presence(b)).toContainText(/conectado/i, { timeout: 30_000 });
 
         // Una edición en A (el `onChange` corre en cada una) viaja a B.
         await openPageSettings(a);
