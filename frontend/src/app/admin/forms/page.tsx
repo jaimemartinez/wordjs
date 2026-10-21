@@ -12,7 +12,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState } from "@/components/ui";
+import { PageHeader, Card, EmptyState, DataTable, Pagination } from "@/components/ui";
 
 // The core dictionary (lib/i18n.ts) has no forms.* keys; register them through the same public
 // runtime API plugins use, so this page can call t() exactly like its sibling admin pages.
@@ -187,7 +187,7 @@ export default function FormsPage() {
 
     if (forbidden) {
         return (
-            <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+            <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
                 <PageHeader title={t("forms.title")} subtitle={t("forms.subtitle")} icon="fa-envelope-open-text" />
                 <Card variant="default" padding="none">
                     <EmptyState icon="fa-lock" title={t("forms.forbiddenTitle")} description={t("forms.forbiddenDescription")} />
@@ -197,7 +197,7 @@ export default function FormsPage() {
     }
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t("forms.title")}
                 subtitle={`${t("forms.subtitle")} · ${total} ${t("forms.submissionsCount")}`}
@@ -212,7 +212,7 @@ export default function FormsPage() {
                     className={`text-xs font-bold px-4 py-2.5 rounded-xl border-2 transition-all ${filter === null ? "bg-blue-500 border-blue-500 text-white shadow-sm" : "bg-white border-gray-100 text-gray-500 hover:border-blue-200"}`}
                 >
                     {t("forms.filterAll")}
-                    <span className={`ml-2 text-[10px] font-black px-1.5 py-0.5 rounded-md ${filter === null ? "bg-white/20" : "bg-gray-100 text-gray-400"}`}>{totalAll}</span>
+                    <span className={`ml-2 text-[11px] font-black px-1.5 py-0.5 rounded-md ${filter === null ? "bg-white/20" : "bg-gray-100 text-gray-400"}`}>{totalAll}</span>
                 </button>
                 {names.map((n) => {
                     const on = filter === n.formName;
@@ -224,7 +224,7 @@ export default function FormsPage() {
                             className={`text-xs font-bold px-4 py-2.5 rounded-xl border-2 transition-all ${on ? "bg-blue-500 border-blue-500 text-white shadow-sm" : "bg-white border-gray-100 text-gray-500 hover:border-blue-200"}`}
                         >
                             {n.formName}
-                            <span className={`ml-2 text-[10px] font-black px-1.5 py-0.5 rounded-md ${on ? "bg-white/20" : "bg-gray-100 text-gray-400"}`}>{n.count}</span>
+                            <span className={`ml-2 text-[11px] font-black px-1.5 py-0.5 rounded-md ${on ? "bg-white/20" : "bg-gray-100 text-gray-400"}`}>{n.count}</span>
                         </button>
                     );
                 })}
@@ -246,118 +246,86 @@ export default function FormsPage() {
                     <EmptyState icon="fa-envelope-open-text" title={t("forms.emptyTitle")} description={t("forms.emptyDescription")} />
                 ) : (
                     <>
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-44">{t("forms.column.date")}</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-44">{t("forms.column.form")}</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t("forms.column.summary")}</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">{t("forms.column.page")}</th>
-                                        <th className="px-6 py-3 w-28"></th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {submissions.map((s) => {
+                        <DataTable
+                            rows={submissions}
+                            rowKey={(s) => s.id}
+                            caption={t("forms.title")}
+                            rowLabel={(s) => `${s.formName} ${fmtDate(s.createdAt)}`}
+                            actionsLabel={t("actions")}
+                            stackBelow="lg"
+                            density="compact"
+                            columns={[
+                                {
+                                    key: "date",
+                                    header: t("forms.column.date"),
+                                    className: "lg:whitespace-nowrap",
+                                    cell: (s) => <span className="text-sm text-gray-500">{fmtDate(s.createdAt)}</span>,
+                                },
+                                {
+                                    key: "form",
+                                    header: t("forms.column.form"),
+                                    primary: true,
+                                    cell: (s) => <span className="inline-block text-[11px] font-black uppercase tracking-wider text-indigo-700 bg-indigo-50 px-2 py-1 rounded-md break-all">{s.formName}</span>,
+                                },
+                                {
+                                    key: "summary",
+                                    header: t("forms.column.summary"),
+                                    cell: (s) => {
                                         const entries = Object.entries(s.fields);
-                                        const expanded = expandedId === s.id;
                                         return (
-                                            <React.Fragment key={s.id}>
-                                                <tr className="group hover:bg-blue-50/5 transition-colors">
-                                                    <td className="px-6 py-4 text-sm text-gray-500 whitespace-nowrap">{fmtDate(s.createdAt)}</td>
-                                                    <td className="px-6 py-4">
-                                                        <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md">{s.formName}</span>
-                                                    </td>
-                                                    <td className="px-6 py-4 text-sm text-gray-700">
-                                                        <div className="flex flex-wrap gap-x-4 gap-y-1">
-                                                            {entries.slice(0, SUMMARY_FIELDS).map(([k, v]) => (
-                                                                <span key={k} className="break-all">
-                                                                    <span className="text-xs font-bold text-gray-400">{truncate(k, 24)}:</span>{" "}
-                                                                    {truncate(v, SUMMARY_VALUE_LEN) || "—"}
-                                                                </span>
-                                                            ))}
-                                                            {entries.length > SUMMARY_FIELDS && (
-                                                                <span className="text-xs text-gray-400 font-bold">+{entries.length - SUMMARY_FIELDS}</span>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-6 py-4 text-sm">
-                                                        {s.pageId != null ? (
-                                                            <a href={`/admin/pages/${s.pageId}`} className="text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap">
-                                                                {t("forms.pageRef")} #{s.pageId}
-                                                            </a>
-                                                        ) : (
-                                                            <span className="text-gray-300">—</span>
-                                                        )}
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <div className="flex items-center justify-end gap-2">
-                                                            <button
-                                                                onClick={() => setExpandedId(expanded ? null : s.id)}
-                                                                title={expanded ? t("forms.detailHide") : t("forms.detailShow")}
-                                                                className="w-9 h-9 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all"
-                                                            >
-                                                                <i className={`fa-solid ${expanded ? "fa-chevron-up" : "fa-chevron-down"} text-xs`}></i>
-                                                            </button>
-                                                            <button
-                                                                onClick={() => remove(s)}
-                                                                disabled={deletingId === s.id}
-                                                                title={t("common.delete")}
-                                                                className="w-9 h-9 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all disabled:opacity-50"
-                                                            >
-                                                                <i className={`fa-solid ${deletingId === s.id ? "fa-spinner fa-spin" : "fa-trash"} text-xs`}></i>
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                                {expanded && (
-                                                    <tr className="bg-gray-50/60">
-                                                        <td colSpan={5} className="px-6 md:px-8 py-6 border-t border-gray-100">
-                                                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">{t("forms.detailFields")}</h3>
-                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 mb-5">
-                                                                {entries.map(([k, v]) => (
-                                                                    <div key={k} className="bg-white rounded-xl px-4 py-3">
-                                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1 break-all">{k}</div>
-                                                                        <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">{v || "—"}</div>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                            <div className="text-xs text-gray-400 flex flex-wrap gap-x-6 gap-y-1">
-                                                                <span><i className="fa-solid fa-network-wired mr-1.5"></i>IP: <code className="font-mono">{s.ip || "—"}</code></span>
-                                                                <span className="break-all"><i className="fa-solid fa-desktop mr-1.5"></i>User-Agent: <code className="font-mono">{s.userAgent || "—"}</code></span>
-                                                            </div>
-                                                        </td>
-                                                    </tr>
+                                            <div className="flex flex-wrap justify-end lg:justify-start gap-x-4 gap-y-1 text-sm text-gray-700">
+                                                {entries.slice(0, SUMMARY_FIELDS).map(([k, v]) => (
+                                                    <span key={k} className="break-all">
+                                                        <span className="text-xs font-bold text-gray-500">{truncate(k, 24)}:</span>{" "}
+                                                        {truncate(v, SUMMARY_VALUE_LEN) || "—"}
+                                                    </span>
+                                                ))}
+                                                {entries.length > SUMMARY_FIELDS && (
+                                                    <span className="text-xs text-gray-500 font-bold">+{entries.length - SUMMARY_FIELDS}</span>
                                                 )}
-                                            </React.Fragment>
+                                            </div>
                                         );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
+                                    },
+                                },
+                                {
+                                    key: "page",
+                                    header: t("forms.column.page"),
+                                    cell: (s) => s.pageId != null ? (
+                                        <a href={`/admin/pages/${s.pageId}`} className="inline-flex items-center pointer-coarse:min-h-11 text-sm text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap">
+                                            {t("forms.pageRef")} #{s.pageId}
+                                        </a>
+                                    ) : (
+                                        <span className="text-gray-300">—</span>
+                                    ),
+                                },
+                            ]}
+                            actions={(s) => {
+                                const expanded = expandedId === s.id;
+                                return [
+                                    { key: "toggle", label: expanded ? t("forms.detailHide") : t("forms.detailShow"), icon: expanded ? "fa-chevron-up" : "fa-chevron-down", onClick: () => setExpandedId(expanded ? null : s.id) },
+                                    { key: "delete", label: t("common.delete"), icon: deletingId === s.id ? "fa-spinner fa-spin" : "fa-trash", onClick: () => remove(s), disabled: deletingId === s.id, tone: "danger" },
+                                ];
+                            }}
+                            expandedRow={(s) => expandedId !== s.id ? null : (
+                                <>
+                                    <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-4">{t("forms.detailFields")}</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 mb-5">
+                                        {Object.entries(s.fields).map(([k, v]) => (
+                                            <div key={k} className="bg-white rounded-xl px-4 py-3">
+                                                <div className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-1 break-all">{k}</div>
+                                                <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">{v || "—"}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="text-xs text-gray-500 flex flex-wrap gap-x-6 gap-y-1">
+                                        <span><i className="fa-solid fa-network-wired mr-1.5" aria-hidden="true"></i>IP: <code className="font-mono">{s.ip || "—"}</code></span>
+                                        <span className="break-all"><i className="fa-solid fa-desktop mr-1.5" aria-hidden="true"></i>User-Agent: <code className="font-mono">{s.userAgent || "—"}</code></span>
+                                    </div>
+                                </>
+                            )}
+                        />
 
-                        {/* Pager (same chrome as ContentTable's) */}
-                        {totalPages > 1 && (
-                            <div className="px-8 py-5 border-t border-gray-100/50 bg-gray-50/30 flex items-center justify-between">
-                                <button
-                                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                                    disabled={page <= 1}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                                >
-                                    <i className="fa-solid fa-chevron-left mr-2"></i>{t("table.previous")}
-                                </button>
-                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                    {t("table.pageOf").replace("{page}", String(page)).replace("{total}", String(totalPages))}
-                                </span>
-                                <button
-                                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                                    disabled={page >= totalPages}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                                >
-                                    {t("table.next")}<i className="fa-solid fa-chevron-right ml-2"></i>
-                                </button>
-                            </div>
-                        )}
+                        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
                     </>
                 )}
             </Card>

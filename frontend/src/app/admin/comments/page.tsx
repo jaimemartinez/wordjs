@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import { commentsApi, Comment } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, EmptyState } from "@/components/ui";
+import { PageHeader, EmptyState, DataTable, Pagination } from "@/components/ui";
+import type { DataTableAction } from "@/components/ui";
 import { sanitizeHTML } from "@/lib/sanitize";
 
 type Tab = 'all' | 'pending' | 'approved' | 'spam' | 'trash';
@@ -114,19 +115,21 @@ export default function CommentsPage() {
     ];
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t('comments.title')}
                 subtitle={`${t('comments.subtitle.page')} ${page}${hasMore ? '' : ` ${t('comments.subtitle.last')}`} · ${comments.length} ${t('comments.subtitle.onThisPage')}`}
             />
 
             {/* Premium Tabs */}
-            <div className="flex gap-2 mb-8 flex-wrap">
+            <div role="group" aria-label={t("comments.title")} className="flex gap-2 mb-6 md:mb-8 flex-wrap">
                 {tabs.map(tab => (
                     <button
                         key={tab.id}
+                        type="button"
+                        aria-pressed={activeTab === tab.id}
                         onClick={() => { setActiveTab(tab.id); setPage(1); }}
-                        className={`px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all duration-300 ${activeTab === tab.id
+                        className={`min-h-11 px-4 sm:px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all duration-300 ${activeTab === tab.id
                             ? "bg-gray-900 text-white shadow-lg shadow-gray-900/20"
                             : "bg-white text-gray-500 hover:bg-gray-50 border border-gray-100"
                             }`}
@@ -137,7 +140,7 @@ export default function CommentsPage() {
             </div>
 
             {/* List */}
-            <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
+            <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
                 {loading ? (
                     <div className="p-20 text-center">
                         <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -151,143 +154,87 @@ export default function CommentsPage() {
                     />
                 ) : (
                     <>
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">{t('comments.column.author')}</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('comments.column.comment')}</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48">{t('comments.column.inResponseTo')}</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">{t('comments.column.date')}</th>
-                                </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {comments.map((comment) => (
-                                    <tr key={comment.id} className={`group ${comment.status === '0' ? 'bg-yellow-50' : ''}`}>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center">
-                                                {comment.authorAvatarUrl ? (
-                                                    <img
-                                                        className="h-10 w-10 rounded-full mr-3"
-                                                        src={comment.authorAvatarUrl}
-                                                        alt={comment.author}
-                                                    />
-                                                ) : (
-                                                    <div
-                                                        className={`h-10 w-10 shrink-0 rounded-full mr-3 flex items-center justify-center text-white text-sm font-bold ${avatarColor(comment.author)}`}
-                                                        role="img"
-                                                        aria-label={comment.author}
-                                                        title={comment.author}
-                                                    >
-                                                        {getInitials(comment.author)}
-                                                    </div>
-                                                )}
-                                                <div>
-                                                    <div className="text-sm font-medium text-gray-900">{comment.author}</div>
-                                                    <div className="text-xs text-gray-500 break-all">{comment.authorEmail}</div>
-                                                    {comment.authorUrl && (
-                                                        <a href={comment.authorUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline break-all">
-                                                            {comment.authorUrl}
-                                                        </a>
-                                                    )}
-                                                    <div className="text-xs text-gray-400 mt-1">{comment.status === '0' && <span className="text-yellow-600 font-bold">{t('comments.status.pending')}</span>}</div>
-                                                </div>
+                    <DataTable
+                        rows={comments}
+                        rowKey={(c) => c.id}
+                        caption={t('comments.title')}
+                        rowLabel={(c) => c.author}
+                        actionsLabel={t('actions')}
+                        stackBelow="lg"
+                        rowClassName={(c) => (c.status === '0' ? 'bg-yellow-50/70' : '')}
+                        columns={[
+                            {
+                                key: "author",
+                                header: t('comments.column.author'),
+                                primary: true,
+                                className: "lg:w-64",
+                                cell: (comment) => (
+                                    <div className="flex items-center">
+                                        {comment.authorAvatarUrl ? (
+                                            <img className="h-10 w-10 shrink-0 rounded-full mr-3" src={comment.authorAvatarUrl} alt="" />
+                                        ) : (
+                                            <div
+                                                className={`h-10 w-10 shrink-0 rounded-full mr-3 flex items-center justify-center text-white text-sm font-bold ${avatarColor(comment.author)}`}
+                                                aria-hidden="true"
+                                            >
+                                                {getInitials(comment.author)}
                                             </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="text-sm text-gray-900 mb-2 break-words">
-                                                <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
-                                            </div>
-                                            {/* Actions */}
-                                            <div className="flex gap-3 text-xs opacity-100 md:opacity-70 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-200">
-                                                {comment.status === '0' && (
-                                                    <button
-                                                        onClick={() => handleAction(comment.id, 'approve')}
-                                                        disabled={processingId === comment.id}
-                                                        className="text-green-600 hover:text-green-900 font-medium"
-                                                    >
-                                                        {t('comments.approve')}
-                                                    </button>
-                                                )}
-                                                {comment.status === '1' && (
-                                                    <button
-                                                        onClick={() => handleAction(comment.id, 'unapprove')}
-                                                        disabled={processingId === comment.id}
-                                                        className="text-yellow-600 hover:text-yellow-900"
-                                                    >
-                                                        {t('comments.unapprove')}
-                                                    </button>
-                                                )}
-
-                                                {activeTab !== 'spam' && activeTab !== 'trash' && (
-                                                    <>
-                                                        <button
-                                                            onClick={() => handleAction(comment.id, 'spam')}
-                                                            disabled={processingId === comment.id}
-                                                            className="text-red-600 hover:text-red-900"
-                                                        >
-                                                            {t('comments.spam')}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => handleAction(comment.id, 'trash')}
-                                                            disabled={processingId === comment.id}
-                                                            className="text-red-600 hover:text-red-900"
-                                                        >
-                                                            {t('comments.trash')}
-                                                        </button>
-                                                    </>
-                                                )}
-
-                                                {activeTab === 'trash' && (
-                                                    <>
-                                                        <button
-                                                            onClick={() => handleAction(comment.id, 'restore')}
-                                                            disabled={processingId === comment.id}
-                                                            className="text-green-600 hover:text-green-900"
-                                                        >
-                                                            {t('comments.restore')}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => handleDeletePermanently(comment.id)}
-                                                            disabled={processingId === comment.id}
-                                                            className="text-red-600 hover:text-red-900"
-                                                        >
-                                                            {t('comments.deletePermanently')}
-                                                        </button>
-                                                    </>
-                                                )}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-sm text-gray-500">
-                                            <a href={`/post/${comment.postId}`} target="_blank" className="hover:text-blue-600 hover:underline">
-                                                {t('comments.viewPost')} #{comment.postId}
-                                            </a>
-                                        </td>
-                                        <td className="px-6 py-4 text-sm text-gray-500">
-                                            {new Date(comment.date).toLocaleString()}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div className="flex justify-between items-center gap-4 px-6 py-4 border-t border-gray-100">
-                        <button
-                            disabled={page === 1}
-                            onClick={() => setPage(p => p - 1)}
-                            className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            {t('comments.pagination.previous')}
-                        </button>
-                        <span className="text-gray-500 text-xs font-bold uppercase tracking-widest">{t('comments.subtitle.page')} {page}</span>
-                        <button
-                            disabled={!hasMore}
-                            onClick={() => setPage(p => p + 1)}
-                            className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            {t('comments.pagination.next')}
-                        </button>
-                    </div>
+                                        )}
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-bold text-gray-900 break-words">{comment.author}</div>
+                                            <div className="text-xs text-gray-500 break-all">{comment.authorEmail}</div>
+                                            {comment.authorUrl && (
+                                                <a href={comment.authorUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline break-all">
+                                                    {comment.authorUrl}
+                                                </a>
+                                            )}
+                                            {comment.status === '0' && <div className="text-xs mt-1 text-yellow-700 font-bold">{t('comments.status.pending')}</div>}
+                                        </div>
+                                    </div>
+                                ),
+                            },
+                            {
+                                key: "comment",
+                                header: t('comments.column.comment'),
+                                className: "max-lg:!block max-lg:text-left",
+                                cell: (comment) => (
+                                    <div className="text-sm text-gray-900 break-words text-left max-lg:mt-1" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
+                                ),
+                            },
+                            {
+                                key: "post",
+                                header: t('comments.column.inResponseTo'),
+                                className: "lg:w-48",
+                                cell: (comment) => (
+                                    <a href={`/post/${comment.postId}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center pointer-coarse:min-h-11 text-sm text-gray-600 hover:text-blue-600 hover:underline">
+                                        {t('comments.viewPost')} #{comment.postId}
+                                    </a>
+                                ),
+                            },
+                            {
+                                key: "date",
+                                header: t('comments.column.date'),
+                                className: "lg:w-40",
+                                cell: (comment) => <span className="text-sm text-gray-500">{new Date(comment.date).toLocaleString()}</span>,
+                            },
+                        ]}
+                        actions={(comment) => {
+                            const busy = processingId === comment.id;
+                            const list: DataTableAction[] = [];
+                            if (comment.status === '0') list.push({ key: "approve", label: t('comments.approve'), icon: "fa-check", onClick: () => handleAction(comment.id, 'approve'), disabled: busy, tone: "success" });
+                            if (comment.status === '1') list.push({ key: "unapprove", label: t('comments.unapprove'), icon: "fa-rotate-left", onClick: () => handleAction(comment.id, 'unapprove'), disabled: busy, tone: "warning" });
+                            if (activeTab !== 'spam' && activeTab !== 'trash') {
+                                list.push({ key: "spam", label: t('comments.spam'), icon: "fa-ban", onClick: () => handleAction(comment.id, 'spam'), disabled: busy, tone: "warning" });
+                                list.push({ key: "trash", label: t('comments.trash'), icon: "fa-trash", onClick: () => handleAction(comment.id, 'trash'), disabled: busy, tone: "danger" });
+                            }
+                            if (activeTab === 'trash') {
+                                list.push({ key: "restore", label: t('comments.restore'), icon: "fa-trash-arrow-up", onClick: () => handleAction(comment.id, 'restore'), disabled: busy, tone: "success" });
+                                list.push({ key: "delete", label: t('comments.deletePermanently'), icon: "fa-xmark", onClick: () => handleDeletePermanently(comment.id), disabled: busy, tone: "danger" });
+                            }
+                            return list;
+                        }}
+                    />
+                    <Pagination page={page} hasNext={hasMore} onChange={setPage} />
                     </>
                 )}
             </div>

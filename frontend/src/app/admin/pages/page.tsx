@@ -22,7 +22,7 @@ export default function PagesPage() {
     if (!allowed) return null;
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t('pages.title')}
                 subtitle={t('pages.subtitle')}

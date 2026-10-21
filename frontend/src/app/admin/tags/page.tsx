@@ -22,7 +22,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState, Button } from "@/components/ui";
+import { PageHeader, Card, EmptyState, Button, DataTable, Pagination } from "@/components/ui";
 import {
     TagDraft,
     TagDraftError,
@@ -318,7 +318,7 @@ export default function TagsPage() {
     const slugPreview = suggestSlug(draft.name);
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t("tags.title")}
                 subtitle={`${t("tags.subtitle")} · ${total} ${t("tags.count")}`}
@@ -336,7 +336,7 @@ export default function TagsPage() {
                     {canManage ? (
                         <form onSubmit={handleCreate} className="space-y-5">
                             <div>
-                                <label htmlFor="tag-name" className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                                <label htmlFor="tag-name" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">
                                     {t("tags.field.name")}
                                 </label>
                                 <input
@@ -350,7 +350,7 @@ export default function TagsPage() {
                             </div>
 
                             <div>
-                                <label htmlFor="tag-slug" className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                                <label htmlFor="tag-slug" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">
                                     {t("tags.field.slug")}
                                 </label>
                                 <input
@@ -369,7 +369,7 @@ export default function TagsPage() {
                             </div>
 
                             <div>
-                                <label htmlFor="tag-description" className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                                <label htmlFor="tag-description" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">
                                     {t("tags.field.description")}
                                 </label>
                                 <textarea
@@ -395,7 +395,7 @@ export default function TagsPage() {
                 </Card>
 
                 {/* Lista */}
-                <div className="lg:col-span-2 space-y-6">
+                <div className="lg:col-span-2 min-w-0 space-y-6">
                     <div className="relative">
                         <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
                         <input
@@ -412,7 +412,7 @@ export default function TagsPage() {
                                 onClick={() => setSearchInput("")}
                                 title={t("tags.searchClear")}
                                 aria-label={t("tags.searchClear")}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-all"
+                                className="absolute right-1 top-1/2 -translate-y-1/2 w-11 h-11 rounded-lg text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-all"
                             >
                                 <i className="fa-solid fa-xmark text-xs"></i>
                             </button>
@@ -439,183 +439,107 @@ export default function TagsPage() {
                             />
                         ) : (
                             <>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full">
-                                        <thead>
-                                            <tr className="border-b border-gray-100/50 bg-gray-50/30">
-                                                <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                    {t("tags.column.name")}
-                                                </th>
-                                                <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                    {t("tags.column.slug")}
-                                                </th>
-                                                <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                    {t("tags.column.count")}
-                                                </th>
-                                                <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                    {t("actions")}
-                                                </th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-50">
-                                            {tags.map((tag) => {
-                                                const editing = editingId === tag.id;
-                                                return (
-                                                    <React.Fragment key={tag.id}>
-                                                        <tr className="group hover:bg-blue-50/5 transition-colors">
-                                                            <td className="px-8 py-6">
-                                                                <div className="flex items-center gap-4">
-                                                                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform shrink-0">
-                                                                        <i className="fa-solid fa-tag"></i>
-                                                                    </div>
-                                                                    <div className="min-w-0">
-                                                                        <span className="block text-lg font-bold text-gray-700 italic tracking-tight break-words">
-                                                                            {tag.name}
-                                                                        </span>
-                                                                        {tag.description && (
-                                                                            <span className="block text-xs text-gray-400 break-words">{tag.description}</span>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-8 py-6">
-                                                                <span className="text-sm font-mono text-gray-400 bg-gray-50 px-3 py-1 rounded-lg break-all">
-                                                                    {tag.slug}
-                                                                </span>
-                                                            </td>
-                                                            <td className="px-8 py-6">
-                                                                <span className="text-sm font-bold text-gray-500 bg-gray-50 px-3 py-1 rounded-full">
-                                                                    {tag.count}
-                                                                </span>
-                                                            </td>
-                                                            <td className="px-8 py-6 text-right">
-                                                                {canManage ? (
-                                                                    <div className="flex items-center justify-end gap-2">
-                                                                        <button
-                                                                            onClick={() => (editing ? cancelEdit() : startEdit(tag))}
-                                                                            title={editing ? t("tags.cancel") : t("tags.edit")}
-                                                                            aria-label={editing ? t("tags.cancel") : t("tags.edit")}
-                                                                            className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
-                                                                        >
-                                                                            <i className={`fa-solid ${editing ? "fa-xmark" : "fa-pen"} text-xs`}></i>
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={() => remove(tag)}
-                                                                            disabled={deletingId === tag.id}
-                                                                            title={t("tags.deleteTitle")}
-                                                                            aria-label={t("tags.deleteTitle")}
-                                                                            className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 disabled:opacity-50"
-                                                                        >
-                                                                            <i className={`fa-solid ${deletingId === tag.id ? "fa-spinner fa-spin" : "fa-trash"} text-xs`}></i>
-                                                                        </button>
-                                                                    </div>
-                                                                ) : (
-                                                                    <span className="text-gray-300">—</span>
-                                                                )}
-                                                            </td>
-                                                        </tr>
-
-                                                        {editing && canManage && (
-                                                            <tr className="bg-gray-50/60">
-                                                                <td colSpan={4} className="px-8 py-6 border-t border-gray-100">
-                                                                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">
-                                                                        {t("tags.editTitle")}
-                                                                    </h3>
-                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                                                                        <div>
-                                                                            <label
-                                                                                htmlFor={`tag-edit-name-${tag.id}`}
-                                                                                className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2"
-                                                                            >
-                                                                                {t("tags.field.name")}
-                                                                            </label>
-                                                                            <input
-                                                                                id={`tag-edit-name-${tag.id}`}
-                                                                                type="text"
-                                                                                value={editDraft.name}
-                                                                                onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
-                                                                                className={`${inputClass} bg-white`}
-                                                                            />
-                                                                        </div>
-                                                                        <div>
-                                                                            <label
-                                                                                htmlFor={`tag-edit-slug-${tag.id}`}
-                                                                                className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2"
-                                                                            >
-                                                                                {t("tags.field.slug")}
-                                                                            </label>
-                                                                            <input
-                                                                                id={`tag-edit-slug-${tag.id}`}
-                                                                                type="text"
-                                                                                value={editDraft.slug}
-                                                                                onChange={(e) => setEditDraft({ ...editDraft, slug: e.target.value })}
-                                                                                className={`${inputClass} bg-white font-mono`}
-                                                                            />
-                                                                        </div>
-                                                                        <div className="md:col-span-2">
-                                                                            <label
-                                                                                htmlFor={`tag-edit-description-${tag.id}`}
-                                                                                className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2"
-                                                                            >
-                                                                                {t("tags.field.description")}
-                                                                            </label>
-                                                                            <textarea
-                                                                                id={`tag-edit-description-${tag.id}`}
-                                                                                value={editDraft.description}
-                                                                                onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })}
-                                                                                rows={2}
-                                                                                className={`${inputClass} bg-white resize-y`}
-                                                                            />
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="flex flex-wrap gap-3">
-                                                                        <Button
-                                                                            size="md"
-                                                                            icon="fa-check"
-                                                                            loading={savingId === tag.id}
-                                                                            disabled={savingId === tag.id}
-                                                                            onClick={() => saveEdit(tag)}
-                                                                        >
-                                                                            {t("tags.save")}
-                                                                        </Button>
-                                                                        <Button size="md" variant="secondary" icon="fa-xmark" onClick={cancelEdit}>
-                                                                            {t("tags.cancel")}
-                                                                        </Button>
-                                                                    </div>
-                                                                </td>
-                                                            </tr>
+                                <DataTable
+                                    rows={tags}
+                                    rowKey={(tag) => tag.id}
+                                    caption={t("tags.title")}
+                                    rowLabel={(tag) => tag.name}
+                                    actionsLabel={t("actions")}
+                                    columns={[
+                                        {
+                                            key: "name",
+                                            header: t("tags.column.name"),
+                                            primary: true,
+                                            cell: (tag) => (
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600 shrink-0" aria-hidden="true">
+                                                        <i className="fa-solid fa-tag"></i>
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <span className="block text-base md:text-lg font-bold text-gray-700 italic tracking-tight break-words">
+                                                            {tag.name}
+                                                        </span>
+                                                        {tag.description && (
+                                                            <span className="block text-xs text-gray-500 break-words">{tag.description}</span>
                                                         )}
-                                                    </React.Fragment>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                                    </div>
+                                                </div>
+                                            ),
+                                        },
+                                        {
+                                            key: "slug",
+                                            header: t("tags.column.slug"),
+                                            cell: (tag) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-all">{tag.slug}</span>,
+                                        },
+                                        {
+                                            key: "count",
+                                            header: t("tags.column.count"),
+                                            cell: (tag) => <span className="text-sm font-bold text-gray-500 bg-gray-50 px-3 py-1 rounded-full">{tag.count}</span>,
+                                        },
+                                    ]}
+                                    actions={canManage ? (tag) => {
+                                        const editing = editingId === tag.id;
+                                        return [
+                                            { key: "edit", label: editing ? t("tags.cancel") : t("tags.edit"), icon: editing ? "fa-xmark" : "fa-pen", onClick: () => (editing ? cancelEdit() : startEdit(tag)), tone: "primary" },
+                                            { key: "delete", label: t("tags.deleteTitle"), icon: deletingId === tag.id ? "fa-spinner fa-spin" : "fa-trash", onClick: () => remove(tag), disabled: deletingId === tag.id, tone: "danger" },
+                                        ];
+                                    } : undefined}
+                                    expandedRow={(tag) => (editingId === tag.id && canManage ? (
+                                        <>
+                                            <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-4">
+                                                {t("tags.editTitle")}
+                                            </h3>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                                <div>
+                                                    <label htmlFor={`tag-edit-name-${tag.id}`} className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
+                                                        {t("tags.field.name")}
+                                                    </label>
+                                                    <input
+                                                        id={`tag-edit-name-${tag.id}`}
+                                                        type="text"
+                                                        value={editDraft.name}
+                                                        onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
+                                                        className={`${inputClass} bg-white`}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label htmlFor={`tag-edit-slug-${tag.id}`} className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
+                                                        {t("tags.field.slug")}
+                                                    </label>
+                                                    <input
+                                                        id={`tag-edit-slug-${tag.id}`}
+                                                        type="text"
+                                                        value={editDraft.slug}
+                                                        onChange={(e) => setEditDraft({ ...editDraft, slug: e.target.value })}
+                                                        className={`${inputClass} bg-white font-mono`}
+                                                    />
+                                                </div>
+                                                <div className="md:col-span-2">
+                                                    <label htmlFor={`tag-edit-description-${tag.id}`} className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
+                                                        {t("tags.field.description")}
+                                                    </label>
+                                                    <textarea
+                                                        id={`tag-edit-description-${tag.id}`}
+                                                        value={editDraft.description}
+                                                        onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })}
+                                                        rows={2}
+                                                        className={`${inputClass} bg-white resize-y`}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-wrap gap-3">
+                                                <Button size="md" icon="fa-check" loading={savingId === tag.id} disabled={savingId === tag.id} onClick={() => saveEdit(tag)}>
+                                                    {t("tags.save")}
+                                                </Button>
+                                                <Button size="md" variant="secondary" icon="fa-xmark" onClick={cancelEdit}>
+                                                    {t("tags.cancel")}
+                                                </Button>
+                                            </div>
+                                        </>
+                                    ) : null)}
+                                />
 
-                                {/* Paginador — mismo cromo que el de /admin/forms */}
-                                {totalPages > 1 && (
-                                    <div className="px-8 py-5 border-t border-gray-100/50 bg-gray-50/30 flex items-center justify-between">
-                                        <button
-                                            onClick={() => setPage((p) => Math.max(1, p - 1))}
-                                            disabled={page <= 1}
-                                            className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                                        >
-                                            <i className="fa-solid fa-chevron-left mr-2"></i>
-                                            {t("table.previous")}
-                                        </button>
-                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                            {t("table.pageOf").replace("{page}", String(page)).replace("{total}", String(totalPages))}
-                                        </span>
-                                        <button
-                                            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                                            disabled={page >= totalPages}
-                                            className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
-                                        >
-                                            {t("table.next")}
-                                            <i className="fa-solid fa-chevron-right ml-2"></i>
-                                        </button>
-                                    </div>
-                                )}
+                                <Pagination page={page} totalPages={totalPages} onChange={setPage} />
                             </>
                         )}
                     </Card>

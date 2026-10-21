@@ -134,7 +134,7 @@ export default function NoticesPage() {
 
     if (forbidden) {
         return (
-            <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+            <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
                 <PageHeader title={t("notices.title")} subtitle={t("notices.subtitle")} icon="fa-bell" />
                 <Card variant="default" padding="none">
                     <EmptyState icon="fa-lock" title={t("notices.forbiddenTitle")} description={t("notices.forbiddenDescription")} />
@@ -144,7 +144,7 @@ export default function NoticesPage() {
     }
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t("notices.title")}
                 subtitle={`${t("notices.subtitle")} · ${notices.length} ${t("notices.count")}`}

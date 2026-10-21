@@ -175,8 +175,8 @@ function SidebarItem({
         <div ref={setNodeRef} style={style} className="mb-3 bg-white border-2 border-gray-50 rounded-2xl shadow-sm overflow-hidden hover:border-blue-100 transition-all">
             <div className="p-4 flex justify-between items-center bg-gray-50/30 border-b border-gray-100">
                 <div className="flex items-center gap-2">
-                    <button className="cursor-grab text-gray-400 hover:text-gray-600" {...listeners} {...attributes}>
-                        <i className="fa-solid fa-grip-vertical"></i>
+                    <button type="button" className="cursor-grab w-11 h-11 shrink-0 -ml-2 flex items-center justify-center text-gray-400 hover:text-gray-600" {...listeners} {...attributes} aria-label={t('common.dragToReorder')}>
+                        <i className="fa-solid fa-grip-vertical" aria-hidden="true"></i>
                     </button>
                     <span className="font-medium select-none">{displayId} {t('widgets.widget')}</span>
                 </div>
@@ -220,7 +220,7 @@ function SidebarContainer({ sidebar, widgets, onRemove }: { sidebar: Sidebar, wi
     });
 
     return (
-        <div ref={setNodeRef} className="bg-white border-2 border-gray-50 rounded-[40px] p-6 shadow-xl shadow-gray-100/50 min-h-[100px]">
+        <div ref={setNodeRef} className="bg-white border-2 border-gray-50 rounded-3xl md:rounded-[40px] p-6 shadow-xl shadow-gray-100/50 min-h-[100px]">
             <h3 className="font-black text-xl text-gray-900 italic tracking-tight mb-1">{sidebar.name}</h3>
             <p className="text-xs text-gray-400 font-medium mb-6">{sidebar.description}</p>
 
@@ -373,7 +373,7 @@ export default function WidgetsPage() {
     if (loading && sidebars.length === 0) return <div className="p-8">{t('widgets.loading')}</div>;
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 animate-in fade-in duration-500">
             <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -387,7 +387,7 @@ export default function WidgetsPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     {/* Available Widgets Column */}
-                    <div className="bg-white rounded-[40px] p-6 border-2 border-gray-50 shadow-xl shadow-gray-100/50 h-fit">
+                    <div className="bg-white rounded-3xl md:rounded-[40px] p-6 border-2 border-gray-50 shadow-xl shadow-gray-100/50 h-fit">
                         <h2 className="font-black text-xl text-gray-900 italic tracking-tight mb-2">{t('widgets.availableWidgets')}</h2>
                         <p className="text-xs text-gray-400 font-medium border-b border-gray-100 pb-4 mb-4">{t('widgets.dragToAdd')}</p>
                         <div className="space-y-2">

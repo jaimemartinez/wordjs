@@ -209,7 +209,7 @@ export default function WebhooksPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t("webhooks.title")}
                 subtitle={t("webhooks.subtitle")}
@@ -228,7 +228,7 @@ export default function WebhooksPage() {
                         <Input label={t("webhooks.payloadUrl")} icon="fa-link" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/webhook" type="url" required />
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">
+                        <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-3">
                             {t("webhooks.events")} <span className="text-gray-300 normal-case tracking-normal font-medium">{t("webhooks.eventsHint")}</span>
                         </label>
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -248,7 +248,7 @@ export default function WebhooksPage() {
                                                     aria-pressed={familyOn}
                                                     aria-label={eventLabel(g.entity + ".*")}
                                                     title={`${g.entity}.*`}
-                                                    className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-lg transition-all ${familyOn ? "bg-blue-500 text-white" : "bg-gray-50 text-gray-400 hover:text-blue-600"}`}
+                                                    className={`text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-lg transition-all ${familyOn ? "bg-blue-500 text-white" : "bg-gray-50 text-gray-400 hover:text-blue-600"}`}
                                                 >
                                                     {t("webhooks.allInGroup")}
                                                 </button>
@@ -270,9 +270,9 @@ export default function WebhooksPage() {
                                                         title={isOptIn ? t("webhooks.optInHint") : ev}
                                                         className={`text-xs font-bold px-3 py-2 rounded-xl border-2 transition-all ${on ? "bg-blue-500 border-blue-500 text-white shadow-sm" : "bg-white border-gray-100 text-gray-500 hover:border-blue-200"} ${covered ? "opacity-70 cursor-default" : ""}`}
                                                     >
-                                                        <i className={`fa-solid ${on ? "fa-check" : "fa-plus"} mr-1.5 text-[10px]`}></i>
+                                                        <i className={`fa-solid ${on ? "fa-check" : "fa-plus"} mr-1.5 text-[11px]`}></i>
                                                         {ev.slice(g.entity.length + 1) || ev}
-                                                        {isOptIn && <span className={`ml-1.5 text-[9px] font-black uppercase tracking-wider ${on ? "text-blue-100" : "text-amber-500"}`}>{t("webhooks.optIn")}</span>}
+                                                        {isOptIn && <span className={`ml-1.5 text-[11px] font-black uppercase tracking-wider ${on ? "text-blue-100" : "text-amber-500"}`}>{t("webhooks.optIn")}</span>}
                                                     </button>
                                                 );
                                             })}
@@ -310,7 +310,7 @@ export default function WebhooksPage() {
                                             <code className="text-xs font-mono text-gray-400 break-all">{w.url}</code>
                                             <div className="flex flex-wrap gap-1 mt-3">
                                                 {(w.events.includes("*") ? [t("webhooks.allEvents")] : w.events).map((ev) => (
-                                                    <span key={ev} title={ev} className="text-[10px] font-black uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md">{eventLabel(ev)}</span>
+                                                    <span key={ev} title={ev} className="text-[11px] font-black uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md">{eventLabel(ev)}</span>
                                                 ))}
                                             </div>
                                             <div className="text-xs text-gray-400 mt-3">
@@ -342,7 +342,7 @@ export default function WebhooksPage() {
 
                                 {expandedId === w.id && (
                                     <div className="bg-gray-50/60 px-6 md:px-8 py-6 border-t border-gray-100">
-                                        <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">{t("webhooks.recentDeliveries")}</h3>
+                                        <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-400 mb-4">{t("webhooks.recentDeliveries")}</h3>
                                         {deliveriesLoading ? (
                                             <p className="text-xs text-gray-400">{t("common.loading")}</p>
                                         ) : deliveries.length === 0 ? (
