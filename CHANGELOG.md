@@ -956,6 +956,13 @@ the boot error links there too.
 - **A second monolith on other ports keeps them after install.** Started with `PORT` and `WORDJS_LOOPBACK_PORT`
   (another install beside one already running), the wizard recorded the default ports 3000 and 4000, so after a
   restart its pages could read the data of the install listening on :4000. It now records the ports it runs on.
+
+- **Public pages and the editor no longer request block bundles that do not exist.** Every active plugin was
+  asked for its editor-block bundle, so each plugin without blocks (analytics, cookie consent, lightbox,
+  announcement bar, mail server…) cost a 404 and a console error on every page view and every editor mount.
+  `GET /api/v1/plugins/registry` now states `blocks` per active plugin (whether its block bundle is served),
+  and the loaders ask only those; without that answer they ask every plugin, as before.
+
 - **The admin, the editor and the bundled themes, from a three-mode QA pass.**
   - *Dark mode:* with the OS in dark mode the admin stays fully light and readable (the Security Center,
     Media storage, Network and the Dashboard chart had near-white text on white). The Verso editor's own dark

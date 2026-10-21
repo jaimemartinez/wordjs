@@ -587,10 +587,15 @@ describe('GET /api/v1/plugins/registry: a plugin\'s browser:script grant only fo
     it('an anonymous caller gets the active plugins without their grant', async () => {
         const r = await registry();
         assert.strictEqual(r.status, 200);
+        // `blocks` is what GET /plugins/<id>/bundle?type=component answers anyone (S1-21): ON serves its
+        // built block bundle, NG's is refused — the same 404 the bundle URL gives, nothing more.
         assert.deepStrictEqual(ours(r.body), {
-            [ON]: { id: ON, path: `/plugins/${ON}`, frontend: {} },
-            [NG]: { id: NG, path: `/plugins/${NG}`, frontend: {} },
+            [ON]: { id: ON, path: `/plugins/${ON}`, frontend: {}, blocks: true },
+            [NG]: { id: NG, path: `/plugins/${NG}`, frontend: {}, blocks: false },
         });
+        for (const [slug, served] of [[ON, 200], [NG, 404]] as const) {
+            assert.strictEqual((await request(app).get(`${API}/plugins/${slug}/bundle?type=component`)).status, served, `${slug}: blocks must match what the bundle route serves`);
+        }
         assert.ok(!r.text.includes('"browser"'), `the grant reached an anonymous caller: ${r.text}`);
         assert.match(String(r.headers['cache-control']), /private/, 'an answer that depends on the caller is not shareable');
     });
@@ -600,8 +605,8 @@ describe('GET /api/v1/plugins/registry: a plugin\'s browser:script grant only fo
             const r = await registry(cookie);
             assert.strictEqual(r.status, 200, who);
             assert.deepStrictEqual(ours(r.body), {
-                [ON]: { id: ON, path: `/plugins/${ON}`, browser: true, frontend: {} },
-                [NG]: { id: NG, path: `/plugins/${NG}`, browser: false, frontend: {} },
+                [ON]: { id: ON, path: `/plugins/${ON}`, browser: true, frontend: {}, blocks: true },
+                [NG]: { id: NG, path: `/plugins/${NG}`, browser: false, frontend: {}, blocks: false },
             }, who);
         }
     });

@@ -27,7 +27,7 @@ import { ixCtxFromSite, type IxMotionPolicy, type IxPreset } from "@/lib/verso/i
 import type { PublicUiStrings } from "@/lib/public/uiStrings";
 import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
 import { SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
-import { fetchActivePluginIds, loadPluginBlockConfigs } from "@/lib/pluginBundleLoader";
+import { fetchBlockPluginIds, loadPluginBlockConfigs } from "@/lib/pluginBundleLoader";
 import { versoPluginComponents } from "@/lib/versoPluginRegistry";
 
 type PluginBlockDef = {
@@ -46,7 +46,7 @@ let runtimeDefsPromise: Promise<Record<string, unknown>> | null = null;
 function loadRuntimePluginDefs(): Promise<Record<string, unknown>> {
     if (runtimeDefsPromise) return runtimeDefsPromise;
     const attempt = (async () => {
-        const ids = await fetchActivePluginIds();
+        const ids = await fetchBlockPluginIds();
         const merged: Record<string, unknown> = {};
         // Best-effort POR PLUGIN: uno caído se salta con warn y no tumba al resto ni a la página.
         // Misma precedencia que el Object.assign del camino legacy.

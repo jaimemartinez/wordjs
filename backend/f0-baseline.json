@@ -11,7 +11,7 @@
       "paths": 254,
       "operations": 320,
       "coverage": 0.9938,
-      "semanticSha256": "f7e4e704db74a217c45fb340432834766149bef5365e938abe0223a30b2b766e"
+      "semanticSha256": "8eb744f443ee4d21e52bbab5f805a379c068050025f7602c9fd04c36724cafc2"
     },
     "typingDebt": {
       "requestAny": {
