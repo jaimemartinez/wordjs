@@ -950,7 +950,8 @@ the boot error links there too.
   activating it again brought it back). The host's own modules now always get the real network modules and
   the database driver runs as the host. An exception raised while the host serves a plugin is logged with the
   plugin's name and the process keeps running; any other fatal error exits cleanly with code 1 for the
-  supervisor instead of aborting. A plugin card whose worker is stopped now shows why.
+  supervisor instead of aborting. A plugin card whose worker is stopped now shows why, and its *Restart*
+  button starts it again (it used to answer that the plugin was not loaded).
 - **Database users without `GRANT OPTION`.** On MySQL/MariaDB (and PostgreSQL) a plugin activated without a
   restart was routed through its own database login even when the server refused to grant it its new tables,
   so every query failed with "access denied" until the next restart. The plugin now falls back to the SQL

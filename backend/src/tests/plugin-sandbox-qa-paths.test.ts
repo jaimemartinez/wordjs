@@ -129,7 +129,7 @@ test('a getter cannot flip the socket away after the check (TOCTOU)', () => {
     Object.defineProperty(opts, 'socket', { get() { reads++; return reads === 1 ? plain : undefined; }, configurable: true, enumerable: true });
     const s = tls.connect(opts);
     s.on('error', () => { /* */ });
-    assert.strictEqual(Object.getOwnPropertyDescriptor(opts, 'socket').value, plain, 'the socket must be pinned as the value that was checked');
+    assert.strictEqual(Object.getOwnPropertyDescriptor(opts, 'socket')!.value, plain, 'the socket must be pinned as the value that was checked');
     s.destroy();
 });
 
@@ -159,4 +159,19 @@ test('the host mounts multipart routes on the per-plugin staging dir, not the OS
     assert.match(src, /uploadStagingDir\(path\.resolve\(__dirname, '\.\.', '\.\.'\), slug, siteId\)/);
     assert.match(src, /multer\(\{ dest: stagingDir,/);
     assert.doesNotMatch(src, /multer\(\{ dest: path\.join\(os\.tmpdir\(\)/);
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// FALLOS 112 — "Restart plugin" recovers an ACTIVE plugin that failed to start
+// ---------------------------------------------------------------------------------------------------------
+test('restarting an active plugin with no running isolate starts it instead of answering 404', () => {
+    const fs = require('fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'routes', 'plugins.ts'), 'utf8');
+    const route = src.slice(src.indexOf("router.post('/:slug/reload'"), src.indexOf("router.post('/:slug/reload'") + 2500);
+    assert.match(route, /if \(!isIsolated\(slug\)\) \{[\s\S]*?isPluginActive\(slug\)[\s\S]*?loadOnePlugin\(slug\)/,
+        'a stopped active plugin must be started through the full load pipeline');
+    assert.match(route, /status\(404\)[\s\S]*?is it active\?/, 'an inactive plugin still answers 404');
+    // The card shows why a stopped plugin is stopped (its runtime.lastError), next to that button.
+    const page = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'frontend', 'src', 'app', 'admin', 'plugins', 'page.tsx'), 'utf8');
+    assert.match(page, /\(isCrashLooping \|\| isRefused \|\| isStopped\) && plugin\.runtime\?\.lastError/);
 });
