@@ -183,7 +183,9 @@ describe("the route map", () => {
         const walk = (dir: string) => {
             for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
                 if (e.isDirectory()) { if (e.name !== "__tests__") walk(path.join(dir, e.name)); }
-                else if (e.name === "page.tsx") pages.push(dir);
+                // [...missing] is the admin 404 (it only calls notFound()): an address no screen answers.
+                // It has no rule on purpose — the guard sends a non-wildcard user to their own home.
+                else if (e.name === "page.tsx" && path.basename(dir) !== "[...missing]") pages.push(dir);
             }
         };
         walk(adminDir);
@@ -193,6 +195,13 @@ describe("the route map", () => {
         expect(routes.length).toBeGreaterThan(30);
         const unguarded = routes.filter((r) => !ruleFor(r));
         expect(unguarded).toEqual([]);
+    });
+
+    it("an address no admin screen answers: an administrator sees the panel's 404, anyone else goes home", () => {
+        const admin: AdminAccessUser = { role: "administrator", capabilities: ["*"] };
+        const editor: AdminAccessUser = { role: "editor", capabilities: ["read", "access_admin_panel", "edit_posts", "edit_others_posts", "edit_pages"] };
+        expect(decideAdminRoute({ pathname: "/admin/no-such-page", user: admin, pluginMenus: [], menusLoaded: true })).toEqual({ kind: "allow" });
+        expect(decideAdminRoute({ pathname: "/admin/no-such-page", user: editor, pluginMenus: [], menusLoaded: true }).kind).toBe("redirect");
     });
 
     it("every core sidebar entry is decided by the capability it is shown for", () => {
