@@ -163,6 +163,14 @@ async function saveRevision(postId: number, preserveFields: any[] = [], source: 
 
   // Cleanup old revisions (keep last 10)
   await limitRevisions(postId, 10);
+  // Inside a transaction the count above sees only what is committed plus this write, so N saves at
+  // once each kept "10" of their own view and the post ended with more (QA S3-16: 13 on Postgres and
+  // MySQL). Pruning again once this write is committed makes the LAST commit see every revision.
+  if (database.hasActiveTransaction()) {
+    database.afterCommit(async () => {
+      try { await limitRevisions(postId, 10); } catch { /* the next save prunes again */ }
+    });
+  }
 
   return revisionId;
 }

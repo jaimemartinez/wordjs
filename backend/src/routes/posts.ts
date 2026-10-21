@@ -1603,8 +1603,22 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
         date,
         language,
         password,
-        sticky
+        sticky,
+        expectedModified
     } = req.body;
+
+    // OPTIMISTIC CONCURRENCY for an editor with no live session (an entry without a stored Verso
+    // document — everything imported or created through the API): it sends the `modified` it loaded,
+    // and a save over a newer version is refused instead of silently replacing it (QA S3-08: the last
+    // "Publish" of two tabs won, with no warning). Absent → the write goes through, as before.
+    if (typeof expectedModified === 'string' && expectedModified
+        && String(post.postModified || '').slice(0, 19) !== expectedModified.slice(0, 19)) {
+        return res.status(409).json({
+            code: 'rest_post_conflict',
+            message: 'This entry was changed by someone else after you opened it.',
+            data: { status: 409, modified: post.postModified }
+        });
+    }
 
     // Re-parenting takes the PARENT's edit gate too, exactly as creation does — the twin surface of the
     // same write. Without it, `parent` is a way to graft a post under a record you cannot touch.

@@ -1324,6 +1324,26 @@ class Post {
      * below only ever answers for SQLite and is the default for direct buildWhere callers.
      */
     static _searchEngineCache: string | null | undefined = undefined;
+    static _pgUnaccentCache: boolean | undefined = undefined;
+
+    /** The case- (and accent-) insensitive sort key for a title column on THIS engine. */
+    static async _titleSortKey(column: string): Promise<string> {
+        const { getDbType } = require('../config/database');
+        const driver = String(getDbType().driver || '');
+        if (driver.startsWith('sqlite')) return `wjs_fold(${column})`;
+        if (driver === 'postgres') {
+            if (Post._pgUnaccentCache === undefined) {
+                try {
+                    const row = await dbAsync.get(`SELECT n.nspname AS s FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'unaccent'`);
+                    Post._pgUnaccentCache = !!(row && /^[a-z_][a-z0-9_]*$/.test(String(row.s)));
+                    Post._pgUnaccentSchema = row ? String(row.s) : '';
+                } catch { Post._pgUnaccentCache = false; }
+            }
+            return Post._pgUnaccentCache ? `LOWER("${Post._pgUnaccentSchema}".unaccent(${column}))` : `LOWER(${column})`;
+        }
+        return column; // MySQL: the column's collation already sorts as people read
+    }
+    static _pgUnaccentSchema = '';
     /** The Postgres text search configuration posts.search_vector is built with. */
     static _pgSearchConfig = 'english';
 
@@ -1539,8 +1559,16 @@ class Post {
         // Order
         // Safe check for order by column
         const allowedOrderBy = ['id', 'post_date', 'post_title', 'post_modified', 'menu_order', 'comment_count'];
-        const safeOrderBy = allowedOrderBy.includes(orderBy) ? `p.${orderBy}` : 'p.post_date';
         const safeOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+        // TITLE ORDER IS A READER'S ORDER on every engine. SQLite and Postgres (C/C.UTF-8 collation) sorted
+        // titles by their bytes — "Zebra" before "apple", accented words after everything — while MySQL's
+        // collation sorts them as people do. The sort key now ignores case (and, where the engine can,
+        // accents: SQLite through wjs_fold, Postgres through unaccent when the extension is there), with
+        // the stored title as the tie-break so the order stays total and stable.
+        const titleKey = await Post._titleSortKey('p.post_title');
+        const safeOrderBy = allowedOrderBy.includes(orderBy)
+            ? (orderBy === 'post_title' ? `${titleKey} ${safeOrder}, p.post_title` : `p.${orderBy}`)
+            : 'p.post_date';
 
         // RELEVANCE FIRST for a search: every engine returns the more-relevant document ahead of the
         // less-relevant one, with the requested column (date by default) only breaking ties. The order

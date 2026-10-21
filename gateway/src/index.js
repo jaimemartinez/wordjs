@@ -1325,7 +1325,18 @@ if (cluster.isPrimary) {
      * dedicated separate-mode gateway whose peers live on other machines — an unknown path still 404s
      * as before; this never becomes a blanket "proxy everything to localhost".
      */
-    const BOOTSTRAP_PORT = { backend: config.backendPort || 4000, frontend: config.frontendPort || 3001 };
+    // The ports come from the gateway config, else from THIS install's backend config (split mode: one
+    // tree, one config in backend/), else the defaults. With the defaults alone, a second install on the
+    // same host routed to the FIRST install's services before its own setup (QA S3-18).
+    const siblingConfig = (() => {
+        try { return JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../backend/wordjs-config.json'), 'utf8')) || {}; }
+        catch { return {}; }
+    })();
+    const portOf = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 && Number(v) < 65536 ? Number(v) : null);
+    const BOOTSTRAP_PORT = {
+        backend: config.backendPort || portOf(siblingConfig.port) || 4000,
+        frontend: config.frontendPort || portOf(siblingConfig.frontendPort) || 3001,
+    };
     // Each peer picks HTTPS-with-mTLS or plain HTTP ONCE, at its own startup, from whether its identity
     // is on disk. In split mode all three start together, so the same look taken HERE, at gateway
     // startup, matches what they chose. Deciding per request instead would be wrong for exactly the

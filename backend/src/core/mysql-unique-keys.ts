@@ -40,6 +40,15 @@ const KEYS = [
         columnDdl: "ADD COLUMN post_slug_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (IF(post_name IS NULL OR post_name = '', NULL, LEFT(CONCAT(post_type, '/', post_name), 512))) STORED",
         dupSql: "SELECT post_name AS k, post_type AS t, COUNT(*) AS c FROM posts WHERE post_name <> '' GROUP BY post_name, post_type HAVING COUNT(*) > 1",
     },
+    {
+        // A term's slug is unique site-wide (models/Term.generateUniqueSlug) — held here so two requests
+        // creating the same tag at once cannot both insert it (QA S3-12).
+        table: 'terms',
+        column: 'term_slug_key',
+        index: 'uq_terms_slug',
+        columnDdl: "ADD COLUMN term_slug_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (IF(slug IS NULL OR slug = '', NULL, LEFT(slug, 255))) STORED",
+        dupSql: "SELECT slug AS k, COUNT(*) AS c FROM terms WHERE slug <> '' GROUP BY slug HAVING COUNT(*) > 1",
+    },
 ];
 
 async function ensureMysqlUniqueKeys(ctx: Ctx): Promise<{ created: string[]; skipped: string[] }> {

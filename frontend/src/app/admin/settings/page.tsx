@@ -57,6 +57,15 @@ export function boolSetting(value: unknown, fallback: "0" | "1"): string {
     return String(value);
 }
 
+/** Every IANA time zone this browser knows (UTC first), plus the stored one if it is not among them. */
+function timeZoneOptions(current: string): { value: string; label: string }[] {
+    let zones: string[] = [];
+    try { zones = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") || []; } catch { zones = []; }
+    const list = ["UTC", ...zones.filter((z) => z !== "UTC")];
+    if (current && !list.includes(current)) list.push(current);
+    return list.map((z) => ({ value: z, label: z.replace(/_/g, " ") }));
+}
+
 export default function SettingsPage() {
     // Multisite: the site's addresses, the media storage and the object-cache switch are the NETWORK's —
     // a network administrator on the main site changes them (the server refuses everyone else). A single
@@ -89,6 +98,7 @@ export default function SettingsPage() {
         author_legacy_slugs: "0",
         WPLANG: "en_US",
         site_text_direction: "",
+        timezone_string: "UTC",
     });
     const [roles, setRoles] = useState<Record<string, Role>>({});
     // The upload limit that applies right now (derived on the server: the panel's value or the default).
@@ -187,6 +197,7 @@ export default function SettingsPage() {
                 author_legacy_slugs: boolSetting(data.author_legacy_slugs, "0"),
                 WPLANG: data.WPLANG || "en_US",
                 site_text_direction: data.site_text_direction || "",
+                timezone_string: data.timezone_string || "UTC",
             });
             const effective = Number((data as Record<string, unknown>).upload_max_bytes);
             setUploadLimitBytes(Number.isFinite(effective) && effective > 0 ? effective : null);
@@ -475,6 +486,18 @@ export default function SettingsPage() {
                                         options={SITE_LOCALES.map((l) => ({ value: l.value, label: l.label }))}
                                     />
                                     <p className="text-xs text-gray-400 mt-1">{t('settings.site.language.help')}</p>
+                                </div>
+
+                                {/* The site's time zone: the public site prints post and comment dates in it
+                                    (lib/public/siteDate). Stored as an IANA name, validated by the backend. */}
+                                <div className="space-y-2">
+                                    <ModernSelect
+                                        label={t('settings.site.timezone')}
+                                        value={settings.timezone_string}
+                                        onChange={(e) => setSettings({ ...settings, timezone_string: e.target.value })}
+                                        options={timeZoneOptions(settings.timezone_string)}
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">{t('settings.site.timezone.help')}</p>
                                 </div>
 
                                 <div className="space-y-2">

@@ -92,7 +92,7 @@ function generatedMutationDtos(schemas: Schema[]): string[] {
             lines.push('    categories?: number[];', '    tags?: number[];');
             // Visibility and front-page placement (WordPress post_password / sticky): '' or null clears the password.
             lines.push('    password?: string | null;', '    sticky?: boolean;');
-            if (operation === 'Update') lines.push('    autosave?: boolean;');
+            if (operation === 'Update') lines.push('    autosave?: boolean;', '    expectedModified?: string;');
             lines.push('}', '');
         }
     }
@@ -125,7 +125,7 @@ function generatedMutationDtos(schemas: Schema[]): string[] {
         }
         lines.push('    categories?: number[];', '    tags?: number[];', '    meta?: Record<string, unknown>;');
         lines.push('    password?: string | null;', '    sticky?: boolean;');
-        if (operation === 'Update') lines.push('    autosave?: boolean;');
+        if (operation === 'Update') lines.push('    autosave?: boolean;', '    expectedModified?: string;');
         lines.push('}', '');
     }
     lines.push(

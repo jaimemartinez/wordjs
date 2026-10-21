@@ -359,7 +359,7 @@ export default function InstallPage() {
                                             { id: 'sqlite-native', title: 'SQLite (recommended)', desc: 'Zero-config, fast, file-based. Perfect for a single host.' },
                                             { id: 'postgres', title: 'PostgreSQL', desc: 'For higher concurrency or multi-node. Needs a running server.' },
                                             { id: 'mysql', title: 'MySQL / MariaDB', desc: 'For MySQL 8.0+ or MariaDB. Needs a running server.' },
-                                            { id: 'sqlite-legacy', title: 'SQLite (legacy / WASM)', desc: 'Pure-JS fallback when the native binary can\'t load.' }
+                                            { id: 'sqlite-legacy', title: 'SQLite (legacy / WASM)', desc: 'Only if the recommended SQLite cannot load on this server. Slower, keeps the whole database in memory, has no full-text search and cannot run a network of sites. You can move to the recommended engine later from Database migration.' }
                                         ] as { id: DbDriver; title: string; desc: string }[]).map(opt => (
                                             <button key={opt.id} type="button" onClick={() => { setDbDriver(opt.id); if (opt.id === 'mysql') setDbPort('3306'); else if (opt.id === 'postgres') setDbPort('5432'); setDbTest({ status: 'idle', message: '' }); }}
                                                 className={`text-left p-4 rounded-lg border-2 transition-all ${dbDriver === opt.id ? 'border-blue-600 bg-blue-50/60 ring-2 ring-blue-200' : 'border-gray-200 hover:border-gray-300 bg-white/40'}`}>

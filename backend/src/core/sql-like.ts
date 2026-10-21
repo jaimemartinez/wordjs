@@ -14,12 +14,24 @@ const ESCAPE_CHAR = '!';
 
 /** `%term%` with the term's own LIKE wildcards made literal. */
 function containsPattern(term: string): string {
+    // Lower-cased here; on SQLite the SQL folds accents on both sides too (wjs_fold), elsewhere the
+    // term keeps them, so `árbol` still finds `árbol` on Postgres.
     const escaped = String(term).toLowerCase().replace(/[!%_]/g, (c) => ESCAPE_CHAR + c);
     return `%${escaped}%`;
 }
 
-/** The SQL for "column contains ?" — pair it with containsPattern(term). */
-function containsSql(column: string): string {
+/** Which engine the site runs on (the fold below exists only on SQLite connections). */
+function onSqlite(): boolean {
+    try { return /^sqlite/.test(String(require('../config/database').getDbType().driver || '')); } catch { return false; }
+}
+
+/**
+ * The SQL for "column contains ?" — pair it with containsPattern(term). On SQLite both sides go
+ * through `wjs_fold` (Unicode lower-case without accents, core/sqlite-functions), because SQLite's
+ * LOWER()/LIKE fold ASCII only; MySQL's collation already ignores case and accents.
+ */
+function containsSql(column: string, engine?: string): string {
+    if (engine ? /^sqlite/.test(engine) : onSqlite()) return `wjs_fold(${column}) LIKE wjs_fold(?) ESCAPE '${ESCAPE_CHAR}'`;
     return `LOWER(${column}) LIKE ? ESCAPE '${ESCAPE_CHAR}'`;
 }
 

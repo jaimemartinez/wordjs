@@ -105,8 +105,28 @@ class Term {
             throw new Error('Term already exists');
         }
 
-        // Insert term
-        const termResult = await dbAsync.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0) RETURNING term_id', [name, termSlug]);
+        // Insert term. The slug is unique in the database too (migration 0023): when another request took
+        // it between the check above and this insert — the same tag created twice at once — the loser
+        // answers what a sequential second request answers ("already exists") if that request created
+        // this very term, and otherwise takes the next free slug.
+        let termResult: any;
+        for (let attempt = 1; ; attempt++) {
+            try {
+                termResult = await dbAsync.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0) RETURNING term_id', [name, termSlug]);
+                break;
+            } catch (e: any) {
+                if (attempt >= 10 || !require('../core/db-errors').isUniqueViolation(e)) throw e;
+                const raced = await dbAsync.get(`
+      SELECT t.term_id FROM terms t
+      JOIN term_taxonomy tt ON t.term_id = tt.term_id
+      WHERE ${exactName} AND tt.taxonomy = ? AND tt.parent = ?
+    `, [name, taxonomy, parent || 0]);
+                if (raced && !slug) throw new Error('Term already exists', { cause: e });
+                // The winner may not have written its taxonomy row yet: give it a moment before deciding.
+                if (!raced && attempt <= 2) { await new Promise((r) => setTimeout(r, 50)); continue; }
+                termSlug = await Term.generateUniqueSlug(termSlug);
+            }
+        }
         const termId = termResult.lastID;
 
         // Insert term taxonomy

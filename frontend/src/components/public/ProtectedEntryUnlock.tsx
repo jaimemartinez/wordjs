@@ -70,7 +70,7 @@ export default function ProtectedEntryUnlock({ postId, strings, htmlClassName, i
     }
 
     return (
-        <form onSubmit={submit} className="wjs-post-protected max-w-md mx-auto px-4 py-8 text-center">
+        <form onSubmit={submit} className="wjs-post-body wjs-post-protected max-w-md mx-auto px-4 py-8 text-center">
             <p className="mb-4 text-[var(--wjs-color-text-muted,#6b7280)]">{strings.notice}</p>
             <div className="flex gap-2 justify-center">
                 <label className="sr-only" htmlFor={`wjs-pp-${postId}`}>{strings.password}</label>

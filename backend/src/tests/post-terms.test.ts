@@ -34,7 +34,8 @@ let dbAsync: any;
 
 /** Create a term + its taxonomy row directly (no Term model dependency). */
 async function makeTerm(name: string, taxonomy: string): Promise<{ termId: number; ttId: number }> {
-    const t = await dbAsync.run('INSERT INTO terms (name, slug) VALUES (?, ?)', [name, name.toLowerCase()]);
+    // A term slug is unique site-wide (models/Term.generateUniqueSlug, enforced by migration 0023).
+    const t = await dbAsync.run('INSERT INTO terms (name, slug) VALUES (?, ?)', [name, `${name.toLowerCase()}-${taxonomy}`]);
     const termId = t.lastID;
     const tt = await dbAsync.run(
         'INSERT INTO term_taxonomy (term_id, taxonomy, description, parent, count) VALUES (?, ?, ?, 0, 0)',

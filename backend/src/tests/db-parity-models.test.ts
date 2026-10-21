@@ -82,3 +82,25 @@ test('terms: same name under another parent, or with its own slug, is a second t
     // Case and accents are distinct names on every engine (MySQL compares them exactly now).
     assert.ok(await Term.create({ name: 'parity tag', taxonomy: 'post_tag' }));
 });
+
+test('order by title ignores case and accents (M3-12 / S3-14), as MySQL does', async () => {
+    for (const t of ['Zebra QA', 'apple QA', 'Árbol QA', 'banana QA', 'Éclair QA']) {
+        await Post.create({ title: t, status: 'publish', authorId: 1 });
+    }
+    const res = await Post.findAll({ search: undefined, status: 'publish', orderBy: 'post_title', order: 'ASC', limit: 200 });
+    const titles = (res.posts || res).map((p: any) => p.postTitle ?? p.title).filter((t: string) => / QA$/.test(t));
+    assert.deepStrictEqual(titles, ['apple QA', 'Árbol QA', 'banana QA', 'Éclair QA', 'Zebra QA']);
+});
+
+test('terms: the slug is unique in the database, and a same-name race ends with one tag (S3-12)', async () => {
+    const db = database.getDbAsync();
+    const idx = await db.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'uq_terms_slug'");
+    assert.ok(idx, 'migration 0023 created the unique index');
+    await assert.rejects(
+        (async () => { await db.run("INSERT INTO terms (name, slug, term_group) VALUES ('A', 'race-slug', 0)"); await db.run("INSERT INTO terms (name, slug, term_group) VALUES ('B', 'race-slug', 0)"); })(),
+        (e: any) => require('../core/db-errors').isUniqueViolation(e)
+    );
+    const results = await Promise.allSettled(Array.from({ length: 6 }, () => Term.create({ name: 'Race tag QA', taxonomy: 'post_tag' })));
+    assert.strictEqual(results.filter((r) => r.status === 'fulfilled').length, 1);
+    assert.ok(results.filter((r) => r.status === 'rejected').every((r: any) => /already exists/.test(r.reason.message)));
+});

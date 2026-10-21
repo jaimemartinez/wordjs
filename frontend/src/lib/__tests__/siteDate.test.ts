@@ -33,3 +33,16 @@ describe("siteDateLanguage", () => {
         expect(siteDateLanguage({})).toBe("en");
     });
 });
+
+describe('formatSiteDate in the site time zone (M3-16)', () => {
+    it('dates a UTC moment on the day it falls in the site zone', async () => {
+        const { formatSiteDate, siteTimeZone } = await import('@/lib/public/siteDate');
+        // 2024-03-02 23:30 in Madrid is 22:30 UTC the same day; 2024-03-03 01:30 in Madrid is 00:30 UTC.
+        expect(formatSiteDate('2024-03-03 00:30:00', 'en', { gmt: '2024-03-03 00:30:00', timeZone: 'America/Mexico_City' })).toBe('March 2, 2024');
+        expect(formatSiteDate('2024-03-02 22:30:00', 'en', { gmt: '2024-03-02 22:30:00', timeZone: 'Asia/Tokyo' })).toBe('March 3, 2024');
+        expect(formatSiteDate('2024-03-02 22:30:00', 'en', { gmt: '2024-03-02 22:30:00', timeZone: 'UTC' })).toBe('March 2, 2024');
+        expect(formatSiteDate('2024-03-02 22:30:00', 'en', { gmt: '2024-03-02 22:30:00', timeZone: 'Not/AZone' })).toBe('March 2, 2024');
+        expect(siteTimeZone({ timezone_string: 'Europe/Madrid' })).toBe('Europe/Madrid');
+        expect(siteTimeZone({})).toBe('UTC');
+    });
+});

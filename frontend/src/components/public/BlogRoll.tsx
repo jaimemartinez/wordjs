@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Post } from "@/lib/api";
 import { postCardExcerpt } from "@/lib/postExcerpt";
-import { formatSiteDate, siteDateLanguage } from "@/lib/public/siteDate";
+import { formatSiteDate, siteDateLanguage, siteTimeZone } from "@/lib/public/siteDate";
 
 /** `/` is page 1 of the blog roll; page n lives at `/page/{n}`. */
 export const blogRollHref = (page: number) => (page <= 1 ? "/" : `/page/${page}`);
@@ -33,7 +33,7 @@ export default function BlogRoll({ posts, page, totalPages, settings }: { posts:
                                 <div className="wjs-post-card-meta flex flex-wrap items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                                     <span className="wjs-post-card-badge bg-[var(--wjs-bg-muted,#eff6ff)] text-[var(--wjs-color-primary,#1d4ed8)] px-3 py-1 rounded-full font-medium">Article</span>
                                     <span>•</span>
-                                    <span>{formatSiteDate(post.date, siteDateLanguage(settings))}</span>
+                                    <span>{formatSiteDate(post.date, siteDateLanguage(settings), { gmt: post.dateGmt, timeZone: siteTimeZone(settings) })}</span>
                                     <span>•</span>
                                     <span>{post.author?.displayName || "Admin"}</span>
                                 </div>

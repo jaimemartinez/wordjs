@@ -179,3 +179,20 @@ test('M3-05: a private-network source is refused with an importer message; loopb
     const loop = await importWxr(xml('127.0.0.1'), { defaultAuthorId: adminId, media: 'download', allowPrivateSource: true });
     assert.match(loop.media.failures.map((f: any) => f.reason).join(' | '), /no import may reach/);
 });
+
+test('S3-08: a save over a newer version is refused (409) when the editor sends the version it loaded', async () => {
+    const created = await Post.create({ title: 'Two tabs', content: '<p>v1</p>', status: 'draft', authorId: adminId });
+    const loaded = (await request(app).get(`/api/v1/posts/${created.id}`).set('Authorization', `Bearer ${token}`)).body.modified;
+    // Tab A saves (a second later, so the stored modified moves on).
+    await new Promise((r) => setTimeout(r, 1100));
+    const a = await request(app).put(`/api/v1/posts/${created.id}`).set('Authorization', `Bearer ${token}`).send({ title: 'Two tabs A', expectedModified: loaded });
+    assert.strictEqual(a.status, 200, JSON.stringify(a.body));
+    // Tab B still holds the version it opened.
+    const b = await request(app).put(`/api/v1/posts/${created.id}`).set('Authorization', `Bearer ${token}`).send({ title: 'Two tabs B', expectedModified: loaded });
+    assert.strictEqual(b.status, 409);
+    assert.strictEqual(b.body.code, 'rest_post_conflict');
+    assert.strictEqual((await dbAsync.get('SELECT post_title FROM posts WHERE id = ?', [created.id])).post_title, 'Two tabs A', 'A\'s change survives');
+    // Choosing to overwrite (no expectedModified) goes through, as every client without the field does.
+    const forced = await request(app).put(`/api/v1/posts/${created.id}`).set('Authorization', `Bearer ${token}`).send({ title: 'Two tabs B' });
+    assert.strictEqual(forced.status, 200);
+});

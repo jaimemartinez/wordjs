@@ -141,6 +141,7 @@ export interface ContentAttachmentUpdateInput {
     password?: string | null;
     sticky?: boolean;
     autosave?: boolean;
+    expectedModified?: string;
 }
 
 export interface ContentPageCreateInput {
@@ -182,6 +183,7 @@ export interface ContentPageUpdateInput {
     password?: string | null;
     sticky?: boolean;
     autosave?: boolean;
+    expectedModified?: string;
 }
 
 export interface ContentPostCreateInput {
@@ -221,6 +223,7 @@ export interface ContentPostUpdateInput {
     password?: string | null;
     sticky?: boolean;
     autosave?: boolean;
+    expectedModified?: string;
 }
 
 export interface ContentCreateInput {
@@ -260,6 +263,7 @@ export interface ContentUpdateInput {
     password?: string | null;
     sticky?: boolean;
     autosave?: boolean;
+    expectedModified?: string;
 }
 
 export type CoreContentCreateInput = ContentAttachmentCreateInput | ContentPageCreateInput | ContentPostCreateInput;

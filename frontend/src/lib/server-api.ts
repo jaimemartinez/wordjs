@@ -171,6 +171,7 @@ function backendBaseCandidates(): string[] {
  * be. Only the three functions that decide WHERE a request goes are shared; nothing about how the
  * request is made or cached is.
  */
+
 export function resolveServerBase(): string {
     for (const candidate of backendBaseCandidates()) {
         const base = sanitizeBackendBase(candidate);
@@ -1235,7 +1236,8 @@ export function isoPostDate(gmt?: string | null, local?: string | null): string 
         const s = typeof value === 'string' ? value.trim() : '';
         if (!s || s.startsWith('0000-00-00')) return undefined;
         const iso = s.replace(' ', 'T');
-        const d = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso) || !utc ? iso : `${iso}Z`);
+        // A trailing offset may be `+00` alone: Postgres prints `…575536+00` for a timestamptz.
+        const d = new Date(/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(iso) || !utc ? iso.replace(/([+-]\d{2})$/, '$1:00') : `${iso}Z`);
         return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
     };
     return pick(gmt, true) ?? pick(local, false);

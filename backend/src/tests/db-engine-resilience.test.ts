@@ -172,11 +172,16 @@ test('LIKE search: % and _ are literal, and case does not matter', async (t: any
     assert.strictEqual(containsPattern('50%_off!'), '%50!%!_off!!%');
     const db = nativeDb();
     if (!db) return t.skip('better-sqlite3 unavailable');
-    db.exec("CREATE TABLE p (t TEXT); INSERT INTO p VALUES ('José Pérez'), ('100% real'), ('a_b');");
+    require('../core/sqlite-functions').registerSqliteFunctions(db);
+    db.exec("CREATE TABLE p (t TEXT); INSERT INTO p VALUES ('José Pérez'), ('100% real'), ('a_b'), ('MURCIÉLAGO árbol');");
     const q = (term: string) => db.prepare(`SELECT t FROM p WHERE ${containsSql('t')}`).all(containsPattern(term)).map((r: any) => r.t);
     assert.deepStrictEqual(q('%'), ['100% real']);
     assert.deepStrictEqual(q('_'), ['a_b']);
     assert.deepStrictEqual(q('JOS'), ['José Pérez']);
+    // SQLite folds full Unicode case and accents on this path (S3-15: legacy found nothing for these).
+    assert.deepStrictEqual(q('murciélago'), ['MURCIÉLAGO árbol']);
+    assert.deepStrictEqual(q('ARBOL'), ['MURCIÉLAGO árbol']);
+    assert.deepStrictEqual(q('perez'), ['José Pérez']);
     db.close();
 });
 
@@ -346,6 +351,13 @@ test('postgres (real): a SQLite-native site switches to Postgres — search, seq
             }
         } finally { Post._pgSearchConfig = saved; }
 
+        // Title order as readers expect (M3-12): the key models/Post._titleSortKey builds for Postgres.
+        const ext = await ctx.driver.get("SELECT n.nspname AS s FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'unaccent'");
+        const key = ext ? `LOWER("${ext.s}".unaccent(post_title))` : 'LOWER(post_title)';
+        await ctx.driver.run("INSERT INTO posts (author_id, post_title, post_content, post_excerpt, post_status, post_name, post_type, guid) VALUES (1, 'Zebra', '', '', 'publish', 'zebra', 'post', ''), (1, 'apple', '', '', 'publish', 'apple', 'post', ''), (1, 'Éclair', '', '', 'publish', 'eclair', 'post', '')");
+        const ordered = (await ctx.driver.all(`SELECT post_title FROM posts WHERE post_name IN ('zebra','apple','eclair') ORDER BY ${key}, post_title`)).map((r: any) => r.post_title);
+        assert.deepStrictEqual(ordered, ['apple', 'Éclair', 'Zebra']);
+
         // Sequences moved past the copied ids: a new row gets a fresh id instead of a duplicate-key error.
         const ins = await ctx.driver.run("INSERT INTO posts (author_id, post_title, post_content, post_excerpt, post_status, post_name, post_type, guid) VALUES (1, 'New', '', '', 'draft', 'new', 'post', '')");
         assert.ok(Number(ins.lastID) > 2, `new id ${ins.lastID} is past the copied ones`);
@@ -511,7 +523,7 @@ test('mysql (real): a SQLite-native site switches to MySQL — FTS tables skippe
         await ctx.driver.run("INSERT INTO posts (author_id, post_title, post_content, post_excerpt, post_status, post_name, post_type, guid) VALUES (1, 'c', '', '', 'draft', 'second', 'page', '')");
         // A LIKE search for % finds only a literal %.
         const { containsSql, containsPattern } = require('../core/sql-like');
-        const pct = await ctx.driver.all(`SELECT id FROM posts WHERE ${containsSql('post_title')}`, [containsPattern('%')]);
+        const pct = await ctx.driver.all(`SELECT id FROM posts WHERE ${containsSql('post_title', 'mysql')}`, [containsPattern('%')]);
         assert.strictEqual(pct.length, 0);
         // The generated key columns stay out of an engine switch away from MySQL.
         const gen = await migration.listGeneratedColumns((sql: string) => ctx.driver.all(sql), 'mysql');

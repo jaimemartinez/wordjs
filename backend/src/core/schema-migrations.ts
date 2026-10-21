@@ -1064,6 +1064,29 @@ const MIGRATIONS: Migration[] = [
             }
             if (cols.length) log.info(`   ✓ [migration 0022] ${cols.length} Postgres date column default(s) set to UTC 'YYYY-MM-DD HH:MM:SS'; ${fixed} row value(s) rewritten`);
         }
+    },
+    {
+        // A term's slug is unique site-wide by the application's rule (models/Term.generateUniqueSlug);
+        // the database now holds it too, so two requests creating the same tag at once leave ONE tag on
+        // every engine (QA S3-12: Postgres and MySQL kept all of them). MySQL gets it as a generated key
+        // column (core/mysql-unique-keys). Duplicates already stored are listed and the index waits.
+        id: '0023_terms_unique_slug',
+        up: async (ctx: MigrationCtx) => {
+            if (ctx.driverName === 'mysql' || ctx.driverName === 'mariadb') {
+                await require('./mysql-unique-keys').ensureMysqlUniqueKeys(ctx);
+                return;
+            }
+            const dups = (await ctx.all("SELECT slug AS k, COUNT(*) AS c FROM terms WHERE slug <> '' GROUP BY slug HAVING COUNT(*) > 1")) || [];
+            if (dups.length) {
+                log.warn(`⚠️  [migration 0023] ${dups.length} term slug(s) appear more than once; the unique index waits until they are resolved: ${dups.slice(0, 20).map((d: any) => d.k).join(', ')}`);
+                return;
+            }
+            try {
+                await ctx.exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_terms_slug ON terms (slug) WHERE slug <> ''");
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️  [migration 0023] could not create the unique index on terms.slug');
+            }
+        }
     }
 ];
 
@@ -1117,6 +1140,7 @@ const ENGINE_SPECIFIC_MIGRATIONS = [
     '0020_mysql_unique_email_slug',
     '0021_pg_search_unaccent_simple',
     '0022_pg_text_timestamp_format',
+    '0023_terms_unique_slug',
 ];
 
 async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string, migrations: Migration[] = MIGRATIONS): Promise<void> {
