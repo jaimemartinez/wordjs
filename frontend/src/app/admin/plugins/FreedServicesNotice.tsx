@@ -18,6 +18,12 @@ import { Button } from "@/components/ui";
 
 type Freed = { slug: string; port: number; service: string; label: string; at: string; pluginActive: boolean };
 
+/** Every occurrence of each placeholder (a message may name the plugin twice). */
+const fillVars = (s: string, it: Freed) => s
+    .split("{service}").join(it.label)
+    .split("{plugin}").join(it.slug)
+    .split("{port}").join(String(it.port));
+
 export default function FreedServicesNotice({ refreshKey }: { refreshKey?: unknown }) {
     const { t } = useI18n();
     const { confirm } = useModal();
@@ -37,7 +43,7 @@ export default function FreedServicesNotice({ refreshKey }: { refreshKey?: unkno
     if (waiting.length === 0) return null;
 
     const restore = async (it: Freed) => {
-        const fill = (s: string) => s.replace("{service}", it.label).replace("{plugin}", it.slug).replace("{port}", String(it.port));
+        const fill = (s: string) => fillVars(s, it);
         if (!(await confirm(fill(t("plugins.freed.confirm")), fill(t("plugins.freed.confirmTitle"))))) return;
         setBusy(it.service);
         try {
@@ -54,7 +60,7 @@ export default function FreedServicesNotice({ refreshKey }: { refreshKey?: unkno
     return (
         <div className="mb-6 space-y-2" data-testid="freed-services-notice">
             {waiting.map((it) => {
-                const fill = (s: string) => s.replace("{service}", it.label).replace("{plugin}", it.slug).replace("{port}", String(it.port));
+                const fill = (s: string) => fillVars(s, it);
                 return (
                     <div key={it.service} className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 sm:flex-row sm:items-center">
                         <i className="fa-solid fa-plug-circle-exclamation text-amber-500 text-lg" aria-hidden="true"></i>
