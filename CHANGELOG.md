@@ -1170,6 +1170,24 @@ the boot error links there too.
   rewritten only when its file is here (WordPress's `-WxH` sizes follow their original), and a re-run moves
   the references of posts imported earlier once their files are stored.
 
+- **WordPress import: nothing the export carries is dropped.** A page whose address belongs to unrelated
+  content of this site (the sample "About") is imported under another address instead of being discarded
+  with its children re-hung on the sample page; a re-run still recognises it. Sticky posts stay sticky, and
+  the front page lists them first. `[gallery]` shows the post's images instead of nothing. A
+  password-protected post can be unlocked by its readers with its password, and the post and page editors
+  show and change the password. In link mode the featured image and `og:image` point at the old site's
+  file and an attachment without a MIME type is typed by its extension. A WordPress on a private network
+  (LAN, intranet, staging) can provide its media with an explicit opt-in that covers that site only; the
+  refusal no longer talks about "plugins". Imported dates use the same clock as the site's own posts.
+- **Edits, searches and orderings that depended on the engine.** Two editors saving one post that has no
+  live session no longer overwrite each other silently: the second save asks first. The same tag created
+  twice at once is one tag on every engine, and concurrent saves no longer leave more revisions than the
+  cap. The SQLite search (sqlite-legacy in particular) ignores case and accents in any language; title
+  order ignores case, and accents where the engine can. `og:article:published_time` and JSON-LD
+  `datePublished` are ISO 8601. Settings → General has a Time zone, and the public site prints dates in
+  it. The installer explains what the legacy SQLite engine costs. In split mode, a second install on the
+  same host uses its own ports before it is set up instead of the first install's.
+
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
   certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes
