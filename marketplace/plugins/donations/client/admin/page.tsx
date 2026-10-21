@@ -14,21 +14,22 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
-const STATUS_LABELS = { pending: "Pendiente", paid: "Pagada", cancelled: "Cancelada" };
 const STATUS_CLS = {
     pending: "is-pending",
     paid: "is-paid",
     cancelled: "is-cancelled",
 };
 
-const fmtMoney = (cents, symbol) =>
-    `${symbol || "$"}${(Math.round(cents || 0) / 100).toLocaleString("es", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+// `locale` is the admin locale from useT(); numbers and dates follow the admin's language.
+const fmtMoney = (cents, symbol, locale) =>
+    `${symbol || "$"}${(Math.round(cents || 0) / 100).toLocaleString(locale || "es", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
-const fmtDate = (s) => {
+const fmtDate = (s, locale) => {
     if (!s) return "—";
     const d = new Date(s);
-    return isNaN(d.getTime()) ? String(s) : d.toLocaleString();
+    return isNaN(d.getTime()) ? String(s) : d.toLocaleString(locale);
 };
 
 /* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
@@ -64,6 +65,7 @@ const IconInboxEmpty = (props) => (
 
 // Module-level modal (never define a component inside a component — it remounts and steals focus).
 function CampaignModal({ initial, symbol, onClose, onSaved }) {
+    const { t } = useT();
     const [title, setTitle] = useState(initial?.title || "");
     const [slug, setSlug] = useState(initial?.slug || "");
     const [description, setDescription] = useState(initial?.description || "");
@@ -77,7 +79,7 @@ function CampaignModal({ initial, symbol, onClose, onSaved }) {
         e.preventDefault();
         setError("");
         const goal = goalUnits === "" ? 0 : Number(String(goalUnits).replace(",", "."));
-        if (!Number.isFinite(goal) || goal < 0) { setError("La meta debe ser un número mayor o igual a 0."); return; }
+        if (!Number.isFinite(goal) || goal < 0) { setError(t("camp.goalInvalid")); return; }
         setSaving(true);
         try {
             const payload = {
@@ -93,7 +95,7 @@ function CampaignModal({ initial, symbol, onClose, onSaved }) {
                 : await apiPost("/plugin/donations/campaigns", payload);
             onSaved(res.campaign);
         } catch (err) {
-            setError(err?.message || "No se pudo guardar la campaña.");
+            setError(err?.message || t("camp.saveError"));
         } finally {
             setSaving(false);
         }
@@ -105,46 +107,46 @@ function CampaignModal({ initial, symbol, onClose, onSaved }) {
                 className="cf-letter"
                 role="dialog"
                 aria-modal="true"
-                aria-label={initial && initial.id ? "Editar campaña" : "Nueva campaña"}
+                aria-label={initial && initial.id ? t("camp.edit") : t("camp.new")}
                 onClick={(e) => e.stopPropagation()}
             >
                 <form onSubmit={save} className="cf-letter-body">
                     <h2 className="cf-editor-title">
                         {initial && initial.id ? <IconPen /> : <IconPlus />}
-                        {initial && initial.id ? "Editar campaña" : "Nueva campaña"}
+                        {initial && initial.id ? t("camp.edit") : t("camp.new")}
                     </h2>
                     <div className="cf-grid">
                         <div className="cf-span-2">
-                            <label className="cf-label" htmlFor="dn-camp-title">Título</label>
+                            <label className="cf-label" htmlFor="dn-camp-title">{t("camp.title")}</label>
                             <input id="dn-camp-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="cf-input" required maxLength={300} />
                         </div>
                         <div className="cf-span-2">
-                            <label className="cf-label" htmlFor="dn-camp-slug">Slug (vacío = se genera del título)</label>
-                            <input id="dn-camp-slug" type="text" value={slug} onChange={(e) => setSlug(e.target.value)} className="cf-input" placeholder="mi-campana" maxLength={200} />
+                            <label className="cf-label" htmlFor="dn-camp-slug">{t("camp.slug")}</label>
+                            <input id="dn-camp-slug" type="text" value={slug} onChange={(e) => setSlug(e.target.value)} className="cf-input" placeholder={t("camp.slugPlaceholder")} maxLength={200} />
                         </div>
                         <div className="cf-span-2">
-                            <label className="cf-label" htmlFor="dn-camp-desc">Descripción</label>
+                            <label className="cf-label" htmlFor="dn-camp-desc">{t("camp.description")}</label>
                             <textarea id="dn-camp-desc" value={description} onChange={(e) => setDescription(e.target.value)} className="cf-input" style={{ minHeight: "90px" }} maxLength={5000} />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="dn-camp-goal">Meta ({symbol || "$"}) — 0 = sin meta</label>
+                            <label className="cf-label" htmlFor="dn-camp-goal">{t("camp.goal", { symbol: symbol || "$" })}</label>
                             <input id="dn-camp-goal" type="number" min="0" step="0.01" value={goalUnits} onChange={(e) => setGoalUnits(e.target.value)} className="cf-input" placeholder="0" />
                         </div>
                         <div style={{ display: "flex", alignItems: "flex-end" }}>
                             <label className="cf-check">
                                 <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
-                                Activa
+                                {t("camp.active")}
                             </label>
                         </div>
                         <div className="cf-span-2">
-                            <label className="cf-label" htmlFor="dn-camp-image">URL de imagen (opcional)</label>
-                            <input id="dn-camp-image" type="text" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} className="cf-input" placeholder="/uploads/2026/07/imagen.jpg" maxLength={1000} />
+                            <label className="cf-label" htmlFor="dn-camp-image">{t("camp.image")}</label>
+                            <input id="dn-camp-image" type="text" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} className="cf-input" placeholder={t("camp.imagePlaceholder")} maxLength={1000} />
                         </div>
                     </div>
                     {error && <div role="alert" className="cf-flash is-error" style={{ margin: "1.05rem 0 0" }}>{error}</div>}
                     <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.4rem" }}>
-                        <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
-                        <button type="submit" disabled={saving} className="cf-btn">{saving ? "Guardando…" : "Guardar"}</button>
+                        <button type="button" onClick={onClose} className="cf-btn-ghost">{t("common.cancel")}</button>
+                        <button type="submit" disabled={saving} className="cf-btn">{saving ? t("common.saving") : t("common.save")}</button>
                     </div>
                 </form>
             </div>
@@ -154,6 +156,7 @@ function CampaignModal({ initial, symbol, onClose, onSaved }) {
 
 // Campaign card with a mini thermometer (module-level).
 function CampaignCard({ c, symbol, onEdit, onDelete }) {
+    const { t, locale } = useT();
     const goal = c.goal_cents || 0;
     const pct = goal > 0 ? Math.min(100, Math.round(((c.raised_cents || 0) * 100) / goal)) : null;
     return (
@@ -171,7 +174,7 @@ function CampaignCard({ c, symbol, onEdit, onDelete }) {
                         <p className="cf-camp-slug">/{c.slug}</p>
                     </div>
                     <span className={`cf-pill ${c.is_active ? "is-on" : "is-off"}`}>
-                        {c.is_active ? "Activa" : "Inactiva"}
+                        {c.is_active ? t("camp.active") : t("camp.inactive")}
                     </span>
                 </div>
                 <div>
@@ -181,20 +184,20 @@ function CampaignCard({ c, symbol, onEdit, onDelete }) {
                                 <div className="cf-thermo-fill" style={{ width: `${pct}%` }} />
                             </div>
                             <div className="cf-thermo-meta">
-                                <span><strong>{fmtMoney(c.raised_cents, symbol)}</strong> de {fmtMoney(goal, symbol)}</span>
+                                <span><strong>{fmtMoney(c.raised_cents, symbol, locale)}</strong> {t("camp.of")} {fmtMoney(goal, symbol, locale)}</span>
                                 <span className="cf-thermo-pct">{pct}%</span>
                             </div>
                         </>
                     ) : (
-                        <p className="cf-thermo-meta"><span><strong>{fmtMoney(c.raised_cents, symbol)}</strong> recaudados (sin meta)</span></p>
+                        <p className="cf-thermo-meta"><span><strong>{fmtMoney(c.raised_cents, symbol, locale)}</strong> {t("camp.raisedNoGoal")}</span></p>
                     )}
                 </div>
                 <p className="cf-meta" style={{ marginTop: 0 }}>
-                    {c.paid_count || 0} pagadas · {c.donation_count || 0} en total
+                    {t("camp.counts", { paid: c.paid_count || 0, total: c.donation_count || 0 })}
                 </p>
                 <div style={{ display: "flex", gap: "0.5rem", marginTop: "auto" }}>
-                    <button type="button" onClick={onEdit} className="cf-btn-ghost"><IconPen /> Editar</button>
-                    <button type="button" onClick={onDelete} className="cf-btn-danger">Eliminar</button>
+                    <button type="button" onClick={onEdit} className="cf-btn-ghost"><IconPen /> {t("common.edit")}</button>
+                    <button type="button" onClick={onDelete} className="cf-btn-danger">{t("common.delete")}</button>
                 </div>
             </div>
         </div>
@@ -202,6 +205,7 @@ function CampaignCard({ c, symbol, onEdit, onDelete }) {
 }
 
 export default function DonationsAdminPage() {
+    const { t, locale } = useT();
     const [tab, setTab] = useState("campaigns");
     const [message, setMessage] = useState("");
 
@@ -249,7 +253,7 @@ export default function DonationsAdminPage() {
             const d = await api("/plugin/donations/campaigns");
             setCampaigns(d.campaigns || []);
         } catch (err) {
-            setMessage(`Error al cargar campañas: ${err?.message || err}`);
+            setMessage(t("campaigns.loadError", { msg: err?.message || err }));
         }
     };
 
@@ -267,7 +271,7 @@ export default function DonationsAdminPage() {
             setDonations(d.donations || []);
             setTotals(d.totals || { count: 0, paid_cents: 0, pending_cents: 0 });
         } catch (err) {
-            setMessage(`Error al cargar donaciones: ${err?.message || err}`);
+            setMessage(t("donations.loadError", { msg: err?.message || err }));
         }
     };
 
@@ -275,13 +279,13 @@ export default function DonationsAdminPage() {
     useEffect(() => { if (tab === "donations") loadDonations(); }, [tab, filterCampaign, filterStatus]);
 
     const deleteCampaign = async (c) => {
-        if (!window.confirm(`¿Eliminar la campaña "${c.title}" y TODAS sus donaciones? Esta acción no se puede deshacer.`)) return;
+        if (!window.confirm(t("campaigns.confirmDelete", { title: c.title }))) return;
         try {
             await apiDelete(`/plugin/donations/campaigns/${c.id}`);
-            setMessage(`Campaña "${c.title}" eliminada.`);
+            setMessage(t("campaigns.deleted", { title: c.title }));
             loadCampaigns();
         } catch (err) {
-            setMessage(`Error: ${err?.message || err}`);
+            setMessage(t("common.error", { msg: err?.message || err }));
         }
     };
 
@@ -292,21 +296,21 @@ export default function DonationsAdminPage() {
             await loadDonations();
             loadCampaigns(); // raised_cents changed
         } catch (err) {
-            setMessage(`Error: ${err?.message || err}`);
+            setMessage(t("common.error", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
     };
 
     const deleteDonation = async (d) => {
-        if (!window.confirm(`¿Eliminar la donación de ${d.donor_name || "(sin nombre)"} por ${fmtMoney(d.amount_cents, symbol)}?`)) return;
+        if (!window.confirm(t("donations.confirmDelete", { name: d.donor_name || t("common.noName"), amount: fmtMoney(d.amount_cents, symbol, locale) }))) return;
         setBusy(true);
         try {
             await apiDelete(`/plugin/donations/donations/${d.id}`);
             await loadDonations();
             loadCampaigns();
         } catch (err) {
-            setMessage(`Error: ${err?.message || err}`);
+            setMessage(t("common.error", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -321,13 +325,13 @@ export default function DonationsAdminPage() {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = data.filename || "donaciones.csv";
+            a.download = data.filename || t("donations.csvName");
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
         } catch (err) {
-            setMessage(`Error al exportar: ${err?.message || err}`);
+            setMessage(t("donations.exportError", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -354,9 +358,9 @@ export default function DonationsAdminPage() {
             setCfgForm({ ...cfgForm, hasStripeKey: !!c.hasStripeKey });
             setStripeKey("");
             setClearKey(false);
-            setMessage("Configuración guardada.");
+            setMessage(t("config.saved"));
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            setMessage(t("config.saveError", { msg: err?.message || err }));
         } finally {
             setSavingCfg(false);
         }
@@ -380,9 +384,9 @@ export default function DonationsAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconHeart /></div>
                 <div>
-                    <h1 className="cf-title">Donaciones</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Campañas con termómetro de meta · pago manual + Stripe opcional · exportación CSV
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
@@ -390,13 +394,13 @@ export default function DonationsAdminPage() {
 
             {/* tabs */}
             <div className="cf-tabs" role="tablist">
-                {tabBtn("campaigns", "Campañas")}
-                {tabBtn("donations", "Donaciones")}
-                {tabBtn("config", "Configuración")}
+                {tabBtn("campaigns", t("tab.campaigns"))}
+                {tabBtn("donations", t("tab.donations"))}
+                {tabBtn("config", t("tab.config"))}
             </div>
 
             {message && (
-                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>
+                <div role={/Erro/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Erro/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
@@ -405,12 +409,12 @@ export default function DonationsAdminPage() {
             {tab === "campaigns" && (
                 <div>
                     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                        <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> Nueva campaña</button>
+                        <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> {t("campaigns.new")}</button>
                     </div>
                     {campaigns.length === 0 ? (
                         <div className="cf-empty">
                             <IconHeart />
-                            <span>Sin campañas todavía — crea la primera para empezar a recibir donaciones.</span>
+                            <span>{t("campaigns.empty")}</span>
                         </div>
                     ) : (
                         <div className="cf-camp-grid">
@@ -420,8 +424,7 @@ export default function DonationsAdminPage() {
                         </div>
                     )}
                     <p className="cf-usage" style={{ marginTop: "1.4rem" }}>
-                        En el editor visual, agrega el bloque <strong>Donations</strong> — muestra la campaña con su
-                        termómetro, montos sugeridos y formulario de donación (con su slug o la primera activa).
+                        {t("campaigns.usage1")}<strong>Donations</strong>{t("campaigns.usage2")}
                     </p>
                 </div>
             )}
@@ -433,39 +436,39 @@ export default function DonationsAdminPage() {
                         <div className="cf-toolbar" style={{ marginBottom: 0 }}>
                             <div className="cf-toolbar-left">
                                 <div>
-                                    <label className="cf-label" htmlFor="dn-filter-campaign">Campaña</label>
+                                    <label className="cf-label" htmlFor="dn-filter-campaign">{t("donations.campaign")}</label>
                                     <select id="dn-filter-campaign" value={filterCampaign} onChange={(e) => setFilterCampaign(e.target.value)} className="cf-select">
-                                        <option value="">Todas</option>
+                                        <option value="">{t("donations.all")}</option>
                                         {campaigns.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="dn-filter-status">Estado</label>
+                                    <label className="cf-label" htmlFor="dn-filter-status">{t("donations.status")}</label>
                                     <select id="dn-filter-status" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="cf-select">
-                                        <option value="">Todos</option>
-                                        <option value="pending">Pendiente</option>
-                                        <option value="paid">Pagada</option>
-                                        <option value="cancelled">Cancelada</option>
+                                        <option value="">{t("donations.allStatuses")}</option>
+                                        <option value="pending">{t("status.pending")}</option>
+                                        <option value="paid">{t("status.paid")}</option>
+                                        <option value="cancelled">{t("status.cancelled")}</option>
                                     </select>
                                 </div>
                             </div>
                             <button type="button" onClick={exportCsv} disabled={busy} className="cf-btn">
-                                <IconDownload /> Exportar CSV
+                                <IconDownload /> {t("donations.exportCsv")}
                             </button>
                         </div>
                     </div>
 
                     <div className="cf-stats">
                         <div className="cf-stat">
-                            <p className="cf-label" style={{ marginBottom: "0.4rem" }}>Recaudado (pagadas)</p>
-                            <p className="cf-stat-value is-ok">{fmtMoney(totals.paid_cents, symbol)}</p>
+                            <p className="cf-label" style={{ marginBottom: "0.4rem" }}>{t("donations.raisedPaid")}</p>
+                            <p className="cf-stat-value is-ok">{fmtMoney(totals.paid_cents, symbol, locale)}</p>
                         </div>
                         <div className="cf-stat">
-                            <p className="cf-label" style={{ marginBottom: "0.4rem" }}>Pendiente</p>
-                            <p className="cf-stat-value is-warn">{fmtMoney(totals.pending_cents, symbol)}</p>
+                            <p className="cf-label" style={{ marginBottom: "0.4rem" }}>{t("donations.pending")}</p>
+                            <p className="cf-stat-value is-warn">{fmtMoney(totals.pending_cents, symbol, locale)}</p>
                         </div>
                         <div className="cf-stat">
-                            <p className="cf-label" style={{ marginBottom: "0.4rem" }}>Donaciones</p>
+                            <p className="cf-label" style={{ marginBottom: "0.4rem" }}>{t("donations.count")}</p>
                             <p className="cf-stat-value">{totals.count || 0}</p>
                         </div>
                     </div>
@@ -474,52 +477,52 @@ export default function DonationsAdminPage() {
                         {donations.length === 0 ? (
                             <div className="cf-empty">
                                 <IconInboxEmpty />
-                                <span>No hay donaciones con estos filtros.</span>
+                                <span>{t("donations.empty")}</span>
                             </div>
                         ) : (
                             <div className="cf-table-wrap">
                                 <table className="cf-table">
                                     <thead>
                                         <tr>
-                                            <th>Fecha</th>
-                                            <th>Donante</th>
-                                            <th>Campaña</th>
-                                            <th>Monto</th>
-                                            <th>Método</th>
-                                            <th>Estado</th>
+                                            <th>{t("donations.colDate")}</th>
+                                            <th>{t("donations.colDonor")}</th>
+                                            <th>{t("donations.colCampaign")}</th>
+                                            <th>{t("donations.colAmount")}</th>
+                                            <th>{t("donations.colMethod")}</th>
+                                            <th>{t("donations.colStatus")}</th>
                                             <th style={{ width: "2.5rem" }}></th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {donations.map((d) => (
                                             <tr key={d.id}>
-                                                <td className="cf-cell-date">{fmtDate(d.created_at)}</td>
+                                                <td className="cf-cell-date">{fmtDate(d.created_at, locale)}</td>
                                                 <td>
                                                     <div className="cf-donor-name">
-                                                        {d.donor_name || "(sin nombre)"}
-                                                        {d.is_anonymous ? <span className="cf-chip" style={{ marginLeft: "0.5rem" }}>Anónimo</span> : null}
+                                                        {d.donor_name || t("common.noName")}
+                                                        {d.is_anonymous ? <span className="cf-chip" style={{ marginLeft: "0.5rem" }}>{t("donations.anonymous")}</span> : null}
                                                     </div>
                                                     <div className="cf-cell-sub">{d.donor_email || "—"}</div>
                                                     {d.message ? <div className="cf-quote" title={d.message}>“{d.message}”</div> : null}
                                                 </td>
                                                 <td>{d.campaign_title || d.campaign_id}</td>
-                                                <td className="cf-cell-amount">{fmtMoney(d.amount_cents, symbol)}</td>
-                                                <td>{d.payment_method === "stripe" ? "Tarjeta" : "Manual"}</td>
+                                                <td className="cf-cell-amount">{fmtMoney(d.amount_cents, symbol, locale)}</td>
+                                                <td>{d.payment_method === "stripe" ? t("donations.methodCard") : t("donations.methodManual")}</td>
                                                 <td>
                                                     <select
-                                                        aria-label="Cambiar estado de la donación"
+                                                        aria-label={t("donations.changeStatus")}
                                                         value={d.payment_status}
                                                         disabled={busy}
                                                         onChange={(e) => changeStatus(d, e.target.value)}
                                                         className={`cf-status-select ${STATUS_CLS[d.payment_status] || "is-cancelled"}`}
                                                     >
-                                                        <option value="pending">{STATUS_LABELS.pending}</option>
-                                                        <option value="paid">{STATUS_LABELS.paid}</option>
-                                                        <option value="cancelled">{STATUS_LABELS.cancelled}</option>
+                                                        <option value="pending">{t("status.pending")}</option>
+                                                        <option value="paid">{t("status.paid")}</option>
+                                                        <option value="cancelled">{t("status.cancelled")}</option>
                                                     </select>
                                                 </td>
                                                 <td style={{ textAlign: "right" }}>
-                                                    <button type="button" onClick={() => deleteDonation(d)} disabled={busy} className="cf-btn-danger">Eliminar</button>
+                                                    <button type="button" onClick={() => deleteDonation(d)} disabled={busy} className="cf-btn-danger">{t("common.delete")}</button>
                                                 </td>
                                             </tr>
                                         ))}
@@ -537,50 +540,49 @@ export default function DonationsAdminPage() {
                     <div className="cf-editor-body">
                         <div className="cf-grid">
                             <div>
-                                <label className="cf-label" htmlFor="dn-cfg-symbol">Símbolo de moneda</label>
+                                <label className="cf-label" htmlFor="dn-cfg-symbol">{t("config.symbol")}</label>
                                 <input id="dn-cfg-symbol" type="text" value={cfgForm.currencySymbol} onChange={(e) => setCfgForm({ ...cfgForm, currencySymbol: e.target.value })} className="cf-input" maxLength={8} />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="dn-cfg-code">Código de moneda (ISO, 3 letras)</label>
+                                <label className="cf-label" htmlFor="dn-cfg-code">{t("config.code")}</label>
                                 <input id="dn-cfg-code" type="text" value={cfgForm.currencyCode} onChange={(e) => setCfgForm({ ...cfgForm, currencyCode: e.target.value })} className="cf-input" placeholder="usd" maxLength={3} />
                             </div>
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="dn-cfg-presets">Montos sugeridos (separados por comas, en {cfgForm.currencySymbol || "$"})</label>
+                                <label className="cf-label" htmlFor="dn-cfg-presets">{t("config.presets", { symbol: cfgForm.currencySymbol || "$" })}</label>
                                 <input id="dn-cfg-presets" type="text" value={cfgForm.presets} onChange={(e) => setCfgForm({ ...cfgForm, presets: e.target.value })} className="cf-input" placeholder="10,25,50,100" />
                             </div>
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="dn-cfg-manual">Instrucciones de pago manual (siempre disponibles)</label>
-                                <textarea id="dn-cfg-manual" value={cfgForm.manualInstructions} onChange={(e) => setCfgForm({ ...cfgForm, manualInstructions: e.target.value })} className="cf-input" style={{ minHeight: "110px" }} placeholder={"Transferencia a la cuenta 000-000000-00 del Banco X.\nEnvía tu comprobante a donaciones@misitio.com indicando tu referencia."} maxLength={5000} />
+                                <label className="cf-label" htmlFor="dn-cfg-manual">{t("config.manual")}</label>
+                                <textarea id="dn-cfg-manual" value={cfgForm.manualInstructions} onChange={(e) => setCfgForm({ ...cfgForm, manualInstructions: e.target.value })} className="cf-input" style={{ minHeight: "110px" }} placeholder={t("config.manualPlaceholder")} maxLength={5000} />
                             </div>
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="dn-cfg-notify">Email de notificaciones (nuevas donaciones)</label>
-                                <input id="dn-cfg-notify" type="email" value={cfgForm.notifyEmail} onChange={(e) => setCfgForm({ ...cfgForm, notifyEmail: e.target.value })} className="cf-input" placeholder="admin@misitio.com" maxLength={254} />
+                                <label className="cf-label" htmlFor="dn-cfg-notify">{t("config.notify")}</label>
+                                <input id="dn-cfg-notify" type="email" value={cfgForm.notifyEmail} onChange={(e) => setCfgForm({ ...cfgForm, notifyEmail: e.target.value })} className="cf-input" placeholder={t("config.notifyPlaceholder")} maxLength={254} />
                             </div>
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="dn-cfg-stripe">Stripe secret key (opcional — habilita pago con tarjeta)</label>
+                                <label className="cf-label" htmlFor="dn-cfg-stripe">{t("config.stripe")}</label>
                                 <input
                                     id="dn-cfg-stripe"
                                     type="password"
                                     value={stripeKey}
                                     onChange={(e) => { setStripeKey(e.target.value); setClearKey(false); }}
-                                    placeholder={cfgForm.hasStripeKey ? "(configurada — escribe para reemplazar)" : "sk_live_… (sin key: solo pago manual)"}
+                                    placeholder={cfgForm.hasStripeKey ? t("config.stripeSet") : t("config.stripeUnset")}
                                     className="cf-input"
                                     autoComplete="new-password"
                                 />
                                 <p className="cf-help">
-                                    La key nunca se muestra de vuelta. Sin key, el bloque solo ofrece pago manual con las
-                                    instrucciones de arriba. La verificación del pago se hace en el servidor al volver de Stripe.
+                                    {t("config.stripeHelp")}
                                 </p>
                                 {cfgForm.hasStripeKey && (
                                     <label className="cf-check">
                                         <input type="checkbox" checked={clearKey} onChange={(e) => { setClearKey(e.target.checked); if (e.target.checked) setStripeKey(""); }} />
-                                        Quitar la key (deshabilitar pago con tarjeta)
+                                        {t("config.stripeClear")}
                                     </label>
                                 )}
                             </div>
                         </div>
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.5rem" }}>
-                            <button type="submit" disabled={savingCfg} className="cf-btn">{savingCfg ? "Guardando…" : "Guardar configuración"}</button>
+                            <button type="submit" disabled={savingCfg} className="cf-btn">{savingCfg ? t("common.saving") : t("config.save")}</button>
                         </div>
                     </div>
                 </form>
@@ -591,7 +593,7 @@ export default function DonationsAdminPage() {
                     initial={modal && modal.id ? modal : null}
                     symbol={symbol}
                     onClose={() => setModal(null)}
-                    onSaved={() => { setModal(null); setMessage("Campaña guardada."); loadCampaigns(); }}
+                    onSaved={() => { setModal(null); setMessage(t("campaigns.saved")); loadCampaigns(); }}
                 />
             )}
         </div>

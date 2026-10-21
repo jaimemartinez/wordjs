@@ -1253,6 +1253,9 @@ the boot error links there too.
   touch the edge of the screen. In the editor palette plugin blocks are grouped with the core blocks (Media,
   Marketing, Dynamic…) with their group's icon, instead of all under *More*. video-gallery **1.1.0** offers its
   block in the editor, with the gallery picked from a list.
+- **Payment and forms plugin screens follow the admin language.** The admin screens of contact-forms, bookings,
+  donations, digital-downloads, memberships, invoices and event-tickets are in English, Spanish and Portuguese
+  (they were Spanish only), with dates and amounts in the admin's locale.
 - **Admin menus follow the admin language.** Plugin menu entries can carry a label per language and every
   marketplace plugin does (English, Spanish, Portuguese). The core form-submissions screen is *Form submissions* and the contact-forms
   plugin's is *Contact forms*, instead of two entries called "Forms".
