@@ -1989,6 +1989,9 @@ async function initializeMainSite() {
 
     // Boot complete (DB + plugins + theme engine ready, or setup-mode). /readyz flips to ready.
     appReady = true;
+    // An update applied from Admin → Updates brought this process up: it is done (core/updater). The
+    // monolith's supervisor rolls back one that crashes instead (scripts/update-rollback.js).
+    try { require('./core/updater').markBootCompleted(); } catch (e: any) { log.warn(`update state not recorded: ${e && e.message}`); }
 
     // Return the configured app so the monolith entrypoint can mount it in-process.
     return app;

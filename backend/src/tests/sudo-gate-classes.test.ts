@@ -98,7 +98,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorUpdate'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -943,6 +943,14 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             site: 'cluster.ts POST /nodes/remove', name: 'POST /system/cluster/nodes/remove', persona: 'doorClusterRemove',
             send: (p: string, pw: string) => request(app).post(`${B}/system/cluster/nodes/remove`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, url: 'https://10.0.0.2:4000' }),
+            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+        },
+        // Admin → Updates (routes/update.ts): the password first, then the second factor (none here), so
+        // nothing is downloaded, backed up or installed.
+        {
+            site: 'update.ts POST /', name: 'POST /system/update', persona: 'doorUpdate',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/update`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, tag: 'v99.0.0' }),
             alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
         },
         // Turning the network on and off from the panel (Settings → Network): the password comes first,

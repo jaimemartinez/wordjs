@@ -556,6 +556,17 @@ function superviseMonolith() {
                 setTimeout(start, 250);
                 return;
             }
+            // An update made from Admin → Updates whose new version did not come up: put the previous
+            // version back and start it (backend/scripts/update-rollback.js; once per update).
+            if (!stopping) {
+                try {
+                    const rollback = require(path.join(BACKEND, 'scripts', 'update-rollback.js'));
+                    if (rollback.rollBack({ file: rollback.defaultStateFile(BACKEND), root: ROOT })) {
+                        setTimeout(start, 250);
+                        return;
+                    }
+                } catch (e) { console.error('[monolith] update rollback check failed:', e && e.message); }
+            }
             process.exit(code === null ? (signal ? 1 : 0) : code);
         });
         child.on('error', (e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });

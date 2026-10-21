@@ -59,6 +59,13 @@ function checkNode(): HealthCheck {
         : { id: 'versions.node', group: 'versions', status: 'fail', title: 'WordJS and Node.js', message: `Node.js ${process.versions.node} is older than ${MIN_NODE_MAJOR}, which WordJS needs. Ask your host to install Node.js ${MIN_NODE_MAJOR} or 24 LTS.` };
 }
 
+async function checkUpdate(): Promise<HealthCheck> {
+    const o = await withTimeout(require('./updater').overview(), 6000, null as any);
+    if (!o || o.error) return { id: 'versions.update', group: 'versions', status: 'info', title: 'Updates', message: 'Could not check for a newer WordJS from here (no connection to GitHub).' };
+    if (!o.latest) return { id: 'versions.update', group: 'versions', status: 'ok', title: 'Updates', message: `WordJS ${o.current} is the latest release.` };
+    return { id: 'versions.update', group: 'versions', status: 'warn', title: 'Updates', message: `WordJS ${o.latest.version} is available (this site runs ${o.current}).`, fix: { href: '/admin/update', label: 'Updates' } };
+}
+
 async function checkFolders(): Promise<HealthCheck[]> {
     const fsStatus = await require('./system-health').checkFilesystem();
     const notWritable = Object.entries(fsStatus).filter(([, v]) => v !== 'WRITABLE').map(([k]) => k);
@@ -199,6 +206,7 @@ async function checkBackground(): Promise<HealthCheck[]> {
 async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary: Record<HealthStatus, number>; at: string; host: string }> {
     const groups = await Promise.all([
         safe('versions.node', 'versions', 'WordJS and Node.js', checkNode),
+        safe('versions.update', 'versions', 'Updates', checkUpdate),
         safe('storage.folders', 'storage', 'Folders WordJS writes to', checkFolders),
         safe('storage.disk', 'storage', 'Free disk space', checkDisk),
         safe('database.reachable', 'database', 'Database', checkDatabase),

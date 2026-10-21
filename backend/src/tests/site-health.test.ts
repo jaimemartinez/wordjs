@@ -46,6 +46,8 @@ config.trustProxy = null; // automatic: decided by the deployment mode (core/cli
 const request = require('supertest');
 const database = require('../config/database');
 const siteContext = require('../core/site-context');
+// No call to GitHub from a test: the updater's releases feed answers "nothing newer" (tests/updater.test.ts).
+require('../core/updater')._setForTests({ fetchJson: async () => [] });
 const app = require('../index');
 
 const API = config.api.prefix;

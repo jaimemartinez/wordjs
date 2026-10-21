@@ -56,6 +56,8 @@ const AUDIT_ACTIONS = Object.freeze({
     CLUSTER_TOKEN_CREATE: 'cluster.token.create',
     CLUSTER_TOKENS_REVOKE: 'cluster.tokens.revoke',
     CLUSTER_NODE_REMOVE: 'cluster.node.remove',
+    // Admin → Updates (core/updater): an update started from the panel {from, to}.
+    SYSTEM_UPDATE_START: 'system.update.start',
     // A new password stored through a profile write (routes/users.ts PUT /users/me and PUT /users/:id).
     // Kept under `auth.` rather than as a `user.update` field, so "who changed whose password" is one query.
     PASSWORD_CHANGE: 'auth.password.change',

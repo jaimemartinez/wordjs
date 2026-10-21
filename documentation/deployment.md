@@ -730,7 +730,15 @@ Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAS
 
 ## 🔄 Updates
 
-**A release install** (`npx create-wordjs`, or an unpacked release ZIP) upgrades in place:
+**From the admin panel:** **Admin → Updates** lists the newer releases with their notes and installs one
+with a click (password and a two-factor code): a backup, the `create-wordjs upgrade` below with
+`--version <tag>`, an automatic restart, and the previous version put back if the update fails or the new
+version does not start (`backend/data/update-state.json`, read by the monolith's supervisor). It is offered
+on a release install running as the monolith under its supervisor, whose files the service account can
+write (the `--systemd` layout). In a container, a git checkout, split or separate mode, or when the code
+belongs to another account, the screen says so and gives the command below instead.
+
+**A release install** (`npx create-wordjs`, or an unpacked release ZIP) upgrades in place from a terminal:
 
 ```bash
 npx create-wordjs@latest upgrade [dir]        # dir defaults to the current directory

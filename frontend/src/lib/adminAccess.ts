@@ -103,6 +103,8 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     { href: "/admin/site-health", label: "nav.siteHealth", icon: "fa-heart-pulse", cap: "manage_options", mainSiteOnly: true },
     // Servers (backend routes/cluster.ts): the nodes the gateway knows, join tokens, removal: the network's.
     { href: "/admin/cluster", label: "nav.cluster", icon: "fa-server", cap: "manage_options", mainSiteOnly: true, networkWide: true },
+    // Updates (backend routes/update.ts): newer releases, their notes, the one-click update: the network's.
+    { href: "/admin/update", label: "nav.update", icon: "fa-cloud-arrow-down", cap: "manage_options", mainSiteOnly: true, networkWide: true },
     // Registro de auditoría (solo lectura). Igual que Herramientas: el backend lo gatea con isAdmin
     // (rol), y la pantalla repite esa comprobación — aquí `manage_options` solo evita enseñar la
     // entrada a quien seguro no la puede usar.
