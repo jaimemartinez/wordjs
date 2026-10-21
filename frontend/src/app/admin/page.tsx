@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { postsApi, usersApi, commentsApi, systemApi, api, Comment, SystemStatus } from "@/lib/api";
+import { postsApi, usersApi, systemApi, api, apiGetPaged, Comment, SystemStatus } from "@/lib/api";
+import { parseServerDate } from "@/lib/serverDate";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -86,11 +87,13 @@ const QuickAction = ({ href, icon, label, subLabel, color }: { href: string, ico
 
 const HealthIndicator = ({ label, status, detail, icon }: { label: string, status: string, detail: string, icon: string }) => {
     const isOk = status === 'OK';
-    const color = isOk ? 'emerald' : (status === 'WARNING' ? 'amber' : 'rose');
+    // NOT_APPLICABLE (mTLS in a single-process monolith) is neither healthy nor broken: neutral.
+    const color = isOk ? 'emerald' : status === 'NOT_APPLICABLE' ? 'slate' : (status === 'WARNING' ? 'amber' : 'rose');
     const C = {
         emerald: { bg: 'bg-emerald-100', text: 'text-emerald-600', dot: 'bg-emerald-500' },
         amber: { bg: 'bg-amber-100', text: 'text-amber-600', dot: 'bg-amber-500' },
         rose: { bg: 'bg-rose-100', text: 'text-rose-600', dot: 'bg-rose-500' },
+        slate: { bg: 'bg-slate-100', text: 'text-slate-500', dot: 'bg-slate-300' },
     }[color];
 
     return (
@@ -162,28 +165,38 @@ export default function DashboardPage() {
         try {
             loadAnalytics();
 
-            const fetchUsers = sections.stats.includes('users') ? usersApi.list() : Promise.resolve([]);
-            const fetchComments = sections.recentComments ? commentsApi.list({ per_page: 5 }) : Promise.resolve([]);
+            // COUNTS COME FROM X-WP-Total. They used to be `array.length` of the first page — "10 POSTS ·
+            // 5 COMMENTS" on a site with 540 posts — and downloaded whole records (content included) just to
+            // count them. One row per list is enough to read the total.
+            const fetchUsers = sections.stats.includes('users') ? usersApi.listPaged({ perPage: 1 }).then((r) => r.total) : Promise.resolve(0);
+            const fetchComments = sections.recentComments ? apiGetPaged<Comment[]>('/comments?per_page=5') : Promise.resolve({ data: [] as Comment[], total: 0, totalPages: 0 });
             // Administrators only, like its endpoint; and a failure here must not blank every count above.
             const fetchSystem = sections.systemHealth ? systemApi.getStatus().catch(() => null) : Promise.resolve(null);
 
             // ... (keep rest of function)
 
+            // An author or contributor (no edit_others_posts) counts THEIR entries, in any status: the
+            // site's published totals described other people's work as theirs.
+            const ownOnly = !can('edit_others_posts') && !!user?.id;
+            const countOf = (type: "post" | "page") => ownOnly
+                ? apiGetPaged<unknown[]>(`/posts?type=${type}&status=any&author=${user!.id}&per_page=1`)
+                : postsApi.listPaged({ type, perPage: 1 });
+
             const [posts, pages, users, comments, system] = await Promise.all([
-                postsApi.list("post"),
-                postsApi.list("page"),
+                countOf("post"),
+                countOf("page"),
                 fetchUsers,
                 fetchComments,
                 fetchSystem
             ]);
 
             setStats({
-                posts: posts.length,
-                pages: pages.length,
-                comments: comments?.length || 0,
-                users: users?.length || 0,
+                posts: posts.total,
+                pages: pages.total,
+                comments: comments.total || 0,
+                users: users || 0,
             });
-            setRecentComments(Array.isArray(comments) ? comments.slice(0, 5) : []);
+            setRecentComments(Array.isArray(comments.data) ? comments.data.slice(0, 5) : []);
             setSystemStatus(system);
         } catch (error) {
             console.error("Failed to load data:", error);
@@ -218,11 +231,13 @@ export default function DashboardPage() {
                             <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.database.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
                             <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">DB: {systemStatus.database.driver}</span>
                         </div>
+                        {systemStatus.mtls.status !== 'NOT_APPLICABLE' && (<>
                         <div className="w-px h-4 bg-gray-200"></div>
                         <div className="flex items-center gap-2">
                             <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.mtls.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
                             <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">mTLS: {systemStatus.mtls.status}</span>
                         </div>
+                        </>)}
                     </div>
                 )}
             </div>
@@ -289,7 +304,7 @@ export default function DashboardPage() {
                                 <HealthIndicator
                                     label={t('dashboard.health.security')}
                                     status={systemStatus.mtls.status}
-                                    detail={systemStatus.mtls.status === 'OK' ? t('dashboard.health.certs.valid') : systemStatus.mtls.status}
+                                    detail={systemStatus.mtls.status === 'OK' ? t('dashboard.health.certs.valid') : systemStatus.mtls.status === 'NOT_APPLICABLE' ? t('dashboard.health.mtls.notUsed') : systemStatus.mtls.status}
                                     icon="fa-shield-halved"
                                 />
                                 <HealthIndicator
@@ -472,7 +487,7 @@ export default function DashboardPage() {
                                                     {comment.author}
                                                 </p>
                                                 <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-gray-500 bg-white px-2 py-0.5 rounded-full shadow-sm border border-gray-100">
-                                                    {new Date(comment.date).toLocaleDateString()}
+                                                    {(parseServerDate(comment.dateGmt, comment.date) ?? new Date(NaN)).toLocaleDateString()}
                                                 </span>
                                             </div>
                                             <div

@@ -1052,6 +1052,72 @@ the boot error links there too.
   gateway serves over plain HTTP, asks before removing a network administrator, clears the action password
   after each action, and the two-factor field on the login screen is labelled for assistive technology. A
   join token's role, TTL and address are checked before the two-factor code is spent on it.
+- **Content, comments and accounts: what the admin screens promised now happens.** Found by testing a site
+  end to end in all three deployment modes:
+  - *Media*: picking or dropping several files uploads every one of them (only the first was sent); a file
+    the server refuses is listed with its reason (too large, refused type); UTF-8 file names keep their
+    accents in the title, and the stored file name folds them (`ñandú` → `nandu`). The upload size limit
+    is set in Settings → Media and applies on save (it was `wordjs-config.json` only); a refused upload
+    names the limit, and the media screen checks a file against it before sending it.
+  - *Posts and pages*: «Delete» moves an entry to the trash, and the list now has a **Trash** tab with
+    **Restore** (back to the status it had) and **Delete permanently**; `POST /posts/:id/restore` is the API.
+    The featured-image, logo and icon pickers list images only (they offered PDFs and videos), and the
+    picker's counter follows the admin language. «Duplicate» carries categories, tags and SEO fields over, and opening the copy no longer gives it back the
+    original's title and slug. The editor's Slug field shows the entry's slug, a published entry keeps its URL
+    when its title changes, and an entry created or saved without a category lands in the default category.
+  - *Public site*: search shows the real number of results and pages through them; the «Latest posts»
+    front page pages at `/page/{n}`. OpenGraph and JSON-LD dates are ISO 8601
+    (from the UTC time) and carry `article:modified_time` / `dateModified`; a site with no icon of its own
+    gets a bundled one instead of a `/favicon.ico` 404 on every page; a missing optional theme template is
+    logged as information, not as a warning on every render.
+  - *Reusable symbols* can be saved again («Save block as symbol» always failed); a site where the symbol
+    type had been registered as internal is corrected on the next save.
+  - *Comments*: Approve / Unapprove appear, pending comments are highlighted, the Spam tab offers «Not spam»
+    and «Delete permanently», and times are shown in the viewer's time zone. `POST /comments/:id/unapprove`
+    lets an editor take an approval back. «Enable comments» and «Registered users only» now take effect on the
+    public form and on `POST /comments`, and a signed-in visitor comments under their own name.
+  - *Accounts*: «Sign out» ends this browser's session only; My Account → **Sessions** signs out everywhere.
+    A two-factor challenge completes one sign-in only. The one-time secret window (API tokens, webhook
+    secrets, backup codes) follows the admin language, and for backup codes it says to regenerate them
+    rather than to «revoke and create a new one». Avatar bubbles show the first letter of a name, not a
+    leading «[». A rate-limited (429) or unreachable server no longer looks like a sign-out: the admin says so and retries
+    on its own. The live notification stream is shared by every tab of a browser, backs off properly when
+    refused, and past the per-user cap the server answers `429` with `Retry-After`.
+  - *Users and roles*: the Team and Subscribers lists page, search and filter by role on the server (they
+    showed the first ten accounts); deleting a user names them and can attribute their posts and pages to
+    another user (`DELETE /users/:id?reassign=`); every password the admin sets needs 8 characters; a custom
+    role still held by users cannot be deleted; core roles offer no delete button; `edit_comments` can be
+    granted from the Roles screen.
+  - *Settings*: the sign-up default role cannot be one that runs the site, `posts_per_page` and
+    `admin_email` are validated, a refused save shows the server's reason, the admin email no longer promises
+    a confirmation message that does not exist, the logo and icon are stored as site-relative paths (they
+    embedded the address the admin happened to use), and the dashboard counters show real totals. In a
+    monolith the dashboard no longer reports «mTLS: OK / certificates valid» for a link that does not exist.
+  - *Single posts* show the featured image under the title and link their categories and tags. Deleting a
+    media item that is an entry's featured image says so first (`GET /media/:id/usage`) and removes the
+    reference, instead of leaving the entry announcing an image that no longer exists. The sitemap submits
+    the category, tag and author archives on every site (only very large, chunked sitemaps listed the
+    taxonomies). Settings refuse a site language the platform does not know (`xx_YY`) and a front page
+    that is not a published page. Authors and contributors see their own totals on the dashboard, and an
+    uninstalled site no longer writes an error to the log on every request.
+  - *Categories*: the screen shows the hierarchy (children indented under their parent) and edits a
+    category's name, slug, description and parent; the API refuses a parent that does not exist, the
+    category itself or one of its subcategories (`rest_term_invalid_parent`).
+  - *Old WordPress addresses*: a nested page address (`/level-1/level-2/level-3`) and a nested category
+    address (`/category/parent/child`) redirect to the page's or category's own address when they name its
+    ancestry exactly; any other prefix is a 404 (`/anything/<page>` used to serve the page under every
+    prefix). The comments screen's «In response to» opens the entry (it linked to a route that does not exist).
+- **Public API: answers and documentation agree.** An `Authorization: Bearer` token that is invalid, expired
+  or revoked is answered `401 rest_token_invalid` with `WWW-Authenticate` on public reads and on GraphQL (it
+  silently read as a visitor, so a client whose token expired stopped seeing its drafts without being told); a
+  stale session cookie still reads as a visitor. An MCP client that sends no token gets the MCP `401` with
+  `WWW-Authenticate` instead of a CSRF `403`. `GET /comments` accepts `status=all`, `approved` and `hold`.
+  The OpenAPI document describes `title` and `content` as the strings the API returns, documents
+  `X-WP-Total` / `X-WP-TotalPages` and the 1–100 page size on `GET /posts`, marks `POST /setup/migrate` as
+  deprecated, and states that the network routes answer 404 on a single-site install. The API tokens screen
+  links the REST reference and the GraphQL endpoint and has the GraphQL introspection switch; AI agents
+  keeps a refused «Create connection» on screen with its reason, and an agent's refused SVG upload says why.
+
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
   certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes

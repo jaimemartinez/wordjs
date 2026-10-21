@@ -99,6 +99,7 @@ const ALL_SETTINGS = [
     'backup_schedule', // Backup Scheduler Frequency
     'backup_time',     // Backup Time of Day (HH:mm)
     'backup_day',      // Backup Day (0-6)
+    'upload_max_size_mb', // Settings → Media: the largest upload, in MB (core/upload-limit; '' = configured default)
     'backup_retention', // How many backups to keep (core/backup pruneBackups; 0 = keep every one)
     // Opt-in email verification on self-registration (FRENTE C-3). '1' requires a newly self-registered
     // user to confirm their email via a tokenized link before they can log in; the auth layer fails this
@@ -186,6 +187,10 @@ const DERIVED_PUBLIC_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.
     // the whole library is in the bucket (state 'offloaded'); the public SSR rewrites /uploads/ to it.
     // Before that (or during a restore) it is '' and pages keep /uploads, which the backend redirects
     // for files it does not hold. Derived per request: content and the DB only ever hold /uploads paths.
+    // The upload size limit in bytes as it applies right now (core/upload-limit): the media screens
+    // check a file against it before sending it, and say what the limit is. Not a secret — every refused
+    // upload already answers with it.
+    upload_max_bytes: async () => require('../core/upload-limit').maxUploadBytes(),
     media_cdn_origin: async () => require('../core/media-storage').resolveMediaStorage().publicOrigin || '',
     media_public_base: async () => {
         const store = require('../core/media-storage').resolveMediaStorage();
@@ -267,6 +272,37 @@ const VIEW_TRANSITION_STYLES = ['', 'off', 'fade', 'slide'];
 // character admitted ends up in an attribute.
 const LOCALE_RE = /^[A-Za-z]{2,3}([-_][A-Za-z]{4})?([-_]([A-Za-z]{2}|[0-9]{3}))?$/;
 
+/** The language subtag (and region, if any) of a LOCALE_RE tag are ones ICU can name. */
+function knownLocaleTag(tag: string): boolean {
+    try {
+        const parts = tag.split(/[-_]/);
+        const language = parts[0].toLowerCase();
+        const region = parts.find((p, i) => i > 0 && /^([A-Za-z]{2}|[0-9]{3})$/.test(p));
+        const names = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' });
+        if (!names.of(language)) return false;
+        if (region && !new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' }).of(region.toUpperCase())) return false;
+        return true;
+    } catch {
+        return true; // no locale data on this runtime: keep the syntax check only
+    }
+}
+
+/**
+ * Settings whose validity depends on stored data. `homepage_id` must name a published page: an id that
+ * does not exist (or a draft, or a post) was stored and the front page fell back without a word.
+ */
+async function settingDataProblem(key: string, value: any): Promise<string | null> {
+    if (key !== 'homepage_id') return null;
+    const raw = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+    if (raw === '' || raw === '0') return null; // "Latest posts"
+    if (!/^[0-9]{1,10}$/.test(raw)) return 'homepage_id must be the id of a published page (or empty for the latest posts).';
+    const page = await require('../models/Post').findById(Number(raw));
+    if (!page || page.postType !== 'page' || page.postStatus !== 'publish') {
+        return `homepage_id ${raw} is not a published page.`;
+    }
+    return null;
+}
+
 // Preajustes de interacción del sitio (`wjs_ix_presets`, motor F9). Se guardan como JSON y los
 // consume el compilador del frontend, que YA los trata como dato hostil: los pasa uno a uno por
 // `normalizeIxPreset` y descarta lo que no encaje (frontend/src/lib/verso/interactions/sitePresets).
@@ -309,6 +345,24 @@ const booleanishSetting = (v: any): '1' | '0' | null => {
 };
 
 const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
+    upload_max_size_mb: (v: any) => require('../core/upload-limit').uploadLimitProblem(v),
+    // The role an anonymous sign-up receives: an existing role that cannot run the site
+    // (core/registration-settings). Administrator here turned the next registration into an admin.
+    default_role: (v: any) => require('../core/registration-settings').signupRoleProblem(v),
+    // The settings screen offers 1–100; the API took -5 and "abc" and the site rendered with them.
+    posts_per_page: (v: any) => {
+        const s = typeof v === 'number' ? String(v) : (typeof v === 'string' ? v.trim() : '');
+        if (!/^[0-9]{1,4}$/.test(s) || Number(s) < 1 || Number(s) > 1000) return 'posts_per_page must be a whole number from 1 to 1000.';
+        return null;
+    },
+    // A real address (or empty). "not-an-email" was stored and shown as the site's contact.
+    admin_email: (v: any) => {
+        if (v === '' || v === null || v === undefined) return null;
+        return typeof v === 'string' && require('../core/email-address').isValidAddress(v.trim()) ? null : 'admin_email must be a valid email address.';
+    },
+    // On/off switches the public site and POST /comments read (see core/options getBooleanOption).
+    comments_enabled: (v: any) => booleanishSetting(v) === null ? 'comments_enabled must be a boolean ("1" or "0").' : null,
+    comment_registration: (v: any) => booleanishSetting(v) === null ? 'comment_registration must be a boolean ("1" or "0").' : null,
     // Interruptor de la caché de objetos: booleano cerrado (ver booleanishSetting arriba).
     redis_cache_enabled: (v: any) => booleanishSetting(v) === null
         ? 'redis_cache_enabled must be a boolean ("1" or "0").'
@@ -382,6 +436,9 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
         if (typeof v !== 'string' || !LOCALE_RE.test(v)) {
             return 'WPLANG must be a language tag like "en", "es_ES" or "ar-SA".';
         }
+        // Well-formed is not enough: `xx_YY` reached <html lang="xx-YY">. The language (and the region,
+        // when given) must be one the platform's locale data knows.
+        if (!knownLocaleTag(v)) return `WPLANG "${v}" is not a known language.`;
         return null;
     },
     site_text_direction: (v: any) => {
@@ -406,6 +463,12 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     backup_retention: (v: any) => String(Number(String(v).trim())),
     graphql_introspection: (v: any) => booleanishSetting(v) ?? '0',
     author_legacy_slugs: (v: any) => booleanishSetting(v) ?? '0',
+    posts_per_page: (v: any) => String(Number(String(v).trim())),
+    upload_max_size_mb: (v: any) => { const mb = require('../core/upload-limit').parseUploadLimitMb(v); return mb ? String(mb) : ''; },
+    admin_email: (v: any) => (v === null || v === undefined ? '' : String(v).trim()),
+    // Stored as the canonical "1"/"0" so every reader agrees on what was saved.
+    comments_enabled: (v: any) => booleanishSetting(v) ?? '1',
+    comment_registration: (v: any) => booleanishSetting(v) ?? '0',
 };
 
 /** El valor EXACTO que se persiste para esta clave (idéntico al recibido si no hay normalizador). */
@@ -584,11 +647,22 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     const updates = req.body;
     const updated: Record<string, any> = {};
 
+    // An API token, or a session started at another address, may save the rest of the screen (which
+    // sends every field back), but not a CHANGE to who may register or as what — refused as a whole,
+    // before any write. Only what this route writes is judged: a key it skips changes nothing. The
+    // allowlist is matched byte for byte, so `REQUIRE_EMAIL_VERIFICATION` is skipped here rather than
+    // landing on the real row under MySQL's case-insensitive names; the check compares canonical names
+    // anyway (core/registration-settings), as the site import needs it to. Asked BEFORE the values are
+    // validated: a caller who may not change these settings is told so, not which value would be wrong.
+    const writable = Object.fromEntries(Object.entries(updates).filter(([key]) => ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)));
+    const registration = await changedRegistrationSettings(writable);
+    if (registration.length && refuseAccountAuthority(req, res, registration)) return;
+
     // Validate the WHOLE payload before writing any of it: a bulk save that stored half its keys and
     // then 400'd would leave the site in a state the admin never asked for.
     for (const [key, value] of Object.entries(updates)) {
         if (!ALL_SETTINGS.includes(key) || DEDICATED_WRITE_API.has(key)) continue;
-        const problem = settingWriteProblem(key, value);
+        const problem = settingWriteProblem(key, value) || await settingDataProblem(key, value);
         if (problem) {
             return res.status(400).json({
                 code: 'rest_invalid_param',
@@ -598,15 +672,6 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         }
     }
 
-    // An API token, or a session started at another address, may save the rest of the screen (which
-    // sends every field back), but not a CHANGE to who may register or as what — refused as a whole,
-    // before any write. Only what this route writes is judged: a key it skips changes nothing. The
-    // allowlist is matched byte for byte, so `REQUIRE_EMAIL_VERIFICATION` is skipped here rather than
-    // landing on the real row under MySQL's case-insensitive names; the check compares canonical names
-    // anyway (core/registration-settings), as the site import needs it to.
-    const writable = Object.fromEntries(Object.entries(updates).filter(([key]) => ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)));
-    const registration = await changedRegistrationSettings(writable);
-    if (registration.length && refuseAccountAuthority(req, res, registration)) return;
     const network = await changedNetworkSettings(req, writable);
     if (network.length) return refuseNetworkSettings(res, network);
     const skipUnchangedNetwork = networkSettingsReadOnly(req);
@@ -678,7 +743,12 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
         });
     }
 
-    const problem = settingWriteProblem(key, value);
+    // The same rule as the bulk save above, asked before the value is validated. `key` is one of
+    // ALL_SETTINGS by now, never a prototype name.
+    const registration = await changedRegistrationSettings({ [key]: value });
+    if (registration.length && refuseAccountAuthority(req, res, registration)) return;
+
+    const problem = settingWriteProblem(key, value) || await settingDataProblem(key, value);
     if (problem) {
         return res.status(400).json({
             code: 'rest_invalid_param',
@@ -686,10 +756,6 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
             data: { status: 400, params: [key] }
         });
     }
-
-    // The same rule as the bulk save above. `key` is one of ALL_SETTINGS by now, never a prototype name.
-    const registration = await changedRegistrationSettings({ [key]: value });
-    if (registration.length && refuseAccountAuthority(req, res, registration)) return;
     const network = await changedNetworkSettings(req, { [key]: value });
     if (network.length) return refuseNetworkSettings(res, network);
 

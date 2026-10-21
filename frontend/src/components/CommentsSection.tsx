@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { commentsApi, Comment } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { formatSiteDate } from "@/lib/public/siteDate";
+import { probeSession } from "@/contexts/AuthContext";
+import { readCsrfToken } from "@/lib/csrf";
 
 // Local initials avatar — no request to the external avatar service. Background is a
 // deterministic pick (simple char-code hash of the name) over the theme token palette.
@@ -34,8 +36,16 @@ function InitialsAvatar({ name }: { name: string }) {
     );
 }
 
-/** `lang` is the SITE language (lib/public/siteDate) — comment dates follow it, not the visitor's browser. */
-export default function CommentsSection({ postId, lang }: { postId: number; lang?: string | null }) {
+/** The signed-in commenter, as GET /auth/me names them. */
+interface Commenter { displayName: string }
+
+/**
+ * `lang` is the SITE language (lib/public/siteDate) — comment dates follow it, not the visitor's browser.
+ * `requireLogin` is the «registered users only» setting (comment_registration): a visitor without a
+ * session gets a sign-in link instead of the form. The server enforces it too; this keeps the page from
+ * offering a form whose every submission is refused.
+ */
+export default function CommentsSection({ postId, lang, requireLogin = false }: { postId: number; lang?: string | null; requireLogin?: boolean }) {
     const [comments, setComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
@@ -49,6 +59,21 @@ export default function CommentsSection({ postId, lang }: { postId: number; lang
     const [content, setContent] = useState("");
     // Always sent, always empty for a human — see HONEYPOT_FIELD.
     const [honeypot, setHoneypot] = useState("");
+    // Who is commenting. The page is anonymous and cached, so the session is asked for here, and only
+    // when the browser holds the session's CSRF twin cookie: an anonymous visitor costs no request.
+    // `undefined` = not known yet, `null` = no session.
+    const [commenter, setCommenter] = useState<Commenter | null | undefined>(undefined);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!readCsrfToken()) { setCommenter(null); return; }
+        probeSession().then((probe) => {
+            if (cancelled) return;
+            const user = probe.kind === "user" ? (probe.user as { displayName?: string; username?: string }) : null;
+            setCommenter(user ? { displayName: user.displayName || user.username || "" } : null);
+        });
+        return () => { cancelled = true; };
+    }, []);
 
     useEffect(() => {
         loadComments();
@@ -72,7 +97,8 @@ export default function CommentsSection({ postId, lang }: { postId: number; lang
         setError("");
         setSuccessMessage("");
 
-        if (!content.trim() || !authorName.trim() || !authorEmail.trim()) {
+        // A signed-in commenter is identified by the session (the server ignores name/email for them).
+        if (!content.trim() || (!commenter && (!authorName.trim() || !authorEmail.trim()))) {
             setError("Please fill in all required fields.");
             return;
         }
@@ -174,7 +200,18 @@ export default function CommentsSection({ postId, lang }: { postId: number; lang
                     </div>
                 )}
 
+                {commenter === undefined && requireLogin ? null : !commenter && requireLogin ? (
+                    <p className="wjs-comment-login-required text-[var(--wjs-color-text-main,#374151)]">
+                        You must be <a href={`/login?redirect=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname : "/")}`} className="underline font-medium text-[var(--wjs-color-primary,#2563eb)]">logged in</a> to post a comment.
+                    </p>
+                ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
+                    {commenter ? (
+                        <p className="wjs-comment-as text-sm text-[var(--wjs-color-text-muted,#6b7280)]">
+                            Commenting as <strong className="text-[var(--wjs-color-text-main,#374151)]">{commenter.displayName}</strong>
+                        </p>
+                    ) : (
+                    <>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="comment-author-name" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Name *</label>
@@ -211,6 +248,8 @@ export default function CommentsSection({ postId, lang }: { postId: number; lang
                             className={inputClass}
                         />
                     </div>
+                    </>
+                    )}
                     <div>
                         <label htmlFor="comment-content" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Comment *</label>
                         <textarea
@@ -256,6 +295,7 @@ export default function CommentsSection({ postId, lang }: { postId: number; lang
                         {submitting ? "Posting..." : "Post Comment"}
                     </button>
                 </form>
+                )}
             </div>
         </div>
     );

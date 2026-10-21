@@ -162,6 +162,28 @@ async function loadTermEntries(siteUrl: string) {
     }));
 }
 
+/**
+ * The author archives (`/author/<slug>`) of everyone with a published, unprotected post. The slug is the
+ * public one Post.toJSON hands out — user_nicename, else the numeric id — never the login.
+ */
+async function loadAuthorEntries(siteUrl: string) {
+    const { dbAsync } = require('../config/database');
+    const rows = await dbAsync.all(
+        "SELECT u.id, u.user_nicename FROM users u WHERE EXISTS (SELECT 1 FROM posts p WHERE p.author_id = u.id " +
+        "AND p.post_type = 'post' AND p.post_status = 'publish' AND (p.post_password IS NULL OR p.post_password = '')) " +
+        `ORDER BY u.id ASC LIMIT ${Number(SITEMAP_FETCH_CAP)}`
+    );
+    return rows.map((r: any) => {
+        const nicename = r.user_nicename == null ? '' : String(r.user_nicename).trim();
+        return { loc: `${siteUrl}/author/${encodeURIComponent(nicename || String(r.id))}`, lastmod: null, changefreq: 'weekly', priority: '0.3' };
+    });
+}
+
+/** Category, tag and author archives: what the post entries alone never submitted. */
+async function loadArchiveEntries(siteUrl: string) {
+    return [...await loadTermEntries(siteUrl), ...await loadAuthorEntries(siteUrl)];
+}
+
 /** The homepage entry, identical to the one the single-file sitemap prints first. */
 function homeEntry(siteUrl: string) {
     return { loc: `${siteUrl}/`, lastmod: null, changefreq: 'daily', priority: '1.0' };
@@ -177,7 +199,7 @@ async function sitemapGroups(content: any[], siteUrl: string) {
     return {
         posts: visible.filter((p: any) => p.postType !== 'page').map((p: any) => contentEntry(p, siteUrl)),
         pages: [homeEntry(siteUrl), ...visible.filter((p: any) => p.postType === 'page').map((p: any) => contentEntry(p, siteUrl))],
-        terms: await loadTermEntries(siteUrl),
+        terms: await loadArchiveEntries(siteUrl),
     };
 }
 
@@ -241,7 +263,7 @@ router.get('/sitemap.xml', async (req: Request, res: Response) => {
 
         const xml = plan.chunked
             ? generateSitemapIndex(plan.chunks, { siteUrl: plan.siteUrl })
-            : await generateSitemap(plan.content, { siteUrl: plan.siteUrl });
+            : await generateSitemap(plan.content, { siteUrl: plan.siteUrl, extraEntries: await loadArchiveEntries(plan.siteUrl) });
 
         res.set('Content-Type', 'application/xml');
         res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour

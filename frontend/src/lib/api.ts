@@ -331,6 +331,9 @@ export interface Category {
     name: string;
     slug: string;
     count: number;
+    description?: string;
+    /** The parent category's id; 0 at the top level. */
+    parent?: number;
 }
 
 export interface User {
@@ -471,7 +474,10 @@ export interface Comment {
     authorEmail: string;
     authorUrl: string;
     date: string;
+    /** The same instant in UTC; read this one (lib/serverDate) — `date` carries no zone. */
+    dateGmt?: string;
     content: string;
+    /** `pending` | `approved` | `spam` | `trash` (the stored `0`/`1` are accepted too — see commentState). */
     status: string;
     authorAvatarUrl?: string;
     parent?: number;
@@ -508,6 +514,9 @@ export interface Revision {
     excerpt: string;
     date: string;
     modified: string;
+    /** UTC twins of date/modified (lib/serverDate): the plain fields carry no zone. */
+    dateGmt?: string | null;
+    modifiedGmt?: string | null;
     meta?: Record<string, any>;
     restore?: RevisionRestoreDescriptor;
     /** Set when the write this revision was taken before was made by an AI agent (backend core/agent-publishing). */
@@ -615,7 +624,8 @@ async function listAllCategories(
 export const categoriesApi = {
     listPaged: listCategoriesPaged,
     listAll: listAllCategories,
-    create: (data: { name: string; slug?: string }) => apiPost<Category>("/categories", data),
+    create: (data: { name: string; slug?: string; description?: string; parent?: number }) => apiPost<Category>("/categories", data),
+    update: (id: number, data: { name?: string; slug?: string; description?: string; parent?: number }) => apiPut<Category>(`/categories/${id}`, data),
     delete: (id: number) => apiDelete(`/categories/${id}`),
 };
 
@@ -758,7 +768,21 @@ export function userSaveErrorText(error: unknown, t: (key: string) => string): s
 }
 
 export const usersApi = {
+    /** First page only (the server pages at 10) — screens that list accounts use listPaged. */
     list: () => apiGet<User[]>("/users"),
+    /**
+     * One page of accounts with X-WP-Total. `excludeRole: "subscriber"` is the Team list and
+     * `role: "subscriber"` the Subscribers list (a user with no stored role counts as a subscriber).
+     */
+    listPaged: (opts: { page?: number; perPage?: number; search?: string; role?: string; excludeRole?: string } = {}) => {
+        const params = new URLSearchParams();
+        params.append("page", String(opts.page || 1));
+        params.append("per_page", String(opts.perPage || 20));
+        if (opts.search) params.append("search", opts.search);
+        if (opts.role) params.append("role", opts.role);
+        if (opts.excludeRole) params.append("exclude_role", opts.excludeRole);
+        return apiGetPaged<User[]>(`/users?${params.toString()}`);
+    },
     get: (id: number) => apiGet<User>(`/users/${id}`),
     create: (data: UserWrite & { password: string }) => apiPost<User>("/users", data),
     update: (id: number, data: UserWrite & { currentPassword?: string }) => apiPut<User>(`/users/${id}`, data),
@@ -780,7 +804,8 @@ export const usersApi = {
      */
     revokeSessions: (currentPassword: string) =>
         apiPost<{ signedOut: boolean }>("/users/me/sessions/revoke", { currentPassword }),
-    delete: (id: number) => apiDelete(`/users/${id}`),
+    /** `reassign`: attribute the account's entries to this other user first (DELETE /users/:id?reassign=). */
+    delete: (id: number, reassign?: number) => apiDelete<{ deleted: boolean; reassigned?: number }>(reassign ? `/users/${id}?reassign=${reassign}` : `/users/${id}`),
 };
 
 // Public password-recovery endpoints (unauthenticated). Available only when the mail server is active
@@ -838,6 +863,8 @@ export const commentsApi = {
     delete: (id: number, force = false) => apiDelete<{ deleted: boolean }>(`/comments/${id}?force=${force}`),
     approve: (id: number) => apiPost<Comment>(`/comments/${id}/approve`, {}),
     spam: (id: number) => apiPost<Comment>(`/comments/${id}/spam`, {}),
+    /** Back to pending: Unapprove, Not spam and Restore from the trash (moderate_comments, like approve). */
+    unapprove: (id: number) => apiPost<Comment>(`/comments/${id}/unapprove`, {}),
 };
 
 export const revisionsApi = {
@@ -1264,7 +1291,14 @@ const mediaListQuery = (opts: MediaListOptions): URLSearchParams => {
     return params;
 };
 
+/** GET /media/:id/usage — entries using the item as their featured image (titles only for editable ones). */
+export interface MediaUsage {
+    featuredIn: number;
+    entries: Array<{ id: number; title: string; type: string }>;
+}
+
 export const mediaApi = {
+    usage: (id: number) => apiGet<MediaUsage>(`/media/${id}/usage`),
     /**
      * The endpoint has ALWAYS paged (per_page defaults to 20, capped at 100), so the old no-argument
      * `list()` was silently showing only the first page of a library and calling it the whole thing.
@@ -1310,11 +1344,19 @@ export const mediaApi = {
                         reject(new Error("Invalid JSON response"));
                     }
                 } else {
-                    reject(new Error(`Upload failed: ${xhr.statusText}`));
+                    // The server's own words (e.g. "File too large", a refused type, the site's quota),
+                    // with the status and code, so the screen can say WHY instead of "Failed to upload".
+                    let body: { message?: unknown; code?: unknown } | null = null;
+                    try { body = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+                    const message = body && typeof body.message === "string" && body.message ? body.message : `Upload failed: ${xhr.statusText || xhr.status}`;
+                    reject(Object.assign(new Error(message), {
+                        status: xhr.status,
+                        code: body && typeof body.code === "string" ? body.code : undefined,
+                    }));
                 }
             };
 
-            xhr.onerror = () => reject(new Error("Network error"));
+            xhr.onerror = () => reject(Object.assign(new Error("Network error"), { status: 0 }));
 
             xhr.send(formData);
         });

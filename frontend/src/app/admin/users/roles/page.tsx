@@ -167,7 +167,7 @@ export default function RolesPage() {
                                 </div>
                                 {/* A plugin's role goes away with its plugin: no delete while it is installed. The button
                                     is visible on screens without hover (phones) and revealed on hover elsewhere. */}
-                                {canDeleteRole(role) && (
+                                {canDeleteRole(role, slug) && (
                                 <div className="flex gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" data-role-actions={slug}>
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleDelete(slug); }}

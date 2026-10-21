@@ -92,7 +92,7 @@ router.post('/check', asyncHandler(async (req: Request, res: Response) => {
 router.post('/', accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
     const b = req.body || {};
     if (await requireSudoPassword(req, res, b.currentPassword)) return;
-    const mfa = await require('./network').requireStepUp(req, res);
+    const mfa = await require('./network').requireStepUp(req, res, 'Updating WordJS');
     if (!mfa) return;
     try {
         const r = await updater().startUpdate({ tag: b.tag, actorUserId: Number(req.user.id) });

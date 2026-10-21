@@ -53,6 +53,7 @@ vi.mock("@/lib/server-api", async (importOriginal) => {
         getPostById: vi.fn(async (id: number) => (id === 7 ? FRONT_PAGE : null)),
         getMenuByRef: vi.fn(async () => ({ items: MENU_ITEMS })),
         getPosts: vi.fn(async () => []),
+        getLatestPostsPage: vi.fn(async () => ({ posts: [], total: 0, totalPages: 1, page: 1 })),
         resolveSiteBase: vi.fn(async () => "http://localhost:3000"),
     };
 });
@@ -60,6 +61,7 @@ vi.mock("@/lib/server-api", async (importOriginal) => {
 import * as serverApi from "@/lib/server-api";
 import HomePage from "@/app/(public)/page";
 import HomeContent from "@/components/public/HomeContent";
+import BlogRoll from "@/components/public/BlogRoll";
 
 // Depth-first search for the first element of `type` in a (non-rendered) React element tree.
 function findByType(node: unknown, type: unknown): React.ReactElement | null {
@@ -111,11 +113,14 @@ describe("HomePage ('/') — the blog roll renders the author the API really sen
     it("shows each post's author.displayName instead of the 'Admin' fallback", async () => {
         // No homepage_id → the OTHER branch of the route: the blog roll.
         vi.mocked(serverApi.getSettings).mockResolvedValueOnce({ blogname: "Acme", posts_per_page: "10" });
-        vi.mocked(serverApi.getPosts).mockResolvedValueOnce(
-            ROLL_POSTS as unknown as Awaited<ReturnType<typeof serverApi.getPosts>>,
+        vi.mocked(serverApi.getLatestPostsPage).mockResolvedValueOnce(
+            { posts: ROLL_POSTS, total: 2, totalPages: 1, page: 1 } as unknown as Awaited<ReturnType<typeof serverApi.getLatestPostsPage>>,
         );
 
-        const text = textIn(await HomePage());
+        // The roll is its own component now (shared with /page/{n}): render that element's output.
+        const roll = findByType(await HomePage(), BlogRoll);
+        expect(roll).not.toBeNull();
+        const text = textIn(BlogRoll(roll!.props as Parameters<typeof BlogRoll>[0]));
 
         expect(text).toContain("First post");
         expect(text).toContain("Second post");

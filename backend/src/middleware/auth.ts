@@ -120,6 +120,11 @@ const MFA_AMR = 'mfa';
  * the claim and never outlives its end; GET /auth/me reports it so the admin shows the handoff banner.
  */
 const SESSION_HANDOFF = new WeakMap<object, { uid: number; by: string; from: string; exp: number }>();
+/**
+ * The session id (`ses`, core/session-revocation) of the session that authenticated this request, so a
+ * token refreshed FROM it keeps the same id and a logout of that browser ends exactly that session.
+ */
+const SESSION_ID = new WeakMap<object, string>();
 
 /** The handoff the presenting session belongs to, or null for any other session. */
 function sessionHandoff(req: Request): { uid: number; by: string; from: string; exp: number } | null {
@@ -622,8 +627,8 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         // Use <= (not <): JWT iat is whole seconds and validAfter is stamped as Math.floor(now/1000),
         // so a token minted in the SAME wall-clock second as the logout/password-change must also be
         // revoked — otherwise iat === validAfter slips through.
-        const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
-        if (validAfter && decoded.iat && decoded.iat <= validAfter) {
+        // Plus the per-session list: a logout ends ITS session only (core/session-revocation).
+        if (require('../core/session-revocation').isSessionRevoked(user, decoded)) {
             return res.status(401).json({
                 code: 'rest_token_revoked',
                 message: 'Session has been revoked. Please log in again.',
@@ -638,6 +643,7 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         // POST /auth/tokens can tell an MFA-verified session from one that never answered a code.
         SESSION_MFA.set(req, Array.isArray(decoded.amr) && decoded.amr.includes(MFA_AMR));
         if (decoded.hof) SESSION_HANDOFF.set(req, decoded.hof);
+        if (typeof decoded.ses === 'string' && decoded.ses) SESSION_ID.set(req, decoded.ses);
         req.user = user;
         noteAuthenticatedUse(req);
         next();
@@ -1398,15 +1404,38 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
 }
 
 /**
- * Optional authentication (doesn't fail if no token)
+ * A Bearer credential the caller SENT that resolves to nobody (unknown, expired, revoked, malformed).
+ * RFC 6750 §3.1: 401 with `WWW-Authenticate: Bearer error="invalid_token"`.
+ */
+function refuseInvalidBearer(res: Response) {
+    res.setHeader('WWW-Authenticate', 'Bearer realm="wordjs", error="invalid_token"');
+    return res.status(401).json({
+        code: 'rest_token_invalid',
+        message: 'The Authorization header carries a token that is invalid, expired or revoked. Send a valid token, or no Authorization header to read as a visitor.',
+        data: { status: 401 },
+    });
+}
+
+/**
+ * Optional authentication: no credential at all reads as a visitor.
+ *
+ * WHO SENT IT DECIDES WHAT A DEAD CREDENTIAL MEANS. A session COOKIE is ambient — the browser attaches a
+ * stale one by itself — so a cookie that no longer resolves still reads as a visitor. An
+ * `Authorization: Bearer` header is a deliberate claim by a headless client (the panel and the public
+ * site never send one), and answering it as anonymous let a client whose token had expired silently stop
+ * seeing its drafts with a 200. That header now gets 401 rest_token_invalid when it resolves to nobody.
+ * A VALID token whose read scope does not cover a write is still read as a visitor here (the route's own
+ * capability check refuses the write).
  */
 async function optionalAuth(req: Request, res: Response, next: NextFunction) {
     if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
+    const fromHeader = !!(authHeader && authHeader.startsWith('Bearer '));
 
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
+    if (fromHeader) {
+        token = authHeader!.substring(7).trim();
+        if (!token) return refuseInvalidBearer(res);
     } else {
         token = sessionCookie(req);
     }
@@ -1415,23 +1444,31 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
         req.user = null;
         return next();
     }
+    // A credential that resolves to nobody: a visitor when it came from the cookie, 401 from the header.
+    const unresolved = () => {
+        req.user = null;
+        if (fromHeader) return refuseInvalidBearer(res);
+        return next();
+    };
 
-    // Scoped API token — resolve it, but degrade to anonymous (never 401) on any failure, matching this
-    // middleware's optional contract. The read/write scope is still honored (a read token can't drive a
-    // mutating request even on an optional-auth route).
+    // Scoped API token. The read/write scope is still honored (a read token can't drive a mutating
+    // request even on an optional-auth route).
     if (token.startsWith(ApiToken.PREFIX)) {
-        try {
-            const record = await ApiToken.findByRawToken(token);
-            const user = record ? await User.findById(record.userId) : null;
-            if (user && ApiToken.scopeAllows(record.scopes, req.method, apiResourceOf(req))) {
-                req.user = user;
-                markHeadless(req, record);
-                ApiToken.touch(record.id);
-                noteAuthenticatedUse(req);
-            } else {
-                req.user = null;
+        const { record, user } = await (async () => {
+            try {
+                const found = await ApiToken.findByRawToken(token);
+                return { record: found, user: found ? await User.findById(found.userId) : null };
+            } catch {
+                return { record: null, user: null };
             }
-        } catch {
+        })();
+        if (!record || !user) return unresolved();
+        if (ApiToken.scopeAllows(record.scopes, req.method, apiResourceOf(req))) {
+            req.user = user;
+            markHeadless(req, record);
+            ApiToken.touch(record.id);
+            noteAuthenticatedUse(req);
+        } else {
             req.user = null;
         }
         return next();
@@ -1439,23 +1476,20 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
 
     try {
         const decoded = verifyForSite(token);
-        // Special-purpose tokens (e.g. the MFA challenge) are never a session — treat as anonymous, and so
-        // is a session minted on an address the site no longer answers (see sessionAddressStillAccepted).
-        if (decoded.purpose || !sessionAddressStillAccepted(decoded)) { req.user = null; return next(); }
+        // Special-purpose tokens (e.g. the MFA challenge) are never a session, and neither is a session
+        // minted on an address the site no longer answers (see sessionAddressStillAccepted).
+        if (decoded.purpose || !sessionAddressStillAccepted(decoded)) return unresolved();
         const user = await User.findById(decoded.userId);
-        // Honor token revocation here too (see verifyAndAttachUser): treat a revoked token as anonymous.
-        // Use <= so a token issued in the same second as logout/password-change is also revoked.
-        const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
-        if (user && validAfter && decoded.iat && decoded.iat <= validAfter) {
-            req.user = null;
-        } else if (user && require('../core/network-handoff').handoffSessionRefusal(decoded, user)) {
-            req.user = null;
-        } else {
-            req.user = user;
-            if (user) noteAuthenticatedUse(req);
+        // Honor token revocation here too (see verifyAndAttachUser).
+        if (!user
+            || require('../core/session-revocation').isSessionRevoked(user, decoded)
+            || require('../core/network-handoff').handoffSessionRefusal(decoded, user)) {
+            return unresolved();
         }
+        req.user = user;
+        noteAuthenticatedUse(req);
     } catch (e) {
-        req.user = null;
+        return unresolved();
     }
 
     next();
@@ -1474,6 +1508,10 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
  */
 function generateToken(user: any, req?: Request, opts?: { mfa?: boolean; handoff?: { uid: number; by: string; from: string; exp: number } }) {
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
+    // One id per signed-in session, inherited by every refresh of it (core/session-revocation).
+    // Only a token minted FOR the user who holds that session inherits its id.
+    const inherited = req && req.user && Number(req.user.id) === Number(user.id) ? SESSION_ID.get(req) : undefined;
+    claims.ses = inherited || require('../core/session-revocation').newSessionId();
     if ((opts && opts.mfa === true) || (req && sessionMfaVerified(req))) claims.amr = [MFA_AMR];
     const address = sessionAddressClaims(req);
     if (address) claims.mh = address.mh;
@@ -1654,6 +1692,15 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     // it are the pre-install ones, which run before any origin — or any user — exists.
     const subPath = pathAfterApiPrefix(req);
     if (CSRF_EXEMPT_PATHS.has(subPath)) {
+        return next();
+    }
+
+    // THE MCP ENDPOINT READS NO AMBIENT CREDENTIAL. routes/mcp.ts authenticates only an
+    // `Authorization: Bearer wja_…` header (a cookie or a wjt_ token is refused there), which a browser
+    // cannot attach cross-site, so there is nothing for this gate to protect. Gating it anyway answered
+    // a token-less MCP client 403 rest_csrf_invalid — misleading, and it hid the 401 + WWW-Authenticate
+    // the MCP authorization flow is discovered from.
+    if (subPath === '/mcp') {
         return next();
     }
 

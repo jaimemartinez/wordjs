@@ -255,8 +255,8 @@ function makeRevalidate(req: Request, postId: number): () => Promise<boolean> {
         if (!user) return false;
         // A network administrator's handoff session ends with its handoff (core/network-handoff).
         if (require('../core/network-handoff').handoffSessionRefusal(decoded, user)) return false;
-        const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
-        if (validAfter && decoded.iat && decoded.iat <= validAfter) return false;
+        // The account epoch and this session's own revocation (a logout ends that session only).
+        if (require('../core/session-revocation').isSessionRevoked(user, decoded)) return false;
 
         // LA MISMA PREGUNTA QUE `mfaComplianceGate` le hace a CADA petición: un usuario cuyo rol exige
         // 2FA y que ya agotó su gracia sin activarlo no pasa de la puerta global — y un stream es UNA

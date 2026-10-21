@@ -355,6 +355,27 @@ function toInt(raw: unknown): number | null {
 const NOT_FOUND = { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } };
 
 /**
+ * THE DEFAULT CATEGORY (Settings → default_category, WordPress parity). An entry of a type that uses the
+ * `category` taxonomy is never in NO category: created without one, or saved with an explicitly empty
+ * list, it lands in the default one. That never happened — every entry had `categories: []`, the
+ * «Uncategorized» archive was always empty and the editor's category picker opened blank.
+ *
+ * Returns the ids to store, or null to leave the entry's categories alone (`categories` absent on an
+ * update, or a type without categories). A default that names no existing category is simply not attached
+ * (Post.setTerms ignores unknown ids).
+ */
+async function categoriesToStore(type: string, categories: unknown, isCreate: boolean): Promise<unknown[] | null> {
+    if (Array.isArray(categories) && categories.length) return categories;
+    if (!isCreate && !Array.isArray(categories)) return null;
+    const postType = require('../core/post-types').getPostType(String(type || 'post'));
+    if (!postType || !Array.isArray(postType.taxonomies) || !postType.taxonomies.includes('category')) {
+        return Array.isArray(categories) ? categories : null;
+    }
+    const fallback = Number(await require('../core/options').getOption('default_category', 1));
+    return Number.isInteger(fallback) && fallback > 0 ? [fallback] : (Array.isArray(categories) ? categories : null);
+}
+
+/**
  * The 404 body of GET /posts/slug/:slug for EVERY miss — no row holds the slug, or only rows this caller may
  * not read do. One body, so the answer never says which.
  */
@@ -629,18 +650,29 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         id:
  *           type: integer
  *         title:
- *           type: object
- *           properties:
- *             rendered:
- *               type: string
+ *           type: string
+ *           description: The title as stored (a plain string — not a WordPress-style `{rendered}` object).
+ *         slug:
+ *           type: string
+ *         type:
+ *           type: string
  *         content:
- *           type: object
- *           properties:
- *             rendered:
- *               type: string
+ *           type: string
+ *           description: The stored HTML (a plain string). Visual-editor documents live in `meta._puck_data`.
+ *         excerpt:
+ *           type: string
  *         date:
  *           type: string
- *           format: date-time
+ *           description: Server-local time, `YYYY-MM-DD HH:MM:SS` without a zone; read `dateGmt` for the exact instant.
+ *         dateGmt:
+ *           type: string
+ *           description: The same instant in UTC, `YYYY-MM-DD HH:MM:SS`.
+ *         modified:
+ *           type: string
+ *         modifiedGmt:
+ *           type: string
+ *         commentStatus:
+ *           type: string
  *         status:
  *           type: string
  *           enum: [publish, draft, pending, private, trash]
@@ -687,8 +719,15 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *           type: integer
  *       - in: query
  *         name: per_page
+ *         description: >-
+ *           Page size, 1 to 100 (default 10). A larger value is capped at 100, a negative one raised to 1,
+ *           and 0 or a non-number means the default — the list is never unbounded. X-WP-TotalPages is
+ *           computed with the size actually used.
  *         schema:
  *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 10
  *       - in: query
  *         name: search
  *         schema:
@@ -698,7 +737,9 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         description: >-
  *           publish (default), draft, pending, private, future, or any. A caller who may not read
  *           unpublished entries of the type gets only their own; an anonymous caller asking for a
- *           non-published status gets an empty list (any lists the published entries).
+ *           non-published status gets an empty list (any lists the published entries). Any other value
+ *           is a status no row carries yet (plugins may register their own) and lists nothing — an empty
+ *           200, not a 400.
  *         schema:
  *           type: string
  *       - in: query
@@ -725,7 +766,8 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         description: >-
  *           Comma-separated category term IDs and/or slugs. A post matches when it carries ANY of
  *           them; combining this with `tags` requires BOTH taxonomies to match. Applied to the rows
- *           and to X-WP-Total alike. A malformed element answers 400 rest_invalid_param.
+ *           and to X-WP-Total alike. A malformed element answers 400 rest_invalid_param; a well-formed
+ *           id or slug that names no term (`abc`) is a valid question with no match — an empty 200.
  *         schema:
  *           type: string
  *         example: news,3
@@ -750,6 +792,15 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *     responses:
  *       200:
  *         description: A list of posts
+ *         headers:
+ *           X-WP-Total:
+ *             description: Entries matching the query across all pages.
+ *             schema:
+ *               type: integer
+ *           X-WP-TotalPages:
+ *             description: Pages at the page size used.
+ *             schema:
+ *               type: integer
  *         content:
  *           application/json:
  *             schema:
@@ -885,6 +936,9 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         if (status === 'any') {
             // 'future' (scheduled) is part of the author-facing set: without it a scheduled post
             // simply vanished from the admin list until its publish moment.
+            // 'trash' stays OUT on purpose (WordPress exclude_from_search): a trashed post must not
+            // reappear in the normal list. It is reachable through the EXPLICIT ?status=trash filter
+            // below — that is what the admin table's Trash tab queries, so it must keep working.
             includeStatuses = ['publish', 'draft', 'pending', 'private', 'future'];
             if (!isPrivileged) {
                 // Scope the unpublished content to the requesting user only.
@@ -1330,8 +1384,9 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
             language
         });
 
-        if (categories && Array.isArray(categories)) {
-            await Post.setTerms(created.id, categories, 'category');
+        const createCategories = await categoriesToStore(createType, categories, true);
+        if (createCategories) {
+            await Post.setTerms(created.id, createCategories, 'category');
         }
         if (tags && Array.isArray(tags)) {
             await Post.setTerms(created.id, tags, 'post_tag');
@@ -1587,8 +1642,9 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
                 language
             });
 
-            if (categories && Array.isArray(categories)) {
-                await Post.setTerms(postId, categories, 'category');
+            const updateCategories = await categoriesToStore(post.postType || post.type, categories, false);
+            if (updateCategories) {
+                await Post.setTerms(postId, updateCategories, 'category');
             }
             if (tags && Array.isArray(tags)) {
                 await Post.setTerms(postId, tags, 'post_tag');
@@ -1724,6 +1780,73 @@ router.delete('/:id', authenticate, asyncHandler(async (req: AuthenticatedReques
         }
         res.json(await serializeVisibleContent(fresh, req.user));
     }
+}));
+
+
+/**
+ * @swagger
+ * /posts/{id}/restore:
+ *   post:
+ *     summary: Restore a trashed post to the status it had before it was trashed
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Post restored (payload is the restored post)
+ *       400:
+ *         description: The post is not in the trash
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Post not found
+ */
+router.post('/:id/restore', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams>, res: Response) => {
+    const postId = parseInt(req.params.id, 10);
+    const post = await Post.findById(postId);
+
+    // The same visibility rule as DELETE: an internal type is not addressable through /posts at all.
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
+    }
+    if (await refuseAttachmentWrite(res, req.user, post)) return;
+
+    // Untrashing is the inverse of trashing, so it clears the SAME bar as DELETE (WordPress gates the
+    // "Restore" link on delete_post): whoever could move this post to the trash may take it back out.
+    if (!canDeletePostRecord(req.user, post)) {
+        return res.status(403).json({
+            code: 'rest_forbidden',
+            message: 'You cannot restore this post.',
+            data: { status: 403 }
+        });
+    }
+
+    // SECURITY: restoring writes a status, so it must clear the publish gate too — otherwise a
+    // contributor whose published post was trashed could put it back LIVE by pressing Restore, with no
+    // publish capability ('future' counts as publishing, exactly as in POST/PUT).
+    const rcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    const restored = await Post.untrash(postId, (original: string) =>
+        (original === 'publish' || original === 'future') && !req.user.can(rcaps.publish) ? 'pending' : original
+    );
+
+    if (!restored) {
+        return res.status(400).json({
+            code: 'rest_post_not_trashed',
+            message: 'This post is not in the trash.',
+            data: { status: 400 }
+        });
+    }
+
+    const fresh = await Post.findById(postId);
+    if (!fresh) return res.status(404).json(NOT_FOUND);
+    await recordAudit(req.user.id, 'post.restore', 'post', postId, { type: fresh.postType, from: 'trash', to: fresh.postStatus, slug: fresh.postName });
+    res.json(await serializeVisibleContent(fresh, req.user));
 }));
 
 

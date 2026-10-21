@@ -7,15 +7,25 @@
  * emits X-WP-Total headers via apiGetPaged), debounced search, status tabs (any is
  * privilege-scoped server-side), bulk selection + delete, and per-row View / Duplicate.
  * Drafts "View" opens the live-site draft preview (/preview/[slug], the dedicated dynamic route).
+ *
+ * TRASH: the delete button is a SOFT delete server-side (the post moves to post_status 'trash'), so this
+ * table has to give that state somewhere to live. Without the Trash tab the row vanished from every view
+ * the admin can reach while the record sat intact in the database, and the confirmation even promised
+ * the opposite ("cannot be undone"). The tab shows the trashed rows with the two actions that state
+ * implies: Restore (back to the status the post was trashed from) and Delete permanently (?force=true,
+ * the only irreversible one, hence its own confirmation).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { postsApi, Post } from "@/lib/api";
 import { previewHref } from "@/lib/previewHref";
+import { buildDuplicatePayload } from "@/lib/duplicateContent";
+import { parseServerDate } from "@/lib/serverDate";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { Button, DataTable, EmptyState, Pagination, StatusBadge } from "@/components/ui";
+import { avatarInitial } from "@/lib/avatarInitial";
 import type { DataTableAction, DataTableColumn } from "@/components/ui";
 
 const PER_PAGE = 20;
@@ -35,13 +45,19 @@ export const STATUS_TABS = [
     { key: "future", labelKey: "table.status.scheduled" },
     { key: "draft", labelKey: "table.status.drafts" },
     { key: "pending", labelKey: "table.status.pending" },
+    // The real DB status, queried through the explicit ?status=trash filter (status 'any' excludes it).
+    { key: "trash", labelKey: "table.status.trash" },
 ];
 
-/** Badge props for a row's status — 'future' (a scheduled post) renders as the "scheduled" badge. */
+/**
+ * Badge props for a row's status — 'future' (a scheduled post) renders as the "scheduled" badge and
+ * 'trash' as the "deleted" one (StatusBadge's error palette; unmapped statuses fall back to neutral).
+ */
 export function statusBadgeView(status: string, t: (k: string) => string): { status: string; label: string } {
     if (status === "publish") return { status: "published", label: t("posts.published") };
     if (status === "draft") return { status: "draft", label: t("posts.draft") };
     if (status === "future") return { status: "scheduled", label: t("posts.scheduled") || "Scheduled" };
+    if (status === "trash") return { status: "deleted", label: t("posts.trashed") || "Trashed" };
     return { status, label: status };
 }
 
@@ -87,32 +103,47 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
     const toggle = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
     const toggleAll = () => setSelected((s) => (s.size === items.length ? new Set<number>() : new Set(items.map((p) => p.id))));
 
-    const handleDelete = async (ids: number[]) => {
-        const msg = ids.length === 1 ? (t('posts.delete.message') || 'Delete this item?') : t('table.delete.many').replace('{n}', String(ids.length));
-        if (!await confirm(msg, t('posts.delete.title') || 'Confirm delete', true, { confirmText: t('common.delete') })) return;
+    /** Viewing the trash changes what the row actions MEAN — see the three handlers below. */
+    const inTrash = status === "trash";
+
+    /** Run one write per id, report how many failed, then reload the current view. */
+    const runOnEach = async (ids: number[], op: (id: number) => Promise<unknown>, failedKey: string) => {
         setBusy(true);
         const failed: number[] = [];
         for (const id of ids) {
-            try { await postsApi.delete(id); } catch { failed.push(id); }
+            try { await op(id); } catch { failed.push(id); }
         }
         setBusy(false);
-        if (failed.length) await alert(t('table.delete.failed').replace('{n}', String(failed.length)));
+        if (failed.length) await alert(t(failedKey).replace('{n}', String(failed.length)));
         load();
+    };
+
+    /** Reversible: the backend moves the post to 'trash', where the Trash tab can restore it. */
+    const handleTrash = async (ids: number[]) => {
+        const msg = ids.length === 1 ? t('table.trash.one') : t('table.trash.many').replace('{n}', String(ids.length));
+        if (!await confirm(msg, t('table.trash.title'), true, { confirmText: t('table.trash.action') })) return;
+        await runOnEach(ids, (id) => postsApi.trash(id), 'table.trash.failed');
+    };
+
+    /** Irreversible (?force=true) — only offered inside the trash, with its own harsher confirmation. */
+    const handleDeleteForever = async (ids: number[]) => {
+        const msg = ids.length === 1 ? t('table.deleteForever.one') : t('table.deleteForever.many').replace('{n}', String(ids.length));
+        if (!await confirm(msg, t('table.deleteForever.title'), true, { confirmText: t('table.deleteForever.action') })) return;
+        await runOnEach(ids, (id) => postsApi.deletePermanently(id), 'table.delete.failed');
+    };
+
+    /** Back to the status the post was trashed from (the backend reads _wp_trash_meta_status). */
+    const handleRestore = async (ids: number[]) => {
+        await runOnEach(ids, (id) => postsApi.restore(id), 'table.restore.failed');
     };
 
     const handleDuplicate = async (post: Post) => {
         setBusy(true);
         try {
-            // Carry the full content + Puck layout over; land as a draft next to the original.
+            // Carry the content, layout, taxonomy and SEO over; land as a draft next to the original.
+            // The copy's editor document is retitled, or opening it would restore the original's title.
             const full = await postsApi.get(post.id);
-            const created = await postsApi.create({
-                title: `${full.title} (copy)`,
-                content: full.content,
-                excerpt: full.excerpt,
-                type: full.type,
-                status: "draft",
-                ...(full.meta?._puck_data ? { meta: { _puck_data: full.meta._puck_data } } : {}),
-            });
+            const created = await postsApi.create(buildDuplicatePayload(full));
             if (created?.id) window.location.href = `${basePath}/${created.id}`;
             else load();
         } catch (error: any) {
@@ -133,7 +164,18 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
             key: "title",
             header: t('posts.title.field'),
             primary: true,
-            cell: (post) => (
+            // In the trash the title is NOT a link to the editor: saving there would write a status behind
+            // the trash's back and leave the restore bookkeeping set. Restore first, then edit.
+            cell: (post) => inTrash ? (
+                <div className="block min-h-11 py-1">
+                    <span className="text-base md:text-lg font-bold text-gray-400 line-through decoration-gray-300 line-clamp-2 xl:line-clamp-1 italic tracking-tight">
+                        {post.title || t('table.untitled')}
+                    </span>
+                    <span className="block text-[11px] font-bold text-gray-400 tracking-wide break-all">
+                        /{post.slug || post.id}
+                    </span>
+                </div>
+            ) : (
                 <Link href={`${basePath}/${post.id}`} className="block min-h-11 py-1 group/title">
                     <span className="text-base md:text-lg font-bold text-gray-700 group-hover/title:text-blue-600 transition-colors line-clamp-2 italic tracking-tight">
                         {post.title || t('table.untitled')}
@@ -151,7 +193,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
             cell: (post) => (
                 <div className="flex items-center justify-end md:justify-start gap-3">
                     <div className="w-8 h-8 shrink-0 rounded-xl bg-gray-100 hidden md:flex items-center justify-center text-xs font-bold text-gray-500" aria-hidden="true">
-                        {post.author?.displayName?.[0] || 'U'}
+                        {avatarInitial(post.author?.displayName, post.author?.slug)}
                     </div>
                     <span className="text-sm font-bold text-gray-600">{post.author?.displayName || t('table.unknownAuthor')}</span>
                 </div>
@@ -162,15 +204,19 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
             key: "date",
             header: t('posts.date'),
             className: "whitespace-nowrap",
-            cell: (post) => <span className="text-sm font-bold text-gray-500">{new Date(post.date).toLocaleDateString()}</span>,
+            cell: (post) => <span className="text-sm font-bold text-gray-500">{(parseServerDate(post.dateGmt, post.date) ?? new Date(NaN)).toLocaleDateString()}</span>,
         },
     ];
 
-    const rowActions = (post: Post): DataTableAction[] => [
+    const rowActions = (post: Post): DataTableAction[] => inTrash ? [
+        // A trashed post is not editable or viewable content: the only two moves decide its fate.
+        { key: "restore", label: t('table.restore.action'), icon: "fa-rotate-left", onClick: () => handleRestore([post.id]), disabled: busy, tone: "success" },
+        { key: "deleteForever", label: t('table.deleteForever.action'), icon: "fa-fire", onClick: () => handleDeleteForever([post.id]), disabled: busy, tone: "danger" },
+    ] : [
         { key: "edit", label: t('edit'), icon: "fa-pen", href: `${basePath}/${post.id}`, tone: "primary" },
         { key: "view", label: post.status === 'publish' ? t('common.view') : t('table.previewDraft'), icon: "fa-eye", href: viewHref(post), external: true, tone: "success" },
         { key: "duplicate", label: t('table.duplicate'), icon: "fa-copy", onClick: () => handleDuplicate(post), disabled: busy, tone: "warning", menu: true },
-        { key: "delete", label: t('delete'), icon: "fa-trash", onClick: () => handleDelete([post.id]), disabled: busy, tone: "danger", menu: true },
+        { key: "delete", label: t('table.trash.action'), icon: "fa-trash", onClick: () => handleTrash([post.id]), disabled: busy, tone: "danger", menu: true },
     ];
 
     return (
@@ -208,13 +254,24 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
             {selected.size > 0 && (
                 <div className="px-4 sm:px-8 py-3 bg-blue-50/60 border-b border-blue-100 flex flex-wrap items-center gap-3 animate-in fade-in duration-200">
                     <span className="text-xs font-bold text-blue-700">{selected.size} {t('table.selected')}</span>
+                    {inTrash && (
+                        <button
+                            type="button"
+                            onClick={() => handleRestore(Array.from(selected))}
+                            disabled={busy}
+                            className="min-h-11 px-4 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-50 transition-all"
+                        >
+                            <i className="fa-solid fa-rotate-left mr-1.5" aria-hidden="true"></i>{t('table.restore.action')}
+                        </button>
+                    )}
                     <button
                         type="button"
-                        onClick={() => handleDelete(Array.from(selected))}
+                        onClick={() => (inTrash ? handleDeleteForever(Array.from(selected)) : handleTrash(Array.from(selected)))}
                         disabled={busy}
                         className="min-h-11 px-4 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50 transition-all"
                     >
-                        <i className="fa-solid fa-trash mr-1.5" aria-hidden="true"></i>{t('delete') || 'Delete'}
+                        <i className={`fa-solid ${inTrash ? 'fa-fire' : 'fa-trash'} mr-1.5`} aria-hidden="true"></i>
+                        {inTrash ? t('table.deleteForever.action') : t('table.trash.action')}
                     </button>
                     <button type="button" onClick={() => setSelected(new Set())} className="min-h-11 px-3 text-xs font-bold text-gray-500 hover:text-gray-700">{t('table.clear')}</button>
                 </div>
@@ -227,8 +284,8 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                 </div>
             ) : items.length === 0 ? (
                 <EmptyState
-                    icon={filtered ? "fa-filter" : emptyIcon}
-                    title={filtered ? (t('no.results') || 'Nothing matches your filters.') : emptyTitle}
+                    icon={inTrash && !search ? "fa-trash-can" : filtered ? "fa-filter" : emptyIcon}
+                    title={inTrash && !search ? t('table.trash.empty') : filtered ? (t('no.results') || 'Nothing matches your filters.') : emptyTitle}
                     description={filtered ? '' : (t('no.posts.desc') || 'Create your first one to get started.')}
                     action={filtered ? (
                         <Button variant="secondary" icon="fa-filter-circle-xmark" onClick={() => { setSearchInput(''); setSearch(''); setStatus('any'); setPage(1); }}>

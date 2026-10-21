@@ -18,7 +18,7 @@ import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput, isFutureInp
 // del registro de bloques — ver la cabecera de editorRootFields.ts.
 import {
     withRecordRootFields,
-    seedRootPropsFromPost,
+    seedRootPropsFromPost, seedRecordIdentity, slugFollowsTitle,
     featuredImageMetaValue,
     resolveExcerptForSave,
     resolveCategoriesForSave,
@@ -202,6 +202,11 @@ export default function PostEditorPage() {
             const [post, fieldsForSeed] = await Promise.all([postsApi.get(postId!), fetchPluginFields()]);
             setTitle(post.title);
             setSlug(post.slug);
+            // The loaded title is already in sync with the loaded slug: the auto-slug effect must not
+            // rewrite it on open, and a published entry keeps its URL when its title changes.
+            setLastSyncedTitle(post.title);
+            setSlugManuallyEdited(!slugFollowsTitle(post));
+            const identity = seedRecordIdentity(post);
             contentRef.current = post.content;
             setStatus(post.status);
             lastServerStatusRef.current = post.status;
@@ -258,16 +263,14 @@ export default function PostEditorPage() {
                     ...stored,
                     root: {
                         ...(stored.root as any),
-                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate, ...seedRoot }
+                        title: identity.title,
+                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate, ...seedRoot, ...identity }
                     }
                 };
                 setVersoData(withTemplate);
                 versoDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
                 setHasStoredDocument(true);
-                if (typeof stored.root?.title === "string") {
-                    setTitle(stored.root.title);
-                }
             } else {
                 // Seed Puck data with existing info for legacy posts. A legacy/imported post keeps its
                 // body as HTML in `content` with no _puck_data. Wrap that HTML in an HTMLEmbed block so it

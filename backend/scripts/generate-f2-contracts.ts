@@ -175,6 +175,12 @@ function commonPrefix(schemas: Schema[]): string[] {
         '    type: string;',
         '    date: string;',
         '    dateGmt?: string;',
+        // Post.toJSON sends the last-modified instant too (server-local and its UTC twin); the public SEO
+        // metadata reads it for article:modified_time / dateModified.
+        '    modified?: string;',
+        '    modifiedGmt?: string;',
+        '    /** The parent entry (hierarchical types such as pages); 0 at the top level. */',
+        '    parent?: number;',
         // `slug` is user_nicename, falling back to user_login — the identity the author feed resolves
         // and the one `GET /posts?author=` accepts, so a public page can link an author archive and
         // list it with the SAME value the record handed it.
@@ -274,6 +280,18 @@ function renderFrontend(schemas: Schema[]): string {
         '        },',
         '        delete(id: number) {',
         '            return transport.delete<ContentRecord>(`/posts/${id}`);',
+        '        },',
+        '        /** Moves the entry to the trash (soft delete); restore() brings it back. */',
+        '        trash(id: number) {',
+        '            return transport.delete<ContentRecord>(`/posts/${id}`);',
+        '        },',
+        '        /** Deletes the entry for good: its row, meta and term relationships. */',
+        '        deletePermanently(id: number) {',
+        '            return transport.delete<{ deleted: boolean; previous: ContentRecord }>(`/posts/${id}?force=true`);',
+        '        },',
+        '        /** Restores a trashed entry to the status it was trashed from. */',
+        '        restore(id: number) {',
+        '            return transport.post<ContentRecord>(`/posts/${id}/restore`, {});',
         '        },',
         '    };',
         '}',

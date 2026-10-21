@@ -13,6 +13,8 @@ import MediaPickerModal from "@/components/MediaPickerModal";
 import ModernSelect from "@/components/ModernSelect";
 import { useModal } from "@/contexts/ModalContext";
 import { useOptionalAuth } from "@/contexts/AuthContext";
+import { withServerReason } from "@/lib/errorText";
+import { isSignupSafeRole } from "@/lib/signupRoles";
 import { PageHeader } from "@/components/ui";
 
 
@@ -80,12 +82,17 @@ export default function SettingsPage() {
         require_email_verification: "0",
         comment_registration: "0",
         redis_cache_enabled: "0",
+        // Settings → Media: the largest upload in MB ('' = the configured default). Zero config: it used
+        // to be wordjs-config.json only.
+        upload_max_size_mb: "",
         // Admin-only: resolve the author slugs migration 0017 retired (they were derived from the login).
         author_legacy_slugs: "0",
         WPLANG: "en_US",
         site_text_direction: "",
     });
     const [roles, setRoles] = useState<Record<string, Role>>({});
+    // The upload limit that applies right now (derived on the server: the panel's value or the default).
+    const [uploadLimitBytes, setUploadLimitBytes] = useState<number | null>(null);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [activePicker, setActivePicker] = useState<"logo" | "icon" | null>(null);
@@ -176,10 +183,13 @@ export default function SettingsPage() {
                 require_email_verification: boolSetting(data.require_email_verification, "0"),
                 comment_registration: boolSetting(data.comment_registration, "0"),
                 redis_cache_enabled: boolSetting(data.redis_cache_enabled, "0"),
+                upload_max_size_mb: data.upload_max_size_mb === undefined || data.upload_max_size_mb === null ? "" : String(data.upload_max_size_mb),
                 author_legacy_slugs: boolSetting(data.author_legacy_slugs, "0"),
                 WPLANG: data.WPLANG || "en_US",
                 site_text_direction: data.site_text_direction || "",
             });
+            const effective = Number((data as Record<string, unknown>).upload_max_bytes);
+            setUploadLimitBytes(Number.isFinite(effective) && effective > 0 ? effective : null);
         } catch (error) {
             console.error("Failed to load settings:", error);
         }
@@ -198,7 +208,7 @@ export default function SettingsPage() {
             setTimeout(() => setSaved(false), 3000);
         } catch (error) {
             console.error("Failed to save settings:", error);
-            await alert(t('settings.save.failed'));
+            await alert(withServerReason(t('settings.save.failed'), error));
         } finally {
             setSaving(false);
         }
@@ -206,9 +216,9 @@ export default function SettingsPage() {
 
     const handleSelectMedia = (media: MediaItem) => {
         if (activePicker === "logo") {
-            setSettings({ ...settings, site_logo: media.guid });
+            setSettings({ ...settings, site_logo: media.sourceUrl || media.guid });
         } else if (activePicker === "icon") {
-            setSettings({ ...settings, site_icon: media.guid });
+            setSettings({ ...settings, site_icon: media.sourceUrl || media.guid });
         }
         setActivePicker(null);
     };
@@ -548,7 +558,8 @@ export default function SettingsPage() {
                                             label={t('settings.new.user.role')}
                                             value={settings.default_role}
                                             onChange={(e) => setSettings({ ...settings, default_role: e.target.value })}
-                                            options={Object.entries(roles).map(([slug, role]) => ({
+                                            // Only roles that cannot run the site: the server refuses the rest.
+                                            options={Object.entries(roles).filter(([slug, role]) => isSignupSafeRole(slug, role)).map(([slug, role]) => ({
                                                 value: slug,
                                                 label: role.name
                                             }))}
@@ -699,6 +710,33 @@ export default function SettingsPage() {
                             </div>
                         </div>
                     </div>
+                    {/* Media Section */}
+                    <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden" data-testid="settings-media">
+                        <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
+                            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                                <i className="fa-solid fa-photo-film text-pink-500" aria-hidden="true"></i> {t('settings.media.title')}
+                            </h2>
+                        </div>
+                        <div className="p-8 space-y-2 max-w-md">
+                            <label htmlFor="settings-upload-max" className="text-sm font-bold text-gray-700">{t('settings.media.maxUpload')}</label>
+                            <input
+                                id="settings-upload-max"
+                                type="number"
+                                min={1}
+                                max={2048}
+                                inputMode="numeric"
+                                value={settings.upload_max_size_mb}
+                                placeholder={t('settings.media.maxUpload.default')}
+                                onChange={(e) => setSettings({ ...settings, upload_max_size_mb: e.target.value })}
+                                className="w-full px-4 py-3.5 bg-gray-50/50 border border-gray-200 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none"
+                            />
+                            <p className="text-xs text-gray-500">
+                                {t('settings.media.maxUpload.help')}
+                                {uploadLimitBytes ? " " + t('settings.media.maxUpload.current').replace('{mb}', String(Math.round((uploadLimitBytes / 1048576) * 10) / 10)) : ''}
+                            </p>
+                        </div>
+                    </div>
+
                     {/* Performance Section */}
                     <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
@@ -772,6 +810,8 @@ export default function SettingsPage() {
                 isOpen={activePicker !== null}
                 onClose={() => setActivePicker(null)}
                 onSelect={handleSelectMedia}
+                // The logo and the icon are images.
+                mimeType="image"
             />
         </div>
     );

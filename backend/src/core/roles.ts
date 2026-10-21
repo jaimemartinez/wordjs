@@ -729,7 +729,7 @@ function getAllAvailableCapabilities() {
     const coreCaps = [
         'read', 'edit_posts', 'publish_posts', 'delete_posts',
         'edit_pages', 'publish_pages', 'delete_pages',
-        'manage_categories', 'moderate_comments', 'upload_files',
+        'manage_categories', 'moderate_comments', 'edit_comments', 'upload_files',
         'list_users', 'edit_users', 'promote_users', 'delete_users',
         'activate_plugins', 'switch_themes', 'manage_options',
         'edit_theme_options',

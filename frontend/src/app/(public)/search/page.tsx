@@ -1,13 +1,23 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { getSettings, searchPosts } from "@/lib/server-api";
+import { getSettings, searchPostsPaged } from "@/lib/server-api";
+import { getPostsPerPage } from "@/lib/public/archives";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { postCardExcerpt } from "@/lib/postExcerpt";
 import { formatSiteDate, siteDateLanguage } from "@/lib/public/siteDate";
 
 interface SearchParams {
     q?: string | string[];
+    page?: string | string[];
 }
+
+function readPage(p: SearchParams["page"]): number {
+    const n = parseInt(String(Array.isArray(p) ? p[0] : p || "1"), 10);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+const searchHref = (query: string, page: number) =>
+    `/search?q=${encodeURIComponent(query)}${page > 1 ? `&page=${page}` : ""}`;
 
 function readQuery(q: SearchParams["q"]): string {
     const raw = Array.isArray(q) ? q[0] : q;
@@ -24,8 +34,12 @@ export async function generateMetadata({ searchParams }: { searchParams: Promise
 }
 
 export default async function SearchPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-    const query = readQuery((await searchParams).q);
-    const results = query ? await searchPosts(query) : [];
+    const params = await searchParams;
+    const query = readQuery(params.q);
+    // A page of results with the REAL total (it said "10 results" with hundreds, and had no pager).
+    const found = query ? await searchPostsPaged(query, readPage(params.page), await getPostsPerPage()) : null;
+    const results = found ? found.posts : [];
+    const total = found ? found.total : 0;
     const dateLang = siteDateLanguage(await getSettings());
 
     // The route hands the template its OWN results: a listing a theme places on the search template
@@ -43,7 +57,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                 </h1>
                 {query && (
                     <p className="wjs-search-summary text-lg text-[var(--wjs-color-text-muted,#6b7280)] break-words">
-                        {results.length} result{results.length !== 1 ? "s" : ""} for &quot;{query}&quot;
+                        {total} result{total !== 1 ? "s" : ""} for &quot;{query}&quot;
+                        {found && found.totalPages > 1 ? ` · page ${found.page} of ${found.totalPages}` : ""}
                     </p>
                 )}
             </div>
@@ -142,6 +157,24 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         </article>
                     ))}
                 </div>
+            )}
+
+            {found && found.totalPages > 1 && (
+                <nav className="wjs-pagination mt-12 flex flex-wrap items-center justify-center gap-2" aria-label="Search results pages">
+                    {found.page > 1 && (
+                        <Link href={searchHref(query, found.page - 1)} rel="prev" className="wjs-pagination-prev inline-flex items-center gap-2 px-4 py-2 rounded-[var(--wjs-radius-md,0.5rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] text-[var(--wjs-color-text-muted,#4b5563)] hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
+                            <i className="fa-solid fa-arrow-left text-sm" aria-hidden="true"></i> Previous
+                        </Link>
+                    )}
+                    <span className="wjs-pagination-current px-4 py-2 rounded-[var(--wjs-radius-md,0.5rem)] bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] font-semibold" aria-current="page">
+                        {found.page} / {found.totalPages}
+                    </span>
+                    {found.page < found.totalPages && (
+                        <Link href={searchHref(query, found.page + 1)} rel="next" className="wjs-pagination-next inline-flex items-center gap-2 px-4 py-2 rounded-[var(--wjs-radius-md,0.5rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] text-[var(--wjs-color-text-muted,#4b5563)] hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
+                            Next <i className="fa-solid fa-arrow-right text-sm" aria-hidden="true"></i>
+                        </Link>
+                    )}
+                </nav>
             )}
 
             {/* Back to home */}

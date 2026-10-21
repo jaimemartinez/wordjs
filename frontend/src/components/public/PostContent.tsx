@@ -11,11 +11,15 @@ import type React from "react";
 import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import { publicUiStrings, membersGateStrings, notFoundStrings } from "@/lib/public/uiStrings";
+import { publicUiStrings, membersGateStrings, notFoundStrings, postTermsStrings } from "@/lib/public/uiStrings";
+import PostTerms from "@/components/public/PostTerms";
+import { featuredImageSrc } from "@/lib/mediaUsage";
+import { mediaBaseFromSettings } from "@/lib/mediaDelivery";
 import MembersOnlyGate from "./MembersOnlyGate";
 import { siteDateLanguage } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
 import CommentsSection from "@/components/CommentsSection";
+import { optionEnabled } from "@/lib/optionFlags";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
 
@@ -64,7 +68,7 @@ export default function PostContent({ post, settings, category, showComments }: 
         !isLocked &&
         !!showComments &&
         post.type === 'post' &&
-        settings?.comments_enabled !== "0" &&
+        optionEnabled(settings?.comments_enabled, true) &&
         post.commentStatus === 'open';
 
     // MEMBERS-ONLY ENTRIES (backend core/content-access). This render is anonymous and cached, so a
@@ -75,6 +79,7 @@ export default function PostContent({ post, settings, category, showComments }: 
     const teaserEmpty = membersLocked && !String(post.content || '').trim()
         && !(Array.isArray((versoData as any)?.content) && (versoData as any).content.length > 0);
     const commentsAllowed = commentsOpen && !membersLocked;
+    const commentsRequireLogin = optionEnabled(settings?.comment_registration, false);
     const ixPresets = settings?.wjs_ix_presets;
     const motion = settings?.wjs_motion;
     const gated = (mode: 'verso' | 'html', htmlClassName: string | undefined, body: React.ReactNode) => (
@@ -89,6 +94,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 strings={membersGateStrings(settings)}
                 showNotice={teaserEmpty}
                 commentsWhenGranted={commentsOpen}
+                commentsRequireLogin={commentsRequireLogin}
             >
                 {body}
             </MembersOnlyGate>
@@ -96,6 +102,8 @@ export default function PostContent({ post, settings, category, showComments }: 
     );
     const pageHtmlClass = "wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
     const postHtmlClass = "wjs-post-body wjs-content prose prose-lg mx-auto p-[min(var(--wjs-card-pad,2rem),1rem)] sm:p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto";
+
+    const featuredSrc = featuredImageSrc(post, mediaBaseFromSettings(settings));
 
     return (
         <div className="w-full">
@@ -170,6 +178,13 @@ export default function PostContent({ post, settings, category, showComments }: 
                         <h1 className="wjs-post-title text-4xl md:text-5xl font-bold text-[var(--wjs-color-heading,#111827)] leading-tight mb-6 text-center">
                             {post.title}
                         </h1>
+                        {/* The featured image the author chose: it reached og:image but never the page itself. */}
+                        {featuredSrc && !isLocked && (
+                            <figure className="wjs-post-featured mb-2">
+                                {/* eslint-disable-next-line @next/next/no-img-element -- media library file, served as is (or from the media bucket) */}
+                                <img src={featuredSrc} alt="" decoding="async" className="w-full h-auto rounded-[var(--wjs-card-radius,1rem)]" />
+                            </figure>
+                        )}
                     </div>
                     {/* `wjs-post-body` names the body REGION on both paths — the manifest's
                         singlePost.body. It cannot be `.wjs-post .wjs-content`: `.wjs-content` is
@@ -193,10 +208,11 @@ export default function PostContent({ post, settings, category, showComments }: 
                             ))}
                         </>
                     )}
+                    {!isLocked && <PostTerms categories={post.categories} tags={post.tags} strings={postTermsStrings(settings)} />}
                 </article>
             )}
 
-            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} />}
+            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} requireLogin={commentsRequireLogin} />}
 
             <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)] flex justify-between items-center px-4">
                 <Link href="/" className="text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] font-medium flex items-center gap-2">

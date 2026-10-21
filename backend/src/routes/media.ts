@@ -159,7 +159,8 @@ const storage = multer.diskStorage({
         const resolvedExt = Media.getExtensionForMime(file.mimetype);
         const ext = resolvedExt ? `.${resolvedExt}` : '';
         const name = path.basename(file.originalname, path.extname(file.originalname));
-        const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
+        // Accents fold to their base letter first (ñandú → nandu) instead of each becoming a dash.
+        const safeName = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
         const uniqueName = `${safeName}-${uuidv4().substring(0, 8)}${ext}`;
         cb(null, uniqueName);
     }
@@ -170,7 +171,14 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     // SECURITY: Block SVG uploads for non-admins (SVGs can contain JavaScript)
     if (file.mimetype === 'image/svg+xml') {
         if (!req.user || req.user.getRole() !== 'administrator') {
-            return cb(new UploadRejectedError(403, 'rest_upload_svg_forbidden', 'SVG uploads are restricted to administrators only.'), false);
+            // An administrator's AI agent reports the synthetic role `agent` (core/agent-capabilities) and
+            // is refused here too; telling it "administrators only" when its user IS one left it nothing
+            // to ask for.
+            const viaAgent = !!req.user && req.user.getRole() === 'agent';
+            const message = viaAgent
+                ? 'SVG uploads are never accepted from an AI agent connection (SVG can carry scripts) — upload a PNG, JPEG or WebP instead, or ask an administrator to upload the SVG from the panel.'
+                : 'SVG uploads are restricted to administrators only.';
+            return cb(new UploadRejectedError(403, 'rest_upload_svg_forbidden', message), false);
         }
     }
 
@@ -195,9 +203,14 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     cb(null, true);
 };
 
-const upload = multer({
+// The multer options POST /media uploads with. `fileSize` here is only the boot-time default: each
+// request uses the limit set in the panel (core/upload-limit), see singleUpload below.
+const UPLOAD_OPTIONS = {
     storage,
     fileFilter,
+    // Browsers send the multipart filename as raw UTF-8 with no charset parameter; busboy's default
+    // (latin1) turned «ñandú.png» into «Ã±andÃº.png» in the media title.
+    defParamCharset: 'utf8',
     limits: {
         fileSize: config.uploads.maxFileSize,
         // SECURITY: Prevent CVE-2025-47935 (memory leak) and CVE-2025-47944 (malformed multipart)
@@ -206,7 +219,21 @@ const upload = multer({
         parts: 100,         // Max total parts (fields + files)
         headerPairs: 2000   // Limit header pairs to prevent header bomb
     }
-});
+};
+
+/**
+ * `upload.single('file')` with the CURRENT size limit (Settings → Media → «Maximum upload size»), read
+ * per request so a change applies at once, without a restart. A refusal for size carries the limit, so
+ * the client can say "the maximum is 10 MB" instead of "Failed to upload file".
+ */
+function singleUpload(req: Request, res: Response, next: (err?: unknown) => void) {
+    require('../core/upload-limit').maxUploadBytes().then((limit: number) => {
+        multer({ ...UPLOAD_OPTIONS, limits: { ...UPLOAD_OPTIONS.limits, fileSize: limit } }).single('file')(req, res, (err: any) => {
+            if (err && err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE') err.limitBytes = limit;
+            next(err);
+        });
+    }, next);
+}
 
 /**
  * @swagger
@@ -482,7 +509,7 @@ router.get('/:id/file', authenticate, asyncHandler(async (req: Request, res: Res
  *       415:
  *         description: "`rest_upload_invalid_type` — a file type or extension the media library does not accept."
  */
-router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req: UploadRequest, res: Response) => {
+router.post('/', authenticate, can('upload_files'), singleUpload, asyncHandler(async (req: UploadRequest, res: Response) => {
     // Bound once into a const so the "an upload actually arrived" guard below still holds inside the
     // per-size callbacks further down; narrowing a property access does not survive a closure.
     const uploaded = req.file;
@@ -874,6 +901,49 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: R
  *       404:
  *         description: No such media item, or one this caller may not read (rest_post_invalid_id)
  */
+/**
+ * @swagger
+ * /media/{id}/usage:
+ *   get:
+ *     summary: Entries that use this media item as their featured image
+ *     description: >-
+ *       Asked before a delete, so the admin can say what the item is still used by. Deleting it removes
+ *       those featured-image references. Titles of entries the caller cannot edit are not listed, only counted.
+ *     tags: [Media]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: "{ featuredIn: number, entries: [{ id, title, type }] }"
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Missing upload_files
+ *       404:
+ *         description: No such media item (rest_post_invalid_id)
+ */
+router.get('/:id/usage', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const mediaId = Number(req.params.id);
+    const media = await Media.findById(mediaId);
+    if (!media) return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid media ID.', data: { status: 404 } });
+    const ids = await Media.featuredUsers(mediaId);
+    const entries: Array<{ id: number; title: string; type: string }> = [];
+    for (const id of ids.slice(0, 20)) {
+        const post = await Post.findById(id);
+        if (!post) continue;
+        const own = Number(post.authorId) === Number(req.user.id);
+        if (own ? req.user.can('edit_posts') : req.user.can('edit_others_posts')) {
+            entries.push({ id, title: String(post.postTitle || ''), type: String(post.postType || 'post') });
+        }
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ featuredIn: ids.length, entries });
+}));
+
 router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
     const mediaId = parseInt(String(req.params.id), 10);
     const media = await Media.findById(mediaId);

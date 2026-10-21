@@ -1072,6 +1072,7 @@ router.post('/install', async (req: Request, res: Response) => {
  * /setup/migrate:
  *   post:
  *     summary: Removed — change the site address in Settings or with the CLI
+ *     deprecated: true
  *     description: >-
  *       This used to repoint the site at whatever host the request arrived on, authenticated by raw
  *       administrator credentials in the body. It is gone: the site's address is never taken from a

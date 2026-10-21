@@ -154,12 +154,17 @@ export function mediaThumbnailUrl(item: MediaItem): string {
 interface MediaLibrarySelectorProps {
     onSelect: (item: MediaItem) => void;
     selectedId?: number | null;
+    /**
+     * Only this MIME family or type ("image", "image/png"), filtered on the server. A featured image
+     * or a logo picker offered PDFs and videos too, and accepted them.
+     */
+    mimeType?: string;
 }
 
 /** Matches ContentTable's search debounce, so typing does not fire a request per keystroke. */
 const SEARCH_DEBOUNCE_MS = 400;
 
-export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibrarySelectorProps) {
+export default function MediaLibrarySelector({ onSelect, selectedId, mimeType }: MediaLibrarySelectorProps) {
     const { t } = useI18n();
     const [media, setMedia] = useState<MediaItem[]>([]);
     const [loading, setLoading] = useState(true);
@@ -187,7 +192,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
         setLoading(true);
         setLoadError(false);
         try {
-            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search, visibility: "public" }));
+            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search, mimeType, visibility: "public" }));
             setMedia(res.data);
             setTotal(res.total);
             setTotalPages(res.totalPages);
@@ -205,7 +210,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
         // `refreshKey` is intentionally a dependency: bumping it is how the refresh button re-runs
         // this exact query. eslint cannot see that, since the value is never read in the body.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, search, refreshKey]);
+    }, [page, search, mimeType, refreshKey]);
 
     useEffect(() => { loadMedia(); }, [loadMedia]);
 

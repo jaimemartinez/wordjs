@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, isBadCurrentPassword } from "@/lib/api";
 import MfaSetup from "@/components/MfaSetup";
+import { avatarInitial } from "@/lib/avatarInitial";
 import { roleDisplayName } from "@/lib/roleOptions";
 import { registerTranslations } from "@/lib/i18n";
 
@@ -49,6 +50,11 @@ export default function AccountPage() {
     const [newPassword, setNewPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
     const [changingPw, setChangingPw] = useState(false);
+
+    // «Sign out everywhere». The header's Sign out ends THIS browser's session only; this ends every
+    // session of the account (other browsers and devices included), so it asks for the password.
+    const [sessionsPassword, setSessionsPassword] = useState("");
+    const [endingSessions, setEndingSessions] = useState(false);
 
     useEffect(() => {
         if (user) {
@@ -97,12 +103,28 @@ export default function AccountPage() {
         }
     };
 
+    const endAllSessions = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setEndingSessions(true);
+        try {
+            await usersApi.revokeSessions(sessionsPassword);
+            addToast(t('account.sessions.done'), "success");
+            // This session ended too: back to the login screen.
+            setTimeout(() => { logout(); router.replace("/login"); }, 900);
+        } catch (err: any) {
+            addToast(isBadCurrentPassword(err)
+                ? (err?.message || t('account.currentPassword'))
+                : (err?.message || t('account.sessions.error')), "error");
+            setEndingSessions(false);
+        }
+    };
+
     const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
     const labelCls = "block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2";
     const btnCls = "px-6 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-gray-200 hover:shadow-blue-500/30 transition-all disabled:opacity-50";
     const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
 
-    const initials = (user?.displayName || user?.username || "?").trim().charAt(0).toUpperCase();
+    const initials = avatarInitial(user?.displayName, user?.username);
 
     return (
         // Root must own its scroll: the admin <main> is overflow-hidden, so a page that just
@@ -199,6 +221,23 @@ export default function AccountPage() {
 
                         {/* MFA */}
                         <MfaSetup />
+
+                        {/* Sessions */}
+                        <form onSubmit={endAllSessions} className={`${cardCls} space-y-5`} data-testid="account-sessions">
+                            <div>
+                                <h2 className="font-bold text-gray-800">{t('account.sessions.title')}</h2>
+                                <p className="text-sm text-gray-500 mt-2 leading-relaxed">{t('account.sessions.help')}</p>
+                            </div>
+                            <div className="max-w-md">
+                                <label htmlFor="account-field-7" className={labelCls}>{t('account.currentPassword')}</label>
+                                <input id="account-field-7" type="password" value={sessionsPassword} onChange={(e) => setSessionsPassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
+                            </div>
+                            <div className="flex justify-end">
+                                <button type="submit" disabled={endingSessions || !sessionsPassword} className={btnCls}>
+                                    {endingSessions ? t('account.saving') : t('account.sessions.action')}
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             </div>

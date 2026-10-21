@@ -100,4 +100,37 @@ async function changedRegistrationSettings(values: unknown): Promise<string[]> {
     return changed;
 }
 
-module.exports = { REGISTRATION_SETTINGS, MAIL_DELIVERY_READY, changedRegistrationSettings };
+/**
+ * Capabilities that let an account run the site or other accounts. A role holding any of them (or the
+ * wildcard) can never be what an ANONYMOUS sign-up receives: with «Anyone can register» on and the
+ * default role set to Administrator, the next POST /auth/register created an administrator.
+ */
+const PRIVILEGED_SIGNUP_CAPABILITIES: readonly string[] = Object.freeze([
+    '*', 'manage_options', 'edit_users', 'create_users', 'delete_users', 'promote_users', 'list_users',
+    'install_plugins', 'activate_plugins', 'edit_plugins', 'delete_plugins', 'edit_theme_options',
+    'switch_themes', 'edit_others_posts', 'publish_pages', 'moderate_comments', 'manage_categories',
+]);
+
+/** Why this role cannot be the sign-up default, or null when it can. Unknown roles are refused too. */
+function signupRoleProblem(slug: unknown): string | null {
+    const name = typeof slug === 'string' ? slug.trim() : '';
+    if (!name) return 'default_role must name a role.';
+    const role = require('./roles').getRole(name);
+    if (!role) return `default_role "${name}" is not a role on this site.`;
+    const caps: string[] = Array.isArray(role.capabilities) ? role.capabilities : [];
+    if (name === 'administrator' || caps.some((c) => PRIVILEGED_SIGNUP_CAPABILITIES.includes(c))) {
+        return `"${name}" can manage the site or other accounts, so it cannot be the role new sign-ups receive. Choose a role such as Subscriber.`;
+    }
+    return null;
+}
+
+/**
+ * The role a self-registered account receives. A stored value that is privileged or names no role (set
+ * before the settings screen refused it, or written straight to the database) falls back to subscriber.
+ */
+async function signupRole(): Promise<string> {
+    const stored = await getOption('default_role', 'subscriber');
+    return signupRoleProblem(stored) ? 'subscriber' : String(stored).trim();
+}
+
+module.exports = { REGISTRATION_SETTINGS, MAIL_DELIVERY_READY, changedRegistrationSettings, signupRoleProblem, signupRole, PRIVILEGED_SIGNUP_CAPABILITIES };

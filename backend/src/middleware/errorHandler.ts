@@ -119,10 +119,14 @@ function errorHandler(err: any, req: Request, res: Response, next: NextFunction)
     // contract, not disclosure.
     if (err && err.name === 'MulterError') {
         const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        // A size refusal from a route that knows its limit (POST /media, core/upload-limit) says it.
+        const limit = status === 413 && Number(err.limitBytes) > 0 ? Number(err.limitBytes) : 0;
         return res.status(status).json({
             code: status === 413 ? 'rest_upload_too_large' : 'rest_upload_invalid',
-            message: err.message || 'Invalid upload.',
-            data: { status }
+            message: limit
+                ? `File too large. The maximum upload size is ${require('../core/upload-limit').formatUploadLimit(limit)}.`
+                : (err.message || 'Invalid upload.'),
+            data: limit ? { status, maxBytes: limit } : { status }
         });
     }
 

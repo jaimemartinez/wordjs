@@ -213,8 +213,8 @@ router.post('/', authenticate, isAdmin, accountAuthorityOnly, asyncHandler(async
  *       409:
  *         description: >-
  *           rest_role_plugin_managed — the role was declared by a plugin that is still installed; it goes
- *           away with the plugin (or stays, orphaned, while users hold it). rest_role_in_use — a role a
- *           plugin declared that users still hold (`data.holders`): give them another role first.
+ *           away with the plugin (or stays, orphaned, while users hold it). rest_role_in_use — a role that
+ *           users still hold (a custom role or a plugin leftover) (`data.holders`): give them another role first.
  */
 router.delete('/:slug', authenticate, isAdmin, accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
     const slug: string = req.params.slug as string;
@@ -237,18 +237,18 @@ router.delete('/:slug', authenticate, isAdmin, accountAuthorityOnly, asyncHandle
             data: { status: 409, plugin: owning.plugin }
         });
     }
-    // A plugin's leftover role goes only once nobody holds it: deleting it under its holders would leave
-    // their accounts naming a role that no longer exists — which the next plugin declaring that slug would
-    // silently hand back to them, with whatever capabilities it declares.
-    if (owning) {
-        const holders = await countRoleHolders(slug);
-        if (holders > 0) {
-            return res.status(409).json({
-                code: 'rest_role_in_use',
-                message: `${holders} user(s) still hold role "${slug}". Give them another role first, then delete it.`,
-                data: { status: 409, holders }
-            });
-        }
+    // A role goes only once nobody holds it — a plugin's leftover role AND one an administrator created.
+    // Deleting it under its holders leaves their accounts naming a role that no longer exists (no
+    // capabilities, yet still able to sign in), and whoever next creates or declares that slug silently
+    // hands it back to them with whatever capabilities it carries. This used to be checked for plugin
+    // roles only.
+    const holders = await countRoleHolders(slug);
+    if (holders > 0) {
+        return res.status(409).json({
+            code: 'rest_role_in_use',
+            message: `${holders} user(s) still hold role "${slug}". Give them another role first, then delete it.`,
+            data: { status: 409, holders }
+        });
     }
 
     const removed = await removeRole(slug);

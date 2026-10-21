@@ -93,6 +93,10 @@ export interface ContentRecord {
     type: string;
     date: string;
     dateGmt?: string;
+    modified?: string;
+    modifiedGmt?: string;
+    /** The parent entry (hierarchical types such as pages); 0 at the top level. */
+    parent?: number;
     author: { id: number; displayName: string; slug: string };
     authorId?: number;
     commentStatus: string;
@@ -295,6 +299,18 @@ export function createContentClient(transport: ContentTransport) {
         },
         delete(id: number) {
             return transport.delete<ContentRecord>(`/posts/${id}`);
+        },
+        /** Moves the entry to the trash (soft delete); restore() brings it back. */
+        trash(id: number) {
+            return transport.delete<ContentRecord>(`/posts/${id}`);
+        },
+        /** Deletes the entry for good: its row, meta and term relationships. */
+        deletePermanently(id: number) {
+            return transport.delete<{ deleted: boolean; previous: ContentRecord }>(`/posts/${id}?force=true`);
+        },
+        /** Restores a trashed entry to the status it was trashed from. */
+        restore(id: number) {
+            return transport.post<ContentRecord>(`/posts/${id}/restore`, {});
         },
     };
 }

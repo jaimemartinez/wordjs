@@ -59,7 +59,7 @@ const { publicErrorText } = require('../middleware/errorHandler');
  * /notifications/stream:
  *   get:
  *     summary: Subscribe to the live notification stream (Server-Sent Events)
- *     description: Long-lived text/event-stream response. Because EventSource cannot set headers, this route also accepts the session token as a token query parameter in addition to the Authorization header and the session cookie. The server writes a retry directive, then a keepalive comment every 5 seconds, then one SSE frame per notification. Concurrency is capped at 8 streams per user and 1000 per process; a refused connection receives an error frame carrying too_many_streams and is closed immediately.
+ *     description: Long-lived text/event-stream response. Because EventSource cannot set headers, this route also accepts the session token as a token query parameter in addition to the Authorization header and the session cookie. The server writes a retry directive, then a keepalive comment every 5 seconds, then one SSE frame per notification. Concurrency is capped at 8 streams per user and 1000 per process; past the cap the request is refused with 429 rest_too_many_streams and a Retry-After header, before any stream is opened. (The admin shares one stream between all of a browser's tabs.)
  *     tags: [Notifications]
  *     security:
  *       - bearerAuth: []
@@ -79,10 +79,27 @@ const { publicErrorText } = require('../middleware/errorHandler');
  *               type: string
  *       401:
  *         description: Not logged in (rest_not_logged_in)
+ *       429:
+ *         description: Too many open streams for this user or process (rest_too_many_streams); retry after the Retry-After seconds
  */
+/** Seconds a refused stream is told to wait (429 Retry-After). */
+const STREAM_RETRY_AFTER_SECONDS = 30;
+
 router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
     const startTime = Date.now();
     log.info({ ip: req.ip }, `[SSE] 📥 New Stream Request from User ${req.user.id} (IP: ${req.ip})`);
+
+    // Past the cap: an ordinary HTTP refusal, before any stream exists. (addClient below re-checks, for
+    // the race between two requests that both saw room.)
+    if (!notificationService.hasRoomFor(req.user.id)) {
+        log.warn(`[SSE] ⛔ Stream refused for user ${req.user.id}: too many open streams`);
+        res.setHeader('Retry-After', String(STREAM_RETRY_AFTER_SECONDS));
+        return res.status(429).json({
+            code: 'rest_too_many_streams',
+            message: 'Too many live notification streams are open for this account. Close some tabs or try again shortly.',
+            data: { status: 429 }
+        });
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

@@ -713,6 +713,10 @@ const SETTINGS_OPTIONS = new Set([
     // la regla y medio sin ella — es decir, sin transición y sin explicación.
     'wjs_view_transitions',
     'wjs_motion',
+    // The comment switches decide whether every post renders its comment form (and whether a visitor
+    // must sign in to use it). Without these, turning comments off left the form on every cached page
+    // until its ISR window happened to expire.
+    'comments_enabled', 'comment_registration',
 ]);
 
 // THE OPTIONS GET /plugins/assets IS COMPUTED FROM (core/plugin-assets getActiveAssets): the enqueue

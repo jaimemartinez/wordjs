@@ -76,6 +76,7 @@ import {
 } from "@/lib/verso/registry";
 import { useVersoCollab } from "@/lib/verso/collab";
 import { isCollabEnabled } from "@/lib/verso/collab/flag";
+import { withRecordSeed } from "@/lib/verso/recordSeed";
 import { registerCoreBlocks } from "@/lib/verso/coreBlocks";
 import { registerStaticPluginBlocks, useVersoPluginBlocks } from "@/lib/verso/pluginBlocks";
 import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
@@ -637,6 +638,11 @@ export default function VersoEditor({
     // lienzo local en el de la sala (su `welcome` reemplazaría lo que se está editando).
     const [collabEligible] = useState(hasStoredDocument);
 
+    // El root SEMBRADO por el host al montar (slug, categoría, extracto, SEO… del REGISTRO). El
+    // documento de la sala es el `_puck_data` guardado, que puede no traer esas claves — p. ej. una
+    // copia hecha con «Duplicar» —, y reemplazarlo todo dejaba el campo «Slug» y la categoría en blanco.
+    const recordSeedRef = useRef<VersoData["root"] | undefined>(initialData?.root);
+
     /**
      * La bandera se lee en un EFECTO, no en el render: mira `localStorage`, que en SSR no existe y
      * que además haría divergir el HTML del servidor del primer render del cliente (hydration
@@ -669,11 +675,11 @@ export default function VersoEditor({
          * instante de carga; con el canal abierto no vuelve a ocurrir.
          */
         onReady: (doc) => {
-            handle.applyRemoteDoc(doc, { resetHistory: true });
+            handle.applyRemoteDoc(withRecordSeed(doc, recordSeedRef.current), { resetHistory: true });
         },
         /** Ops AJENAS ya proyectadas: se publican sin entrada de historia (regla 1 del hook). */
         onRemoteDoc: (doc) => {
-            handle.applyRemoteDoc(doc);
+            handle.applyRemoteDoc(withRecordSeed(doc, recordSeedRef.current));
         },
     });
 
@@ -814,10 +820,12 @@ export default function VersoEditor({
     // registrando el MediaItem completo (rememberPickedMedia) para que el srcSet se derive igual
     // que en el legacy; field.mapProp lo aplica el propio control al seleccionar.
     const renderExternalPicker = useCallback<RenderExternalPicker>(
-        ({ onSelect, close }) => (
+        ({ field, onSelect, close }) => (
             <MediaPickerModal
                 isOpen
                 onClose={close}
+                // A field may restrict the kind of file (the featured image: images only).
+                mimeType={typeof field.initialFilters?.mimeType === "string" ? field.initialFilters.mimeType : undefined}
                 onSelect={(item) => {
                     rememberPickedMedia(item);
                     onSelect(item);

@@ -121,12 +121,14 @@ function refuseSetupCaller(req: Request, res: Response): boolean {
  * carry a current code (`mfaCode`) even when the session signed in with one — a fresh proof, like the
  * password. Returns the assurance recorded in the audit log, or null when it has answered the request.
  */
-async function requireStepUp(req: Request, res: Response): Promise<string | null> {
+// `action` names what is being confirmed, for the "turn on 2FA first" message: the update and cluster
+// screens reuse this gate, and every one of them used to be told that switching the NETWORK asks for a code.
+async function requireStepUp(req: Request, res: Response, action = 'Switching the network on or off'): Promise<string | null> {
     const mfa = require('../core/mfa');
     if (!(await mfa.isEnabled(req.user.id))) {
         res.status(403).json({
             code: 'network_mfa_enrollment_required',
-            message: 'Turn on two-factor authentication for your account first (Profile → Two-factor authentication). Switching the network on or off asks for a code.',
+            message: `Turn on two-factor authentication for your account first (Profile → Two-factor authentication). ${action} asks for a code.`,
             data: { status: 403 },
         });
         return null;

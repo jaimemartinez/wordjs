@@ -29,10 +29,16 @@ const { createHandler } = require('graphql-http/lib/use/express');
 const { specifiedRules, GraphQLError, validate, getOperationAST, subscribe } = require('graphql');
 const graphql = require('../core/graphql');
 const config = require('../config/app');
-const { sameOriginRequest, SESSION_COOKIE } = require('../middleware/auth');
+const { sameOriginRequest, SESSION_COOKIE, optionalAuth } = require('../middleware/auth');
 const log = require('../core/module-logger').moduleLogger('routes/graphql');
 
 const router = express.Router();
+
+// The caller, resolved once at the door (middleware/auth optionalAuth): a Bearer header that resolves to
+// nobody is refused here (401 rest_token_invalid, as on REST) — every field is dispatched to REST as this
+// caller, where the same header degraded `viewer` to null and the reads to the anonymous answer with a
+// 200 — and the stream cap below counts streams per signed-in USER.
+router.use(optionalAuth);
 
 /** A resolver crash is a bug, not a contract: its message (or stack) never reaches the client. */
 function formatError(err: any) {
@@ -67,6 +73,8 @@ const handler = createHandler({
 
 const multipart = multer({
     storage: multer.memoryStorage(),
+    // UTF-8 file names, as POST /media reads them (busboy's default is latin1).
+    defParamCharset: 'utf8',
     limits: {
         // The REST upload limit: a file POST /media would refuse is refused before it is buffered whole.
         fileSize: config.uploads.maxFileSize,
@@ -234,6 +242,10 @@ const MAX_STREAM_MS = 60 * 60 * 1000;
 const streamTuning = { keepaliveMs: KEEPALIVE_MS, maxStreamMs: MAX_STREAM_MS };
 
 function clientKey(req: Request): string {
+    // Per signed-in user: every session and token carries its own id (core/session-revocation), so a
+    // key made of the raw credential let one account open five streams per token it held.
+    const userId = req.user && Number(req.user.id);
+    if (userId) return `u:${userId}`;
     const auth = String(req.headers.authorization || '');
     const cookie = req.cookies && typeof req.cookies[SESSION_COOKIE] === 'string' ? req.cookies[SESSION_COOKIE] : '';
     const credential = auth.startsWith('Bearer ') ? auth : cookie;

@@ -63,6 +63,8 @@ export interface ArchiveTerm {
     taxonomy?: string;
     description?: string;
     count?: number;
+    /** The parent term (categories); 0 at the top level. */
+    parent?: number;
 }
 
 export interface Paginated<T> {

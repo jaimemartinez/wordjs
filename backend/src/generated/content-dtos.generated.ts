@@ -93,6 +93,10 @@ export interface ContentRecord {
     type: string;
     date: string;
     dateGmt?: string;
+    modified?: string;
+    modifiedGmt?: string;
+    /** The parent entry (hierarchical types such as pages); 0 at the top level. */
+    parent?: number;
     author: { id: number; displayName: string; slug: string };
     authorId?: number;
     commentStatus: string;

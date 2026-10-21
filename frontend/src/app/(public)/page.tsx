@@ -1,12 +1,10 @@
-import Link from "next/link";
 import type { Metadata } from "next";
 import HomeContent from "@/components/public/HomeContent";
 import JsonLd from "@/components/public/JsonLd";
-import { getSettings, getPostById, getPosts, getPluginShortcodes, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getSettings, getPostById, getLatestPostsPage, getPluginShortcodes, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
-import { postCardExcerpt } from "@/lib/postExcerpt";
-import { formatSiteDate, siteDateLanguage } from "@/lib/public/siteDate";
+import BlogRoll from "@/components/public/BlogRoll";
 
 // Server-rendered AND cached: the homepage serves from the Full-Route Cache (crawlers and first
 // paint still get the real blog roll / static page), revalidating every 60s + purged on publish.
@@ -86,57 +84,15 @@ export default async function HomePage() {
         }
     }
 
-    // Otherwise: the blog roll (latest published posts) — pure server-rendered markup.
-    const posts = (await getPosts("post", "publish")) || [];
-    const published = posts.filter((p) => p.status === "publish");
+    // Otherwise: the blog roll (latest published posts) — pure server-rendered markup, page 1 of
+    // /page/{n} (components/public/BlogRoll).
+    const roll = await getLatestPostsPage(1);
 
     return (
         <ThemeTemplate kind="home">
         <div className="space-y-4">
             {siteJsonLd}
-            {/* `wjs-*` hooks are the theme contract: STABLE names alongside the Tailwind utilities, so a
-                theme can style the blog roll declaratively instead of guessing at `rounded-2xl`. They add
-                no styling of their own — the manifest (backend/public/theme-tokens.json) promises them and
-                frontend/src/lib/__tests__/chromeSelectorContract.test.ts proves they are still emitted. */}
-            <div className="wjs-post-list-header border-b border-[var(--wjs-border-subtle,#e5e7eb)] pb-4 mb-8">
-                <h1 className="wjs-post-list-title text-2xl font-bold text-[var(--wjs-color-heading,#1f2937)]">Latest Posts</h1>
-            </div>
-
-            {published.length === 0 ? (
-                <div className="wjs-post-list-empty text-center py-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-lg">
-                    <p className="text-[var(--wjs-color-text-muted,#6b7280)]">No posts found. Go to Admin to create one!</p>
-                </div>
-            ) : (
-                <div className="wjs-post-list grid grid-cols-1 gap-12">
-                    {published.map((post) => (
-                        <article key={post.id} className="wjs-post-card group bg-[var(--wjs-bg-surface,#ffffff)] rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border border-[var(--wjs-border-subtle,#f3f4f6)] overflow-hidden">
-                            <div className="wjs-post-card-body p-8">
-                                <div className="wjs-post-card-meta flex flex-wrap items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
-                                    <span className="wjs-post-card-badge bg-[var(--wjs-bg-muted,#eff6ff)] text-[var(--wjs-color-primary,#1d4ed8)] px-3 py-1 rounded-full font-medium">Article</span>
-                                    <span>•</span>
-                                    <span>{formatSiteDate(post.date, siteDateLanguage(settings))}</span>
-                                    <span>•</span>
-                                    <span>{post.author?.displayName || "Admin"}</span>
-                                </div>
-
-                                <Link href={`/${post.slug || post.id}`} className="wjs-post-card-link block group-hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
-                                    <h2 className="wjs-post-card-title text-3xl font-bold text-[var(--wjs-color-heading,#111827)] mb-4 leading-tight">
-                                        {post.title}
-                                    </h2>
-                                </Link>
-
-                                <p className="wjs-post-card-excerpt text-[var(--wjs-color-text-muted,#4b5563)] mb-6 line-clamp-3 leading-relaxed">
-                                    {postCardExcerpt(post)}
-                                </p>
-
-                                <Link href={`/${post.slug || post.id}`} className="wjs-post-card-more inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all">
-                                    Read Article <i className="fa-solid fa-arrow-right ms-2 text-sm"></i>
-                                </Link>
-                            </div>
-                        </article>
-                    ))}
-                </div>
-            )}
+            <BlogRoll posts={roll.posts} page={roll.page} totalPages={roll.totalPages} settings={settings} />
         </div>
         </ThemeTemplate>
     );

@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge, DataTable } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
+import ApiAccessCard from "@/components/ApiAccessCard";
 import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 const fmtDate = (v: number | null | string | undefined) => {
@@ -255,6 +256,10 @@ export default function TokensPage() {
                         )}
                     </Card>
                 </div>
+            </div>
+
+            <div className="mt-8 max-w-3xl">
+                <ApiAccessCard />
             </div>
 
             <SecretRevealModal

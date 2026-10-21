@@ -211,6 +211,9 @@ async function getRevisions(postId: number, options: { limit?: number; offset?: 
     content: row.post_content,
     excerpt: row.post_excerpt,
     modified: row.post_modified,
+    // The same instant in UTC: `modified` is server-local with no zone, and the editor read it as the
+    // VIEWER's local time ("in 5 hours" on a revision saved a second ago).
+    modifiedGmt: row.post_modified_gmt || null,
     restore: describeRevisionSnapshot(manifestByRevision[row.id] || []),
     // null for a person's write; { kind: 'agent', agentId, agentName } for an AI agent's (see saveRevision).
     source: sourceByRevision[row.id] || null,
@@ -236,7 +239,9 @@ async function getRevision(revisionId: number) {
     content: row.post_content,
     excerpt: row.post_excerpt,
     date: row.post_date,
+    dateGmt: row.post_date_gmt || null,
     modified: row.post_modified,
+    modifiedGmt: row.post_modified_gmt || null,
     meta: await getAllMeta(revisionId, rawMeta),
     restore: describeRevisionSnapshot(rawMeta),
     source: parseRevisionSource((rawMeta.find((m: any) => canonicalMetaKey(m.meta_key) === canonicalMetaKey(REVISION_SOURCE_META_KEY)) || {}).meta_value),

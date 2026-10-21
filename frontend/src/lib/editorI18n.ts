@@ -385,6 +385,7 @@ const FIELD_STRINGS: Tri[] = [
     { es: "Extracto", en: "Excerpt", pt: "Resumo" },
     { es: "Resumen breve (listados y descripción SEO)", en: "Short summary (listings and SEO description)", pt: "Resumo breve (listagens e descrição SEO)" },
     { es: "Sin categoría", en: "Uncategorized", pt: "Sem categoria" },
+    { es: "Categoría por defecto", en: "Default category", pt: "Categoria padrão" },
     { es: "Etiquetas", en: "Tags", pt: "Tags" },
     { es: "Elige una etiqueta", en: "Choose a tag", pt: "Escolha uma tag" },
     { es: "🔍 Título SEO (máx. 60 caracteres)", en: "🔍 SEO title (60 characters max)", pt: "🔍 Título SEO (máx. 60 caracteres)" },

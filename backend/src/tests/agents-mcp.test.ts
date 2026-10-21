@@ -227,7 +227,11 @@ test('a wja_ agent token is refused by the REST API, and a wjt_ API token is ref
         .set('Accept', 'application/json, text/event-stream')
         .send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '1' } } });
     assert.strictEqual(viaApiToken.status, 401, JSON.stringify(viaApiToken.body));
-    // (A header-less anonymous POST never gets this far — the CSRF gate refuses it first.)
+    // No Authorization at all, no Origin (a misconfigured MCP client): the MCP 401 with WWW-Authenticate,
+    // not the CSRF gate's 403 — /mcp reads no ambient credential.
+    const bare = await request(app).post('/api/v1/mcp').set('Accept', 'application/json, text/event-stream').send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.strictEqual(bare.status, 401, JSON.stringify(bare.body));
+    assert.match(String(bare.headers['www-authenticate']), /Bearer realm="wordjs-mcp"/);
     const anon = await request(app).post('/api/v1/mcp').set('Authorization', 'Bearer not-an-agent-token').send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
     assert.strictEqual(anon.status, 401);
     assert.match(String(anon.headers['www-authenticate']), /Bearer/);
@@ -310,6 +314,12 @@ test('an editor agent with taxonomy:write + media:upload; an admin agent cannot 
         filename: 'x.svg', mime_type: 'image/svg+xml', data_base64: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64'),
     } });
     assert.ok(up.isError, 'SVG is an administrator-only upload; an admin\'s agent is not an administrator');
+    // It says why (an agent connection) instead of "administrators only" to an administrator's agent.
+    assert.match(JSON.stringify(up.content), /AI agent connection/);
+    // The refused write is audited with no object id, not the string "false".
+    const refused = await dbAsync.all(`SELECT detail FROM audit_log WHERE action = 'agent.write' AND target_id = ?`, [String(svg.connection.id)]);
+    assert.ok(refused.length > 0);
+    for (const row of refused) assert.notStrictEqual(JSON.parse(row.detail).objectId, 'false', row.detail);
     // A real (tiny) PNG goes through the same checks a browser upload does.
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
     const ok = await c2.callTool({ name: 'upload_media', arguments: { filename: 'dot.png', mime_type: 'image/png', data_base64: png.toString('base64'), alt_text: 'A dot' } });

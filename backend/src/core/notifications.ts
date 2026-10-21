@@ -142,6 +142,18 @@ class NotificationService {
     }
 
     /**
+     * Would a new stream for this user fit under the caps right now? The route asks BEFORE it commits to
+     * a 200 event-stream, so a refusal can be an HTTP 429 with Retry-After: answered inside a 200, the
+     * browser's EventSource counted it as a successful connection and reconnected about twice a second.
+     */
+    hasRoomFor(userId: any): boolean {
+        const siteId = siteContext.currentSiteIdOrNull();
+        let perUser = 0;
+        for (const c of this.clients) { if (c._wordjs_user_id === userId && c._wordjs_site_id === siteId) perUser++; }
+        return this.clients.size < NotificationService.MAX_TOTAL_CLIENTS && perUser < NotificationService.MAX_CLIENTS_PER_USER;
+    }
+
+    /**
      * Register a web client (for SSE)
      */
     addClient(res: any, userId: any) {

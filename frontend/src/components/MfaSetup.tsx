@@ -223,6 +223,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                 secret={backupReveal}
                 title={t("mfa.backupTitle")}
                 description={t("mfa.backupDescription")}
+                lostHint={t("secret.lostHint.backup")}
                 onClose={() => {
                     setBackupReveal(null);
                     if (enrolledPendingClose) { setEnrolledPendingClose(false); onEnabled?.(); }
