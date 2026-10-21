@@ -404,10 +404,65 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
                 env: { ...process.env, npm_config_ignore_scripts: 'true' },
             });
             log.info('   ✅ Dependencies installed successfully.');
+            recordPluginInstalledDeps(slug, Object.keys(manifest.dependencies).filter((d) => toInstall.some((t) => t.startsWith(d + '@'))));
         } catch (error) {
             throw new Error(`Failed to install dependencies for ${slug}: ${error.message}`, { cause: error });
         }
     }
+}
+
+// ── WHICH PACKAGES THE DEPENDENCY GC MAY REMOVE (FALLOS 116) ──────────────────────────────────────
+// Plugin dependencies are installed with `--save` into the host's own package.json, next to the core's,
+// so that file cannot tell them apart. The GC used to remove every dependency of a deactivated plugin no
+// other active plugin declared, shielded only by a hard-coded list — and `uuid`, which the core requires
+// at load (routes/media) and three gallery plugins also declare, was uninstalled: the next restart died
+// with "Cannot find module 'uuid'". So the GC now removes ONLY packages the plugin installer itself added
+// (recorded here when it installs them), and never one the host process has loaded or another active
+// plugin declares. A package that was already present when a plugin asked for it — every core
+// dependency — is never recorded, so it can never be removed. An install from before this ledger existed
+// has no record: its packages are kept, which costs disk, never a boot.
+const PLUGIN_DEPS_LEDGER = path.join(ROOT_DIR, 'data', 'plugin-installed-deps.json');
+
+function readPluginInstalledDeps(): Set<string> {
+    try {
+        const raw = JSON.parse(fs.readFileSync(PLUGIN_DEPS_LEDGER, 'utf8'));
+        return new Set(Object.keys(raw && typeof raw === 'object' ? raw : {}));
+    } catch { return new Set(); }
+}
+
+function writePluginInstalledDeps(mutate: (ledger: Record<string, string[]>) => void): void {
+    // Host bookkeeping: written as the host even when an activation runs under a plugin's context.
+    require('./plugin-context').runAsHost(() => {
+        let ledger: Record<string, string[]> = {};
+        try { ledger = JSON.parse(fs.readFileSync(PLUGIN_DEPS_LEDGER, 'utf8')) || {}; } catch { /* first entry */ }
+        mutate(ledger);
+        try {
+            fs.mkdirSync(path.dirname(PLUGIN_DEPS_LEDGER), { recursive: true });
+            fs.writeFileSync(PLUGIN_DEPS_LEDGER, JSON.stringify(ledger, null, 2));
+        } catch (e: any) { log.warn({ err: e }, '[Plugins] could not record plugin-installed dependencies (they will be kept on deactivation)'); }
+    });
+}
+
+function recordPluginInstalledDeps(slug: string, deps: string[]): void {
+    if (!deps.length) return;
+    writePluginInstalledDeps((ledger) => {
+        for (const d of deps) ledger[d] = Array.from(new Set([...(Array.isArray(ledger[d]) ? ledger[d] : []), slug]));
+    });
+}
+
+function forgetPluginInstalledDeps(deps: string[]): void {
+    writePluginInstalledDeps((ledger) => { for (const d of deps) delete ledger[d]; });
+}
+
+/** True when the HOST process has loaded code from this package (plugins run in their own processes). */
+function isLoadedByHost(dep: string): boolean {
+    const marker = `${path.sep}node_modules${path.sep}${String(dep).split('/').join(path.sep)}${path.sep}`;
+    return Object.keys(require.cache).some((f) => f.includes(marker));
+}
+
+/** The dependencies of a deactivated plugin that the GC may uninstall. Pure, so the rule is testable. */
+function selectPrunableDependencies(deps: string[], ctx: { usedByOtherPlugins: Set<string>; installedByPlugins: Set<string>; loadedByHost: (dep: string) => boolean }): string[] {
+    return deps.filter((dep) => !ctx.usedByOtherPlugins.has(dep) && ctx.installedByPlugins.has(dep) && !ctx.loadedByHost(dep));
 }
 
 /**
@@ -443,20 +498,14 @@ async function prunePluginDependencies(slug: string, manifest: any) {
         }
     }
 
-    // 3. Check for unused dependencies
-    const toRemove: string[] = [];
-
+    // 3. Only what the plugin installer itself added may go (see selectPrunableDependencies).
+    const toRemove = selectPrunableDependencies(Object.keys(manifest.dependencies), {
+        usedByOtherPlugins: usedDependencies as Set<string>,
+        installedByPlugins: readPluginInstalledDeps(),
+        loadedByHost: isLoadedByHost,
+    });
     for (const dep of Object.keys(manifest.dependencies)) {
-        if (!usedDependencies.has(dep)) {
-            // Check if it's a known core dependency (Shield for core packages)
-            const isLikelyCore = ['express', 'cors', 'dotenv', 'helmet', 'multer', 'nodemailer', 'sql.js', 'mongoose', 'pg', 'sqlite3', 'jsonwebtoken', 'bcryptjs'].includes(dep);
-
-            if (isLikelyCore) {
-                log.info({ dep: logSafe(dep) }, `🛡️ Persisting core dependency: ${logSafe(dep)}`);
-            } else {
-                toRemove.push(dep);
-            }
-        }
+        if (!toRemove.includes(dep)) log.info({ dep: logSafe(dep) }, `🛡️ Keeping dependency '${logSafe(dep)}' (the host or another plugin uses it, or the plugin installer did not add it)`);
     }
 
     if (toRemove.length > 0) {
@@ -464,6 +513,7 @@ async function prunePluginDependencies(slug: string, manifest: any) {
         try {
             // Async so pruning on the deactivate request path doesn't block the event loop.
             await execFileAsync(NPM_BIN, ['uninstall', ...toRemove, '--save'], { cwd: ROOT_DIR });
+            forgetPluginInstalledDeps(toRemove);
             log.info('   ✅ Dependencies removed successfully.');
         } catch (e) {
             log.error({ err: e }, '   ⚠️ Failed to prune dependencies');
@@ -3232,6 +3282,8 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
 
 module.exports = {
     dropTablesInDependencyOrder,
+    selectPrunableDependencies,
+    isLoadedByHost,
     loadSitePlugins, deactivatePluginOnSecondarySites, retireOnSecondarySites, offerPluginToSites, withdrawPluginFromSites, respawnOnSecondarySites, onSecondarySite,
     scanPlugins,
     getActivePlugins,

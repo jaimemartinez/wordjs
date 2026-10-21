@@ -175,3 +175,38 @@ test('restarting an active plugin with no running isolate starts it instead of a
     const page = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'frontend', 'src', 'app', 'admin', 'plugins', 'page.tsx'), 'utf8');
     assert.match(page, /\(isCrashLooping \|\| isRefused \|\| isStopped\) && plugin\.runtime\?\.lastError/);
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// FALLOS 116 — deactivating a plugin must never uninstall a dependency the core (or another plugin) uses
+// ---------------------------------------------------------------------------------------------------------
+test('the dependency GC never removes a core dependency or one another active plugin needs', () => {
+    const fs = require('fs');
+    const { selectPrunableDependencies, isLoadedByHost } = require('../core/plugins');
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+    const coreDeps = Object.keys({ ...(pkg.dependencies || {}), ...(pkg.optionalDependencies || {}) });
+    assert.ok(coreDeps.includes('uuid'), 'uuid is a core dependency (routes/media requires it)');
+
+    // card-gallery / photo-carousel / video-gallery declare uuid: deactivating the last of them kept removing it.
+    // Whatever the ledger says, nothing the release's package.json declares is ever chosen when the plugin
+    // installer did not add it — and the installer never adds a package that is already present.
+    const none = selectPrunableDependencies(coreDeps, { usedByOtherPlugins: new Set(), installedByPlugins: new Set(), loadedByHost: () => false });
+    assert.deepStrictEqual(none, [], 'a core dependency was selected for uninstall');
+
+    // A package the installer did add is still kept while the host has loaded it…
+    require('uuid');
+    assert.equal(isLoadedByHost('uuid'), true);
+    assert.deepStrictEqual(selectPrunableDependencies(['uuid'], { usedByOtherPlugins: new Set(), installedByPlugins: new Set(['uuid']), loadedByHost: isLoadedByHost }), []);
+    // …or while another active plugin declares it.
+    assert.deepStrictEqual(selectPrunableDependencies(['left-pad'], { usedByOtherPlugins: new Set(['left-pad']), installedByPlugins: new Set(['left-pad']), loadedByHost: () => false }), []);
+    // Only a package the installer added, nobody else uses and the host never loaded is removed.
+    assert.deepStrictEqual(selectPrunableDependencies(['left-pad', 'uuid'], { usedByOtherPlugins: new Set(), installedByPlugins: new Set(['left-pad']), loadedByHost: isLoadedByHost }), ['left-pad']);
+});
+
+test('the GC asks the ledger, the host and the other plugins before uninstalling', () => {
+    const fs = require('fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'core', 'plugins.ts'), 'utf8');
+    const prune = src.slice(src.indexOf('async function prunePluginDependencies'), src.indexOf('const PLUGINS_DIR_REAL'));
+    assert.match(prune, /selectPrunableDependencies\(Object\.keys\(manifest\.dependencies\), \{[\s\S]*?installedByPlugins: readPluginInstalledDeps\(\),[\s\S]*?loadedByHost: isLoadedByHost/);
+    assert.doesNotMatch(prune, /isLikelyCore/, 'the hard-coded shield list is gone');
+    assert.match(src, /recordPluginInstalledDeps\(slug,/, 'installs are recorded');
+});

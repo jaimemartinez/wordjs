@@ -952,6 +952,11 @@ the boot error links there too.
   plugin's name and the process keeps running; any other fatal error exits cleanly with code 1 for the
   supervisor instead of aborting. A plugin card whose worker is stopped now shows why, and its *Restart*
   button starts it again (it used to answer that the plugin was not loaded).
+- **Deactivating or deleting a plugin no longer uninstalls packages the core needs.** The dependency clean-up
+  removed every package of the plugin that no other active plugin declared, so deactivating the last gallery
+  plugin uninstalled `uuid` — which WordJS itself requires — and the next restart failed to start. It now
+  removes only packages it installed for plugins, never one the server has loaded or another active plugin
+  declares.
 - **Database users without `GRANT OPTION`.** On MySQL/MariaDB (and PostgreSQL) a plugin activated without a
   restart was routed through its own database login even when the server refused to grant it its new tables,
   so every query failed with "access denied" until the next restart. The plugin now falls back to the SQL
