@@ -522,6 +522,7 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Buscar un bloque para insertar…", en: "Search for a block to insert…", pt: "Buscar um bloco para inserir…" },
     { es: "Buscar un bloque para insertar", en: "Search for a block to insert", pt: "Buscar um bloco para inserir" },
     { es: "Página", en: "Page", pt: "Página" },
+    { es: "Entrada", en: "Post", pt: "Post" },
     // Capitalized variant used by the toolbar (lowercase "Vista previa" already exists above).
     { es: "Vista Previa", en: "Preview", pt: "Pré-visualização" },
     { es: "Programar", en: "Schedule", pt: "Agendar" },

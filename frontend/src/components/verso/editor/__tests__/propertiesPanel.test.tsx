@@ -82,13 +82,14 @@ const blockState = {
 };
 
 describe("PropertiesPanel — rediseño de acordeón", () => {
-    it("bloque: cabecera con ID, tres secciones plegables, campos repartidos y pie de reset", () => {
+    it("bloque: cabecera sin el id interno, tres secciones plegables, campos repartidos y pie de reset", () => {
         const html = panelFor(blockState);
 
         // Ancla de e2e + identidad.
         expect(html).toContain('data-verso-panel="block"');
         expect(html).toContain('data-verso-panel-node="n1"');
-        expect(html).toContain("ID: hero-3f8a2c");
+        // El id interno es dato de desarrollador: no se enseña en la cabecera (QA M1-08).
+        expect(html).not.toContain("ID: hero-3f8a2c");
         expect(html).toContain("Sección Hero");
 
         // Las tres secciones existen, como acordeón (no pestañas), y nacen ABIERTAS.
@@ -125,6 +126,15 @@ describe("PropertiesPanel — rediseño de acordeón", () => {
         // La página no se anima ni se "restablece": ni interacciones ni pie.
         expect(html).not.toContain('data-ix="1"');
         expect(html).not.toContain("Restablecer estilos");
+        expect(html).toContain("Página");
+
+        // Editando una ENTRADA la cabecera dice «Entrada», no «Página» (QA M1-08 / S1-19).
+        const handle = { __state: rootState, transact: () => true } as never;
+        const post = renderToStaticMarkup(
+            <PropertiesPanel handle={handle} registry={registry} rootFields={{}} onClose={() => {}} docLabel="Entrada" />,
+        );
+        expect(post).toContain("Entrada");
+        expect(post).not.toMatch(/<h3[^>]*>Página</);
     });
 
     it("durante un drag, el panel se bloquea con su aviso", () => {

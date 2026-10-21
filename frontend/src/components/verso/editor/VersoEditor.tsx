@@ -1615,6 +1615,7 @@ export default function VersoEditor({
                                 registry={registry}
                                 rootFields={rootFields}
                                 renderExternalPicker={renderExternalPicker}
+                                docLabel={templateKind === "single" ? "Entrada" : "Página"}
                                 onClose={() => {
                                     if (isCompact()) setMobileSheet(null);
                                     else setShowProperties(false);
