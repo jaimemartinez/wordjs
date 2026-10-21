@@ -370,7 +370,10 @@ if (!fileConfig.jwtSecret) {
  * The backend's own listen port: PORT from the environment, then `port` in wordjs-config.json, then 4000.
  * PORT used to be ignored outright, so `PORT=4100 npm run dev` still listened on 4000. NOT in the
  * monolith (WORDJS_EMBEDDED=1): there PORT is the PUBLIC port monolith.js listens on, and config.port
- * is only the loopback SSR listener it derives from the file. An unusable value falls through.
+ * is only the loopback SSR listener it derives from the file — unless WORDJS_LOOPBACK_PORT names another
+ * one, which monolith.js then binds instead: the install records THAT port (QA M1-24: a second monolith
+ * started with WORDJS_LOOPBACK_PORT=4390 wrote 4000, and after a restart its pages read the data of the
+ * other install listening there). An unusable value falls through.
  */
 function resolveBackendPort(fromFile: unknown): number {
     const valid = (v: unknown): number | null => {
@@ -380,6 +383,9 @@ function resolveBackendPort(fromFile: unknown): number {
     if (process.env.WORDJS_EMBEDDED !== '1') {
         const fromEnv = valid(process.env.PORT);
         if (fromEnv) return fromEnv;
+    } else {
+        const loopback = valid(process.env.WORDJS_LOOPBACK_PORT);
+        if (loopback) return loopback;
     }
     return valid(fromFile) || defaultConfig.port;
 }
