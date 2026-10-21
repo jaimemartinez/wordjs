@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, accountBoundSessionAddress } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -14,10 +14,14 @@ import { PageHeader, Button, Card, Input } from "@/components/ui";
  * code) with the command to run there, revokes outstanding tokens, and takes a node out of the cluster.
  */
 
-interface Node { url: string; role: string | null; routes: string[]; status: "up" | "down" | "unknown"; latencyMs?: number | null; lastError?: string | null }
+interface Node { url: string; role: string | null; routes: string[]; status: "up" | "down" | "unknown"; latencyMs?: number | null; lastError?: string | null; certExpiresAt?: string | null }
 interface ClusterState {
-    mode: "monolith" | "split";
+    mode: "monolith" | "split" | "separate";
     initialized: boolean;
+    /** This session was started at an address other than the main one: the writes below are refused. */
+    boundSession?: boolean;
+    mainAddress?: string | null;
+    gateway?: { advertiseHost: string | null; port: number; serving: "https" | "http" | "mixed" | null; certExpiresAt: string | null; caExpiresAt: string | null };
     advertiseHost?: string | null;
     enrollPort?: number;
     caFingerprint?: string;
@@ -40,6 +44,14 @@ export default function ClusterPage() {
     const [busy, setBusy] = useState<string | null>(null);
     const [minted, setMinted] = useState<{ command: string; expiresAt: string } | null>(null);
 
+    /** A refused write, in words: a session from a secondary address says where to sign in (QA X1-06). */
+    const failure = (err: any, fallback: string) => {
+        const main = accountBoundSessionAddress(err);
+        if (main !== null) return main ? t("cluster.boundSession").replace("{url}", () => main) : t("cluster.boundSessionNoUrl");
+        return err?.message || t(fallback);
+    };
+    const fmtDate = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleDateString() : "?");
+
     const load = async () => {
         try { setState(await apiGet<ClusterState>("/system/cluster")); setError(null); }
         catch (e: any) { setError(e?.message || t("cluster.loadFailed")); }
@@ -55,7 +67,7 @@ export default function ClusterPage() {
             setMinted({ command: r.command, expiresAt: r.expiresAt });
             setPassword(""); setCode("");
             await load();
-        } catch (err: any) { addToast(err?.message || t("cluster.mintFailed"), "error"); }
+        } catch (err: any) { addToast(failure(err, "cluster.mintFailed"), "error"); }
         finally { setBusy(null); }
     };
 
@@ -68,7 +80,7 @@ export default function ClusterPage() {
             addToast(t("cluster.removed").replace("{url}", node.url), "success");
             setPassword(""); setCode("");
             await load();
-        } catch (err: any) { addToast(err?.message || t("cluster.removeFailed"), "error"); }
+        } catch (err: any) { addToast(failure(err, "cluster.removeFailed"), "error"); }
         finally { setBusy(null); }
     };
 
@@ -76,7 +88,7 @@ export default function ClusterPage() {
         if (!password) { addToast(t("network.passwordRequired"), "error"); return; }
         setBusy("revoke");
         try { await apiPost("/system/cluster/tokens/revoke", { currentPassword: password }); setPassword(""); addToast(t("cluster.revoked"), "success"); await load(); }
-        catch (err: any) { addToast(err?.message || t("cluster.revokeFailed"), "error"); }
+        catch (err: any) { addToast(failure(err, "cluster.revokeFailed"), "error"); }
         finally { setBusy(null); }
     };
 
@@ -103,6 +115,13 @@ export default function ClusterPage() {
     );
 
     return shell(<>
+        {state.boundSession && (
+            <div role="status" data-testid="cluster-bound-session" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                {state.mainAddress
+                    ? <>{t("cluster.boundSession").replace("{url}", state.mainAddress)} <a className="font-bold underline" href={`${state.mainAddress}/admin/cluster`}>{t("cluster.openMain")}</a></>
+                    : t("cluster.boundSessionNoUrl")}
+            </div>
+        )}
         <Card variant="default" padding="lg">
             <p className="text-sm text-gray-500 mb-4">{t("cluster.credentialsHelp")}</p>
             {credentials}
@@ -110,6 +129,16 @@ export default function ClusterPage() {
 
         <Card variant="default" padding="lg">
             <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">{t("cluster.nodes")}</h2>
+            {state.gateway && (
+                <div className="py-3 border-b border-gray-100" data-testid="cluster-gateway">
+                    <p className="font-mono text-sm text-gray-900 break-all">{t("cluster.gatewayRow")}{state.gateway.advertiseHost ? ` · ${state.gateway.advertiseHost}` : ""}:{state.gateway.port}</p>
+                    <p className="text-xs text-gray-500">
+                        {state.gateway.serving === "https" ? "HTTPS" : state.gateway.serving === "http" ? "HTTP" : "…"}
+                        {state.gateway.certExpiresAt ? ` · ${t("cluster.certExpires").replace("{date}", fmtDate(state.gateway.certExpiresAt))}` : ""}
+                        {state.gateway.caExpiresAt ? ` · ${t("cluster.caExpires").replace("{date}", fmtDate(state.gateway.caExpiresAt))}` : ""}
+                    </p>
+                </div>
+            )}
             {state.nodes.length === 0 ? <p className="text-sm text-gray-500">{t("cluster.noNodes")}</p> : (
                 <ul className="divide-y divide-gray-100" data-testid="cluster-nodes">
                     {state.nodes.map((n) => (
@@ -120,6 +149,7 @@ export default function ClusterPage() {
                                     <span className={`font-bold ${n.status === "up" ? "text-emerald-600" : n.status === "down" ? "text-red-600" : "text-gray-400"}`}>{t(`cluster.status.${n.status}`)}</span>
                                     {" · "}{n.role || "?"}{" · "}{n.routes.join(", ")}{typeof n.latencyMs === "number" ? ` · ${n.latencyMs} ms` : ""}
                                 </p>
+                                {n.certExpiresAt && <p className="text-xs text-gray-400">{t("cluster.certExpires").replace("{date}", fmtDate(n.certExpiresAt))}</p>}
                                 {n.lastError && <p className="text-xs text-red-600 break-words">{n.lastError}</p>}
                             </div>
                             <Button variant="danger" size="sm" icon="fa-right-from-bracket" loading={busy === n.url} onClick={() => remove(n)}>{t("cluster.remove")}</Button>
@@ -167,6 +197,18 @@ export default function ClusterPage() {
                     <p className="text-sm text-gray-600">{t("cluster.outstanding").replace("{n}", String(state.tokens.length))}</p>
                     {state.tokens.length > 0 && <Button variant="secondary" size="sm" loading={busy === "revoke"} onClick={revoke}>{t("cluster.revoke")}</Button>}
                 </div>
+                {state.tokens.length > 0 && (
+                    <ul className="mt-2 space-y-1 text-xs text-gray-500" data-testid="cluster-tokens">
+                        {state.tokens.map((tok, i) => (
+                            <li key={i}>
+                                {t(`cluster.role.${tok.role === "frontend" ? "frontend" : "backend"}`)}
+                                {" · "}{tok.host ? t("cluster.tokenPinned").replace("{host}", tok.host) : t("cluster.tokenUnpinned")}
+                                {" · "}{t("cluster.tokenExpires").replace("{at}", new Date(tok.expiresAt).toLocaleString())}
+                            </li>
+                        ))}
+                    </ul>
+                )}
+                <p className="mt-2 text-xs text-gray-400">{t("cluster.rotateHint")}</p>
                 {state.caFingerprint && <p className="mt-2 text-xs text-gray-400 break-all">{t("cluster.fingerprint")}: {state.caFingerprint}</p>}
             </Card>
         )}

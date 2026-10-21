@@ -164,10 +164,13 @@ export default function NetworkSettingsPage() {
 
     const changeAdmin = async (a: NetworkAdministrator) => {
         if (!adminPassword) { addToast(t("network.passwordRequired"), "error"); return; }
+        // Taking someone's network administration away is asked first (QA X1-11: it applied on one click).
+        if (a.networkAdmin && !(await confirm(t("networkSetup.removeAdminConfirm").replace("{login}", a.login), t("networkSetup.removeAdmin"), true))) return;
         setBusyAdmin(a.id);
         try {
             const r = a.networkAdmin ? await networkApi.removeAdmin(a.id, adminPassword) : await networkApi.addAdmin(a.id, adminPassword);
             setAdmins(r.administrators);
+            setAdminPassword("");
             addToast((a.networkAdmin ? t("networkSetup.adminRemoved") : t("networkSetup.adminAdded")).replace("{login}", a.login), "success");
         } catch (err: any) {
             addToast(err?.message || t("networkSetup.adminFailed"), "error");

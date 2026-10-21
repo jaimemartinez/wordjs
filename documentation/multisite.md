@@ -11,6 +11,7 @@ or changes. The design, the isolation guarantees and the road ahead are in
 - [Turning it on](#turning-it-on)
 - [Creating a site](#creating-a-site)
 - [DNS, the gateway and TLS](#dns-the-gateway-and-tls)
+- [Changing a site's address](#changing-a-sites-address)
 - [Suspending a site](#suspending-a-site)
 - [Opening a site as administrator](#opening-a-site-as-administrator)
 - [Deleting a site](#deleting-a-site)
@@ -36,7 +37,7 @@ or changes. The design, the isolation guarantees and the road ahead are in
 | Plugins | Installed here, for the whole network; activated and granted here | Activated and granted per site, among the plugins the network offers ([below](#plugins-on-the-sites)) |
 | Themes | Installed and edited here | Chosen and customised per site; the theme files are shared; each site runs its own theme server code |
 | Pages and sign-in screens | Rendered as before | Rendered in the site's own document: `<html lang>` and text direction from its language settings, its uploaded fonts, its name in every title (the sign-in, registration and password screens included) |
-| TLS certificate | Settings → Certificates, as before | Its own, for its address, served by SNI ([below](#dns-the-gateway-and-tls)) |
+| TLS certificate | Security → Automatic Certificate Renewal, as before | Its own, for its address, served by SNI ([below](#dns-the-gateway-and-tls)) |
 | Backups | Settings → Backups (network administrators) | Its own, made and restored by its administrators ([below](#backups)) |
 
 A request is assigned to a site by the address it was sent to. An address no site declares is answered
@@ -161,12 +162,12 @@ Point the new name at the server the main site runs on, exactly as you did for t
   site by fetching that site's data through the gateway; the gateway lets a node it has registered name
   the site (only one of the network's addresses). A node registered by a DNS name rather than an IP
   address is not recognised that way: register nodes by address.
-- **TLS: one certificate per site.** The main site keeps its certificate (Settings → Certificates). Every
+- **TLS: one certificate per site.** The main site keeps its certificate (Security → Automatic Certificate Renewal). Every
   other site has a certificate of its own for its main address, which the gateway — and the monolith —
   selects by the name the browser asks for (SNI); a name with no certificate of its own gets the main
   site's. Admin → Network shows each site's certificate and offers two ways to get one:
   - **Get certificate**: Let's Encrypt over HTTP-01, with the install's ACME account (the email of
-    Settings → Certificates). The address must already point at this server. With ACME enabled and the
+    Security → Automatic Certificate Renewal). The address must already point at this server. With ACME enabled and the
     `http-01` challenge, this happens on its own: when a site is created, and in the twice-daily renewal
     pass, which renews each site's certificate inside `acme.renewBeforeDays` (30) of its expiry and leaves
     an address whose last attempt failed alone for six hours.
@@ -180,6 +181,16 @@ Point the new name at the server the main site runs on, exactly as you did for t
   to answers it; the gateway's own port-80 listener (`acme.http01Port`) redirects a token it does not
   hold to HTTPS, where the backends answer it. You can also terminate TLS in a reverse proxy in front of
   WordJS instead.
+
+## Changing a site's address
+
+Admin → Network → **Change address** (your password confirms it) moves a site to another main address and sets its other
+addresses: host names such as the `www.` twin, or the old domain kept while visitors move. Each name is checked as at
+creation (a DNS name no other site and not the main site answers). The other names are answered with the main
+address's scheme and port, for the same site; links, feeds and emails keep naming the main address. The site's own
+`siteurl`/`home` follow the main address, the certificate kept for the old main address is removed (get one for the new
+address with **Get certificate**), and the gateway hears the new addresses at once. The main site's address is changed in
+Settings → Site address. On a site of the network, that screen points its administrators here.
 
 ## Suspending a site
 
@@ -405,6 +416,7 @@ wrong one is `403 rest_bad_current_password`.
 | `DELETE` | `/admins/:id` | `{ currentPassword }` | `{ administrators }`. `409 network_last_admin`, `404 network_admin_not_found` |
 | `GET` | `/sites` | — | `{ sites: [{ id, slug, url, host, status, main, createdAt, updatedAt }], localAddresses }`, the main site first; `localAddresses` is true when a new site may use a `*.localhost` address |
 | `POST` | `/sites` | `{ slug, url, title, adminUsername, adminEmail, adminPassword, currentPassword }` | `201 { site }`. `400` for an invalid field (`network_invalid_url`, `network_invalid_slug`, `network_invalid_title`, `network_invalid_admin`, `network_weak_password`), `409 network_host_taken` / `network_slug_taken` |
+| `PUT` | `/sites/:id/address` | `{ url, aliases?, currentPassword }` | `{ site }` with `aliases`. `400 network_invalid_url` / `network_invalid_alias`, `400 network_primary_site`, `404 network_site_not_found`, `409 network_host_taken` |
 | `POST` | `/sites/:id/suspend` | `{ currentPassword }` | `{ site }`. `400 network_primary_site` for the main site, `404 network_site_not_found` |
 | `POST` | `/sites/:id/resume` | `{ currentPassword }` | `{ site }` |
 | `DELETE` | `/sites/:id` | `{ confirmSlug, currentPassword }` | `{ deleted: id }`. `409 network_site_active` unless suspended, `400 network_confirm_mismatch`, `400 network_primary_site` |

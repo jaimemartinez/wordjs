@@ -187,3 +187,29 @@ describe('server-api: the SSR base of a local split install', () => {
         expect(await resolveIn(null)).toBe('https://site.example/api/v1');
     });
 });
+
+describe('localGatewaySignature: what server.js watches to follow a TLS change next door', () => {
+    const { localGatewaySignature } = require('../../../local-gateway.js');
+
+    it('changes when the gateway switches HTTPS on or off, and when its certificate is replaced', () => {
+        const backend = site({ ssl: { enabled: false }, gatewayPort: 3000 });
+        const gwConfig = path.join(backend, '..', 'gateway', 'gateway-config.json');
+        const off = localGatewaySignature(backend, {});
+        expect(off).toContain('http://127.0.0.1:3000');
+
+        fs.writeFileSync(gwConfig, JSON.stringify({ ssl: { enabled: true }, gatewayPort: 3000 }));
+        const on = localGatewaySignature(backend, {});
+        expect(on).not.toBe(off);
+        expect(on).toContain('https://127.0.0.1:3000');
+        expect(localGatewaySignature(backend, {})).toBe(on);
+
+        // The auto-generated certificate appears (the trust bundle was built without it).
+        fs.writeFileSync(path.join(backend, '..', 'gateway', 'ssl-auto.crt'), 'pem');
+        expect(localGatewaySignature(backend, {})).not.toBe(on);
+    });
+
+    it('null for a gateway on another machine or none at all', () => {
+        expect(localGatewaySignature(site(null), {})).toBeNull();
+        expect(localGatewaySignature(site({ ssl: false }), { gatewayHost: '192.0.2.157' })).toBeNull();
+    });
+});

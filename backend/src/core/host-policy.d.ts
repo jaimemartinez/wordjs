@@ -66,10 +66,14 @@ export interface HostPolicy {
     warnings: readonly string[];
 }
 
-/** Multisite: another site's main address (`config.networkSites`). */
+/** Multisite: another site's main address, or one of its other addresses (`config.networkSites`). */
 export interface NetworkSiteEntry extends SiteUrl {
     siteId: number;
     status: 'active' | 'suspended';
+    /** Set on another address of the site (`networkSites[].aliases`): the site's main origin. */
+    aliasOf?: string;
+    /** Set with aliasOf: the site's main hostname. */
+    mainHostname?: string;
 }
 
 export type HostClass = 'canonical' | 'alias' | 'env' | 'loopback' | 'ip' | 'dev' | 'unknown';

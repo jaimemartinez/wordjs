@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { usersApi, User } from "@/lib/api";
+import { usersApi, User, userSaveErrorText } from "@/lib/api";
 import ModernSelect from "@/components/ModernSelect";
 import DialogLayer from "@/components/DialogLayer";
 import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
@@ -81,7 +81,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
             onClose();
         } catch (error) {
             console.error("Failed to save user:", error);
-            await alert(t('user.edit.saveError'));
+            await alert(userSaveErrorText(error, t));
         } finally {
             setSaving(false);
         }

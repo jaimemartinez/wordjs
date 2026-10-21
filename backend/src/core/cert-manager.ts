@@ -1131,6 +1131,14 @@ class CertManager {
             const config = await this.getConfig();
             const hasCert = config.certInfo && config.certInfo.type !== 'none' && config.certInfo.type !== 'error';
 
+            // HTTPS switched off (or the gateway could not be read): there is nothing to secure, and a
+            // certificate generated here would only be noise on a gateway that serves HTTP on purpose -
+            // behind a TLS-terminating proxy or tunnel. FALLOS 114: merely opening Admin → Security ran
+            // this and the generated certificate switched such a gateway to HTTPS, cutting the proxy off.
+            if (!config.sslEnabled || config.error) {
+                return { success: true, skipped: true, message: config.error ? 'Gateway configuration unavailable' : 'HTTPS is off: no certificate needed' };
+            }
+
             if (!hasCert) {
                 log.info('[CertManager] No certificate found on Gateway. Generating self-signed...');
 

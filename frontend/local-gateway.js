@@ -110,4 +110,26 @@ function frontendListenHost(configDir, frontendCfg, env = process.env) {
     return gatewayIsLocal(configDir, cfg) ? '127.0.0.1' : null;
 }
 
-module.exports = { localGatewayOrigin, frontendListenHost, gatewayIsLocal, isLoopbackName };
+/**
+ * Everything the frontend's SSR wiring is derived from on this machine, as one comparable string: the
+ * loopback origin above and the certificate the gateway serves (path + modification time — the trust
+ * bundle scripts/ssr-trust.js builds at startup holds that certificate). null when there is no local
+ * gateway. server.js compares it with the value at its start and asks start-frontend.js to start it again
+ * when it differs, so switching HTTPS on or off, or installing a certificate, from Admin → Security no
+ * longer leaves SSR dialling the old protocol until somebody restarts the frontend by hand.
+ */
+function localGatewaySignature(configDir, frontendCfg) {
+    if (gatewayIsElsewhere(frontendCfg)) return null;
+    const gw = readLocalGateway(configDir);
+    if (!gw) return null;
+    const fs = require('fs');
+    const path = require('path');
+    const ssl = gw.cfg.ssl;
+    const certPath = ssl && typeof ssl === 'object' && typeof ssl.cert === 'string' && ssl.cert ? ssl.cert : 'ssl-auto.crt';
+    let cert;
+    try { cert = `${certPath}@${fs.statSync(path.resolve(gw.dir, certPath)).mtimeMs}`; } catch { cert = `${certPath}@-`; }
+    // The origin carries the protocol (http:// when the switch is off), so the switch is not read twice.
+    return JSON.stringify({ origin: localGatewayOrigin(configDir, frontendCfg), cert });
+}
+
+module.exports = { localGatewayOrigin, localGatewaySignature, frontendListenHost, gatewayIsLocal, isLoopbackName };

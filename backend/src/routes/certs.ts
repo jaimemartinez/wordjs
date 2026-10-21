@@ -648,7 +648,8 @@ router.post('/check', async (req: Request, res: Response) => {
  *         description: >-
  *           The gateway's answer to the configuration push, plus what it means for the site's main
  *           address — `canonicalUpgraded` when the same host moved from http to https and the main
- *           address followed automatically, or `suggestCanonical` when the gateway now reports another
+ *           address followed automatically, `canonicalDowngraded` when HTTPS was switched off here and the
+ *           gateway's own listener (same host and port) is now http, or `suggestCanonical` when the gateway now reports another
  *           address that only an administrator may adopt (Settings → Site address).
  *         content:
  *           application/json:
@@ -658,6 +659,8 @@ router.post('/check', async (req: Request, res: Response) => {
  *                 siteUrl:
  *                   type: string
  *                 canonicalUpgraded:
+ *                   type: string
+ *                 canonicalDowngraded:
  *                   type: string
  *                 suggestCanonical:
  *                   type: string
@@ -703,9 +706,12 @@ router.post('/config', async (req: Request, res: Response) => {
         // fails the TLS change itself, which the gateway has already applied.
         const addressUpdate: Record<string, unknown> = {};
         try {
-            const outcome = await require('../core/site-address').noteGatewaySiteUrl(result && result.siteUrl);
+            const outcome = await require('../core/site-address').noteGatewaySiteUrl(result && result.siteUrl, { adminTurnedTlsOff: sslEnabled === false });
             if (outcome.outcome === 'upgraded') {
                 addressUpdate.canonicalUpgraded = outcome.canonical;
+                if (outcome.warnings && outcome.warnings.length) addressUpdate.siteAddressWarnings = outcome.warnings;
+            } else if (outcome.outcome === 'downgraded') {
+                addressUpdate.canonicalDowngraded = outcome.canonical;
                 if (outcome.warnings && outcome.warnings.length) addressUpdate.siteAddressWarnings = outcome.warnings;
             } else if (outcome.outcome === 'drift') {
                 addressUpdate.suggestCanonical = outcome.gateway;

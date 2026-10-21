@@ -171,6 +171,8 @@ function copyDir(from, to) {
 /**
  * Start the gateway. Options:
  *   secure         serve the public listener over TLS (a self-signed leaf) instead of plain http
+ *   storedCert     write that leaf and name it in `ssl`, but with the switch OFF ({ enabled: false, key, cert })
+ *   ssl            the raw `ssl` value for gateway-config.json (overrides the two above; e.g. false)
  *   acme           also start the port-80-style ACME listener (on a random port)
  *   upstreams      { frontend, backend } echo upstream ports for the registry ('/' and '/api')
  *   cluster        a CA from makeCa(): installs gateway-internal certs so the internal mTLS listener starts
@@ -180,7 +182,7 @@ function copyDir(from, to) {
  *   env            more environment variables for the gateway process
  * Returns { dir, port, internalPort, acmePort, output(), stop() }.
  */
-async function bootGateway({ secure = false, acme = false, upstreams, cluster, registered = true, extraConfig = {}, env = {} }) {
+async function bootGateway({ secure = false, storedCert = false, ssl, acme = false, upstreams, cluster, registered = true, extraConfig = {}, env = {} }) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-gw-'));
     const dir = path.join(root, 'gateway');
     copyDir(path.join(GATEWAY_ROOT, 'src'), path.join(dir, 'src'));
@@ -198,13 +200,15 @@ async function bootGateway({ secure = false, acme = false, upstreams, cluster, r
     };
     Object.assign(config, extraConfig);
     if (acme) config.acme = { http01Port: acmePort };
-    if (secure) {
+    if (secure || storedCert) {
         const leaf = makeLeaf(null, 'localhost');
         fs.mkdirSync(path.join(dir, 'ssl'), { recursive: true });
         fs.writeFileSync(path.join(dir, 'ssl', 'key.pem'), leaf.key);
         fs.writeFileSync(path.join(dir, 'ssl', 'cert.pem'), leaf.cert);
-        config.ssl = { enabled: true, key: './ssl/key.pem', cert: './ssl/cert.pem' };
+        // storedCert alone: the certificate is on disk and named in the config, TLS switched OFF.
+        config.ssl = { enabled: !!secure, key: './ssl/key.pem', cert: './ssl/cert.pem' };
     }
+    if (ssl !== undefined) config.ssl = ssl;
     fs.writeFileSync(path.join(dir, 'gateway-config.json'), JSON.stringify(config, null, 2));
     fs.writeFileSync(path.join(dir, 'gateway-registry.json'), JSON.stringify(registered ? {
         '/': { targets: [`http://127.0.0.1:${upstreams.frontend}`], metrics: {} },

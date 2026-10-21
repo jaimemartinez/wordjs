@@ -141,6 +141,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useRouter } from "next/navigation";
 import { afterGatewayConfigSave } from "@/lib/siteAddress";
+import { gatewayServingNotice, gatewayNeedsCertificate } from "@/lib/gatewayServing";
 
 function GatewayConfigForm() {
     const [config, setConfig] = useState<any>(null);
@@ -148,42 +149,72 @@ function GatewayConfigForm() {
     const [saving, setSaving] = useState(false);
     const { t } = useI18n();
 
-    const { alert } = useModal();
+    const { alert, confirm } = useModal();
     const router = useRouter();
+    // The switch as the gateway reported it when the screen loaded: a save that flips it asks first.
+    const [savedSsl, setSavedSsl] = useState<boolean | null>(null);
+    const [generating, setGenerating] = useState(false);
+    // The configuration as the gateway reported it: the warning above the form describes the gateway,
+    // never the switch the administrator is still editing.
+    const [reported, setReported] = useState<any>(null);
+
+    // Reading the gateway's configuration is ALL this screen does on load. It used to POST
+    // /system/certs/check whenever no certificate was reported, which generated a self-signed certificate
+    // and switched a gateway serving HTTP behind a proxy or tunnel to HTTPS - opening a screen took the
+    // site down (FALLOS 114). Generating one is now the button below, shown when it is needed.
+    const load = async () => {
+        try {
+            const data = await apiGet<any>('/system/certs/config?t=' + Date.now());
+            setConfig(data);
+            setReported(data);
+            setSavedSsl(data && typeof data.sslEnabled === 'boolean' ? data.sslEnabled : null);
+        } catch (err: any) {
+            setConfig({ error: err.message });
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
         setLoading(true);
-        const load = async () => {
-            try {
-                // 1. Get Config
-                let data = await apiGet<any>('/system/certs/config?t=' + Date.now());
-
-                // 2. If valid response but no cert, try to auto-generate (Self-Signed) via check.
-                // Skip in monolith mode: /check pushes a cert to the (nonexistent) gateway and would
-                // fail — mono manages its own cert at boot, so there is nothing to generate here.
-                if (data && data.source !== 'monolith' && (!data.certInfo || data.certInfo.type === 'none')) {
-                    await apiPost('/system/certs/check', {});
-                    // Reload config
-                    data = await apiGet<any>('/system/certs/config?t=' + Date.now());
-                }
-                setConfig(data);
-            } catch (err: any) {
-                setConfig({ error: err.message });
-            } finally {
-                setLoading(false);
-            }
-        };
         load();
     }, []);
 
+    const generateSelfSigned = async () => {
+        setGenerating(true);
+        try {
+            await apiPost('/system/certs/check', {});
+            await load();
+        } catch (e: any) {
+            await alert(t('security.gateway.generateFailed').replace('{error}', () => e.message));
+        } finally {
+            setGenerating(false);
+        }
+    };
+
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
+        // Changing the protocol the gateway speaks can cut off whatever sits in front of it (a proxy or a
+        // tunnel speaking the other one), so it is never a silent side effect of "Save".
+        if (savedSsl !== null && !!config.sslEnabled !== savedSsl) {
+            const ok = await confirm(
+                t(config.sslEnabled ? 'security.gateway.confirmTransportOn' : 'security.gateway.confirmTransportOff'),
+                t('security.gateway.confirmTitle'),
+                true,
+            );
+            if (!ok) return;
+        }
         setSaving(true);
         try {
             const saved = await apiPost<unknown>('/system/certs/config', {
                 port: config.gatewayPort,
                 sslEnabled: config.sslEnabled
             });
+            const transportChanged = savedSsl !== null && !!config.sslEnabled !== savedSsl;
+            setSavedSsl(!!config.sslEnabled);
+            // What the gateway serves now, for the warning and the "serving now" line. Not after a protocol
+            // change: this page was loaded over the protocol the gateway no longer speaks.
+            if (!transportChanged) await load();
             // The answer also says what the change did to the site's main address: followed at once
             // (same host, http → https) or only suggested — then the admin decides on the
             // site-address screen, which opens the change dialog prefilled (SPEC §6, REDTEAM R1).
@@ -284,8 +315,34 @@ function GatewayConfigForm() {
         );
     }
 
+    // What visitors actually get (the workers' own report), next to the switch (QA X1-03).
+    const notice = gatewayServingNotice(reported);
+    const needsCertificate = gatewayNeedsCertificate(reported);
+
     return (
         <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            {notice && (
+                <div role="status" data-testid="gateway-serving-notice" className="md:col-span-2 p-5 bg-amber-50 dark:bg-amber-900/20 rounded-2xl border border-amber-200 dark:border-amber-800 flex items-start gap-4">
+                    <i className="fa-solid fa-triangle-exclamation text-xl text-amber-600 dark:text-amber-400 mt-0.5"></i>
+                    <div className="text-sm text-amber-900 dark:text-amber-200 space-y-3">
+                        <p>{t(notice)}</p>
+                        {needsCertificate && (
+                            <button type="button" onClick={generateSelfSigned} disabled={generating} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold">
+                                <i className={`fa-solid ${generating ? 'fa-circle-notch fa-spin' : 'fa-certificate'}`}></i>
+                                {t('security.gateway.generateSelfSigned')}
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+            {typeof reported?.serving === 'string' && (
+                <div className="md:col-span-2 text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2" data-testid="gateway-serving">
+                    <span className="text-xs uppercase tracking-wider text-gray-400 font-bold">{t('security.gateway.servingNow')}</span>
+                    <span className={`font-bold ${reported.serving === 'https' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>
+                        {reported.serving === 'https' ? t('security.gateway.httpsEnabled') : reported.serving === 'http' ? t('security.gateway.httpNoTls') : t('security.gateway.servingReloading')}
+                    </span>
+                </div>
+            )}
             {config.certInfo && (
                 <div className="md:col-span-2 bg-gradient-to-br from-indigo-50/80 to-purple-50/80 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 p-6 shadow-sm">
                     <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 mb-4 flex items-center gap-2 uppercase tracking-wide">

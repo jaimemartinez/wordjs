@@ -879,6 +879,8 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
                 const created = await onMain('post', `${API}/users`, bound).send({ username: `bound_new_${stamp}`, email: `bound_new_${stamp}@example.com`, password: 'Str0ng-Passw0rd-xyz!', role: 'administrator' });
                 assert.strictEqual(created.status, 403, JSON.stringify(created.body));
                 assert.strictEqual(created.body.code, 'rest_account_bound_session');
+                // It names the main address, for the screen to say where to sign in (QA S4-02).
+                assert.strictEqual(created.body.data.mainAddress, 'https://example.com');
                 const edited = await onMain('put', `${API}/users/${otherId}`, bound).send({ email: `taken_${stamp}@example.com` });
                 assert.strictEqual(edited.status, 403, JSON.stringify(edited.body));
                 assert.strictEqual(edited.body.code, 'rest_account_bound_session');

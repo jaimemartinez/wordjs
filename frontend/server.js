@@ -91,6 +91,41 @@ const shownHost = listenHost ? (listenHost.includes(':') ? `[${listenHost}]` : l
 const hasIdentity = fs.existsSync(caPath) && fs.existsSync(keyPath) && fs.existsSync(certPath);
 process.env.WORDJS_FRONTEND_LISTENER = hasIdentity ? 'https' : 'http';
 
+// The gateway on THIS machine: its protocol and certificate are what start-frontend.js derived the SSR
+// trust bundle and the loopback origin from, and both are fixed for this process's life (an environment
+// variable, NODE_EXTRA_CA_CERTS). When Admin → Security changes them, ask start-frontend.js to start this
+// server again with the new wiring (exit 75), instead of rendering every public page against the old
+// protocol until somebody restarts it by hand. Only when start-frontend.js worked that wiring out itself.
+if (process.env.WORDJS_LOCAL_GATEWAY_WATCH === '1') {
+    const { localGatewaySignature } = require('./local-gateway.js');
+    const readSignature = () => {
+        try {
+            let dir = process.cwd();
+            if (!fs.existsSync(path.join(dir, 'wordjs-config.json'))) dir = path.resolve(dir, '..', 'backend');
+            let cfg = {};
+            try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'wordjs-config.json'), 'utf8')); } catch { /* none yet */ }
+            return localGatewaySignature(dir, cfg);
+        } catch {
+            return null;
+        }
+    };
+    const atStart = readSignature();
+    if (atStart !== null) {
+        let pending = null;
+        const timer = setInterval(() => {
+            const now = readSignature();
+            if (now === null || now === atStart) { pending = null; return; }
+            // Two readings in a row: the gateway rewrites its config and reloads its workers in one go,
+            // and a half-written moment must not restart anything.
+            if (pending !== now) { pending = now; return; }
+            clearInterval(timer);
+            console.log('🔄 The gateway on this machine changed its protocol or certificate - restarting the frontend to follow it.');
+            process.exit(75);
+        }, 3000);
+        timer.unref();
+    }
+}
+
 app.prepare().then(() => {
     let httpsOptions = null;
 

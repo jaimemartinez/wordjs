@@ -688,8 +688,13 @@ describe("after an SSL or port change: the main address is followed or suggested
         expect(upgraded.went).toEqual([]);
 
         const plain = await run({ siteUrl: "https://example.com" });
-        expect(plain.alerts).toEqual(["Settings saved. You may need to restart the gateway."]);
+        expect(plain.alerts).toEqual(["Settings saved. The gateway reloads itself in a few seconds."]);
         expect(plain.went).toEqual([]);
+
+        // HTTPS switched off here: the main address followed the gateway's own listener (QA lab, fix A).
+        const downgraded = await run({ canonicalDowngraded: "http://example.com:3000" });
+        expect(downgraded.alerts[0]).toMatch(/main address is http:\/\/example\.com:3000: open the panel there/);
+        expect(downgraded.went).toEqual([]);
     });
 
     it("?suggest= is a hint: honoured only for the address the backend itself reports as the gateway's", () => {

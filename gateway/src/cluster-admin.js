@@ -67,6 +67,9 @@ function describeNodes(registry, targetOwner) {
             byUrl.set(url, n);
         });
     });
+    // A node that does not answer has no latency: the last one measured while it was up is not shown as
+    // if it were current (QA X1-04).
+    for (const n of byUrl.values()) if (n.status === 'down') n.latencyMs = null;
     return [...byUrl.values()].sort((a, b) => String(a.role).localeCompare(String(b.role)) || a.url.localeCompare(b.url));
 }
 

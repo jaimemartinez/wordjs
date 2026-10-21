@@ -21,7 +21,7 @@ import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
-const { authenticate, sessionOnly, accountAuthorityOnly } = require('../middleware/auth');
+const { authenticate, sessionOnly, accountAuthorityOnly, sessionBoundToSecondaryAddress, siteHostPolicy } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
 const log = require('../core/module-logger').moduleLogger('routes/cluster');
@@ -32,6 +32,52 @@ router.use(authenticate, isAdmin, sessionOnly);
 
 function deploymentMode(): 'monolith' | 'split' {
     return process.env.WORDJS_EMBEDDED === '1' || process.env.WORDJS_MODE === 'mono' ? 'monolith' : 'split';
+}
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+/**
+ * What the screen calls the deployment: 'separate' once any node the gateway knows lives on another
+ * machine (a non-loopback address), 'split' while they all run next to it. QA X1-08: a three-machine
+ * cluster was reported as "split".
+ */
+function clusterMode(nodes: unknown): 'split' | 'separate' {
+    if (!Array.isArray(nodes)) return 'split';
+    return nodes.some((n: any) => {
+        try { return !LOOPBACK.has(new URL(String(n && n.url)).hostname.toLowerCase()); } catch { return false; }
+    }) ? 'separate' : 'split';
+}
+
+/**
+ * The writes here need a session started at the main address (accountAuthorityOnly). Said up front, so
+ * the screen can explain it before the administrator types a password and a code (QA X1-06).
+ */
+function sessionAddress(req: Request): { boundSession: boolean; mainAddress: string | null } {
+    let mainAddress: string | null;
+    try { mainAddress = (siteHostPolicy.get().canonical || {}).origin || null; } catch { mainAddress = null; }
+    return { boundSession: sessionBoundToSecondaryAddress(req) === true, mainAddress };
+}
+
+/**
+ * The join-token request checked BEFORE the two-factor code is spent on it (QA X1-08: an invalid role or
+ * TTL burned the code, and the corrected retry in the same 30 s window was refused). The gateway checks
+ * the same fields again (src/cluster-admin.js); this only refuses what it would refuse.
+ */
+function tokenRequestProblem(b: any): { code: string; error: string } | null {
+    if (b.role !== 'backend' && b.role !== 'frontend') return { code: 'cluster_invalid_role', error: 'role is backend or frontend' };
+    const ttl = b.ttlMinutes;
+    if (ttl !== undefined && ttl !== null && ttl !== '' && !(Number.isInteger(Number(ttl)) && Number(ttl) >= 1 && Number(ttl) <= 60)) {
+        return { code: 'cluster_invalid_ttl', error: 'ttlMinutes is a whole number from 1 to 60' };
+    }
+    const host = b.host;
+    if (host !== undefined && host !== null && host !== '') {
+        const s = String(host).trim();
+        const ip = require('net').isIP(s) !== 0;
+        if (s.length > 253 || (!ip && !/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(s))) {
+            return { code: 'cluster_invalid_host', error: 'host is an IP address or a DNS name' };
+        }
+    }
+    return null;
 }
 
 /** Ask the gateway; a coded failure instead of a throw when it cannot be reached. */
@@ -158,12 +204,14 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
     if (deploymentMode() === 'monolith') return res.json({ mode: 'monolith', initialized: false, nodes: [], tokens: [], removed: [] });
     const r = await gateway('GET', '/cluster', null);
     if (r.status !== 200) return relay(res, r);
-    res.json({ mode: 'split', ...r.body });
+    res.json({ ...r.body, mode: clusterMode(r.body && r.body.nodes), ...sessionAddress(req) });
 }));
 
 router.post('/token', accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
     if (deploymentMode() === 'monolith') return res.status(409).json({ code: 'cluster_monolith', error: 'This install runs as one process (the monolith); there is no gateway to join.' });
     const b = req.body || {};
+    const problem = tokenRequestProblem(b);
+    if (problem) return res.status(400).json(problem);
     if (await requireSudoPassword(req, res, b.currentPassword)) return;
     const mfa = await require('./network').requireStepUp(req, res);
     if (!mfa) return;

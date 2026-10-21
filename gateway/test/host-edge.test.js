@@ -555,7 +555,7 @@ describe('a redirect alias', () => {
 describe('multisite: the other sites of the network', () => {
     const state = {
         policy: sitePolicy({ config: { networkSites: [
-            { id: 2, url: 'https://two.example.org', status: 'active' },
+            { id: 2, url: 'https://two.example.org', status: 'active', aliases: ['www.two.example.org'] },
             { id: 3, url: 'https://three.example.org', status: 'suspended' },
         ] } }),
     };
@@ -565,6 +565,12 @@ describe('multisite: the other sites of the network', () => {
 
     it('answers another site of the network and names it upstream, for the frontend', async () => {
         const r = await s.get('two.example.org', '/hello');
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
+    });
+
+    it('names an alias of a site by the site\'s MAIN hostname upstream (QA X1-09)', async () => {
+        const r = await s.get('www.two.example.org', '/hello');
         assert.strictEqual(r.status, 200);
         assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
     });
@@ -599,6 +605,31 @@ describe('multisite: the other sites of the network', () => {
         for (const bad of [{ id: 1, url: 'https://x.org', status: 'active' }, { id: 2, url: 5, status: 'active' }, { id: 2, url: 'https://x.org', status: 'gone' }, 'https://x.org']) {
             assert.strictEqual(hostEdge.sanitizePolicyPush({ enforce: true, config: { siteUrl: 'https://example.com', networkSites: [bad] } }).ok, false, JSON.stringify(bad));
         }
+    });
+
+    it("carries a site's other host names (QA X1-09), bounded, and the edge answers them for that site", () => {
+        const push = { enforce: true, config: { siteUrl: 'https://example.com', networkSites: [{ id: 2, url: 'https://two.example.org', status: 'active', aliases: ['www.two.example.org', 'old-two.example.net'] }] } };
+        const ok = hostEdge.sanitizePolicyPush(push);
+        assert.ok(ok.ok, ok.error);
+        assert.deepStrictEqual(ok.value.config.networkSites[0].aliases, ['www.two.example.org', 'old-two.example.net']);
+        for (const bad of [{ aliases: 'www.x.org' }, { aliases: [5] }, { aliases: new Array(21).fill('a.example.org') }]) {
+            const r = hostEdge.sanitizePolicyPush({ enforce: true, config: { siteUrl: 'https://example.com', networkSites: [{ id: 2, url: 'https://two.example.org', status: 'active', ...bad }] } });
+            assert.strictEqual(r.ok, false, JSON.stringify(bad));
+        }
+        const hp = require('../src/host-policy');
+        const pol = hp.buildPolicy({ config: ok.value.config, env: {}, nodeEnv: 'production' });
+        for (const host of ['www.two.example.org', 'old-two.example.net']) {
+            const v = hp.classify(hp.parseHost(host), pol);
+            assert.strictEqual(v.cls, 'canonical', host);
+            assert.strictEqual(v.entry.siteId, 2, host);
+            assert.strictEqual(v.entry.aliasOf, 'https://two.example.org');
+            assert.strictEqual(v.entry.scheme, 'https', 'answered with the main address scheme');
+        }
+        // A main-site address or a non-host is never taken as another site's alias.
+        const clash = hp.buildPolicy({ config: { siteUrl: 'https://example.com', networkSites: [{ id: 2, url: 'https://two.example.org', status: 'active', aliases: ['example.com', 'x.org:8080', '10.0.0.1'] }] }, env: {}, nodeEnv: 'production' });
+        assert.strictEqual(hp.classify(hp.parseHost('example.com'), clash).reason, 'canonical');
+        assert.strictEqual(clash.sites.size, 1, 'only the main address of site 2');
+        assert.strictEqual(clash.warnings.filter((w) => /aliases\[/.test(w)).length, 3);
     });
 });
 

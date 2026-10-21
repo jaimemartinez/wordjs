@@ -733,6 +733,30 @@ export function isBadCurrentPassword(error: unknown): boolean {
         && (error as { code?: string }).code === "rest_bad_current_password";
 }
 
+/**
+ * A write to accounts refused because this session was started at an address other than the main one
+ * (rest_account_bound_session): the main address to sign in at, or "" when the server did not name one.
+ * null for any other error. QA S4-02: the user screens showed only "Failed to save user".
+ */
+export function accountBoundSessionAddress(error: unknown): string | null {
+    if (!error || typeof error !== "object" || (error as { code?: string }).code !== "rest_account_bound_session") return null;
+    const main = (error as { data?: { mainAddress?: unknown } }).data?.mainAddress;
+    return typeof main === "string" ? main : "";
+}
+
+/** The alert text for a refused user save: the bound-session explanation when that is why, else the server's words. */
+export function userSaveErrorText(error: unknown, t: (key: string) => string): string {
+    const main = accountBoundSessionAddress(error);
+    if (main !== null) {
+        return main
+            ? t("user.edit.boundSession").replace("{url}", () => main)
+            : t("user.edit.boundSessionNoUrl");
+    }
+    const message = (error as { message?: string })?.message;
+    if (isBadCurrentPassword(error)) return message || t("user.edit.saveError");
+    return message ? `${t("user.edit.saveError")}: ${message}` : t("user.edit.saveError");
+}
+
 export const usersApi = {
     list: () => apiGet<User[]>("/users"),
     get: (id: number) => apiGet<User>(`/users/${id}`),
@@ -1669,6 +1693,8 @@ export interface NetworkSite {
     host: string;
     status: "active" | "suspended";
     main: boolean;
+    /** The site's other host names (answered for it, with its main address's scheme and port). */
+    aliases?: string[];
     createdAt: string;
     updatedAt: string;
 }
@@ -1748,9 +1774,13 @@ export const networkApi = {
         api<{ slug: string; withdrawn: boolean; deactivatedOn: number[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { method: "DELETE", body: { currentPassword } }),
     /** localAddresses: the main site is on this computer, so a new site may use a <name>.localhost address. */
     sites: () => apiGet<{ sites: NetworkSite[]; localAddresses?: boolean }>("/network/sites"),
-    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
+    /** `warnings`: `network_https_not_served` when the address is https:// and the edge serves plain HTTP. */
+    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite; warnings?: string[] }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+    /** Move a site to another address and/or replace its other host names. */
+    changeAddress: (id: number, url: string, aliases: string[], currentPassword: string) =>
+        apiPut<{ site: NetworkSite; warnings?: string[] }>(`/network/sites/${id}/address`, { url, aliases, currentPassword }),
     /** Open a site's admin as administrator: a one-time URL on the site's address, valid for a minute. */
     handoff: (id: number, currentPassword: string) => apiPost<{ url: string; expiresAt: string }>(`/network/sites/${id}/handoff`, { currentPassword }),
     /** Delete a suspended site and everything it holds (confirmSlug repeats its slug). */
@@ -1758,7 +1788,8 @@ export const networkApi = {
         api<{ deleted: number }>(`/network/sites/${id}`, { method: "DELETE", body: { confirmSlug, currentPassword } }),
     quotas: () => apiGet<NetworkQuotas>("/network/quotas"),
     /** Every other site's TLS certificate (status only) and whether Let's Encrypt issues them on its own. */
-    certificates: () => apiGet<{ autoIssue: boolean; certificates: NetworkSiteCertificate[] }>("/network/certificates"),
+    /** `edgeServes`: what the public listener serves now ('https' | 'http'), null when it cannot be told. */
+    certificates: () => apiGet<{ autoIssue: boolean; edgeServes?: "https" | "http" | null; certificates: NetworkSiteCertificate[] }>("/network/certificates"),
     issueCertificate: (id: number, currentPassword: string) =>
         apiPost<{ certificate: NetworkSiteCertificate }>(`/network/sites/${id}/certificate`, { currentPassword }),
     installCertificate: (id: number, certPem: string, keyPem: string, currentPassword: string) =>

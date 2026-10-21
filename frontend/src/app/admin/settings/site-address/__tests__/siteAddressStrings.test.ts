@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { translations, type Language } from "@/lib/i18n";
-import type { AliasError, CanonicalNote, HostClass, IpLiteralMode, OldAddressAction, RefusalHint, RefusalSource, SignInWarning } from "@/lib/siteAddress";
+import type { AliasError, CanonicalNote, HostClass, IpLiteralMode, OldAddressAction, RefusalHint, RefusalSource, SignInWarning, SiteAddressRefusal } from "@/lib/siteAddress";
 import type { SignInRefusal } from "@/contexts/AuthContext";
 
 const SRC = path.resolve(import.meta.dirname, "../../../../..");
@@ -54,6 +54,8 @@ const ipModes: Record<IpLiteralMode, true> = { any: true, own: true, none: true 
 const oldActions: Record<OldAddressAction, true> = { keep: true, redirect: true, drop: true };
 const warnings: Record<Exclude<SignInWarning, null>, true> = { "plain-http": true, ip: true, tunnel: true, local: true };
 const refusals: Record<SignInRefusal, true> = { transport: true, address: true };
+// Why an administrator cannot manage the address here (siteAddressRefusalKey, QA X1-09).
+const screenRefusals: Record<SiteAddressRefusal, true> = { "siteAddress.adminOnly": true, "siteAddress.networkAdminOnlySite": true, "siteAddress.networkAdminOnlyMain": true };
 
 const DYNAMIC = [
     ...Object.keys(errors).map((k) => `siteAddress.error.${k}`),
@@ -72,6 +74,7 @@ const DYNAMIC = [
     ...["admin", "cli", "install", "config"].map((k) => `siteAddress.source.${k}`),
     ...["gatewayUrl", "frontendUrl", "recent-use"].map((k) => `siteAddress.dependent.${k}`),
     ...Object.keys(refusals).map((k) => `hostNotice.signinRefused.${k}`),
+    ...Object.keys(screenRefusals),
     ...["address", "label", "mode", "signIn", "source", "expires", "lastSeen", "count", "hint", "actions"].map((k) => `siteAddress.col.${k}`),
 ];
 

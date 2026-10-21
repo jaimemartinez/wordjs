@@ -809,6 +809,18 @@ export function canManageSiteAddress(user: { role?: unknown; network?: { mainSit
     return !network || (network.mainSite && network.networkAdmin);
 }
 
+/**
+ * Why an ADMINISTRATOR cannot manage the address here, as the i18n key the screen shows — or null for
+ * anyone else (who gets the plain "administrators only"). QA X1-09: an administrator of a network site
+ * was told "Only administrators can manage the site address", which is what they are; a site's address
+ * belongs to the network administrator (Network → Sites → Change address, on the main site).
+ */
+export type SiteAddressRefusal = "siteAddress.adminOnly" | "siteAddress.networkAdminOnlySite" | "siteAddress.networkAdminOnlyMain";
+export function siteAddressRefusalKey(user: { role?: unknown; network?: { mainSite: boolean; networkAdmin: boolean } } | null | undefined): Exclude<SiteAddressRefusal, "siteAddress.adminOnly"> | null {
+    if (user?.role !== "administrator" || !user.network) return null;
+    return user.network.mainSite ? "siteAddress.networkAdminOnlyMain" : "siteAddress.networkAdminOnlySite";
+}
+
 /** Where the retired /migration page sends a visitor: administrators to the settings screen, others home. */
 export function migrationRedirectTarget(user: { role?: unknown } | null): string {
     return canManageSiteAddress(user) ? SITE_ADDRESS_SETTINGS_PATH : "/";
@@ -818,11 +830,14 @@ export function migrationRedirectTarget(user: { role?: unknown } | null): string
 
 export type GatewayAddressOutcome =
     | { kind: "upgraded"; address: string; warnings: string[] }
+    | { kind: "downgraded"; address: string; warnings: string[] }
     | { kind: "suggest"; address: string; href: string };
 
 /**
  * What POST /system/certs/config said about the main address (SPEC §6, REDTEAM R1):
  *   · `canonicalUpgraded` — the same host moved http → https and the main address followed at once;
+ *   · `canonicalDowngraded` — HTTPS was switched off here and the main address followed the gateway's own
+ *     listener (same host and port, https → http): the panel is reachable only at that address now;
  *   · `suggestCanonical` — the gateway now serves ANOTHER address, which only an administrator may adopt,
  *     so the security page sends them to the site-address screen with it as `?suggest=`.
  * Both are parsed: a value that is not a site address is neither shown nor linked.
@@ -834,6 +849,11 @@ export function gatewayAddressOutcome(res: unknown): GatewayAddressOutcome | nul
     if (upgraded) {
         const warnings = asList(r.siteAddressWarnings).map(asString).filter((w): w is string => w !== null);
         return { kind: "upgraded", address: upgraded.origin, warnings };
+    }
+    const downgraded = parseSiteAddress(r.canonicalDowngraded);
+    if (downgraded) {
+        const warnings = asList(r.siteAddressWarnings).map(asString).filter((w): w is string => w !== null);
+        return { kind: "downgraded", address: downgraded.origin, warnings };
     }
     const suggested = parseSiteAddress(r.suggestCanonical);
     if (suggested) {
@@ -851,11 +871,15 @@ export async function afterGatewayConfigSave(
     res: unknown,
     io: { alert: (message: string) => unknown; navigate: (href: string) => void },
 ): Promise<GatewayAddressOutcome | null> {
-    const restart = "You may need to restart the gateway.";
+    // The gateway reloads its workers by itself (gateway/src/index.js, POST /config-update).
+    const restart = "The gateway reloads itself in a few seconds.";
     const outcome = gatewayAddressOutcome(res);
     if (outcome?.kind === "upgraded") {
         const notes = outcome.warnings.length ? ` Note: ${outcome.warnings.join(" ")}` : "";
         await io.alert(`Settings saved. The main address is now ${outcome.address}: emails, feeds and the sitemap link to it from now on.${notes} ${restart}`);
+    } else if (outcome?.kind === "downgraded") {
+        const notes = outcome.warnings.length ? ` Note: ${outcome.warnings.join(" ")}` : "";
+        await io.alert(`Settings saved. The gateway now serves plain HTTP and the main address is ${outcome.address}: open the panel there to keep working.${notes} ${restart}`);
     } else if (outcome?.kind === "suggest") {
         await io.alert(`Settings saved. The gateway now serves the site at ${outcome.address}, which is not the main address. Review it in Settings → Site address. ${restart}`);
         io.navigate(outcome.href);

@@ -46,7 +46,8 @@ export type SiteRecord = {
     updatedAt: string;
 };
 
-export type PolicySite = { id: number; url: string; status: SiteStatus };
+/** `aliases`: the site's other host names, answered with its main address's scheme and port. */
+export type PolicySite = { id: number; url: string; status: SiteStatus; aliases?: string[] };
 
 type Row = Record<string, any>;
 
@@ -382,7 +383,7 @@ function siteRows(): Row[] {
 
 function hostRows(): Row[] {
     if (isSqlStore()) return mirrorOrThrow().hosts;
-    return openStore().prepare('SELECT host, site_id FROM network_site_hosts').all();
+    return openStore().prepare('SELECT host, site_id, kind FROM network_site_hosts').all();
 }
 
 function load() {
@@ -391,13 +392,22 @@ function load() {
     const sites: SiteRecord[] = rows.map(rowToSite);
     const byId = new Map<number, SiteRecord>(sites.map((s) => [s.id, s]));
     const byHost = new Map<string, number>();
+    const aliasesOf = new Map<number, string[]>();
     for (const h of hostRows()) {
         const id = Number(h.site_id);
-        if (id !== PRIMARY_SITE_ID && byId.has(id)) byHost.set(String(h.host), id);
+        if (id !== PRIMARY_SITE_ID && byId.has(id)) {
+            byHost.set(String(h.host), id);
+            if (h.kind === 'alias') aliasesOf.set(id, [...(aliasesOf.get(id) || []), String(h.host)]);
+        }
     }
     const policy: PolicySite[] = Object.freeze(sites
         .filter((s) => s.id !== PRIMARY_SITE_ID)
-        .map((s) => Object.freeze({ id: s.id, url: s.mainUrl, status: s.status }))) as PolicySite[];
+        .map((s) => {
+            const aliases = (aliasesOf.get(s.id) || []).sort();
+            return Object.freeze(aliases.length
+                ? { id: s.id, url: s.mainUrl, status: s.status, aliases: Object.freeze(aliases) as string[] }
+                : { id: s.id, url: s.mainUrl, status: s.status });
+        })) as PolicySite[];
     snapshot = { sites, byId, byHost, policy };
     return snapshot;
 }
@@ -422,6 +432,12 @@ function listSitesUnchecked(): SiteRecord[] {
 
 function getSite(id: number): SiteRecord | null {
     return isSiteId(id) ? load().byId.get(id) || null : null;
+}
+
+/** A site's other host names (network_site_hosts kind 'alias'), sorted. */
+function siteAliases(id: number): string[] {
+    const entry = load().policy.find((p) => p.id === id);
+    return entry && entry.aliases ? entry.aliases.slice() : [];
 }
 
 /** The site (other than site 1) whose address is `hostname`, or null. Site 1's addresses are the host policy's. */
@@ -563,6 +579,54 @@ async function insertSite(input: { slug: string; url: string; hostname: string }
         }
     }
     throw codedError('network_busy', 'The site could not be recorded; try again.');
+}
+
+/**
+ * Give a site (not site 1) a new main address and/or other host names, in one write: network_sites.main_url
+ * and every network_site_hosts row of the site are replaced. The caller (core/network-sites
+ * changeSiteAddress) has validated every name; a name another site holds still fails here, on the
+ * table's primary key, as network_host_taken.
+ */
+async function setSiteAddresses(id: number, input: { url: string; hostname: string; aliases: string[] }): Promise<SiteRecord> {
+    if (!isSiteId(id) || id === PRIMARY_SITE_ID) throw codedError('network_primary_site', 'The main site\'s address is changed in Settings → Site address.');
+    const t = now();
+    const rows: Array<[string, string]> = [[input.hostname, 'main'], ...input.aliases.map((h): [string, string] => [h, 'alias'])];
+    const taken = (owner: any) => owner && Number(owner.site_id) !== id;
+    if (!isSqlStore()) {
+        const store = openStore();
+        store.transaction(() => {
+            if (!store.prepare('SELECT 1 FROM network_sites WHERE id = ?').get(id)) throw codedError('network_site_not_found', 'No such site.');
+            for (const [host] of rows) {
+                if (taken(store.prepare('SELECT site_id FROM network_site_hosts WHERE host = ?').get(host))) {
+                    throw codedError('network_host_taken', `Another site already answers on ${host}.`);
+                }
+            }
+            store.prepare('DELETE FROM network_site_hosts WHERE site_id = ?').run(id);
+            for (const [host, kind] of rows) store.prepare('INSERT INTO network_site_hosts (host, site_id, kind) VALUES (?, ?, ?)').run(host, id, kind);
+            store.prepare('UPDATE network_sites SET main_url = ?, updated_at = ? WHERE id = ?').run(input.url, t, id);
+        })();
+        invalidate();
+        return getSite(id) as SiteRecord;
+    }
+    const d = await sqlStore();
+    try {
+        await d.transaction(async (q: any) => {
+            if (!(await q.get('SELECT 1 AS x FROM network_sites WHERE id = ?', [id]))) throw codedError('network_site_not_found', 'No such site.');
+            for (const [host] of rows) {
+                if (taken(await q.get('SELECT site_id FROM network_site_hosts WHERE host = ?', [host]))) {
+                    throw codedError('network_host_taken', `Another site already answers on ${host}.`);
+                }
+            }
+            await q.run('DELETE FROM network_site_hosts WHERE site_id = ?', [id]);
+            for (const [host, kind] of rows) await q.run('INSERT INTO network_site_hosts (host, site_id, kind) VALUES (?, ?, ?)', [host, id, kind]);
+            await q.run('UPDATE network_sites SET main_url = ?, updated_at = ? WHERE id = ?', [input.url, t, id]);
+        });
+    } catch (e: any) {
+        if (isDuplicateKey(e)) throw codedError('network_host_taken', 'Another site already answers on one of these addresses.');
+        throw e;
+    }
+    await afterSqlWrite();
+    return getSite(id) as SiteRecord;
 }
 
 /** Remove a site's record, addresses, quota and certificates (a failed provisioning, or a deletion). */
@@ -896,7 +960,9 @@ module.exports = {
     listSites,
     getSite,
     siteIdForHostname,
+    siteAliases,
     policySites,
+    setSiteAddresses,
     registerPrimarySite,
     normalizeSiteUrl,
     insertSite,

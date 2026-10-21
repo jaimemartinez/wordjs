@@ -95,8 +95,9 @@ function LoginForm() {
                             <p className="text-sm text-gray-500">{t('login.mfaPrompt')}</p>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">{t('login.mfaCode')}</label>
+                            <label htmlFor="login-mfa-code" className="block text-sm font-medium text-gray-700 mb-2">{t('login.mfaCode')}</label>
                             <input
+                                id="login-mfa-code"
                                 type="text"
                                 inputMode="numeric"
                                 autoComplete="one-time-code"

@@ -1543,8 +1543,24 @@ async function initializeMainSite() {
             };
 
             // Attempt registration with retry logic
+            let waitingForIdentityReported = false;
             const registerAll = async () => {
                 refreshClientOpts(); // certs may have been issued since the last attempt (see above)
+                // `/register` exists only on the gateway's internal mTLS listener and requires a cluster
+                // identity. Without one (a split install before the wizard has run) every attempt went to
+                // the PUBLIC port, which has no such route: a 405 every few seconds and a log full of
+                // "Waiting for Gateway to register backend..." until the install finished (FALLOS 109).
+                // Until then the gateway reaches this backend through its pre-install bootstrap route, so
+                // there is nothing to send: look for the certificates quietly and register as soon as
+                // setup writes them - the same rule as the frontend (src/instrumentation.ts).
+                if (Object.keys(clientOpts).length === 0) {
+                    if (!waitingForIdentityReported) {
+                        waitingForIdentityReported = true;
+                        log.info('⏳ No cluster certificate yet - the backend registers with the gateway once setup issues one.');
+                    }
+                    setTimeout(registerAll, 3000);
+                    return;
+                }
                 let preferredProto = (config.gatewaySsl && config.gatewaySsl.enabled) ? 'https' : 'http';
                 let fallbackProto = preferredProto === 'https' ? 'http' : 'https';
                 let allSuccess = true;

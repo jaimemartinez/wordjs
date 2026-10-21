@@ -12,6 +12,7 @@ import {
     aliasesForWrite,
     buildAlias,
     canManageSiteAddress,
+    siteAddressRefusalKey,
     canonicalChangeNotes,
     canonicalChoice,
     classifyWriteError,
@@ -455,7 +456,7 @@ export default function SiteAddressPage() {
 
     if (isLoading) return null;
     if (!isAdmin) {
-        return <div className="px-4 py-6 sm:p-8 md:p-12"><p className="text-sm text-gray-600">{t("siteAddress.adminOnly")}</p></div>;
+        return <div className="px-4 py-6 sm:p-8 md:p-12"><p className="text-sm text-gray-600" data-testid="site-address-refused">{t(siteAddressRefusalKey(user) || "siteAddress.adminOnly")}</p></div>;
     }
 
     const finished = (result: WriteResult) => {
