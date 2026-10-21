@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import DialogLayer from "@/components/DialogLayer";
 
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 export default function DbMigrationPage() {
     const [status, setStatus] = useState<any>(null);
@@ -31,6 +32,7 @@ export default function DbMigrationPage() {
     });
 
     const { confirm } = useModal();
+    const { t } = useI18n();
 
     // Modal State
     const [modal, setModal] = useState<{
@@ -53,7 +55,7 @@ export default function DbMigrationPage() {
                 window.location.href = "/login";
                 return;
             }
-            setError("Error connecting to server: " + e.message);
+            setError(t('dbMigration.connectError').replace('{error}', e.message));
         }
     };
 
@@ -72,11 +74,11 @@ export default function DbMigrationPage() {
     };
 
     const runCleanup = async (file: string) => {
-        if (!await confirm(`Are you sure you want to delete ${file}? This cannot be undone.`, "Delete File", true)) return;
+        if (!await confirm(t('dbMigration.deleteConfirm').replace('{file}', file), t('dbMigration.deleteFile'), true)) return;
 
         try {
             await apiPost('/db-migration/cleanup', { file });
-            setResult(`Cleaned up ${file}`);
+            setResult(t('dbMigration.cleanedUp').replace('{file}', file));
             fetchStatus(); // Refresh list
             setTimeout(() => setResult(null), 3000);
         } catch (e: any) {
@@ -156,13 +158,13 @@ export default function DbMigrationPage() {
                         ></div>
                     </div>
                     <div className="mt-4 text-sm text-gray-500 text-center font-medium h-6">
-                        {migrationProgress.currentTable && `Migrating table: ${migrationProgress.currentTable}`}
+                        {migrationProgress.currentTable && t('dbMigration.migratingTable').replace('{table}', migrationProgress.currentTable)}
                     </div>
 
                     {migrationProgress.warnings && migrationProgress.warnings.length > 0 && (
                         <div className="mt-6 p-4 bg-orange-50 text-orange-800 text-xs rounded-lg border border-orange-200 max-h-40 overflow-y-auto shadow-sm">
                             <h4 className="font-bold flex items-center gap-2 mb-2 sticky top-0 bg-orange-50 pb-2 border-b border-orange-200">
-                                <i className="fa-solid fa-circle-exclamation"></i> Warnings ({migrationProgress.warnings.length})
+                                <i className="fa-solid fa-circle-exclamation"></i> {t('dbMigration.warnings').replace('{count}', String(migrationProgress.warnings.length))}
                             </h4>
                             <ul className="space-y-1">
                                 {migrationProgress.warnings.map((w: string, i: number) => (
@@ -182,8 +184,8 @@ export default function DbMigrationPage() {
                 <div className="animate-spin text-4xl text-blue-600 mb-4">
                     <i className="fa-solid fa-circle-notch"></i>
                 </div>
-                <h2 className="text-xl font-bold text-gray-800">Restarting Server...</h2>
-                <p className="text-gray-500 mt-2">Please wait while we apply changes.</p>
+                <h2 className="text-xl font-bold text-gray-800">{t('dbMigration.restarting')}</h2>
+                <p className="text-gray-500 mt-2">{t('dbMigration.restartingHint')}</p>
             </DialogLayer>
         );
     }
@@ -192,7 +194,7 @@ export default function DbMigrationPage() {
         <div className="flex items-center justify-center min-h-[60vh]">
             <div className="flex flex-col items-center gap-4 animate-pulse">
                 <i className="fa-solid fa-circle-notch animate-spin text-4xl text-indigo-600"></i>
-                <span className="text-gray-500 font-medium tracking-wide">Connecting to System...</span>
+                <span className="text-gray-500 font-medium tracking-wide">{t('dbMigration.connecting')}</span>
             </div>
         </div>
     );
@@ -204,8 +206,8 @@ export default function DbMigrationPage() {
             <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-100/50 rounded-full blur-[100px] opacity-60 -z-10 -translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
 
             <PageHeader
-                title="Database Migration"
-                subtitle="Manage storage engines and data portability"
+                title={t('dbMigration.title')}
+                subtitle={t('dbMigration.subtitle')}
                 icon="fa-database"
             />
 
@@ -219,7 +221,7 @@ export default function DbMigrationPage() {
 
                         <div className="relative z-10">
                             <h2 className="text-xs font-black text-indigo-400 uppercase tracking-widest mb-6 flex items-center gap-2">
-                                <i className="fa-solid fa-microchip"></i> Active Engine
+                                <i className="fa-solid fa-microchip"></i> {t('dbMigration.activeEngine')}
                             </h2>
 
                             <div className="flex flex-col gap-6">
@@ -229,17 +231,17 @@ export default function DbMigrationPage() {
                                         <div className="absolute inset-0 bg-emerald-500 rounded-full animate-ping opacity-75"></div>
                                     </div>
                                     <span className="text-3xl font-black text-gray-800 tracking-tight leading-none">
-                                        {status.currentDriver === 'sqlite-native' ? 'Native SQLite' :
+                                        {status.currentDriver === 'sqlite-native' ? t('dbMigration.engine.sqliteNative') :
                                             status.currentDriver === 'postgres' ? 'PostgreSQL' :
-                                                status.currentDriver === 'mysql' ? 'MySQL / MariaDB' : 'Legacy SQLite'}
+                                                status.currentDriver === 'mysql' ? 'MySQL / MariaDB' : t('dbMigration.engine.sqliteLegacy')}
                                     </span>
                                 </div>
 
                                 <div className="text-sm bg-gray-50/80 rounded-2xl p-5 border border-gray-100 text-gray-600 leading-relaxed font-medium">
-                                    {status.currentDriver === 'sqlite-native' && (<><i className="fa-solid fa-bolt text-amber-500 mr-1.5"></i> High-performance file-based storage with WAL mode enabled. Recommended for most users.</>)}
-                                    {status.currentDriver === 'postgres' && (<><i className="fa-solid fa-database text-indigo-500 mr-1.5"></i> Production-grade relational database engine. Best for scaling and high concurrency.</>)}
-                                    {status.currentDriver === 'mysql' && (<><i className="fa-solid fa-fish text-teal-500 mr-1.5"></i> The world's most popular open-source database. Great for shared hosting and existing MySQL infrastructure.</>)}
-                                    {status.currentDriver === 'sqlite-legacy' && (<><i className="fa-solid fa-hard-drive text-gray-400 mr-1.5"></i> Compatibility mode using standard file locking. Slower, but works on all file systems.</>)}
+                                    {status.currentDriver === 'sqlite-native' && (<><i className="fa-solid fa-bolt text-amber-500 mr-1.5"></i> {t('dbMigration.desc.sqliteNative')}</>)}
+                                    {status.currentDriver === 'postgres' && (<><i className="fa-solid fa-database text-indigo-500 mr-1.5"></i> {t('dbMigration.desc.postgres')}</>)}
+                                    {status.currentDriver === 'mysql' && (<><i className="fa-solid fa-fish text-teal-500 mr-1.5"></i> {t('dbMigration.desc.mysql')}</>)}
+                                    {status.currentDriver === 'sqlite-legacy' && (<><i className="fa-solid fa-hard-drive text-gray-400 mr-1.5"></i> {t('dbMigration.desc.sqliteLegacy')}</>)}
                                 </div>
                             </div>
                         </div>
@@ -249,9 +251,9 @@ export default function DbMigrationPage() {
                     <div className="bg-gradient-to-br from-gray-900 to-gray-800 text-white p-6 rounded-3xl md:rounded-[40px] shadow-xl flex items-center justify-between group overflow-hidden relative">
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-1000"></div>
                         <div className="relative z-10">
-                            <div className="text-gray-400 text-xs font-bold uppercase mb-1 tracking-wider">System Status</div>
+                            <div className="text-gray-400 text-xs font-bold uppercase mb-1 tracking-wider">{t('dbMigration.systemStatus')}</div>
                             <div className="text-xl font-bold flex items-center gap-2">
-                                Online
+                                {t('dbMigration.online')}
                                 <i className="fa-solid fa-check text-emerald-400 text-sm"></i>
                             </div>
                         </div>
@@ -264,10 +266,10 @@ export default function DbMigrationPage() {
                     {status.legacyFiles && status.legacyFiles.length > 0 && (
                         <div className="bg-red-50 p-6 rounded-3xl md:rounded-[40px] border border-red-100 animate-in slide-in-from-left-8 fade-in duration-700 delay-300">
                             <h3 className="text-red-900 font-bold mb-3 flex items-center gap-2">
-                                <i className="fa-solid fa-trash-can"></i> Legacy / Unused Files
+                                <i className="fa-solid fa-trash-can"></i> {t('dbMigration.legacyFiles')}
                             </h3>
                             <p className="text-xs text-red-700/80 mb-4 leading-relaxed">
-                                These database files are from previous drivers and are currently not in use. You can safely remove them to free up disk space.
+                                {t('dbMigration.legacyFilesHint')}
                             </p>
                             <ul className="space-y-3">
                                 {status.legacyFiles.map((file: string) => (
@@ -276,7 +278,7 @@ export default function DbMigrationPage() {
                                         <button
                                             onClick={() => runCleanup(file)}
                                             className="w-8 h-8 shrink-0 flex items-center justify-center bg-red-100 text-red-600 rounded-lg hover:bg-red-600 hover:text-white transition-all"
-                                            title="Delete File"
+                                            title={t('dbMigration.deleteFile')}
                                         >
                                             <i className="fa-solid fa-xmark"></i>
                                         </button>
@@ -294,7 +296,7 @@ export default function DbMigrationPage() {
                             <div className="w-8 h-8 shrink-0 rounded-lg bg-gray-900 text-white flex items-center justify-center text-sm">
                                 <i className="fa-solid fa-share-nodes"></i>
                             </div>
-                            Available Migrations
+                            {t('dbMigration.available')}
                         </h2>
 
                         <div className="grid gap-5">
@@ -308,11 +310,11 @@ export default function DbMigrationPage() {
                                                 <i className="fa-solid fa-bolt"></i>
                                             </div>
                                             <div>
-                                                <h3 className="text-xl font-bold text-gray-900 group-hover:text-blue-700 transition-colors">Migrate to Native SQLite</h3>
-                                                <p className="text-gray-500 font-medium mt-1">Boost write performance by 10x with WAL mode.</p>
+                                                <h3 className="text-xl font-bold text-gray-900 group-hover:text-blue-700 transition-colors">{t('dbMigration.toNative.title')}</h3>
+                                                <p className="text-gray-500 font-medium mt-1">{t('dbMigration.toNative.desc')}</p>
                                                 <div className="flex gap-2 mt-3">
-                                                    <span className="px-2 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded uppercase">Recommended</span>
-                                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded uppercase">Fast</span>
+                                                    <span className="px-2 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded uppercase">{t('dbMigration.badge.recommended')}</span>
+                                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded uppercase">{t('dbMigration.badge.fast')}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -321,7 +323,7 @@ export default function DbMigrationPage() {
                                             disabled={loading}
                                             className="px-8 py-4 bg-gray-900 text-white font-bold rounded-xl hover:bg-blue-600 hover:shadow-lg hover:shadow-blue-500/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                                         >
-                                            Upgrade Now
+                                            {t('dbMigration.upgradeNow')}
                                         </button>
                                     </div>
                                 </div>
@@ -337,11 +339,11 @@ export default function DbMigrationPage() {
                                                 <i className="fa-solid fa-network-wired"></i>
                                             </div>
                                             <div>
-                                                <h3 className="text-xl font-bold text-gray-900 group-hover:text-indigo-700 transition-colors">Switch to PostgreSQL</h3>
-                                                <p className="text-gray-500 font-medium mt-1">Scale up with a production-grade external database.</p>
+                                                <h3 className="text-xl font-bold text-gray-900 group-hover:text-indigo-700 transition-colors">{t('dbMigration.toPostgres.title')}</h3>
+                                                <p className="text-gray-500 font-medium mt-1">{t('dbMigration.toPostgres.desc')}</p>
                                                 <div className="flex gap-2 mt-3">
-                                                    <span className="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded uppercase">Scalable</span>
-                                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded uppercase">Secure</span>
+                                                    <span className="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded uppercase">{t('dbMigration.badge.scalable')}</span>
+                                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded uppercase">{t('dbMigration.badge.secure')}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -350,7 +352,7 @@ export default function DbMigrationPage() {
                                             disabled={loading}
                                             className="px-8 py-4 bg-gray-900 text-white font-bold rounded-xl hover:bg-indigo-600 hover:shadow-lg hover:shadow-indigo-500/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                                         >
-                                            Configure
+                                            {t('dbMigration.configure')}
                                         </button>
                                     </div>
                                 </div>
@@ -366,10 +368,10 @@ export default function DbMigrationPage() {
                                                 <i className="fa-solid fa-database"></i>
                                             </div>
                                             <div>
-                                                <h3 className="text-xl font-bold text-gray-900 group-hover:text-teal-700 transition-colors">Switch to MySQL / MariaDB</h3>
-                                                <p className="text-gray-500 font-medium mt-1">Use the world's most popular open-source database.</p>
+                                                <h3 className="text-xl font-bold text-gray-900 group-hover:text-teal-700 transition-colors">{t('dbMigration.toMysql.title')}</h3>
+                                                <p className="text-gray-500 font-medium mt-1">{t('dbMigration.toMysql.desc')}</p>
                                                 <div className="flex gap-2 mt-3">
-                                                    <span className="px-2 py-1 bg-teal-50 text-teal-700 text-xs font-bold rounded uppercase">Popular</span>
+                                                    <span className="px-2 py-1 bg-teal-50 text-teal-700 text-xs font-bold rounded uppercase">{t('dbMigration.badge.popular')}</span>
                                                     <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded uppercase">MySQL 8+</span>
                                                 </div>
                                             </div>
@@ -379,7 +381,7 @@ export default function DbMigrationPage() {
                                             disabled={loading}
                                             className="px-8 py-4 bg-gray-900 text-white font-bold rounded-xl hover:bg-teal-600 hover:shadow-lg hover:shadow-teal-500/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                                         >
-                                            Configure
+                                            {t('dbMigration.configure')}
                                         </button>
                                     </div>
                                 </div>
@@ -394,8 +396,8 @@ export default function DbMigrationPage() {
                                                 <i className="fa-regular fa-hard-drive"></i>
                                             </div>
                                             <div>
-                                                <h3 className="text-xl font-bold text-gray-600 group-hover:text-gray-800 transition-colors">Downgrade to Legacy</h3>
-                                                <p className="text-gray-400 font-medium mt-1">Revert to standard file locking (sql.js).</p>
+                                                <h3 className="text-xl font-bold text-gray-600 group-hover:text-gray-800 transition-colors">{t('dbMigration.toLegacy.title')}</h3>
+                                                <p className="text-gray-400 font-medium mt-1">{t('dbMigration.toLegacy.desc')}</p>
                                             </div>
                                         </div>
                                         <button
@@ -403,7 +405,7 @@ export default function DbMigrationPage() {
                                             disabled={loading}
                                             className="px-6 py-3 text-gray-500 font-bold hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all disabled:opacity-50"
                                         >
-                                            Downgrade
+                                            {t('dbMigration.downgrade')}
                                         </button>
                                     </div>
                                 </div>
@@ -443,30 +445,30 @@ export default function DbMigrationPage() {
                                 <div className="w-16 h-16 shrink-0 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-6 mx-auto">
                                     <i className="fa-solid fa-arrow-right-arrow-left text-2xl"></i>
                                 </div>
-                                <h3 className="text-2xl font-black text-gray-900 text-center mb-2">Ready to Migrate?</h3>
+                                <h3 className="text-2xl font-black text-gray-900 text-center mb-2">{t('dbMigration.confirmTitle')}</h3>
                                 <p className="text-gray-500 text-center mb-8 font-medium">
-                                    You are about to migrate data to <strong>{modal.target}</strong>.
-                                    The server will restart automatically.
+                                    {t('dbMigration.confirmLead')} <strong>{modal.target}</strong>.
+                                    {' '}{t('dbMigration.confirmRestart')}
                                 </p>
                                 <div className="grid grid-cols-2 gap-4">
                                     <button
                                         onClick={() => setModal({ ...modal, isOpen: false })}
                                         className="px-6 py-4 rounded-xl border border-gray-200 text-gray-700 font-bold hover:bg-gray-50 hover:border-gray-300 transition-all"
                                     >
-                                        Cancel
+                                        {t('common.cancel')}
                                     </button>
                                     <button
                                         onClick={runMigration}
                                         className="px-6 py-4 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-500/30 transition-all"
                                     >
-                                        Start Migration
+                                        {t('dbMigration.start')}
                                     </button>
                                 </div>
                             </div>
                         ) : (
                             <div className="p-8">
                                 <div className="flex items-center justify-between mb-8">
-                                    <h3 className="text-2xl font-black text-gray-900">{modal.target === 'mysql' ? 'MySQL / MariaDB Setup' : 'PostgreSQL Setup'}</h3>
+                                    <h3 className="text-2xl font-black text-gray-900">{t('dbMigration.setupTitle').replace('{engine}', modal.target === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL')}</h3>
                                     <button onClick={() => setModal({ ...modal, isOpen: false })} className="text-gray-400 hover:text-gray-600">
                                         <i className="fa-solid fa-xmark text-xl"></i>
                                     </button>
@@ -474,7 +476,7 @@ export default function DbMigrationPage() {
 
                                 <div className="space-y-5 mb-8">
                                     <div>
-                                        <label htmlFor="db-migration-field-1" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Host Address</label>
+                                        <label htmlFor="db-migration-field-1" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{t('dbMigration.field.host')}</label>
                                         <input id="db-migration-field-1"
                                             type="text"
                                             value={pgConfig.dbHost}
@@ -485,7 +487,7 @@ export default function DbMigrationPage() {
                                     </div>
                                     <div className="grid grid-cols-2 gap-5">
                                         <div>
-                                            <label htmlFor="db-migration-field-2" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Port</label>
+                                            <label htmlFor="db-migration-field-2" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{t('dbMigration.field.port')}</label>
                                             <input id="db-migration-field-2"
                                                 type="text"
                                                 value={pgConfig.dbPort}
@@ -495,7 +497,7 @@ export default function DbMigrationPage() {
                                             />
                                         </div>
                                         <div>
-                                            <label htmlFor="db-migration-field-3" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">DB Name</label>
+                                            <label htmlFor="db-migration-field-3" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{t('dbMigration.field.dbName')}</label>
                                             <input id="db-migration-field-3"
                                                 type="text"
                                                 value={pgConfig.dbName}
@@ -507,7 +509,7 @@ export default function DbMigrationPage() {
                                     </div>
                                     <div className="grid grid-cols-2 gap-5">
                                         <div>
-                                            <label htmlFor="db-migration-field-4" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">User</label>
+                                            <label htmlFor="db-migration-field-4" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{t('dbMigration.field.user')}</label>
                                             <input id="db-migration-field-4"
                                                 type="text"
                                                 value={pgConfig.dbUser}
@@ -517,7 +519,7 @@ export default function DbMigrationPage() {
                                             />
                                         </div>
                                         <div>
-                                            <label htmlFor="db-migration-field-5" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Password</label>
+                                            <label htmlFor="db-migration-field-5" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{t('users.password')}</label>
                                             <input id="db-migration-field-5"
                                                 type="password"
                                                 value={pgConfig.dbPassword}
@@ -530,12 +532,12 @@ export default function DbMigrationPage() {
                                     <div className="mt-4 space-y-3">
                                         <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
                                             <input type="checkbox" checked={pgConfig.dbSsl} onChange={e => setPgConfig({ ...pgConfig, dbSsl: e.target.checked })} />
-                                            Use SSL (the server certificate is verified)
+                                            {t('dbMigration.ssl.use')}
                                         </label>
                                         {pgConfig.dbSsl && (
                                             <>
                                                 <div>
-                                                    <label htmlFor="migration-db-ssl-ca" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">CA certificate (PEM, optional)</label>
+                                                    <label htmlFor="migration-db-ssl-ca" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{t('dbMigration.ssl.ca')}</label>
                                                     <textarea
                                                         id="migration-db-ssl-ca"
                                                         rows={4}
@@ -546,15 +548,15 @@ export default function DbMigrationPage() {
                                                         className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 font-mono text-xs transition-colors"
                                                         placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
                                                     />
-                                                    <p className="mt-1 text-xs text-gray-500">For a private CA, a managed database&apos;s own CA or a self-signed server.</p>
+                                                    <p className="mt-1 text-xs text-gray-500">{t('dbMigration.ssl.caHint')}</p>
                                                 </div>
                                                 <label className="flex items-start gap-2 text-sm text-gray-700">
                                                     <input type="checkbox" className="mt-0.5" checked={pgConfig.dbSslSkipVerify} onChange={e => setPgConfig({ ...pgConfig, dbSslSkipVerify: e.target.checked })} />
-                                                    <span>Skip certificate verification (not recommended)</span>
+                                                    <span>{t('dbMigration.ssl.skipVerify')}</span>
                                                 </label>
                                                 {pgConfig.dbSslSkipVerify && (
                                                     <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                                                        The connection is encrypted but the server is not authenticated: anyone on the network path could impersonate the database.
+                                                        {t('dbMigration.ssl.skipVerifyWarning')}
                                                     </p>
                                                 )}
                                             </>
@@ -565,7 +567,7 @@ export default function DbMigrationPage() {
                                     onClick={runMigration}
                                     className="w-full px-6 py-4 rounded-xl bg-gray-900 text-white font-bold hover:bg-indigo-600 hover:shadow-lg hover:shadow-indigo-500/30 transition-all text-lg"
                                 >
-                                    Confirm Configuration
+                                    {t('dbMigration.confirmConfig')}
                                 </button>
                             </div>
                         )}

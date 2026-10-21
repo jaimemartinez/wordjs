@@ -224,7 +224,9 @@ describe('every place that configures a server database carries the TLS settings
 
     test('DB migration: UI sends the settings, the backend connects and persists with them', () => {
         const ui = repo('frontend/src/app/admin/db-migration/page.tsx');
-        assert.ok(/dbSslRejectUnauthorized: !dbSslSkipVerify/.test(ui) && /Skip certificate verification/.test(ui));
+        // The opt-out's label lives in the i18n catalogue; the page renders it by key.
+        assert.ok(/dbSslRejectUnauthorized: !dbSslSkipVerify/.test(ui) && /t\('dbMigration\.ssl\.skipVerify'\)/.test(ui));
+        assert.ok(/'dbMigration\.ssl\.skipVerify': 'Skip certificate verification/.test(repo('frontend/src/lib/i18n.ts')));
         const be = read('core/db-admin/migration.js');
         assert.ok(/dbConfig: \{[^}]*\.\.\.dbTls \}/.test(be), 'the target connection uses the TLS settings');
         assert.ok(/password: dbPassword,\s*\.\.\.dbTls/.test(be), 'the saved connection keeps them');
