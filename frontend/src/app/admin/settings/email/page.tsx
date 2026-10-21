@@ -121,13 +121,13 @@ export default function AccountMailSettingsPage() {
         }
     };
 
-    const label = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
+    const label = "block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2";
     const routeText = !status ? "" : status.route === "core" ? t("accountMail.routeCore")
         : status.route === "provider" ? t("accountMail.routeProvider").replace("{plugin}", status.provider || "")
         : t("accountMail.routeNone");
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader title={t("accountMail.title")} subtitle={t("accountMail.subtitle")} icon="fa-envelope-circle-check" />
 
             {status && (
@@ -213,7 +213,7 @@ export default function AccountMailSettingsPage() {
                                 <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-4">
                                     <div className="flex items-center justify-between gap-3">
                                         <code className="text-xs font-mono font-bold text-gray-800">{status.provider}</code>
-                                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full ${status.providerAllowed ? "bg-rose-600 text-white" : "bg-gray-200 text-gray-600"}`}>
+                                        <span className={`text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-full ${status.providerAllowed ? "bg-rose-600 text-white" : "bg-gray-200 text-gray-600"}`}>
                                             {status.providerAllowed ? t("accountMail.providerAllowedBadge") : t("accountMail.providerNotAllowedBadge")}
                                         </span>
                                     </div>

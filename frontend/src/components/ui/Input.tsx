@@ -47,7 +47,7 @@ export function Input({
     return (
         <div className="w-full">
             {label && (
-                <label htmlFor={inputId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                <label htmlFor={inputId} className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
                     {label}
                 </label>
             )}

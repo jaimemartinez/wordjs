@@ -274,7 +274,7 @@ export default function NetworkPage() {
 
     if (allowed === false) {
         return (
-            <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full">
+            <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full">
                 <PageHeader title={t("network.title")} subtitle={t("network.subtitle")} icon="fa-sitemap" />
                 <Card variant="default" padding="none">
                     <EmptyState icon="fa-lock" title={t("network.notAllowedTitle")} description={t("network.notAllowedDescription")} />
@@ -284,7 +284,7 @@ export default function NetworkPage() {
     }
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader title={t("network.title")} subtitle={t("network.subtitle")} icon="fa-sitemap" />
 
             <Card variant="default" padding="lg" className="mb-8">
@@ -348,10 +348,10 @@ export default function NetworkPage() {
                 ) : (
                     <ul className="divide-y divide-gray-50">
                         {sites.map((site) => (
-                            <li key={site.id} className="p-6 md:p-8 flex items-start justify-between gap-4 flex-wrap">
+                            <li key={site.id} className="p-5 md:p-8 flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-4">
                                 <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-3 mb-1 flex-wrap">
-                                        <a href={site.url} target="_blank" rel="noopener noreferrer" className="text-lg font-bold text-gray-700 tracking-tight break-all hover:text-blue-600">{site.host}</a>
+                                        <a href={site.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center pointer-coarse:min-h-11 text-lg font-bold text-gray-700 tracking-tight break-all hover:text-blue-600">{site.host}</a>
                                         {site.main && <StatusBadge status="info" label={t("network.mainSite")} />}
                                         {site.status === "active"
                                             ? <StatusBadge status="success" label={t("network.statusActive")} />
@@ -418,7 +418,7 @@ export default function NetworkPage() {
                                     )}
                                 </div>
                                 {!site.main && (
-                                    <div className="shrink-0 flex flex-col items-end gap-2">
+                                    <div className="sm:shrink-0 flex flex-col items-stretch sm:items-end gap-2">
                                         {site.status === "active" ? (
                                             <>
                                                 <Button variant="primary" icon="fa-right-to-bracket" loading={busyId === site.id && opening} onClick={() => openAsAdmin(site)} title={t("network.openAsAdminHint")} data-open-as-admin={site.id}>{t("network.openAsAdmin")}</Button>

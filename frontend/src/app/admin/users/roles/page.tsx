@@ -184,7 +184,7 @@ export default function RolesPage() {
                                 )}
                             </div>
                             <div className="mt-4 flex flex-wrap gap-1">
-                                <span className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full font-bold">
+                                <span className="text-[11px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full font-bold">
                                     {role.capabilities.length} {t('roles.caps')}
                                 </span>
                             </div>
@@ -197,7 +197,7 @@ export default function RolesPage() {
                     {editingSlug !== null && isPluginRole(roles[editingSlug]) ? (
                         <PluginRolePanel slug={editingSlug} role={roles[editingSlug]} t={t} onClose={() => setEditingSlug(null)} />
                     ) : editingSlug !== null ? (
-                        <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 sticky top-8">
+                        <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-5 sm:p-8 sticky top-8">
                             <form onSubmit={handleSave}>
                                 <div className="flex flex-wrap justify-between items-center gap-3 mb-8">
                                     <h2 className="text-xl font-bold text-gray-900">
@@ -223,8 +223,8 @@ export default function RolesPage() {
 
                                 <div className="space-y-6">
                                     <div>
-                                        <label className="block text-sm font-bold text-gray-700 mb-2">{t('roles.displayName')}</label>
-                                        <input
+                                        <label htmlFor="users-roles-field-1" className="block text-sm font-bold text-gray-700 mb-2">{t('roles.displayName')}</label>
+                                        <input id="users-roles-field-1"
                                             type="text"
                                             value={editName}
                                             onChange={(e) => setEditName(e.target.value)}
@@ -266,7 +266,7 @@ export default function RolesPage() {
                                                 >
                                                     <div className={`w-5 h-5 shrink-0 rounded flex items-center justify-center transition-all ${editCaps.includes(cap) ? "bg-blue-600 text-white" : "bg-white border border-gray-300"
                                                         }`}>
-                                                        {editCaps.includes(cap) && <i className="fa-solid fa-check text-[10px]"></i>}
+                                                        {editCaps.includes(cap) && <i className="fa-solid fa-check text-[11px]"></i>}
                                                     </div>
                                                     <input
                                                         type="checkbox"
@@ -285,7 +285,7 @@ export default function RolesPage() {
                             </form>
                         </div>
                     ) : (
-                        <div className="h-full min-h-[400px] bg-gray-50 border-2 border-dashed border-gray-200 rounded-[40px] flex flex-col items-center justify-center p-12 text-center text-gray-400">
+                        <div className="h-full min-h-[400px] bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl md:rounded-[40px] flex flex-col items-center justify-center p-12 text-center text-gray-400">
                             <div className="w-16 h-16 shrink-0 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-4">
                                 <i className="fa-solid fa-shield-halved text-2xl text-gray-200"></i>
                             </div>

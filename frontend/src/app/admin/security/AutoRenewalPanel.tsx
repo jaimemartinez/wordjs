@@ -137,8 +137,8 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
             {/* Settings */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Account email</label>
-                    <input
+                    <label htmlFor="autorenew-field-1" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Account email</label>
+                    <input id="autorenew-field-1"
                         type="email"
                         value={cfg.email}
                         onChange={e => setCfg({ ...cfg, email: e.target.value })}
@@ -148,8 +148,8 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     <p className="text-xs text-gray-500 ml-1">Let&apos;s Encrypt expiry notices go here.</p>
                 </div>
                 <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Renew before expiry (days)</label>
-                    <input
+                    <label htmlFor="autorenew-field-2" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Renew before expiry (days)</label>
+                    <input id="autorenew-field-2"
                         type="number" min={1} max={89}
                         value={cfg.renewBeforeDays}
                         onChange={e => setCfg({ ...cfg, renewBeforeDays: Number(e.target.value) })}
@@ -158,8 +158,8 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     <p className="text-xs text-gray-500 ml-1">Default 30. Checked twice daily.</p>
                 </div>
                 <div className="space-y-2 md:col-span-2">
-                    <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Domain(s)</label>
-                    <input
+                    <label htmlFor="autorenew-field-3" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Domain(s)</label>
+                    <input id="autorenew-field-3"
                         type="text"
                         value={domainsText}
                         onChange={e => setDomainsText(e.target.value)}

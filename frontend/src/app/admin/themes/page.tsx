@@ -281,7 +281,7 @@ export default function ThemesPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
             {permDialog && (
                 <ThemePermissionsDialog
                     themeName={permDialog.theme.name}
@@ -301,9 +301,9 @@ export default function ThemesPage() {
                         <>
                             <a
                                 href="/admin/themes/customize"
-                                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors"
+                                className="inline-flex items-center gap-2 min-h-11 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors"
                             >
-                                <i className="fa-solid fa-sliders"></i> {t('themes.customize')}
+                                <i className="fa-solid fa-sliders" aria-hidden="true"></i> {t('themes.customize')}
                             </a>
                             {/* Always available, not only while the banner is up: restoring is also
                                 how you undo a hand edit to themes/default that broke the stylesheet. */}
@@ -387,10 +387,10 @@ export default function ThemesPage() {
                         <div className="space-y-2 mb-4">
                             {srcList.map((u, i) => (
                                 <div key={u} className="flex items-center gap-2 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
-                                    <span className="text-[10px] font-mono text-gray-400 w-4 shrink-0">{i + 1}</span>
+                                    <span className="text-[11px] font-mono text-gray-400 w-4 shrink-0">{i + 1}</span>
                                     <span className="flex-1 font-mono text-[11px] text-gray-700 truncate" title={u}>{u}</span>
                                     {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
-                                    <button type="button" onClick={() => setSrcList((l) => l.filter((x) => x !== u))} aria-label={t('themes.sources.remove')} className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-rose-500 hover:border-rose-200 transition-colors shrink-0"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                                    <button type="button" onClick={() => setSrcList((l) => l.filter((x) => x !== u))} aria-label={t('themes.sources.remove')} className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-rose-500 hover:border-rose-200 transition-colors shrink-0"><i className="fa-solid fa-trash-can text-[11px]"></i></button>
                                 </div>
                             ))}
                             {srcList.length === 0 && <div className="text-[11px] text-gray-400 italic px-1">{t('themes.sources.empty')}</div>}
@@ -404,7 +404,7 @@ export default function ThemesPage() {
                                 placeholder={t('themes.sources.placeholder')}
                                 className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl outline-none font-mono text-xs focus:border-gray-400 transition-colors"
                             />
-                            <Button onClick={addSource}><i className="fa-solid fa-plus mr-1.5 text-[10px]"></i> {t('common.add')}</Button>
+                            <Button onClick={addSource}><i className="fa-solid fa-plus mr-1.5 text-[11px]"></i> {t('common.add')}</Button>
                         </div>
                         <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-100">
                             <button type="button" onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-gray-500 hover:text-gray-800 disabled:opacity-50 uppercase tracking-widest">{t('themes.sources.resetDefault')}</button>
@@ -429,7 +429,7 @@ export default function ThemesPage() {
                                 disabled={restoring}
                                 className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 font-bold text-xs uppercase tracking-widest hover:bg-amber-200 transition-colors disabled:opacity-50"
                             >
-                                <i className={`fa-solid ${restoring ? 'fa-circle-notch fa-spin' : 'fa-rotate-left'} text-[10px]`}></i>
+                                <i className={`fa-solid ${restoring ? 'fa-circle-notch fa-spin' : 'fa-rotate-left'} text-[11px]`}></i>
                                 {restoring ? t('themes.restoring') : t('themes.restoreDefault')}
                             </button>
                         </div>
@@ -468,7 +468,7 @@ export default function ThemesPage() {
                             <div
                                 key={theme.slug}
                                 className={`
-                                group bg-white rounded-[40px] border transition-all duration-500 relative flex flex-col h-full overflow-hidden
+                                group bg-white rounded-3xl md:rounded-[40px] border transition-all duration-500 relative flex flex-col h-full overflow-hidden
                                 animate-in fade-in slide-in-from-bottom-8 fill-mode-both
                                 ${theme.active
                                         ? "border-blue-500/50 shadow-[0_25px_60px_-15px_rgba(59,130,246,0.15)] ring-1 ring-blue-500/20"
@@ -514,7 +514,7 @@ export default function ThemesPage() {
                                             <h3 className="text-2xl font-black text-gray-900 group-hover:text-blue-600 transition-colors truncate">
                                                 {theme.name}
                                             </h3>
-                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] bg-gray-50 px-2 py-1 rounded-md">
+                                            <span className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] bg-gray-50 px-2 py-1 rounded-md">
                                                 v{theme.version}
                                             </span>
                                         </div>
@@ -602,7 +602,7 @@ export default function ThemesPage() {
                         market.map((entry, index) => (
                             <div
                                 key={entry.id}
-                                className="group bg-white rounded-[40px] border border-gray-200 shadow-[0_15px_40px_-15px_rgba(0,0,0,0.04)] hover:shadow-[0_30px_70px_-15px_rgba(0,0,0,0.08)] hover:-translate-y-2 transition-all duration-500 relative flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-bottom-8 fill-mode-both"
+                                className="group bg-white rounded-3xl md:rounded-[40px] border border-gray-200 shadow-[0_15px_40px_-15px_rgba(0,0,0,0.04)] hover:shadow-[0_30px_70px_-15px_rgba(0,0,0,0.08)] hover:-translate-y-2 transition-all duration-500 relative flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-bottom-8 fill-mode-both"
                                 style={{ animationDelay: `${index * 80}ms` }}
                             >
                                 <div className="aspect-[4/3] overflow-hidden relative">
@@ -626,7 +626,7 @@ export default function ThemesPage() {
                                     <div className="mb-4">
                                         <div className="flex items-center justify-between gap-4 mb-2">
                                             <h3 className="text-2xl font-black text-gray-900 group-hover:text-blue-600 transition-colors truncate">{entry.name}</h3>
-                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] bg-gray-50 px-2 py-1 rounded-md">v{entry.version}</span>
+                                            <span className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] bg-gray-50 px-2 py-1 rounded-md">v{entry.version}</span>
                                         </div>
                                         <p className="text-gray-500 font-medium text-sm leading-relaxed line-clamp-2">{entry.description || t('themes.defaultDescription')}</p>
                                     </div>
@@ -634,7 +634,7 @@ export default function ThemesPage() {
                                         <div className="flex items-center justify-between text-xs font-bold text-gray-400 mb-2">
                                             <span>{t('themes.by')} <span className="text-gray-900">{entry.author || 'WordJS'}</span></span>
                                             {entry.updateAvailable && (
-                                                <span className="text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-md uppercase tracking-wider text-[10px]">v{entry.installedVersion} instalada</span>
+                                                <span className="text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-md uppercase tracking-wider text-[11px]">v{entry.installedVersion} instalada</span>
                                             )}
                                         </div>
                                         {entry.installed ? (

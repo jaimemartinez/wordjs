@@ -35,7 +35,7 @@ export const OPTION_LABEL_CLASS = 'min-w-0 flex-1 whitespace-normal break-words'
  * ≥ 6.9:1 even over black — so does the menu's empty-list line. The trigger's placeholder (gray-400 too)
  * is gray-500, on the trigger's solid gray-50. Exported for the unit test.
  */
-export const GROUP_HEADING_CLASS = 'px-4 pt-3 pb-1 text-[10px] font-black uppercase tracking-widest text-gray-600 break-words';
+export const GROUP_HEADING_CLASS = 'px-4 pt-3 pb-1 text-[11px] font-black uppercase tracking-widest text-gray-600 break-words';
 export const EMPTY_LIST_CLASS = 'px-4 py-3 text-sm text-gray-600 italic';
 export const PLACEHOLDER_CLASS = 'text-gray-500';
 
@@ -162,7 +162,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                     <span className={`truncate ${!selectedOption ? PLACEHOLDER_CLASS : ''}`}>
                         {displayLabel}
                     </span>
-                    <i className={`fa-solid fa-chevron-down text-[10px] transition-transform duration-300 text-gray-400 ${isOpen ? 'rotate-180 text-blue-500' : ''}`}></i>
+                    <i className={`fa-solid fa-chevron-down text-[11px] transition-transform duration-300 text-gray-400 ${isOpen ? 'rotate-180 text-blue-500' : ''}`}></i>
                 </button>
 
                 {/* Dropdown Menu — portalled to <body>, above any dialog it is opened from (lib/adminLayers.ts). */}

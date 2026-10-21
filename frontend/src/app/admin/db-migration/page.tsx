@@ -198,7 +198,7 @@ export default function DbMigrationPage() {
     );
 
     return (
-        <div className="p-8 max-w-7xl mx-auto relative min-h-[85vh] h-full overflow-y-auto">
+        <div className="px-4 py-6 sm:p-8 max-w-7xl mx-auto relative min-h-[85vh] h-full w-full overflow-y-auto overflow-x-hidden">
             {/* Decorative Background Elements */}
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-100/50 rounded-full blur-[100px] opacity-60 -z-10 translate-x-1/3 -translate-y-1/3 pointer-events-none"></div>
             <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-100/50 rounded-full blur-[100px] opacity-60 -z-10 -translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
@@ -212,7 +212,7 @@ export default function DbMigrationPage() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 {/* Left Column: Status (4 cols) */}
                 <div className="lg:col-span-4 space-y-6 animate-in slide-in-from-left-4 fade-in duration-700 delay-100">
-                    <div className="bg-white/80 backdrop-blur-xl p-8 rounded-[40px] border border-white/60 shadow-xl overflow-hidden relative group hover:shadow-2xl transition-all duration-500">
+                    <div className="bg-white/80 backdrop-blur-xl p-5 sm:p-8 rounded-3xl md:rounded-[40px] border border-white/60 shadow-xl overflow-hidden relative group hover:shadow-2xl transition-all duration-500">
                         <div className="absolute top-0 right-0 p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity duration-500 transform scale-150 rotate-12 pointer-events-none">
                             <i className="fa-solid fa-server text-9xl text-indigo-900"></i>
                         </div>
@@ -246,7 +246,7 @@ export default function DbMigrationPage() {
                     </div>
 
                     {/* Stats / Info */}
-                    <div className="bg-gradient-to-br from-gray-900 to-gray-800 text-white p-6 rounded-[40px] shadow-xl flex items-center justify-between group overflow-hidden relative">
+                    <div className="bg-gradient-to-br from-gray-900 to-gray-800 text-white p-6 rounded-3xl md:rounded-[40px] shadow-xl flex items-center justify-between group overflow-hidden relative">
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-1000"></div>
                         <div className="relative z-10">
                             <div className="text-gray-400 text-xs font-bold uppercase mb-1 tracking-wider">System Status</div>
@@ -262,7 +262,7 @@ export default function DbMigrationPage() {
 
                     {/* Legacy Data Cleanup */}
                     {status.legacyFiles && status.legacyFiles.length > 0 && (
-                        <div className="bg-red-50 p-6 rounded-[40px] border border-red-100 animate-in slide-in-from-left-8 fade-in duration-700 delay-300">
+                        <div className="bg-red-50 p-6 rounded-3xl md:rounded-[40px] border border-red-100 animate-in slide-in-from-left-8 fade-in duration-700 delay-300">
                             <h3 className="text-red-900 font-bold mb-3 flex items-center gap-2">
                                 <i className="fa-solid fa-trash-can"></i> Legacy / Unused Files
                             </h3>
@@ -329,7 +329,7 @@ export default function DbMigrationPage() {
 
                             {/* Option: Postgres */}
                             {status.currentDriver !== 'postgres' && status.availableDrivers?.includes('postgres') && (
-                                <div className="group bg-white p-6 md:p-8 rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
+                                <div className="group bg-white p-6 md:p-8 rounded-3xl md:rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-indigo-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
@@ -358,7 +358,7 @@ export default function DbMigrationPage() {
 
                             {/* Option: MySQL / MariaDB */}
                             {status.currentDriver !== 'mysql' && status.availableDrivers?.includes('mysql') && (
-                                <div className="group bg-white p-6 md:p-8 rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
+                                <div className="group bg-white p-6 md:p-8 rounded-3xl md:rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-teal-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
@@ -387,7 +387,7 @@ export default function DbMigrationPage() {
 
                             {/* Option: Legacy */}
                             {status.currentDriver !== 'sqlite-legacy' && status.availableDrivers?.includes('sqlite-legacy') && (
-                                <div className="group bg-white/40 p-6 md:p-8 rounded-[40px] border-2 border-dashed border-gray-200 hover:border-gray-300 hover:bg-white transition-all duration-300">
+                                <div className="group bg-white/40 p-6 md:p-8 rounded-3xl md:rounded-[40px] border-2 border-dashed border-gray-200 hover:border-gray-300 hover:bg-white transition-all duration-300">
                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
                                             <div className="w-16 h-16 bg-gray-100 text-gray-400 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl group-hover:text-gray-600 transition-colors">
@@ -437,7 +437,7 @@ export default function DbMigrationPage() {
             {modal.isOpen && (
                 <DialogLayer className="flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm animate-in fade-in" onClick={() => setModal({ ...modal, isOpen: false })}></div>
-                    <div className="bg-white rounded-[40px] shadow-2xl max-w-lg w-full overflow-hidden relative z-10 animate-in zoom-in-95 duration-300">
+                    <div className="bg-white rounded-3xl md:rounded-[40px] shadow-2xl max-w-lg w-full overflow-hidden relative z-10 animate-in zoom-in-95 duration-300">
                         {modal.type === 'confirm' ? (
                             <div className="p-8">
                                 <div className="w-16 h-16 shrink-0 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-6 mx-auto">
@@ -474,8 +474,8 @@ export default function DbMigrationPage() {
 
                                 <div className="space-y-5 mb-8">
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Host Address</label>
-                                        <input
+                                        <label htmlFor="db-migration-field-1" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Host Address</label>
+                                        <input id="db-migration-field-1"
                                             type="text"
                                             value={pgConfig.dbHost}
                                             onChange={e => setPgConfig({ ...pgConfig, dbHost: e.target.value })}
@@ -485,8 +485,8 @@ export default function DbMigrationPage() {
                                     </div>
                                     <div className="grid grid-cols-2 gap-5">
                                         <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Port</label>
-                                            <input
+                                            <label htmlFor="db-migration-field-2" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Port</label>
+                                            <input id="db-migration-field-2"
                                                 type="text"
                                                 value={pgConfig.dbPort}
                                                 onChange={e => setPgConfig({ ...pgConfig, dbPort: e.target.value })}
@@ -495,8 +495,8 @@ export default function DbMigrationPage() {
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">DB Name</label>
-                                            <input
+                                            <label htmlFor="db-migration-field-3" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">DB Name</label>
+                                            <input id="db-migration-field-3"
                                                 type="text"
                                                 value={pgConfig.dbName}
                                                 onChange={e => setPgConfig({ ...pgConfig, dbName: e.target.value })}
@@ -507,8 +507,8 @@ export default function DbMigrationPage() {
                                     </div>
                                     <div className="grid grid-cols-2 gap-5">
                                         <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">User</label>
-                                            <input
+                                            <label htmlFor="db-migration-field-4" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">User</label>
+                                            <input id="db-migration-field-4"
                                                 type="text"
                                                 value={pgConfig.dbUser}
                                                 onChange={e => setPgConfig({ ...pgConfig, dbUser: e.target.value })}
@@ -517,8 +517,8 @@ export default function DbMigrationPage() {
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Password</label>
-                                            <input
+                                            <label htmlFor="db-migration-field-5" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Password</label>
+                                            <input id="db-migration-field-5"
                                                 type="password"
                                                 value={pgConfig.dbPassword}
                                                 onChange={e => setPgConfig({ ...pgConfig, dbPassword: e.target.value })}

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { authApi, settingsApi } from "@/lib/api";
 import { currentReturnPath } from "@/lib/safeReturnPath";
+import { getStoredLanguage, t } from "@/lib/i18n";
 
 function LoginForm() {
     const [username, setUsername] = useState("");
@@ -149,16 +150,20 @@ function LoginForm() {
                                 type={showPassword ? "text" : "password"}
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 pr-10"
+                                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 pr-12"
                                 placeholder="Enter password"
                                 required
                             />
                             <button
                                 type="button"
                                 onClick={() => setShowPassword(!showPassword)}
-                                className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
+                                aria-label={t(showPassword ? 'login.hidePassword' : 'login.showPassword', getStoredLanguage())}
+                                aria-pressed={showPassword}
+                                // The stored admin language is read in the browser only: the server's guess may differ.
+                                suppressHydrationWarning
+                                className="absolute inset-y-0 right-0 w-11 flex items-center justify-center rounded-r-lg text-gray-400 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-blue-500"
                             >
-                                <i className={`fa-solid ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                                <i className={`fa-solid ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`} aria-hidden="true"></i>
                             </button>
                         </div>
                     </div>
@@ -197,7 +202,7 @@ function LoginForm() {
                 )}
 
                 <div className="mt-6 text-center">
-                    <a href="/" className="text-sm text-gray-500 hover:text-blue-600">
+                    <a href="/" className="inline-flex items-center min-h-11 text-sm text-gray-500 hover:text-blue-600">
                         &larr; Back to Home
                     </a>
                 </div>

@@ -296,7 +296,7 @@ export default function ChromeEditorPage() {
                         </div>
                         <div className="hidden md:block">
                             <h1 className="font-black italic text-xl tracking-tighter leading-none">{t("chrome.admin.title")}</h1>
-                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{t("chrome.admin.subtitle")}</span>
+                            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest leading-none">{t("chrome.admin.subtitle")}</span>
                         </div>
                     </div>
                     <div className="h-8 w-px bg-gray-100 hidden md:block"></div>
@@ -309,7 +309,7 @@ export default function ChromeEditorPage() {
                                 type="button"
                                 onClick={() => switchPart(p)}
                                 aria-pressed={part === p}
-                                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${part === p ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}
+                                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all ${part === p ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}
                             >
                                 {/* Non-colour cue for the active part (the fill/colour swap alone is invisible
                                     under forced colours and to users who can't tell the two apart). */}
@@ -321,7 +321,7 @@ export default function ChromeEditorPage() {
 
                     {/* Effective source — what visitors see right now, and where it comes from */}
                     <span
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-50 border border-gray-100 text-[10px] font-black uppercase tracking-widest text-gray-500 max-w-full min-w-0"
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-50 border border-gray-100 text-[11px] font-black uppercase tracking-widest text-gray-500 max-w-full min-w-0"
                         title={t(`chrome.admin.sourceHint.${source}`)}
                         data-wjs-chrome-source={source}
                     >
@@ -413,14 +413,14 @@ export default function ChromeEditorPage() {
                         <button
                             type="button"
                             onClick={() => { setPendingPart(null); setPart(pendingPart); window.history.replaceState(null, "", `?part=${pendingPart}`); }}
-                            className="px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 transition-all"
+                            className="px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 transition-all"
                         >
                             {t("chrome.admin.discardConfirm")}
                         </button>
                         <button
                             type="button"
                             onClick={() => setPendingPart(null)}
-                            className="px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest bg-white border border-gray-200 text-gray-500 hover:text-gray-700 transition-all"
+                            className="px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest bg-white border border-gray-200 text-gray-500 hover:text-gray-700 transition-all"
                         >
                             {t("chrome.admin.discardCancel")}
                         </button>
@@ -464,7 +464,7 @@ export default function ChromeEditorPage() {
                     <div className="absolute inset-0 flex items-center justify-center">
                         <div className="flex flex-col items-center gap-3 text-gray-300">
                             <i className="fa-solid fa-circle-notch fa-spin text-2xl"></i>
-                            <span className="text-[10px] font-black uppercase tracking-widest">{t("chrome.admin.loading")}</span>
+                            <span className="text-[11px] font-black uppercase tracking-widest">{t("chrome.admin.loading")}</span>
                         </div>
                     </div>
                 ) : (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PageHeader, Card, Button, Select, TimePicker } from "@/components/ui";
+import { PageHeader, Card, Button, Select, TimePicker, DataTable, EmptyState } from "@/components/ui";
 import { backupsApi, settingsApi, BackupFile } from "@/lib/api";
 import { format } from "date-fns";
 import { useModal } from "@/contexts/ModalContext";
@@ -165,7 +165,7 @@ export default function BackupsPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full bg-gray-50/50 overflow-auto">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full bg-gray-50/50 overflow-auto">
             <PageHeader
                 title={t('backups.title')}
                 subtitle={t('backups.subtitle')}
@@ -214,7 +214,7 @@ export default function BackupsPage() {
             </div>
 
             {/* Scheduler Card */}
-            <Card className="rounded-[40px] border-none shadow-sm mb-8 p-8" overflow="visible">
+            <Card className="rounded-3xl md:rounded-[40px] border-none shadow-sm mb-8 p-5 sm:p-8" overflow="visible">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                     <div>
                         <h3 className="text-xl font-bold text-gray-800 mb-2">
@@ -292,84 +292,49 @@ export default function BackupsPage() {
                 </div>
             </Card>
 
-            <Card className="rounded-[40px] border-none shadow-sm">
-                <div className="overflow-x-auto">
-                    <table className="w-full">
-                        <thead>
-                            <tr className="border-b border-gray-100/50 text-left">
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">{t('backups.column.filename')}</th>
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">{t('backups.column.date')}</th>
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">{t('backups.column.size')}</th>
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold text-right">{t('backups.column.actions')}</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                            {loading ? (
-                                <tr>
-                                    <td colSpan={4} className="p-12 text-center text-gray-400">
-                                        <i className="fa-solid fa-spinner fa-spin text-2xl mb-3"></i>
-                                        <p>{t('backups.loading')}</p>
-                                    </td>
-                                </tr>
-                            ) : backups.length === 0 ? (
-                                <tr>
-                                    <td colSpan={4} className="p-12 text-center text-gray-400">
-                                        <div className="w-16 h-16 shrink-0 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                                            <i className="fa-solid fa-box-open text-2xl text-gray-300"></i>
+            <Card className="rounded-3xl md:rounded-[40px] border-none shadow-sm" padding="none">
+                {loading ? (
+                    <div className="p-12 text-center text-gray-500" role="status">
+                        <i className="fa-solid fa-spinner fa-spin text-2xl mb-3" aria-hidden="true"></i>
+                        <p>{t('backups.loading')}</p>
+                    </div>
+                ) : backups.length === 0 ? (
+                    <EmptyState
+                        icon="fa-box-open"
+                        title={t('backups.empty.title')}
+                        description={t('backups.empty.description')}
+                    />
+                ) : (
+                    <DataTable
+                        rows={backups}
+                        rowKey={(b) => b.filename}
+                        caption={t('backups.title')}
+                        rowLabel={(b) => b.filename}
+                        actionsLabel={t('backups.column.actions')}
+                        columns={[
+                            {
+                                key: "filename",
+                                header: t('backups.column.filename'),
+                                primary: true,
+                                cell: (backup) => (
+                                    <div className="flex items-center gap-3 font-medium text-gray-700">
+                                        <div className="w-10 h-10 shrink-0 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center" aria-hidden="true">
+                                            <i className="fa-solid fa-file-zipper"></i>
                                         </div>
-                                        <p className="font-medium">{t('backups.empty.title')}</p>
-                                        <p className="text-sm mt-1">{t('backups.empty.description')}</p>
-                                    </td>
-                                </tr>
-                            ) : (
-                                backups.map((backup) => (
-                                    <tr key={backup.filename} className="hover:bg-gray-50/50 transition-colors group">
-                                        <td className="p-6 font-medium text-gray-700">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 shrink-0 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center">
-                                                    <i className="fa-solid fa-file-zipper"></i>
-                                                </div>
-                                                {backup.filename}
-                                            </div>
-                                        </td>
-                                        <td className="p-6 text-gray-500 text-sm">
-                                            {format(new Date(backup.date), "PPP p")}
-                                        </td>
-                                        <td className="p-6 text-gray-500 text-sm font-mono">
-                                            {formatSize(backup.size)}
-                                        </td>
-                                        <td className="p-6 text-right">
-                                            <div className="flex items-center justify-end gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
-                                                <button
-                                                    onClick={() => backupsApi.download(backup.filename)}
-                                                    className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"
-                                                    title={t('backups.action.download')}
-                                                >
-                                                    <i className="fa-solid fa-download"></i>
-                                                </button>
-                                                <button
-                                                    onClick={() => handleRestore(backup.filename)}
-                                                    disabled={restoring}
-                                                    className="p-2 hover:bg-orange-50 text-orange-500 rounded-lg transition-colors"
-                                                    title={t('backups.action.restore')}
-                                                >
-                                                    <i className="fa-solid fa-clock-rotate-left"></i>
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDelete(backup.filename)}
-                                                    className="p-2 hover:bg-red-50 text-red-500 rounded-lg transition-colors"
-                                                    title={t('backups.action.delete')}
-                                                >
-                                                    <i className="fa-solid fa-trash"></i>
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
+                                        <span className="break-all min-w-0">{backup.filename}</span>
+                                    </div>
+                                ),
+                            },
+                            { key: "date", header: t('backups.column.date'), cell: (backup) => <span className="text-gray-500 text-sm">{format(new Date(backup.date), "PPP p")}</span> },
+                            { key: "size", header: t('backups.column.size'), cell: (backup) => <span className="text-gray-500 text-sm font-mono">{formatSize(backup.size)}</span> },
+                        ]}
+                        actions={(backup) => [
+                            { key: "download", label: t('backups.action.download'), icon: "fa-download", onClick: () => backupsApi.download(backup.filename), tone: "primary" },
+                            { key: "restore", label: t('backups.action.restore'), icon: "fa-clock-rotate-left", onClick: () => handleRestore(backup.filename), disabled: restoring, tone: "warning" },
+                            { key: "delete", label: t('backups.action.delete'), icon: "fa-trash", onClick: () => handleDelete(backup.filename), tone: "danger" },
+                        ]}
+                    />
+                )}
             </Card>
         </div>
     );

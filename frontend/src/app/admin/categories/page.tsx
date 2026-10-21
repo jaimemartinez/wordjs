@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { categoriesApi, Category } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button, EmptyState, Card } from "@/components/ui";
+import { PageHeader, Button, EmptyState, Card, DataTable } from "@/components/ui";
 
 export default function CategoriesPage() {
     const { t } = useI18n();
@@ -59,7 +59,7 @@ export default function CategoriesPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t('categories.title') || "Categories"}
                 subtitle={
@@ -70,17 +70,19 @@ export default function CategoriesPage() {
                 }
             />
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
                 {/* Add new category */}
                 <Card variant="default" padding="lg" className="h-fit">
-                    <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6 flex items-center gap-2">
-                        <i className="fa-solid fa-plus-circle text-blue-500"></i>
+                    <h2 className="text-xs font-black uppercase tracking-widest text-gray-500 mb-6 flex items-center gap-2">
+                        <i className="fa-solid fa-plus-circle text-blue-500" aria-hidden="true"></i>
                         {t('categories.add') || "Add New Category"}
                     </h2>
                     <form onSubmit={handleCreate} className="space-y-6">
                         <div className="relative group">
-                            <i className="fa-solid fa-tag absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
+                            <label htmlFor="new-category-name" className="sr-only">{t('categories.name.label')}</label>
+                            <i className="fa-solid fa-tag absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors" aria-hidden="true"></i>
                             <input
+                                id="new-category-name"
                                 type="text"
                                 value={newCategory}
                                 onChange={(e) => setNewCategory(e.target.value)}
@@ -95,11 +97,11 @@ export default function CategoriesPage() {
                 </Card>
 
                 {/* Categories list */}
-                <div className="lg:col-span-2">
+                <div className="lg:col-span-2 min-w-0">
                     <Card variant="default" padding="none">
                         {loading ? (
-                            <div className="p-20 text-center">
-                                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                            <div className="p-20 text-center" role="status">
+                                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" aria-hidden="true"></div>
                                 <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{t('loading')}</p>
                             </div>
                         ) : categories.length === 0 ? (
@@ -109,60 +111,43 @@ export default function CategoriesPage() {
                                 description={t('categories.add.first') || "Create your first category to organize content."}
                             />
                         ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full">
-                                    <thead>
-                                        <tr className="border-b border-gray-100/50 bg-gray-50/30">
-                                            <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                {t('categories.name') || "Name"}
-                                            </th>
-                                            <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                {t('categories.slug') || "Slug"}
-                                            </th>
-                                            <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                {t('categories.post.count') || "Count"}
-                                            </th>
-                                            <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                {t('actions')}
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-50">
-                                        {categories.map((cat) => (
-                                            <tr key={cat.id} className="group hover:bg-blue-50/5 transition-colors">
-                                                <td className="px-8 py-6">
-                                                    <div className="flex items-center gap-4">
-                                                        <div className="w-10 h-10 shrink-0 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
-                                                            <i className="fa-solid fa-folder"></i>
-                                                        </div>
-                                                        <span className="text-lg font-bold text-gray-700 italic tracking-tight">
-                                                            {cat.name}
-                                                        </span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-8 py-6">
-                                                    <span className="text-sm font-mono text-gray-400 bg-gray-50 px-3 py-1 rounded-lg">
-                                                        {cat.slug}
-                                                    </span>
-                                                </td>
-                                                <td className="px-8 py-6">
-                                                    <span className="text-sm font-bold text-gray-500 bg-gray-50 px-3 py-1 rounded-full">
-                                                        {cat.count}
-                                                    </span>
-                                                </td>
-                                                <td className="px-8 py-6 text-right">
-                                                    <button
-                                                        onClick={() => handleDelete(cat.id)}
-                                                        className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                                                    >
-                                                        <i className="fa-solid fa-trash text-xs"></i>
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
+                            <DataTable
+                                rows={categories}
+                                rowKey={(c) => c.id}
+                                caption={t('categories.title') || "Categories"}
+                                rowLabel={(c) => c.name}
+                                actionsLabel={t('actions')}
+                                columns={[
+                                    {
+                                        key: "name",
+                                        header: t('categories.name') || "Name",
+                                        primary: true,
+                                        cell: (cat) => (
+                                            <div className="flex items-center gap-4">
+                                                <div className="w-10 h-10 shrink-0 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600" aria-hidden="true">
+                                                    <i className="fa-solid fa-folder"></i>
+                                                </div>
+                                                <span className="text-base md:text-lg font-bold text-gray-700 italic tracking-tight break-words min-w-0">
+                                                    {cat.name}
+                                                </span>
+                                            </div>
+                                        ),
+                                    },
+                                    {
+                                        key: "slug",
+                                        header: t('categories.slug') || "Slug",
+                                        cell: (cat) => <span className="text-sm font-mono text-gray-500 bg-gray-50 px-3 py-1 rounded-lg break-all">{cat.slug}</span>,
+                                    },
+                                    {
+                                        key: "count",
+                                        header: t('categories.post.count') || "Count",
+                                        cell: (cat) => <span className="text-sm font-bold text-gray-500 bg-gray-50 px-3 py-1 rounded-full">{cat.count}</span>,
+                                    },
+                                ]}
+                                actions={(cat) => [
+                                    { key: "delete", label: t('categories.delete'), icon: "fa-trash", onClick: () => handleDelete(cat.id), tone: "danger" },
+                                ]}
+                            />
                         )}
                     </Card>
                 </div>

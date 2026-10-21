@@ -28,9 +28,9 @@ const variantClasses: Record<ButtonVariant, string> = {
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
-    sm: "px-4 py-2 text-[10px] rounded-xl gap-2",
-    md: "px-6 py-3 text-[10px] rounded-xl gap-2",
-    lg: "px-8 py-4 text-[10px] rounded-2xl gap-3",
+    sm: "px-4 py-2 text-[11px] rounded-xl gap-2 pointer-coarse:min-h-11",
+    md: "px-6 py-3 text-[11px] rounded-xl gap-2 pointer-coarse:min-h-11",
+    lg: "px-6 sm:px-8 py-4 text-[11px] rounded-2xl gap-3",
 };
 
 /**
@@ -59,9 +59,9 @@ export function Button({
         "font-black uppercase tracking-widest transition-all duration-300 active:scale-95 flex items-center justify-center";
 
     const iconElement = loading ? (
-        <i className="fa-solid fa-spinner fa-spin text-[8px]"></i>
+        <i className="fa-solid fa-spinner fa-spin text-[11px]" aria-hidden="true"></i>
     ) : icon ? (
-        <i className={`fa-solid ${icon} text-[8px]`}></i>
+        <i className={`fa-solid ${icon} text-[11px]`} aria-hidden="true"></i>
     ) : null;
 
     return (

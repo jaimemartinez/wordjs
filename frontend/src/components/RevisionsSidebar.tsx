@@ -333,7 +333,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                         <ol className="space-y-3 list-none m-0 p-0">
                             {revisions.map((rev, index) => (
                                 <li key={rev.id || index} className={`relative p-4 rounded-2xl border ${index === 0 ? "bg-[var(--ed-primary-fixed)] border-[var(--ed-primary-container)]" : "bg-[var(--ed-surface-container-lowest)] border-[var(--ed-outline-variant)] hover:border-[var(--ed-primary)]"} transition-colors`}>
-                                    {index === 0 && <span className="absolute top-3 right-3 rounded-full bg-[var(--ed-primary-solid)] text-white text-[10px] font-semibold px-2 py-1">{tr("Última")}</span>}
+                                    {index === 0 && <span className="absolute top-3 right-3 rounded-full bg-[var(--ed-primary-solid)] text-white text-[11px] font-semibold px-2 py-1">{tr("Última")}</span>}
                                     <div className="pr-14">
                                         <div className="flex items-center gap-2 mb-2">
                                             <span className="w-8 h-8 shrink-0 rounded-full bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] flex items-center justify-center text-[11px] text-[var(--ed-on-surface)] font-semibold">

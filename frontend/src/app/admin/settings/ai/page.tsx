@@ -74,10 +74,10 @@ export default function AiSettingsPage() {
         }
     };
 
-    const label = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
+    const label = "block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2";
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader title={t("ai.settings.title")} subtitle={t("ai.settings.subtitle")} icon="fa-brain" />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
