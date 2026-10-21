@@ -235,3 +235,29 @@ test('with Require STARTTLS off, a relay that refuses STARTTLS with an SMTP repl
         assert.match(st.error, /502 5\.5\.1/);
     } finally { on.plugin.deactivate(); }
 });
+
+test('with Require STARTTLS off, an internal relay whose certificate cannot be verified is used with STARTTLS unverified; with it on, it is reported', async () => {
+    // nodemailer's socket error for a self-signed STARTTLS certificate (another WordJS inbound presents one).
+    const selfSigned = () => Object.assign(new Error('self-signed certificate'), { code: 'ESOCKET' });
+    const verify = async (opts: any) => { if (!(opts.tls && opts.tls.rejectUnauthorized === false)) throw selfSigned(); return true; };
+    const off = await boot({ options: { mail_server: '192.168.182.56', mail_port: '2525', mail_relay_require_tls: '0' }, verify });
+    try {
+        const last = off.transports[off.transports.length - 1];
+        assert.strictEqual(last.tls.rejectUnauthorized, false, 'encrypted, not verified');
+        assert.strictEqual(last.tls.port, 2525, 'the port still rides in the TLS options');
+        assert.notStrictEqual(last.ignoreTLS, true, 'not downgraded to plaintext');
+        assert.strictEqual((await off.call('get', '/settings')).body.relay_status.ok, true);
+    } finally { off.plugin.deactivate(); }
+    const on = await boot({ options: { mail_server: '192.168.182.56', mail_port: '587' }, verify });
+    try {
+        assert.ok(on.transports.every((t: any) => !(t.tls && t.tls.rejectUnauthorized === false)), 'never unverified while STARTTLS is required');
+        const st = (await on.call('get', '/settings')).body.relay_status;
+        assert.strictEqual(st.ok, false);
+        assert.match(st.error, /self-signed certificate/);
+    } finally { on.plugin.deactivate(); }
+    // A non-certificate failure is never retried without verification.
+    const other = await boot({ options: { mail_server: '192.168.182.56', mail_port: '2525', mail_relay_require_tls: '0' }, verify: async () => { throw Object.assign(new Error('connect ECONNREFUSED 192.168.182.56:2525'), { code: 'ESOCKET' }); } });
+    try {
+        assert.ok(other.transports.every((t: any) => !(t.tls && t.tls.rejectUnauthorized === false)));
+    } finally { other.plugin.deactivate(); }
+});

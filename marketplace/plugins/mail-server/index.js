@@ -55,10 +55,23 @@ const UPLOAD_DIR = path.join(__dirname, 'data/attachments');
 // into a NEW tag (e.g. "<<script>script>" -> "<script>"), so one pass can leave a live tag behind
 // (CodeQL js/incomplete-multi-character-sanitization). Repeat to a fixpoint, then drop any residual
 // angle brackets left by unterminated tags. Text nodes / whitespace / newlines are preserved.
+// HTML → the text/plain body (stored body_text, list snippets, the outgoing text part). Line breaks
+// survive as newlines, and character references are decoded AFTER the tags are gone: the result is
+// plain text, so "R&amp;D" must read "R&D" (it used to travel and show as "R&amp;D"), and a decoded
+// '<' can no longer start a tag because nothing parses this as HTML again.
 function stripHtml(s) {
-    let out = String(s == null ? '' : s);
+    let out = String(s == null ? '' : s)
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|li|h[1-6]|blockquote|tr)>/gi, '\n');
     for (let prev = null; prev !== out; ) { prev = out; out = out.replace(/<[^>]*>/g, ''); }
-    return out.replace(/[<>]/g, '');
+    return out.replace(/[<>]/g, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#0*39;|&apos;/gi, "'")
+        .replace(/&#(\d{1,7});/g, (m, d) => { const n = Number(d); return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ''; })
+        .replace(/&#x([0-9a-f]{1,6});/gi, (m, h) => { const n = parseInt(h, 16); return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ''; })
+        .replace(/&amp;/gi, '&')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
 }
 
 exports.metadata = {
@@ -664,9 +677,20 @@ async function initTransporter() {
             // and then refuses it with an SMTP reply (Mailpit: "502 5.5.1 Command not implemented") gets
             // the mail in plaintext — the rule the direct-to-MX path already applies to such servers. A
             // handshake that starts and then fails is not downgraded, and with STARTTLS required nothing is.
-            if (requireRelayTls || secure || !/upgrading connection with STARTTLS: [45]\d\d/i.test(String(e && e.message))) throw e;
-            console.warn(`   [MailServer][TLS] relay ${host}:${port} refused STARTTLS (${e.message}) — Require STARTTLS is off, so connecting without TLS`);
-            candidate = nodemailer.createTransport({ ...candidateOptions, ignoreTLS: true, requireTLS: false });
+            if (requireRelayTls || secure) throw e;
+            if (/upgrading connection with STARTTLS: [45]\d\d/i.test(String(e && e.message))) {
+                console.warn(`   [MailServer][TLS] relay ${host}:${port} refused STARTTLS (${e.message}) — Require STARTTLS is off, so connecting without TLS`);
+                candidate = nodemailer.createTransport({ ...candidateOptions, ignoreTLS: true, requireTLS: false });
+            } else if (isTlsVerifyError(e)) {
+                // An internal relay whose certificate cannot be verified (self-signed — what another WordJS
+                // server presents — or expired): with "Require STARTTLS" off the operator already accepted
+                // plaintext to this host, so encrypting without verification is strictly better than the
+                // plaintext they allowed. The same certificate-only rule as the direct-to-MX fallback.
+                console.warn(`   [MailServer][TLS] relay ${host}:${port} certificate could not be verified (${e.message}) — Require STARTTLS is off, so using STARTTLS without verification`);
+                candidate = nodemailer.createTransport({ ...candidateOptions, tls: { ...(candidateOptions.tls || {}), rejectUnauthorized: false } });
+            } else {
+                throw e;
+            }
             await candidate.verify();
         }
         transporter = candidate;
@@ -1929,7 +1953,9 @@ async function initSMTPServer() {
                 reason: res.ok ? (res.reason || null) : (res.reason || res.error || 'the host could not open the inbound SMTP port'),
                 proxyIps: res.proxyIps || trustedProxyIps, mode: 'host',
                 // The STARTTLS certificate the host presents for us (subject / expiry, never the key).
-                tls: res.tls || null
+                tls: res.tls || null,
+                // Where the host listens: its addresses (the sandbox hides the interfaces from us).
+                addresses: res.addresses || null
             };
             if (res.ok) console.log(`   ✓ Inbound SMTP: the host is listening on port ${res.boundPort} for this plugin (smtp:inbound).`);
             else console.warn(`   ⚠️  Inbound SMTP: the host could not listen for this plugin: ${inboundStatus.reason}`);
@@ -2161,18 +2187,30 @@ function identityFromMailboxAddress(address, name) {
  * owns the site's catch-all inbox (see canUseMailSurface), and answers that mail AS THE SITE — null, the
  * site identity every un-attributed message already uses — never as their own personal address.
  */
+/**
+ * The name an account sends under: its directory display name. The request's user is not a reliable
+ * source (the host fills its displayName with the login), so the login ("m4a") was the From name of
+ * every webmail send and every Sent copy, while recipients of queued mail saw the real name.
+ */
+async function displayNameOf(user) {
+    if (!user) return '';
+    const login = user.username || user.userLogin || '';
+    if (user.id) {
+        try {
+            const full = await User.findById(user.id);
+            const n = full && String(full.displayName || '').trim();
+            if (n) return n;
+        } catch (e) { /* fall back to what the request carries */ }
+    }
+    return String(user.displayName || '').trim() || login;
+}
+
 async function sendingIdentityOf(user, mailDomain) {
     const domain = mailDomain || await getMailDomain().catch(() => '');
     const address = mailboxAddressOf(user, domain);
     if (!address && user && user.role === 'administrator') return null;
     if (!address) throw noMailboxAddressError(domain);
-    // The request's user carries no display name, so the login ("m4a") became the From name of every
-    // webmail send while recipients saw the real name: read it from the directory when it is missing.
-    let name = user && user.displayName;
-    if (!name && user && user.id) {
-        try { const full = await User.findById(user.id); name = full && full.displayName; } catch (e) { name = ''; }
-    }
-    return identityFromMailboxAddress(address, name || (user && (user.username || user.userLogin)) || '');
+    return identityFromMailboxAddress(address, await displayNameOf(user));
 }
 
 /**
@@ -2976,6 +3014,13 @@ async function getHeloName() {
  * is not the address visitors reach the site on, so the console names the address it listens on
  * instead of leaving the operator to guess. Best effort: an unreadable interface list is empty.
  */
+/** The addresses the HOST reported with the listener status, else what this process can see. */
+function nodeAddressesKnown() {
+    const a = inboundStatus && inboundStatus.addresses;
+    if (a && ((a.public && a.public.length) || (a.private && a.private.length))) return a;
+    return serverAddresses();
+}
+
 function serverAddresses() {
     const out = { public: [], private: [] };
     try {
@@ -4051,7 +4096,7 @@ exports.init = async function (bridge) {
                 // The address this draft would be SENT from: the caller's mailbox address, never a personal
                 // account email ('' when the account has none — the send itself is then refused).
                 fromAddress: mailboxAddressOf(req.user, await getMailDomain().catch(() => '')),
-                fromName: req.user.displayName || req.user.userLogin,
+                fromName: await displayNameOf(req.user),
                 toAddress: splitAddresses(to).join(', '),
                 ccAddress: splitAddresses(cc).join(', '),
                 bccAddress: splitAddresses(bcc).join(', '),
@@ -4207,7 +4252,7 @@ exports.init = async function (bridge) {
                 const data = {
                     // null = an administrator answering as the site (sendingIdentityOf); the queue resolves it again.
                     fromAddress: identity ? identity.fromEmail : '',
-                    fromName: identity ? identity.fromName : (req.user.displayName || req.user.userLogin),
+                    fromName: identity ? identity.fromName : await displayNameOf(req.user),
                     toAddress: toList.join(', '),
                     ccAddress: ccList.join(', '),
                     bccAddress: bccList.join(', '),
@@ -4532,7 +4577,7 @@ exports.init = async function (bridge) {
             selector,
             heloHost: await getHeloName(),
             dkimConfigured: !!priv,
-            records: buildDnsRecords(domain, selector, publicKeyPem, { addresses: serverAddresses(), heloHost: await getHeloName() })
+            records: buildDnsRecords(domain, selector, publicKeyPem, { addresses: nodeAddressesKnown(), heloHost: await getHeloName() })
         });
     });
 
@@ -4636,7 +4681,7 @@ exports.init = async function (bridge) {
             await updateOption('mail_security_dkim_domain', domain);
             await updateOption('mail_security_dkim_selector', selector);
 
-            res.json({ success: true, domain, selector, records: buildDnsRecords(domain, selector, publicKey, { addresses: serverAddresses(), heloHost: await getHeloName() }) });
+            res.json({ success: true, domain, selector, records: buildDnsRecords(domain, selector, publicKey, { addresses: nodeAddressesKnown(), heloHost: await getHeloName() }) });
         } catch (error) {
             res.status(500).json({ error: error.message });
         }
@@ -5014,7 +5059,7 @@ exports.init = async function (bridge) {
                 inbound: {
                     boundPort: inboundStatus.boundPort,
                     // Where that port is: this node's addresses (on a multi-machine install, the backend).
-                    addresses: serverAddresses(),
+                    addresses: nodeAddressesKnown(),
                     tls: inboundStatus.tls || null,
                     mode: inboundStatus.mode || 'plugin',
                     ok: inboundStatus.boundPort === 25,

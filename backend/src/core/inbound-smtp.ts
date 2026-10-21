@@ -55,6 +55,8 @@ interface Status {
     proxyIps: string[];
     /** The STARTTLS certificate this listener presents (never the private key). */
     tls?: { subject: string; validTo: string; selfSigned: boolean } | null;
+    /** This node's IPv4 addresses — where the port is reachable (a sandboxed plugin cannot see them). */
+    addresses?: { public: string[]; private: string[] };
 }
 
 const DEFAULT_PORT = 25;
@@ -150,6 +152,22 @@ function probe(port: number): Promise<{ ok: boolean; code?: string }> {
     });
 }
 
+/** This node's non-loopback IPv4 addresses, split into public and private (RFC 1918, CGNAT, link-local). */
+function nodeAddresses(): { public: string[]; private: string[] } {
+    const out = { public: [] as string[], private: [] as string[] };
+    const isPrivate = (ip: string) => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip);
+    try {
+        for (const list of Object.values(require('os').networkInterfaces() || {}) as any[]) {
+            for (const a of list || []) {
+                if (!a || a.internal || (a.family !== 'IPv4' && a.family !== 4)) continue;
+                const bucket = isPrivate(a.address) ? out.private : out.public;
+                if (!bucket.includes(a.address)) bucket.push(a.address);
+            }
+        }
+    } catch { /* no interface list on this platform */ }
+    return out;
+}
+
 /** A DNS host name, or '' — what the greeting may announce. */
 function hostName(raw: unknown): string {
     const n = String(raw == null ? '' : raw).trim().toLowerCase().replace(/\.$/, '');
@@ -236,6 +254,7 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
     const name = hostName(opts && opts.name);
     const tls = await tlsMaterial(name);
     status.tls = tls ? tls.info : null;
+    status.addresses = nodeAddresses();
 
     const { SMTPServer } = require('smtp-server');
     server = new SMTPServer({
@@ -317,7 +336,7 @@ async function stop(slug: string): Promise<void> {
 }
 
 function getStatus(): Status {
-    return { ...status, proxyIps: [...status.proxyIps], tls: status.tls ? { ...status.tls } : null };
+    return { ...status, proxyIps: [...status.proxyIps], tls: status.tls ? { ...status.tls } : null, addresses: status.addresses ? { public: [...status.addresses.public], private: [...status.addresses.private] } : undefined };
 }
 
 module.exports = { start, stop, getStatus, _bindReason: bindReason, _hostName: hostName, _tlsMaterial: tlsMaterial };

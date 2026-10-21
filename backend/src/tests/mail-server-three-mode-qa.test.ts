@@ -422,12 +422,20 @@ test('a failed delivery TEST is recorded as failed at once — not retried five 
 test('webmail sends carry the account\'s display name, not its login', async () => {
     const b = await boot();
     try {
-        // The request's user, as the host hands it over: no displayName on it.
-        const reqUser = { id: ALICE.id, role: ALICE.role, userEmail: ALICE.userEmail, userLogin: ALICE.userLogin, username: ALICE.userLogin, accountCapabilities: MAILBOX };
-        const out = await call(b, 'post /send', reqUser, { body: { to: BOB.userEmail, subject: 'Named', body: 'x' } });
-        assert.equal(out.status, 200, JSON.stringify(out.body));
-        const sent: any = (await rows(b)).find((r: any) => Number(r.user_id) === ALICE.id && r.subject === 'Named');
-        assert.equal(sent.from_name, 'Alice Doe');
+        // The request's user, as the host hands it over: its displayName is the LOGIN (seen in the lab).
+        const reqUser = { id: ALICE.id, role: ALICE.role, userEmail: ALICE.userEmail, userLogin: ALICE.userLogin, username: ALICE.userLogin, displayName: ALICE.userLogin, accountCapabilities: MAILBOX };
+        for (const undo of ['0', '10']) {
+            b.options.mail_undo_send_seconds = undo;
+            const subject = `Named ${undo}`;
+            const out = await call(b, 'post /send', reqUser, { body: { to: BOB.userEmail, subject, body: '<p>R&amp;D <b>plan</b></p><p>line 2</p>' } });
+            assert.equal(out.status, 200, JSON.stringify(out.body));
+            const sent: any = (await rows(b)).find((r: any) => Number(r.user_id) === ALICE.id && r.subject === subject);
+            assert.equal(sent.from_name, 'Alice Doe', `undo=${undo}: the Sent copy names the account, not its login`);
+            assert.equal(sent.body_text, 'R&D plan\nline 2', 'the text body is plain text: tags gone, references decoded, paragraphs kept');
+        }
+        const draft = await call(b, 'post /drafts', reqUser, { body: { to: BOB.userEmail, subject: 'Draft named', body: 'x' } });
+        assert.equal(draft.status, 200);
+        assert.equal(((await rows(b)).find((r: any) => r.subject === 'Draft named') as any).from_name, 'Alice Doe');
     } finally { b.plugin.deactivate(); }
 });
 

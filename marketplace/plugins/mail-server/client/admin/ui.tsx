@@ -341,6 +341,7 @@ export function Sheet({ open, onClose, title, children, footer, wide = false, bo
  * opens UPWARDS when there is more room above: rendered inline it was clipped by any `overflow-hidden`
  * ancestor (the split Send button, the mailbox table) and fell off the bottom of the screen when the
  * trigger sat at the bottom of the composer — the schedule-send and quota menus could not be used.
+ * It stacks above the composer (6000) and sheets (6500), below toasts (7000).
  */
 export function Menu({ trigger, children, align = 'right', width = 'w-56', className = '' }: any) {
     const [open, setOpen] = useState(false);
@@ -386,7 +387,7 @@ export function Menu({ trigger, children, align = 'right', width = 'w-56', class
                 <div
                     ref={panelRef}
                     className={cx('fixed overflow-y-auto rounded-xl border border-slate-200 bg-white py-1.5 shadow-xl shadow-slate-900/10', width)}
-                    style={{ zIndex: 1000, ...pos }}
+                    style={{ zIndex: 6800, ...pos }}
                     onClick={(e) => { if ((e.target as HTMLElement).closest('[data-menu-close]')) setOpen(false); }}
                 >
                     {typeof children === 'function' ? children({ close: () => setOpen(false) }) : children}

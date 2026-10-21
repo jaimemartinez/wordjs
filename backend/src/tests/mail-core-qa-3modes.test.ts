@@ -164,6 +164,9 @@ test('inbound SMTP greets with the plugin\'s HELO name and offers STARTTLS with 
         assert.equal(st.tls.selfSigned, true);
         assert.ok(Date.parse(st.tls.validTo) > Date.now() + 365 * 24 * 3600 * 1000);
         assert.ok(fs.existsSync(path.join(TLS_TMP, 'tls.key')));
+        // Where the port is reachable: the host's own addresses (a sandboxed plugin cannot list interfaces).
+        assert.ok(st.addresses && Array.isArray(st.addresses.public) && Array.isArray(st.addresses.private));
+        assert.ok(![...st.addresses.public, ...st.addresses.private].some((ip: string) => ip.startsWith('127.')), 'no loopback');
         const talk = await greeting(free);
         assert.match(talk, /^220 mail\.qa\.example /, talk);
         assert.match(talk, /STARTTLS/);
