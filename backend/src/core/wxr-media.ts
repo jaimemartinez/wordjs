@@ -360,12 +360,60 @@ function collectUploadBases(attachmentUrls: string[], siteBaseUrl: string): stri
     return [...bases].sort((a, b) => b.length - a.length);
 }
 
-/** Swap every old upload base for this install's `/uploads`, leaving everything else untouched. */
-function rewriteUploadUrls(content: string, bases: string[]): string {
+/**
+ * Swap every old upload base for this install's `/uploads`, leaving everything else untouched.
+ *
+ * With `isHere`, only a reference whose file is actually on this install is swapped (it is handed the
+ * path after the base, e.g. `2013/03/photo-580x300.jpg`). A download that FAILED must leave the body
+ * pointing at the old site, which still serves the file — swapping it anyway turned every such image
+ * into a 404 on this install.
+ */
+function rewriteUploadUrls(content: string, bases: string[], isHere?: (relativePath: string) => boolean): string {
     if (!content || bases.length === 0) return content;
     let out = content;
-    for (const base of bases) out = out.replace(new RegExp(escapeRegExp(base), 'g'), '/uploads');
+    for (const base of bases) {
+        const re = new RegExp(`${escapeRegExp(base)}(/[A-Za-z0-9._~%+/-]*)?`, 'g');
+        out = out.replace(re, (match: string, rest: string | undefined) => {
+            if (isHere && !isHere(String(rest || '').replace(/^\/+/, ''))) return match;
+            return `/uploads${rest || ''}`;
+        });
+    }
     return out;
+}
+
+/**
+ * The upload path an attachment URL names (`2013/03/photo.jpg`), or null when it is not under
+ * `/wp-content/uploads/`.
+ */
+function uploadPathOf(attachmentUrl: string): string | null {
+    let u: URL;
+    try { u = new URL(attachmentUrl); } catch { return null; }
+    const marker = u.pathname.toLowerCase().indexOf('/wp-content/uploads/');
+    if (marker < 0) return null;
+    return u.pathname.slice(marker + '/wp-content/uploads/'.length) || null;
+}
+
+/**
+ * Is the file a body reference names (`2013/03/photo-580x300.jpg`) on this install, so the reference may
+ * point at `/uploads`? A size WordPress derives from an original (`-WxH`, `-scaled`) counts as its original.
+ *   · stored by this run (`present`)                       → yes;
+ *   · one of this file's attachments that was NOT stored   → no, even if a file of that name exists: the
+ *     download failed (keep the old site's URL, which serves it) or the path is another file's;
+ *   · anything else (copied by hand, imported before)      → yes when it exists under `uploadsRoot`.
+ */
+function referencesPresentUpload(reference: string, present: Set<string>, ownAttachments?: Set<string>, uploadsRoot?: string): boolean {
+    let ref = reference;
+    try { ref = decodeURI(reference); } catch { /* keep as is */ }
+    const original = ref.replace(/-(?:\d+x\d+|scaled)(?=\.[A-Za-z0-9]+$)/, '');
+    if (present.has(ref) || present.has(original)) return true;
+    if (ownAttachments && (ownAttachments.has(ref) || ownAttachments.has(original))) return false;
+    if (!uploadsRoot) return false;
+    const { resolveWithin } = require('./safe-path');
+    for (const candidate of [ref, original]) {
+        const file = resolveWithin(uploadsRoot, ...candidate.split('/'));
+        if (file && fs.existsSync(file)) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -888,5 +936,7 @@ module.exports = {
     safeAttachmentMetadata,
     collectUploadBases,
     rewriteUploadUrls,
+    uploadPathOf,
+    referencesPresentUpload,
     createMediaImporter,
 };

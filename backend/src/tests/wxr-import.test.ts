@@ -281,6 +281,8 @@ describe('WXR importer (fast-xml-parser v5)', () => {
         // one the first is about to be disambiguated to.
         const chainAPath = '/wp-content/uploads/2025/05/chain.jpg';
         const chainBPath = '/wp-content/uploads/2025/05/chain-1.jpg';
+        // One run, post listed BEFORE its image (how WordPress exports): QA X3-03.
+        const sameRunPath = '/wp-content/uploads/2025/06/same-run.jpg';
 
         before(async () => {
             const sharp = require('sharp');
@@ -311,6 +313,7 @@ describe('WXR importer (fast-xml-parser v5)', () => {
                 [legitPath]: otherJpeg,
                 [chainAPath]: chainABytes,
                 [chainBPath]: chainBBytes,
+                [sameRunPath]: jpeg,
             };
             requests = [];
             server = http.createServer((req: any, res: any) => {
@@ -414,9 +417,11 @@ describe('WXR importer (fast-xml-parser v5)', () => {
         it('rewrites in-content upload URLs onto this install /uploads path', async () => {
             const post = await dbAsync.get(
                 `SELECT post_content, post_excerpt FROM posts WHERE post_name = 'media-post'`);
-            assert.ok(post.post_content.includes('/uploads/2025/01/photo.jpg'), 'img src rewritten');
-            assert.ok(post.post_content.includes('/uploads/2025/01/missing.png'), 'href rewritten too');
-            assert.ok(!post.post_content.includes(origin), 'no reference to the old host survives');
+            assert.ok(post.post_content.includes('"/uploads/2025/01/photo.jpg"'), 'img src of the stored file rewritten');
+            assert.ok(!post.post_content.includes(`${origin}/wp-content/uploads/2025/01/photo.jpg`), 'no old URL for a file that is here');
+            // missing.png failed to download (404): the body keeps the old site's URL instead of a
+            // /uploads link to a file this install does not have (QA X3-03: 146 broken images).
+            assert.ok(post.post_content.includes(`${origin}/wp-content/uploads/2025/01/missing.png`), 'a failed download keeps its source URL');
             assert.strictEqual(post.post_excerpt, 'See /uploads/2025/01/photo.jpg', 'excerpt rewritten');
         });
 
@@ -646,6 +651,23 @@ describe('WXR importer (fast-xml-parser v5)', () => {
                 'the block image points at THIS install');
             assert.strictEqual(puck.content[0].props.href, '',
                 'and the meta sanitizer still runs first (javascript: URL neutralised)');
+        });
+
+        it('in ONE run, a body listed before its images points at /uploads only for the files that were stored', async () => {
+            const item = (fields: string) => `<item>${fields}<dc:creator><![CDATA[admin]]></dc:creator><excerpt:encoded><![CDATA[]]></excerpt:encoded><wp:status>publish</wp:status><wp:post_parent>0</wp:post_parent></item>`;
+            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:wp="http://wordpress.org/export/1.2/">
+  <channel><title>Same run</title><wp:wxr_version>1.2</wp:wxr_version>
+  ${item(`<title>Same run post</title><content:encoded><![CDATA[<img src="${origin}${sameRunPath}"><img src="${origin}/wp-content/uploads/2025/06/same-run-300x200.jpg"><img src="${origin}/wp-content/uploads/2025/06/gone.jpg">]]></content:encoded><wp:post_id>900</wp:post_id><wp:post_name>same-run-post</wp:post_name><wp:post_type>post</wp:post_type>`)}
+  ${item(`<title>Same run image</title><content:encoded><![CDATA[]]></content:encoded><wp:post_id>901</wp:post_id><wp:post_name>same-run-image</wp:post_name><wp:post_type>attachment</wp:post_type><wp:attachment_url>${origin}${sameRunPath}</wp:attachment_url><wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type><wp:postmeta><wp:meta_key>_wp_attached_file</wp:meta_key><wp:meta_value><![CDATA[2025/06/same-run.jpg]]></wp:meta_value></wp:postmeta>`)}
+  ${item(`<title>Gone image</title><content:encoded><![CDATA[]]></content:encoded><wp:post_id>902</wp:post_id><wp:post_name>gone-image</wp:post_name><wp:post_type>attachment</wp:post_type><wp:attachment_url>${origin}/wp-content/uploads/2025/06/gone.jpg</wp:attachment_url><wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type>`)}
+  </channel></rss>`;
+            const summary = await importWxr(xml, { defaultAuthorId: adminId, media: 'download', allowHttp: true });
+            assert.strictEqual(summary.media.downloaded, 1, JSON.stringify(summary.media.failures));
+            const post = await dbAsync.get(`SELECT post_content FROM posts WHERE post_name = 'same-run-post'`);
+            assert.ok(post.post_content.includes('src="/uploads/2025/06/same-run.jpg"'), post.post_content);
+            assert.ok(post.post_content.includes('src="/uploads/2025/06/same-run-300x200.jpg"'), 'a WordPress size of a stored original follows it');
+            assert.ok(post.post_content.includes(`src="${origin}/wp-content/uploads/2025/06/gone.jpg"`), 'the failed download keeps its working source URL');
         });
 
         it('link mode keeps the REMOTE url as the attachment sourceUrl', async () => {

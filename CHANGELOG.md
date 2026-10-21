@@ -1163,6 +1163,13 @@ the boot error links there too.
   duplicate. The installer's *Test connection* says which field to check, and SQLite database files are
   created owner-only.
 
+- **WordPress import: a failed media download no longer breaks the image.** In download mode every
+  `/wp-content/uploads/` URL was rewritten to this install's `/uploads/`, including the files that could
+  not be downloaded, which turned working images into 404s (and a later run that did download them skipped
+  the posts already imported). Attachments are now imported before the posts that embed them, a URL is
+  rewritten only when its file is here (WordPress's `-WxH` sizes follow their original), and a re-run moves
+  the references of posts imported earlier once their files are stored.
+
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
   certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes

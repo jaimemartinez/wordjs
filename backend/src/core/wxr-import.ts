@@ -53,6 +53,8 @@ const {
     safeAttachmentMetadata,
     collectUploadBases,
     rewriteUploadUrls,
+    uploadPathOf,
+    referencesPresentUpload,
     createMediaImporter,
 } = require('./wxr-media');
 const { importMenus } = require('./wxr-menus');
@@ -472,9 +474,22 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
      * and whose files this install did not move — keeps pointing where it pointed.
      */
     const renames = media.pathRenames();
+    // In download mode a reference is swapped only when its file IS here — downloaded now, or by an
+    // earlier run. The attachments are imported before any body is written (see the main loop's order),
+    // so this set is complete by the time `rewrite` runs. An explicit `rewriteUrls: true` (files copied
+    // by hand) swaps every reference, as before.
+    const presentUploads = new Set<string>();
+    // The path a body uses for an attachment: the one its URL names (the rename map below takes it from
+    // there to where the file really went).
+    const uploadPathsOf = (i: any): string[] => [uploadPathOf(text(i['wp:attachment_url']).trim())].filter(Boolean) as string[];
+    const ownAttachmentUploads = new Set<string>(attachmentItems.flatMap(uploadPathsOf));
+    const onlyPresent = options.rewriteUrls === undefined && media.mode === 'download';
+    const uploadsRootForCheck = onlyPresent ? require('./private-media').publicUploadsRoot() : undefined;
     const rewrite = (body: string) => {
         if (!body) return body;
-        const out = uploadBases.length ? rewriteUploadUrls(body, uploadBases) : body;
+        const out = uploadBases.length
+            ? rewriteUploadUrls(body, uploadBases, onlyPresent ? (rel: string) => referencesPresentUpload(rel, presentUploads, ownAttachmentUploads, uploadsRootForCheck) : undefined)
+            : body;
         // The MAP is captured, never its contents: planPlacements() fills this very Map, and it has not
         // run yet when this closure is made — a WXR lists a post before the attachment it embeds.
         if (renames.size === 0) return out;
@@ -482,6 +497,22 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             const moved = renames.get(target);
             return moved === undefined ? match : `${before}/uploads/${moved}`;
         });
+    };
+
+    /** Re-point an already-imported post's old-site upload URLs at the files now on this install. */
+    const refreshUploadReferences = async (postId: number) => {
+        const row = await dbAsync.get('SELECT post_content, post_excerpt FROM posts WHERE id = ?', [postId]);
+        if (!row) return;
+        const content = rewrite(String(row.post_content || ''));
+        const excerpt = rewrite(String(row.post_excerpt || ''));
+        if (content !== String(row.post_content || '') || excerpt !== String(row.post_excerpt || '')) {
+            await runContentMutation(async () => Post.update(postId, { content, excerpt }));
+        }
+        const puck = await dbAsync.get("SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = '_puck_data'", [postId]);
+        if (puck && typeof puck.meta_value === 'string') {
+            const next = sanitizeImportedMeta('_puck_data', puck.meta_value, rewrite);
+            if (next !== puck.meta_value) await Post.updateMeta(postId, '_puck_data', next);
+        }
     };
 
     const summary: ImportSummary = {
@@ -714,7 +745,12 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
     /** One `wp:postmeta` value by key, or ''. */
     const metaValue = metaValueOf;
 
-    for (const item of parsed.items) {
+    // ATTACHMENTS FIRST. A WXR lists a post before the images it embeds, and a body is written once: to
+    // know which of its image URLs can point at this install, every download has to be done before the
+    // first body. Order is otherwise kept (a stable partition).
+    const isAttachmentItem = (i: any) => (text(i['wp:post_type']) || 'post') === 'attachment';
+    const itemsInOrder = [...parsed.items.filter(isAttachmentItem), ...parsed.items.filter((i: any) => !isAttachmentItem(i))];
+    for (const item of itemsInOrder) {
         const type = text(item['wp:post_type']) || 'post';
         // FOLDED ONTO THE WRITABLE SET before anything reads it — the trash skips below included, so
         // `Trash` is skipped like `trash` — because the row is later compared by the database under the
@@ -776,6 +812,16 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             // An already-present attachment still has to answer `wp:post_parent` references (a featured
             // image points AT the post, and the post's `_thumbnail_id` points back at this row).
             if (outcome.postId !== null && oldId) oldToNewPost.set(oldId, outcome.postId);
+            if (outcome.outcome === 'downloaded') for (const here of uploadPathsOf(item)) presentUploads.add(here);
+            // Imported by an earlier run: here only if that run stored the file (a `link`-mode run did not).
+            if (outcome.outcome === 'skipped' && outcome.reason === 'already imported') {
+                const root = require('./private-media').publicUploadsRoot();
+                const stored = uploadPathsOf(item).some((here) => {
+                    const onDisk = require('./safe-path').resolveWithin(root, ...here.split('/'));
+                    return !!onDisk && require('fs').existsSync(onDisk);
+                });
+                if (stored) for (const here of uploadPathsOf(item)) presentUploads.add(here);
+            }
             if (outcome.outcome === 'skipped' || outcome.outcome === 'failed') {
                 summary.attachments.skipped++;
                 if (outcome.outcome === 'failed') pushError(`attachment "${slug}": ${outcome.reason}`);
@@ -808,6 +854,12 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                 // exactly that raw value, so a featured image chosen since then is never touched.
                 const sourceThumb = metaValue(item, THUMBNAIL_META_KEY).trim();
                 if (sourceThumb) staleThumbnail.set(existing.id, sourceThumb);
+                // A run whose downloads failed left this post pointing at the old site; now that the files
+                // may be here, the references to them are moved to this install's uploads.
+                if (onlyPresent && uploadBases.length) {
+                    try { await refreshUploadReferences(existing.id); }
+                    catch (e: any) { pushError(`"${slug}": its image URLs could not be updated (${e.message})`); }
+                }
                 bumpSkip(summary, type);
                 continue;
             }
