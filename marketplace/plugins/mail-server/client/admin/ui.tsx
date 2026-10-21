@@ -5,6 +5,7 @@
 // menus, avatars, formatting helpers and the sandboxed message frame. Everything is plain Tailwind so
 // the plugin stylesheet build (backend/scripts/plugin-stylesheet.js) compiles exactly what is used.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export const cx = (...a: any[]) => a.filter(Boolean).join(' ');
 
@@ -335,33 +336,62 @@ export function Sheet({ open, onClose, title, children, footer, wide = false, bo
 }
 
 /** A small dropdown anchored to its trigger; closes on outside click / Escape / selection. */
+/**
+ * Dropdown menu. The panel is portalled to <body> with FIXED coordinates taken from the trigger, and
+ * opens UPWARDS when there is more room above: rendered inline it was clipped by any `overflow-hidden`
+ * ancestor (the split Send button, the mailbox table) and fell off the bottom of the screen when the
+ * trigger sat at the bottom of the composer — the schedule-send and quota menus could not be used.
+ */
 export function Menu({ trigger, children, align = 'right', width = 'w-56', className = '' }: any) {
     const [open, setOpen] = useState(false);
+    const [pos, setPos] = useState<any>(null);
     const ref = useRef<HTMLDivElement>(null);
+    const panelRef = useRef<HTMLDivElement>(null);
+    const place = () => {
+        const el = ref.current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const vh = window.innerHeight, vw = window.innerWidth;
+        const below = vh - r.bottom - 8, above = r.top - 8;
+        const up = below < 240 && above > below;
+        const next: any = { maxHeight: Math.max(120, Math.min(vh * 0.6, up ? above : below)) };
+        if (up) next.bottom = vh - r.top + 6; else next.top = r.bottom + 6;
+        if (align === 'right') next.right = Math.max(8, vw - r.right); else next.left = Math.max(8, r.left);
+        setPos(next);
+    };
+    useLayoutEffect(() => { if (open) place(); }, [open]);
     useEffect(() => {
         if (!open) return;
-        const onDoc = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        const inside = (t: any) => (ref.current && ref.current.contains(t)) || (panelRef.current && panelRef.current.contains(t));
+        const onDoc = (e: any) => { if (!inside(e.target)) setOpen(false); };
         const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+        const onMove = () => place();
         document.addEventListener('mousedown', onDoc);
         document.addEventListener('touchstart', onDoc);
         document.addEventListener('keydown', onKey);
+        window.addEventListener('resize', onMove);
+        window.addEventListener('scroll', onMove, true);
         return () => {
             document.removeEventListener('mousedown', onDoc);
             document.removeEventListener('touchstart', onDoc);
             document.removeEventListener('keydown', onKey);
+            window.removeEventListener('resize', onMove);
+            window.removeEventListener('scroll', onMove, true);
         };
     }, [open]);
     return (
         <div ref={ref} className={cx('relative', className)}>
             {trigger({ open, toggle: () => setOpen(v => !v) })}
-            {open && (
+            {open && pos && typeof document !== 'undefined' && createPortal(
                 <div
-                    className={cx('absolute top-full mt-1.5 max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white py-1.5 shadow-xl shadow-slate-900/10', width, align === 'right' ? 'right-0' : 'left-0')}
-                    style={{ zIndex: 60 }}
+                    ref={panelRef}
+                    className={cx('fixed overflow-y-auto rounded-xl border border-slate-200 bg-white py-1.5 shadow-xl shadow-slate-900/10', width)}
+                    style={{ zIndex: 1000, ...pos }}
                     onClick={(e) => { if ((e.target as HTMLElement).closest('[data-menu-close]')) setOpen(false); }}
                 >
                     {typeof children === 'function' ? children({ close: () => setOpen(false) }) : children}
-                </div>
+                </div>,
+                document.body
             )}
         </div>
     );

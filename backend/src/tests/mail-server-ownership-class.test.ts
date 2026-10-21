@@ -166,6 +166,9 @@ const NOT_ROW_ACCESS = new Set([
     'getPrefs', 'setPrefs', 'getPendingScheduled', 'getPendingRetries',
     'purgeOldSpam', // site-wide retention: no user, and the ONLY SYSTEM_RETENTION caller
     'allowAttachmentRoot', 'resolveAttachmentSource',
+    // Upload staging: copies the host's temp file into the plugin's own staging dir / reaps that dir.
+    // Neither reads nor writes a row.
+    'stageUpload', 'sweepStaging',
 ]);
 
 test('CLASS: every function the store exposes is classified — a new one fails here, not in production', async () => {
@@ -770,10 +773,12 @@ test('CLASS: every sink that reads a client-named file goes through the ONE reso
         INDEX_CODE.match(/\.map\(a => \(\{ filename: a\.filename, path: a\.path \}\)\)/g) || [], [],
         'the outbound builder must not pass the client path through untouched'
     );
-    // …and the only way a directory becomes acceptable is the host's own multipart staging dir.
-    assert.match(INDEX_CODE, /Email\.allowAttachmentRoot\(stagingRoot\)/);
-    assert.match(INDEX_CODE, /const stagingRoot = path\.dirname\(req\.file\.path\)/,
-        'the root must come from req.file.path (host multer), never from the request body');
+    // …and a fresh upload reaches the roots only by being COPIED in from the host's own multer temp
+    // path (req.file.path, never the request body); the composer gets an opaque token, not a path.
+    assert.match(INDEX_CODE, /Email\.stageUpload\(req\.file\.path\)/,
+        'the staged copy must come from req.file.path (host multer), never from the request body');
+    assert.deepEqual(INDEX_CODE.match(/Email\.allowAttachmentRoot\(/g) || [], [],
+        'no route widens the accepted roots any more (the host temp dir is never a root)');
 });
 
 test('CLASS: every shape of a hostile attachment path is refused, and the real journey still works', async () => {

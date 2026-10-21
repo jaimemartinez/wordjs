@@ -1,7 +1,7 @@
 {
     "id": "mail-server",
     "name": "Mail Server",
-    "version": "3.1.1",
+    "version": "3.2.0",
     "description": "Complete mail server: responsive webmail (filters, blocked senders, templates, scheduled send, auto-forward) and a server console (mailboxes and quotas, aliases, outbound queue, policies) on a real MTA with DKIM/SPF/DNS tooling",
     "author": "WordJS",
     "isolated": true,
@@ -30,7 +30,7 @@
             "name": "Professional mail account",
             "description": "A mailbox on the site’s mail domain: this account can read and send mail from this server and receives the mail addressed to its account email. While it is on, only an administrator can change that address.",
             "locksEmail": true,
-            "defaultForNewAccounts": true
+            "defaultForNewAccounts": false
         }
     ],
     "permissions": [

@@ -101,7 +101,18 @@ fs.mkdir(UPLOAD_DIR, { recursive: true }).catch(err => console.error("Failed to 
 // across restarts in the plugin's own secrets row. realpath() runs BEFORE the containment test, so a
 // symlink dropped inside a root cannot point out of it, and only a BASENAME is accepted (both roots
 // are flat), so no traversal segment survives.
-const ATTACH_ROOTS = new Set([path.resolve(UPLOAD_DIR)]);
+// (c) this plugin's own STAGING dir: /upload/attachment copies the host's multer temp file here
+// DURING the upload request (the host unlinks its temp file as soon as that request ends, so a path
+// into it is dead by the time the message is sent) and hands the composer only an opaque token.
+const STAGING_DIR = path.join(__dirname, '../data/staging');
+const STAGING_TOKEN_RE = /^[a-f0-9]{32}$/;
+const ATTACH_ROOTS = new Set([path.resolve(UPLOAD_DIR), path.resolve(STAGING_DIR)]);
+
+/** The staged file an opaque upload token names, or '' when the string is not such a token. */
+function stagedPathOf(token) {
+    const t = String(token == null ? '' : token).trim().toLowerCase().replace(/\.bin$/, '');
+    return STAGING_TOKEN_RE.test(t) ? path.join(STAGING_DIR, t + '.bin') : '';
+}
 
 function registerAttachmentRoot(dir) {
     if (!dir) return false;
@@ -126,8 +137,10 @@ function registerAttachmentRoot(dir) {
  * @returns {Promise<string|null>} the real absolute path, or null (never throws, never guesses).
  */
 async function resolveAttachmentSource(candidate) {
-    const raw = String(candidate == null ? '' : candidate);
+    let raw = String(candidate == null ? '' : candidate);
     if (!raw) return null;
+    // An upload token (what /upload/attachment returns) names a file in the staging root.
+    raw = stagedPathOf(raw) || raw;
     let real;
     try {
         real = await fs.realpath(path.resolve(raw));
@@ -287,6 +300,31 @@ const LEGACY_SCAN_CAP = 20000;
 // by the host SQL guard) so the pre-filter over-selects for exactly ONE reason — a genuine address
 // substring — and never for a punctuation accident.
 const LIKE_ESCAPE = '!';
+// `scheduled_at` is a DATETIME column. MySQL/MariaDB REJECT an ISO string with 'T' and 'Z'
+// ("Incorrect datetime value"), which made every send fail there while the undo-send window (on by
+// default) scheduled it. 'YYYY-MM-DD HH:MM:SS' in UTC is the one literal SQLite (string compare),
+// PostgreSQL and MySQL all accept, and the one CURRENT_TIMESTAMP writes. Accepts a Date, an ISO
+// string, epoch ms or an already-normalized literal; anything unparseable becomes null.
+function sqlDateTime(v) {
+    if (v === null || v === undefined || v === '') return null;
+    let d;
+    if (v instanceof Date) d = v;
+    else if (typeof v === 'number') d = new Date(v);
+    else {
+        const s = String(v).trim();
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s;
+        d = new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(s) ? s.replace(' ', 'T') + 'Z' : s);
+    }
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/** A single bounded, header-safe address for the reply_to column, or '' (anything else is dropped). */
+function replyToColumn(v) {
+    const a = String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().toLowerCase();
+    return /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(a) && a.length <= 320 ? a : '';
+}
+
 const escapeLike = (s) => String(s).replace(/!/g, '!!').replace(/%/g, '!%').replace(/_/g, '!_');
 
 // The ONLY actor that may reach deleteManyPermanently without a per-row ownership gate: site-wide
@@ -359,6 +397,35 @@ module.exports = function createEmailStore(db, hooks = {}) {
         // resolveAttachmentSource() before it hands any path to nodemailer.
         allowAttachmentRoot: registerAttachmentRoot,
         resolveAttachmentSource,
+
+        /**
+         * Copy a just-uploaded file (the host's multer temp path) into the staging root and return its
+         * opaque token. Throws when the file cannot be read: the composer must see that at upload time
+         * rather than have the file silently missing from the sent message.
+         */
+        async stageUpload(tempPath) {
+            const token = crypto.randomBytes(16).toString('hex');
+            await fs.mkdir(STAGING_DIR, { recursive: true });
+            await fs.copyFile(String(tempPath), path.join(STAGING_DIR, token + '.bin'));
+            return token;
+        },
+
+        /** Delete staged uploads older than maxAgeMs (a sent or saved message holds its own copy). */
+        async sweepStaging(maxAgeMs = 24 * 60 * 60 * 1000) {
+            let removed = 0;
+            let names = [];
+            try { names = await fs.readdir(STAGING_DIR); } catch (e) { return 0; }
+            const cutoff = Date.now() - maxAgeMs;
+            for (const n of names) {
+                if (!STAGING_TOKEN_RE.test(n.replace(/\.bin$/, ''))) continue;
+                const fp = path.join(STAGING_DIR, n);
+                try {
+                    const st = await fs.stat(fp);
+                    if (st.isFile() && st.mtimeMs < cutoff) { await fs.unlink(fp); removed++; }
+                } catch (e) { /* raced with another sweep */ }
+            }
+            return removed;
+        },
 
         // address(lower) -> { at, ids }: short-lived memo for _legacyOwnedIds (see LEGACY_ID_TTL_MS).
         _legacyIdCache: new Map(),
@@ -463,6 +530,8 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 // 1 = an automatic response (vacation reply). The retry queue reads it so a queued
                 // auto-reply keeps its null return path (RFC 3834 §3.3) on every later attempt.
                 'is_auto_reply INT DEFAULT 0',
+                // Where a reply goes when it is not the sender (see the v3.2.0 _ensureColumn below).
+                'reply_to VARCHAR(320)',
                 'parent_id INT DEFAULT 0',
                 'thread_id INT DEFAULT 0',
                 'scheduled_at DATETIME',
@@ -530,11 +599,29 @@ module.exports = function createEmailStore(db, hooks = {}) {
             await this._ensureColumn(T_EMAILS, 'auth_results', 'VARCHAR(1024)');
             // Auto-reply marker for the retry queue (see the column definition above).
             await this._ensureColumn(T_EMAILS, 'is_auto_reply', 'INT DEFAULT 0');
+            // v3.2.0: where a reply goes when it is not the sender (Reply-To of an inbound message, or
+            // the visitor's address on a site form notification). One bounded address.
+            await this._ensureColumn(T_EMAILS, 'reply_to', 'VARCHAR(320)');
 
             // 3. One-time, idempotent migration from the legacy UNPREFIXED tables, if they still exist.
             // (Only relevant for sites upgraded from the trusted era where the bridge let us write
             // received_emails / email_attachments directly.)
             await this._migrateLegacyTables();
+
+            // 3b. Pending schedules written before sqlDateTime() existed hold ISO text ('...T...Z').
+            //     SQLite compares the column as TEXT, and 'T' sorts after ' ', so such a row would wait
+            //     until the next calendar day against a normalized "now". Rewrite the (few, pending)
+            //     rows once. MySQL never stored one (it rejected them); PostgreSQL returns a Date,
+            //     which is left alone.
+            try {
+                const pending = await db.all(
+                    `SELECT id, scheduled_at FROM ${T_EMAILS} WHERE is_sent = 0 AND scheduled_at IS NOT NULL`);
+                for (const r of pending || []) {
+                    if (typeof r.scheduled_at !== 'string' || !r.scheduled_at.includes('T')) continue;
+                    await db.run(`UPDATE ${T_EMAILS} SET scheduled_at = ? WHERE id = ?`,
+                        [sqlDateTime(r.scheduled_at), r.id]);
+                }
+            } catch (e) { /* best effort: a missed row is only delivered late */ }
 
             // 4. Indexes. idx_..._owner is the one that makes every mailbox listing an index probe;
             // idx_..._msgid makes inbound In-Reply-To threading O(log n) instead of a full scan.
@@ -550,14 +637,10 @@ module.exports = function createEmailStore(db, hooks = {}) {
             await this._createIndex('wjp_mail_server_idx_el_label', T_EMAIL_LABELS, 'label_id');
             await this._createIndex('wjp_mail_server_idx_prefs_user', T_PREFS, 'user_id');
 
-            // 5. Re-arm the attachment staging root discovered by a previous run of the process. The
-            //    root is learned from req.file.path (a value the HOST's multipart handler chooses, not
-            //    the client), and remembering it keeps compose-with-attachment working after a restart
-            //    instead of silently dropping every file the composer still holds a path for.
-            try {
-                const savedRoot = await this.getSecret('_attach_staging_root', '');
-                if (savedRoot) registerAttachmentRoot(savedRoot);
-            } catch (e) { /* best effort: an unknown root only costs a re-upload */ }
+            // 5. Uploads are staged in the plugin's own dir since 3.2.0 (see stageUpload); the host's
+            //    temp dir, which earlier versions remembered as a root, is never accepted again.
+            //    Reap staged files nobody sent or saved.
+            try { await this.sweepStaging(); } catch (e) { /* best effort */ }
 
             // 6. Drain the legacy (user_id = 0) set. Runs AFTER idx_owner exists so the probe below is
             //    an index seek, and after the legacy-table import so imported rows are covered too.
@@ -841,10 +924,17 @@ module.exports = function createEmailStore(db, hooks = {}) {
         },
 
         async _ensureColumn(table, name, ddl) {
+            // Probe first: an ALTER that fails because the column exists is logged as an ERROR by the
+            // host's PostgreSQL/MySQL drivers, which put "column ... already exists" in the log on every
+            // activation. The probe fails (once) only on the upgrade that really adds the column.
+            try {
+                await db.get(`SELECT ${name} FROM ${table} WHERE 1 = 0`);
+                return;
+            } catch (e) { /* missing: add it */ }
             try {
                 await db.run(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`);
             } catch (e) {
-                // Duplicate-column error = column already there (fresh install or already upgraded).
+                // Duplicate-column error = column already there (a concurrent upgrade won the race).
             }
         },
 
@@ -914,7 +1004,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 messageId, fromAddress, fromName, toAddress, ccAddress = '', bccAddress = '', subject, bodyText, bodyHtml, rawContent,
                 receivedSpf = '', authResults = '',
                 isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0, isSpam = 0, isRead = 0,
-                parentId = 0, threadId = 0, scheduledAt = null, isAutoReply = 0
+                parentId = 0, threadId = 0, scheduledAt = null, isAutoReply = 0, replyTo = ''
             } = data;
 
             // Owner of this copy. Accept either `userId` or the legacy `user_id` spelling callers used
@@ -933,14 +1023,14 @@ module.exports = function createEmailStore(db, hooks = {}) {
                     message_id, from_address, from_name, to_address, cc_address, bcc_address, subject, body_text, body_html, raw_content,
                     received_spf, auth_results,
                     is_sent, is_draft, is_archived, is_starred, is_trash, is_spam, is_read, user_id, parent_id, thread_id, scheduled_at,
-                    is_auto_reply
+                    is_auto_reply, reply_to
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
                 str(messageId), str(fromAddress), str(fromName), str(toAddress), str(ccAddress), str(bccAddress), str(subject), str(bodyText), str(bodyHtml), str(rawContent),
                 str(receivedSpf).slice(0, 1024), str(authResults).slice(0, 1024),
-                isSent, isDraft, isArchived, isStarred, isTrash, isSpam ? 1 : 0, isRead ? 1 : 0, ownerId, parentId, threadId, scheduledAt,
-                isAutoReply ? 1 : 0
+                isSent, isDraft, isArchived, isStarred, isTrash, isSpam ? 1 : 0, isRead ? 1 : 0, ownerId, parentId, threadId, sqlDateTime(scheduledAt),
+                isAutoReply ? 1 : 0, replyToColumn(replyTo)
             ]);
 
             const emailId = result.lastID;
@@ -1102,7 +1192,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 params.push(isSpam ? 1 : 0, isSpam ? UNIDENTIFIED_FLAGGER : 0);
             }
             if (isArchived !== undefined) { fields.push("is_archived = ?"); params.push(isArchived ? 1 : 0); }
-            if (scheduledAt !== undefined) { fields.push("scheduled_at = ?"); params.push(scheduledAt); }
+            if (scheduledAt !== undefined) { fields.push("scheduled_at = ?"); params.push(sqlDateTime(scheduledAt)); }
 
             if (contentChanged) {
                 fields.push("date_received = CURRENT_TIMESTAMP");
@@ -1512,20 +1602,25 @@ module.exports = function createEmailStore(db, hooks = {}) {
             const cols = ['to_address', 'cc_address', 'bcc_address', 'from_address'];
             const likeSql = cols.map(c => `LOWER(m.${c}) LIKE ? ESCAPE '${LIKE_ESCAPE}'`).join(' OR ');
             const likeParams = cols.map(() => pattern);
-            const sql =
+            // Keyset on id, descending. The first page has NO upper bound: a sentinel such as
+            // Number.MAX_SAFE_INTEGER is out of range for PostgreSQL's int4 SERIAL ("value ... is out
+            // of range for type integer"), which failed this pre-filter on every call there.
+            const sqlFor = (bounded) =>
                 `SELECT ${AUTH_COLS} FROM ${T_EMAILS} m ` +
-                `WHERE m.user_id = 0 AND m.id < ? AND (${likeSql}) ` +
+                `WHERE m.user_id = 0 ${bounded ? 'AND m.id < ? ' : ''}AND (${likeSql}) ` +
                 `ORDER BY m.id DESC LIMIT ?`;
 
             const ids = [];
-            let cursor = Number.MAX_SAFE_INTEGER; // keyset on id, descending
+            let cursor = null;
             let scanned = 0;
             let exhausted = false;
             let capped = false;
             while (scanned < LEGACY_SCAN_CAP) {
                 let rows;
                 try {
-                    rows = await db.all(sql, [cursor, ...likeParams, LEGACY_SCAN_PAGE]);
+                    rows = cursor === null
+                        ? await db.all(sqlFor(false), [...likeParams, LEGACY_SCAN_PAGE])
+                        : await db.all(sqlFor(true), [cursor, ...likeParams, LEGACY_SCAN_PAGE]);
                 } catch (e) {
                     // Fail CLOSED, and say so: an unreadable pre-filter must never widen the ownership
                     // clause, and must never be reported as a complete answer either.
@@ -2126,16 +2221,25 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 else if (folder === 'starred') where.push('m.is_starred = 1');
             }
 
-            if (q.text) {
-                const t = `%${q.text}%`;
-                where.push('(m.subject LIKE ? OR m.body_text LIKE ? OR m.from_name LIKE ? OR m.from_address LIKE ? OR m.to_address LIKE ?)');
-                params.push(t, t, t, t, t);
+            // Every term must match somewhere (a quoted phrase is ONE term); every `-term` nowhere.
+            const TEXT_COLS = ['m.subject', 'm.body_text', 'm.from_name', 'm.from_address', 'm.to_address'];
+            const terms = Array.isArray(q.terms) ? q.terms.slice(0, 10) : (q.text ? [q.text] : []);
+            for (const term of terms) {
+                const t = `%${term}%`;
+                where.push('(' + TEXT_COLS.map(c => `${c} LIKE ?`).join(' OR ') + ')');
+                params.push(...TEXT_COLS.map(() => t));
+            }
+            for (const term of (Array.isArray(q.exclude) ? q.exclude.slice(0, 10) : [])) {
+                const t = `%${term}%`;
+                where.push('NOT (' + TEXT_COLS.map(c => `COALESCE(${c}, '') LIKE ?`).join(' OR ') + ')');
+                params.push(...TEXT_COLS.map(() => t));
             }
             if (q.from) { const t = `%${q.from}%`; where.push('(m.from_address LIKE ? OR m.from_name LIKE ?)'); params.push(t, t); }
             if (q.to) { const t = `%${q.to}%`; where.push('(m.to_address LIKE ? OR m.cc_address LIKE ? OR m.bcc_address LIKE ?)'); params.push(t, t, t); }
             if (q.subject) { where.push('m.subject LIKE ?'); params.push(`%${q.subject}%`); }
             if (q.hasAttachment) where.push(`EXISTS (SELECT 1 FROM ${T_ATTACH} a WHERE a.email_id = m.id)`);
-            if (q.isUnread) where.push('m.is_read = 0');
+            // Unread is about mail RECEIVED: your own sent copy is never "unread" to you.
+            if (q.isUnread) where.push('m.is_read = 0 AND m.is_sent = 0');
             if (q.isStarred) where.push('m.is_starred = 1');
             if (q.labelId) {
                 where.push(`EXISTS (SELECT 1 FROM ${T_EMAIL_LABELS} el WHERE el.email_id = m.id AND el.label_id = ?)`);
@@ -2352,11 +2456,13 @@ module.exports = function createEmailStore(db, hooks = {}) {
         },
 
         async getPendingScheduled() {
+            // Compared as the same normalized literal it is stored as (see sqlDateTime): a real datetime
+            // comparison on PostgreSQL/MySQL, and a correct TEXT comparison on SQLite.
             return await db.all(`
                 SELECT * FROM ${T_EMAILS}
                 WHERE is_sent = 0 AND is_draft = 0 AND is_trash = 0
                 AND scheduled_at IS NOT NULL AND scheduled_at <= ?
-            `, [new Date().toISOString()]);
+            `, [sqlDateTime(new Date())]);
         },
 
         // --- Outbound retry queue ---------------------------------------------
@@ -2425,3 +2531,4 @@ module.exports = function createEmailStore(db, hooks = {}) {
 
 // THE address-list parser, exported on the factory so index.js does not have to grow a second one.
 module.exports.splitAddressList = splitAddressList;
+module.exports.sqlDateTime = sqlDateTime;
