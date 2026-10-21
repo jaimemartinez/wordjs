@@ -2,7 +2,7 @@
  * Hello World Plugin - Unit Tests
  *
  * The plugin's own tests, for its author: run them with
- *   node --test backend/plugins/hello-world/tests/hello-world.test.js
+ *   node --test documentation/examples/plugins/hello-world/tests/hello-world.test.js
  * WordJS does NOT run them at activation — a plugin's test files are code, and the host never executes
  * plugin code outside the sandbox. Keep tests like these in your plugin and run them in your own CI.
  */

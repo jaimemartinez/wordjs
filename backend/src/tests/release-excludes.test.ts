@@ -282,9 +282,10 @@ describe('release packager — private, untracked plugins never ship', () => {
         }
     }
 
+    // What a tracked tree legitimately ships. backend/plugins/ itself ships with its README only: the core
+    // carries no plugin (core-ships-no-plugins.test.ts), so a plugin folder is never the control here.
     const PUBLIC: Record<string, string> = {
-        'backend/plugins/public-plugin/manifest.json': '{"slug":"public-plugin"}',
-        'backend/plugins/public-plugin/index.js': 'module.exports = {};',
+        'backend/plugins/README.md': '# installed plugins live here',
         'backend/themes/public-theme/theme.json': '{"slug":"public-theme"}',
     };
 
@@ -300,6 +301,8 @@ describe('release packager — private, untracked plugins never ship', () => {
             'backend/themes/private-theme/theme.json': '{"slug":"private-theme"}',
             // ...and merely never added: no ignore rule, no name anywhere. It must not matter.
             'backend/plugins/private-untracked/index.js': 'module.exports = {};',
+            // Even COMMITTED, a plugin folder stays out: plugins reach a site through the marketplace.
+            'backend/plugins/committed-plugin/manifest.json': '{"slug":"committed-plugin"}',
         });
         try {
             const listing = withGitEnv(undefined, () => {
@@ -308,7 +311,7 @@ describe('release packager — private, untracked plugins never ship', () => {
                     assert.strictEqual(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
                 };
                 git('init', '-q');
-                git('add', '--', '.gitignore', 'scripts', 'backend/plugins/public-plugin', 'backend/themes/public-theme');
+                git('add', '--', '.gitignore', 'scripts', 'backend/plugins/README.md', 'backend/plugins/committed-plugin', 'backend/themes/public-theme');
                 return packageFixture(root);
             });
 
@@ -318,6 +321,7 @@ describe('release packager — private, untracked plugins never ship', () => {
             }
             const leaked = listing.filter((rel) => rel.includes('private-'));
             assert.deepStrictEqual(leaked, [], 'untracked extension directories reached the bundle');
+            assert.deepStrictEqual(listing.filter((rel) => rel.includes('committed-plugin')), [], 'a committed plugin reached the bundle');
         } finally {
             fs.rmSync(root, { recursive: true, force: true });
         }
@@ -344,7 +348,7 @@ describe('release packager — private, untracked plugins never ship', () => {
             const listing = withGitEnv(path.join(root, 'no-such-git-dir'), () => packageFixture(root));
 
             // THE CONTROL, and the proof the fallback ran: nothing here is tracked, so with git answering
-            // the public plugin would have been dropped too.
+            // the public files would have been dropped too.
             for (const rel of Object.keys(PUBLIC)) {
                 assert.ok(listing.includes(rel), `should ship in the name-list fallback: ${rel}\nbundle: ${listing.join(', ')}`);
             }

@@ -51,12 +51,12 @@ type Build = {
     registries?: Record<string, string[]>;
 };
 
-/** What git tracks of the one plugin the clean build's registries import. */
+/** What git tracks of the (hypothetical) plugin the build's registries import — the core ships none. */
 const TRACKED: Set<string> = new Set([
-    'backend/plugins/hello-world/manifest.json',
-    'backend/plugins/hello-world/client/Widget.tsx',
-    'backend/plugins/hello-world/client/admin/Page.tsx',
-    'backend/plugins/hello-world/client/verso/HelloWorldVerso.tsx',
+    'backend/plugins/example-plugin/manifest.json',
+    'backend/plugins/example-plugin/client/Widget.tsx',
+    'backend/plugins/example-plugin/client/admin/Page.tsx',
+    'backend/plugins/example-plugin/client/verso/ExampleVerso.tsx',
 ]);
 
 const temps: string[] = [];
@@ -92,10 +92,10 @@ function cleanBuild(): Required<Build> {
         rewrites: defaultRewrites(),
         fetchCache: [],
         registries: {
-            'src/lib/pluginRegistry.ts': ['backend/plugins/hello-world/client/Widget'],
-            'src/app/admin/plugin/[slug]/page.tsx': ['backend/plugins/hello-world/client/admin/Page'],
-            'src/lib/versoPluginRegistry.ts': ['backend/plugins/hello-world/client/verso/HelloWorldVerso'],
-            // hello-world declares no portal page: the generator still writes the (empty) registry.
+            'src/lib/pluginRegistry.ts': ['backend/plugins/example-plugin/client/Widget'],
+            'src/app/admin/plugin/[slug]/page.tsx': ['backend/plugins/example-plugin/client/admin/Page'],
+            'src/lib/versoPluginRegistry.ts': ['backend/plugins/example-plugin/client/verso/ExampleVerso'],
+            // example-plugin declares no portal page: the generator still writes the (empty) registry.
             'src/lib/portalPluginRegistry.ts': [],
         },
     };
@@ -260,10 +260,10 @@ describe('release hermetic-build guard — every trace of a live backend trips i
 
     test('an untracked file inside a TRACKED plugin is reported too — the check is per module, not per folder', () => {
         const build = cleanBuild();
-        build.registries['src/lib/pluginRegistry.ts'].push('backend/plugins/hello-world/client/LocalExperiment');
+        build.registries['src/lib/pluginRegistry.ts'].push('backend/plugins/example-plugin/client/LocalExperiment');
         const v = violationsOf(build);
         assert.strictEqual(v.length, 1, v.join('\n'));
-        assert.match(v[0], /hello-world\/client\/LocalExperiment/);
+        assert.match(v[0], /example-plugin\/client\/LocalExperiment/);
     });
 
     test('a missing registry fails closed', () => {

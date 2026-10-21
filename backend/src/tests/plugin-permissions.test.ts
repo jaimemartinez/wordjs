@@ -17,6 +17,9 @@ const perms = require('../core/plugin-permissions');
 
 const SLUG = 'perm-test-plugin';
 const dir = path.join(path.resolve(__dirname, '../../plugins'), SLUG);
+// A second on-disk plugin that declares database:write (the core ships no plugin, so the test writes it).
+const DISK_SLUG = 'perm-disk-plugin';
+const diskDir = path.join(path.resolve(__dirname, '../../plugins'), DISK_SLUG);
 
 before(() => {
     fs.mkdirSync(dir, { recursive: true });
@@ -24,8 +27,15 @@ before(() => {
         name: SLUG,
         permissions: [{ scope: 'database', access: 'read' }, { scope: 'settings', access: 'write' }]
     }));
+    fs.mkdirSync(diskDir, { recursive: true });
+    fs.writeFileSync(path.join(diskDir, 'manifest.json'), JSON.stringify({
+        name: DISK_SLUG,
+        permissions: [{ scope: 'database', access: 'write' }]
+    }));
 });
-after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } });
+after(() => {
+    for (const d of [dir, diskDir]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* */ } }
+});
 
 test('default-deny: a declared-but-ungranted permission is denied', async () => {
     perms._setGrantsInMemory(SLUG, []); // grants are set by ADMIN/host (no plugin context), then plugin code runs
@@ -69,17 +79,16 @@ test('network grant: off by default, on after granting', () => {
 
 // No trust tier: even a plugin present on disk gets NOTHING without an explicit grant — there is no
 // bypass. It only gains a capability once an admin grants it (and the manifest declares it).
-// hasPermission reads the plugin's manifest from backend/plugins/<slug>/, so this fixture must be a
-// plugin that ships there. Real plugins now live under marketplace/plugins/ and are not present until
-// installed; test-schema is a bundled fixture that declares database:write in its manifest.
+// hasPermission reads the plugin's manifest from backend/plugins/<slug>/, so the fixture is written
+// there (DISK_SLUG, declaring database:write) — the core ships no plugin of its own.
 test('no trust tier: even a disk-present plugin needs grants (no bypass)', async () => {
-    perms._setGrantsInMemory('test-schema', []); // no grants
-    await runWithContext('test-schema', async () => {
+    perms._setGrantsInMemory(DISK_SLUG, []); // no grants
+    await runWithContext(DISK_SLUG, async () => {
         assert.equal(hasPermission('database', 'write'), false);
         assert.equal(hasPermission('email', 'admin'), false);
     });
-    perms._setGrantsInMemory('test-schema', ['database:write']);
-    await runWithContext('test-schema', async () => {
+    perms._setGrantsInMemory(DISK_SLUG, ['database:write']);
+    await runWithContext(DISK_SLUG, async () => {
         assert.equal(hasPermission('database', 'write'), true);  // granted now
         assert.equal(hasPermission('email', 'admin'), false);    // still not granted
     });

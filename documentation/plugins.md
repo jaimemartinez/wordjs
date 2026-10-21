@@ -18,8 +18,8 @@ A WordJS plugin is simply a folder inside `backend/plugins/`.
 ## 2. Tutorial: Create a "Greeting Card" Plugin
 
 Follow these steps to create a plugin that shows a message in the admin panel. (The tutorial plugin is
-called `greeting-card` because `backend/plugins/hello-world` already exists: it is a different, minimal
-reference plugin — see [Plugins Reference §7](plugins-reference.md).)
+called `greeting-card` so it never collides with `hello-world`, the minimal reference plugin in
+`documentation/examples/plugins/hello-world/` — see [Plugins Reference §7](plugins-reference.md).)
 
 > **Fast path:** `node backend/cli/wordjs.js create plugin my-plugin` scaffolds everything below in one command — manifest (`"isolated": true`, requested permissions), a bridge-idiomatic `index.js` (typed via `backend/types/wordjs-bridge.d.ts` for JSDoc IntelliSense), an admin page and a Verso block — and prints the activate/regenerate flow. See `documentation/cli.md` §3. The tutorial below explains what each piece is.
 
@@ -357,7 +357,7 @@ from the Marketplace UI (`GET`/`PUT /api/v1/marketplace/sources`, persisted in t
 `marketplace_sources` option as a list of https catalogs, merged with per-source error isolation);
 with none configured the default is the GitHub release assets
 (`https://github.com/jaimemartinez/wordjs/releases/latest/download`). See
-**[Plugins Reference §10](plugins-reference.md)** for the catalog.
+**[Plugins Reference §9](plugins-reference.md)** for the catalog.
 
 ### Getting your plugin reviewed
 

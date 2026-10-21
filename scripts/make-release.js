@@ -106,6 +106,7 @@ const IGNORE_PATTERNS = [
 const CLI_SHIPPED = new Set(['backend/cli', 'backend/cli/wordjs.js', 'backend/cli/templates']);
 const isShippedCli = (rel) => CLI_SHIPPED.has(rel) || rel.startsWith('backend/cli/templates/');
 
+const INSTALLED_PLUGIN_RE = /^backend\/plugins\/[^/]+\//;
 const SECRET_DIR_RE = /^(?:backend\/|gateway\/)?(?:data|certs)\/|^gateway\/ssl\/|(?:^|\/)plugins\/[^/]+\/data\//;
 const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.key', '.pem', '.mailenc'];
 
@@ -460,6 +461,15 @@ function shouldIgnore(filePath) {
         if (matchesEntry(relativePath, segments, pattern)) return true;
     }
 
+    // The core package carries NO plugin: backend/plugins/ ships empty (its README only), and plugins reach a
+    // site through the marketplace or an upload. Structural, not a list of names — whatever a developer has
+    // installed or is writing in-tree stays out, with or without git.
+    if (INSTALLED_PLUGIN_RE.test(relativePath)) return true;
+    // …nor its (then empty) folder, so not even a plugin's name reaches the package.
+    if (/^backend\/plugins\/[^/]+$/.test(relativePath)) {
+        try { if (fs.statSync(filePath).isDirectory()) return true; } catch { /* vanished: nothing to ship */ }
+    }
+
     // What this public file must not name: the developer's own `.release-exclude` (see loadLocalExcludes).
     if (loadLocalExcludes().some((entry) => matchesEntry(relativePath, segments, entry))) return true;
 
@@ -534,5 +544,5 @@ async function createZip(sourceDir, outPath) {
 if (require.main === module) {
     run();
 } else {
-    module.exports = { shouldIgnore, copyFiles, IGNORE_PATTERNS, ROOT_DIR, buildFrontendForRelease };
+    module.exports = { shouldIgnore, INSTALLED_PLUGIN_RE, copyFiles, IGNORE_PATTERNS, ROOT_DIR, buildFrontendForRelease };
 }

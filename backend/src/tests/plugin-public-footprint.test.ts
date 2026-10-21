@@ -222,8 +222,6 @@ describe('static /plugins: manifest.json is never served', () => {
                 assert.ok(!r.text.includes('9.8.7') && !r.text.includes('Probe Author'), 'no manifest bytes');
             }
         }
-        // The in-tree plugin too: the rule is not probe-specific.
-        assert.strictEqual((await request(app).get('/plugins/hello-world/manifest.json')).status, 404);
     });
 });
 
