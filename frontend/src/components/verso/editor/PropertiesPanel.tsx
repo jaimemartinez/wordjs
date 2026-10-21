@@ -24,7 +24,7 @@
  * compara clave a clave los `fields` de Verso con los de `versoConfig` (verso-coreBlocks.test.ts), y
  * `ix` no existe —ni va a existir— en el editor viejo, al que Verso sustituye.
  */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useSyncExternalStore } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { humanizeFieldKey, localizeField, trStr } from "@/lib/editorI18n";
@@ -36,6 +36,19 @@ import { useStoreSlice } from "../render/context";
 import VersoFieldControl, { type RenderExternalPicker } from "../fields/VersoFieldControl";
 import { partitionFieldEntries, tabAvailability, type PanelTab } from "./panelTabs";
 import { ancestorChain } from "./outlineModel";
+import { DockMotion } from "./IxDock";
+import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
+
+/** Por debajo de md el dock de movimiento no existe (IxDock: `hidden md:flex`): su cuerpo vive aquí. */
+const PHONE_QUERY = "(max-width: 767.98px)";
+function subscribePhone(cb: () => void) {
+    const mq = window.matchMedia(PHONE_QUERY);
+    mq.addEventListener("change", cb);
+    return () => mq.removeEventListener("change", cb);
+}
+function usePhoneWidth(): boolean {
+    return useSyncExternalStore(subscribePhone, () => window.matchMedia(PHONE_QUERY).matches, () => false);
+}
 
 const selectState = (s: VersoEditorState) => s;
 
@@ -65,6 +78,9 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
     const node = selectedId ? state.doc.nodes[selectedId] : undefined;
     const def = node ? registry.get(node.type) : undefined;
     const isDragging = state.dragPreview !== null;
+    const isPhone = usePhoneWidth();
+    const ixCtx = useSiteIxPresets();
+    const [motionOpen, setMotionOpen] = useState(true);
 
     const msIcon = node ? (BLOCK_META[node.type]?.ms || "widgets") : "web";
     const label = node
@@ -263,6 +279,29 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                             </section>
                         );
                     })}
+                    {/* MOVIMIENTO en el móvil: el cuerpo del dock (entrada + interacciones + línea de
+                        tiempo, en pestañas) con altura propia, porque sus paneles se miden contra ella. */}
+                    {isPhone && node && def && !isDragging && (
+                        <section data-verso-section="motion" className="border-t border-[var(--ed-outline-variant)]">
+                            <button
+                                type="button"
+                                onClick={() => setMotionOpen((o) => !o)}
+                                aria-expanded={motionOpen}
+                                className="w-full min-h-11 px-4 py-3 flex items-center justify-between group hover:bg-[var(--ed-surface-container-low)] transition-colors"
+                            >
+                                <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.03em] text-[var(--ed-on-surface)]">
+                                    <MSym name="animation" size={16} className="text-[var(--ed-on-surface-variant)]" />
+                                    {trStr("Movimiento", language)}
+                                </span>
+                                <MSym name={motionOpen ? "expand_less" : "expand_more"} size={16} className="text-[var(--ed-outline)] group-hover:text-[var(--ed-on-surface)] transition-colors" />
+                            </button>
+                            {motionOpen && (
+                                <div className="relative h-[min(72dvh,600px)] border-t border-[var(--ed-outline-variant)]">
+                                    <DockMotion key={node.id} node={node} def={def} handle={handle} ixCtx={ixCtx} language={language} />
+                                </div>
+                            )}
+                        </section>
+                    )}
                 </main>
                 {/* Estado de drag — los campos no pueden aplicar a un bloque en el aire. */}
                 {isDragging && (

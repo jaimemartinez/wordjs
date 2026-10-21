@@ -141,3 +141,33 @@ describe("IxDock — anatomía de editor de vídeo", () => {
         expect(html).not.toContain('data-timeline="1"');
     });
 });
+
+// Phone and tablet: no editor control may be desktop-only (owner finding: «en Verso para mobile no
+// está la opción para editar los movimientos»). The dock is `hidden md:flex`, so below md its body
+// mounts in the properties sheet; the header controls that only show from xl live in «Más opciones».
+describe("Verso on a phone or a tablet — nothing is desktop-only", () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const read = (f: string) => fs.readFileSync(path.resolve(__dirname, "..", f), "utf8");
+
+    it("the motion dock hides below md exactly where the properties sheet mounts its body", () => {
+        expect(read("IxDock.tsx")).toMatch(/className="relative hidden md:flex /);
+        expect(read("IxDock.tsx")).toMatch(/export function DockMotion\(/);
+        const panel = read("PropertiesPanel.tsx");
+        expect(panel).toContain('const PHONE_QUERY = "(max-width: 767.98px)";');
+        expect(panel).toMatch(/isPhone && node && def && !isDragging && \(\s*<section data-verso-section="motion"/);
+        expect(panel).toMatch(/<DockMotion key=\{node\.id\} node=\{node\} def=\{def\}/);
+    });
+
+    it("«Más opciones» (below xl) carries every xl-only header and rail control", () => {
+        const src = read("VersoEditor.tsx");
+        const start = src.indexOf("<div ref={moreRef}");
+        const menu = src.slice(start, src.indexOf("{onSave && (", start));
+        expect(menu).toMatch(/className="relative xl:hidden"/);
+        for (const needle of [
+            "<HistoryControls", "onStatusChange(e.target.value)", 'type="datetime-local"', "handlePreview()",
+            "replayAnimations(frameDoc)", "setGuidesOn(!guidesOn)", 'setRailView("patterns")', "setMediaOpen(true)",
+            "setCommentsOpen(true)", "setShowRevisions(true)", "setA11yOpen(true)", "setCmdkOpen(true)",
+        ]) expect(menu, needle).toContain(needle);
+    });
+});

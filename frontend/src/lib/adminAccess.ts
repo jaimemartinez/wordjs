@@ -87,7 +87,7 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     // Preajustes de interacción del sitio (motor F9). Literal en vez de clave i18n, como el resto de
     // las entradas añadidas después del corte de traducciones. Va DESPUÉS del índice 7, así que cae
     // en la sección de gestión junto a Ajustes — no mueve el reparto de secciones.
-    { href: "/admin/settings/interactions", label: "Interacciones", icon: "fa-wand-magic-sparkles", cap: "manage_options" },
+    { href: "/admin/settings/interactions", label: "nav.motions", icon: "fa-wand-magic-sparkles", cap: "manage_options" },
     // Proveedor de IA (backend routes/ai.ts): el backend lo gatea con isAdmin + sesión interactiva.
     { href: "/admin/settings/ai", label: "nav.ai", icon: "fa-brain", cap: "manage_options" },
     // Herramientas: exportación JSON/WXR (la mitad que faltaba de importar/exportar). El backend la

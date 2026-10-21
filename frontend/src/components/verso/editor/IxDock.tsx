@@ -17,8 +17,10 @@
  * y los MISMOS escritores puros — un solo dueño por prop, un solo camino de escritura
  * (`handle.transact` con `coalesceKey`), la misma historia de undo.
  *
- * SOLO ESCRITORIO/TABLETA (`hidden md:flex`): en móvil el editor trabaja con hojas y el inspector
- * móvil sigue siendo el camino.
+ * SOLO ESCRITORIO/TABLETA (`hidden md:flex`): en un móvil no cabe un dock bajo el lienzo, así que el
+ * MISMO cuerpo (DockMotion: mismos escritores, misma historia) se monta como sección «Movimiento» de la
+ * hoja de propiedades (PropertiesPanel), con inspector y línea de tiempo en pestañas. Antes, por debajo
+ * de md no había ningún camino para editar la entrada ni las interacciones de un bloque.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
@@ -30,7 +32,7 @@ import type { VersoEditorState } from "@/lib/verso/types";
 import type { IxCompileCtx } from "@/lib/verso/interactions";
 import { useStoreSlice } from "../render/context";
 import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
-import { DockTabs, PresetBar, type DockPane } from "./IxDockParts";
+import { DockTabs, MotionPicker, PresetBar, type DockPane } from "./IxDockParts";
 import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
 import InteractionsControl, { isTimed } from "../fields/InteractionsControl";
 import IxScrubberControl from "../fields/IxScrubberControl";
@@ -249,8 +251,9 @@ export default function IxDock({ handle, registry }: IxDockProps) {
     );
 }
 
-/** El cuerpo con bloque: inspector (izquierda) + escenario (transporte y línea de tiempo). */
-function DockMotion({
+/** El cuerpo con bloque: inspector (izquierda) + escenario (transporte y línea de tiempo). También lo
+ *  monta la hoja de propiedades del móvil, donde no hay dock. */
+export function DockMotion({
     node,
     def,
     handle,
@@ -342,8 +345,10 @@ function DockMotion({
                     ))}
                 </section>
             )}
+            <MotionPicker ix={ix} ixCtx={ixCtx} presetId={st.presetId} onChoose={(next) => onFieldChange("ix", next)} />
             <section className="rounded-xl border border-[var(--ed-outline-variant)] p-3" data-verso-dock-section="ix">
-                <PresetBar
+                {/* Linked: the picker above already says so. Unlinked: «save as preset» and «manage». */}
+                {!linked && <PresetBar
                     ix={ix}
                     linked={linked}
                     active={st.active}
@@ -351,7 +356,7 @@ function DockMotion({
                     ixCtx={ixCtx}
                     language={language}
                     onLinked={(next) => onFieldChange("ix", next)}
-                />
+                />}
                 <InteractionsControl
                     key={`${node.id}:ix`}
                     value={ix}
@@ -369,7 +374,7 @@ function DockMotion({
     // ESCENARIO — transporte arriba, línea de tiempo protagonista debajo.
     const stage = (
             <div className="h-full min-w-0 flex flex-col">
-                <div className="h-10 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
+                <div className="min-h-10 shrink-0 px-3 py-1 flex flex-wrap items-center gap-2 border-b border-[var(--ed-outline-variant)]">
                     {/* «Probar» primario y «Probar todo» secundario a la MISMA altura y radio (antes
                         32 vs 28 px y radio 8 vs 2: hermanos que parecían de dos sistemas). */}
                     <button

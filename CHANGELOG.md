@@ -633,6 +633,14 @@ the boot error links there too.
 
 ### Changed
 
+- **Settings ▸ Motions: the interaction presets screen is a motion library.** It explains what a preset is and how to
+  use one in three steps; shows the site's motions as cards with a live preview (the real compiler, played on a sample
+  card), a plain-language description («appears sliding up when it scrolls into view, its items one after another») and
+  the pages that use each, with links; offers templates and the included motions as starting points; and edits a motion
+  in a simple mode (effect, when, speed, delay, this block or its items one by one) with a preview that replays on every
+  change, the full step and timeline editor behind *Advanced*. Deleting a motion in use names the pages it leaves still.
+  Previews respect *reduce motion*. In Verso, the block's Motion panel opens with the same «Choose a motion» picker. The
+  presets, their storage and how pages compile them are unchanged.
 - **The admin works on a phone and a tablet.** Every core list (posts, pages, media, comments, users,
   categories, tags, audit log, form submissions, API tokens, backups, site addresses) renders through one
   responsive table: labelled cards on a phone, columns that wait for room on a tablet, row actions that never
@@ -935,6 +943,12 @@ the boot error links there too.
 
 ### Fixed
 
+- **Verso on a phone or a tablet: nothing is desktop-only any more.** Below 768 px the block's motion (entrance
+  animation, interaction preset, steps and timeline) had no way in at all: the motion dock is a desktop/tablet panel
+  and those fields are not in the inspector. Its body now opens as a *Motion* section of the properties sheet. Below
+  1280 px a *More options* menu in the header holds what only the desktop header and rail showed: undo/redo,
+  publication status and date, preview, replaying the entrance animations, guides, templates, the media library,
+  review comments, revision history, the accessibility check and the command palette.
 - **Public header and footer on a touch screen.** Menu links, the site title and the logo are at least 44 px
   tall where the pointer is a finger (a mouse keeps the theme's own line height), the drawer's close button is
   44 px, and a header menu with submenus uses the drawer up to 1024 px on a touch screen: its dropdowns open on
