@@ -712,7 +712,9 @@ router.post('/install', async (req: Request, res: Response) => {
         // without a backend port records the one this process listens on (config/app.ts: PORT, then 4000).
         port: validPort(enrolledConfig.port) || config.port || 4000,
         frontendPort: validPort(enrolledConfig.frontendPort) || 3001,
-        gatewayPort: validPort(enrolledConfig.gatewayPort) || 3000,
+        // The monolith's public port is PORT (monolith.js sets it from its own resolution before the backend
+        // loads): a second install started on PORT=3390 recorded 3000 and moved there at its next restart.
+        gatewayPort: validPort(enrolledConfig.gatewayPort) || (process.env.WORDJS_EMBEDDED === '1' ? validPort(process.env.PORT) : null) || 3000,
         gatewayInternalPort: enrolledConfig.gatewayInternalPort || 3100,
         // Host for the backend server listen binding (usually localhost or 0.0.0.0). An enrolled node
         // MUST keep the binding enrollment chose — the gateway lives on another machine.

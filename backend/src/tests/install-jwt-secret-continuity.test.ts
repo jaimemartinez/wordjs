@@ -461,6 +461,26 @@ describe('the install keeps the ports the config already names', () => {
         assert.deepStrictEqual([cfg.port, cfg.frontendPort, cfg.gatewayPort], [4100, 3101, 8443]);
     });
 
+    it('a second monolith started on other ports records the ports it runs on (QA M1-24)', async () => {
+        // monolith.js binds WORDJS_LOOPBACK_PORT for the SSR loopback and PORT publicly; the install wrote
+        // 4000/3000, so after a restart this install's pages read the data of the one listening on :4000.
+        freshMachine();
+        const saved = { PORT: process.env.PORT, WORDJS_LOOPBACK_PORT: process.env.WORDJS_LOOPBACK_PORT };
+        process.env.WORDJS_EMBEDDED = '1';
+        process.env.PORT = '3390';
+        process.env.WORDJS_LOOPBACK_PORT = '4390';
+        try {
+            await boot();
+            const { res } = await install({ siteUrl: 'http://localhost:3390' });
+            assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+            const cfg = persisted();
+            assert.deepStrictEqual([cfg.port, cfg.gatewayPort], [4390, 3390]);
+        } finally {
+            for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+            delete process.env.WORDJS_EMBEDDED;
+        }
+    });
+
     it('a config without ports records the defaults, as before', async () => {
         freshMachine();
         await boot();

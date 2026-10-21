@@ -45,6 +45,13 @@ describe('the backend listen port', () => {
     it('the monolith ignores PORT: it is the public port there, not the backend\'s', () => {
         withEnv({ PORT: '3000', WORDJS_EMBEDDED: '1' }, () => assert.strictEqual(resolveBackendPort(4000), 4000));
     });
+
+    it('the monolith takes the loopback port it was started with (WORDJS_LOOPBACK_PORT), QA M1-24', () => {
+        withEnv({ PORT: '3390', WORDJS_EMBEDDED: '1', WORDJS_LOOPBACK_PORT: '4390' }, () => assert.strictEqual(resolveBackendPort(4000), 4390));
+        withEnv({ PORT: '3390', WORDJS_EMBEDDED: '1', WORDJS_LOOPBACK_PORT: 'nope' }, () => assert.strictEqual(resolveBackendPort(4100), 4100));
+        // Split mode never reads it: PORT is the backend's own port there.
+        withEnv({ PORT: undefined, WORDJS_EMBEDDED: undefined, WORDJS_LOOPBACK_PORT: '4390' }, () => assert.strictEqual(resolveBackendPort(4100), 4100));
+    });
 });
 
 describe('a local reverse proxy nothing trusts', () => {
