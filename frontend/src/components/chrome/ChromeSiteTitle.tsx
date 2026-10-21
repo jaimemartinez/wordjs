@@ -26,7 +26,7 @@ export default function ChromeSiteTitle({ showTagline = false, location = "heade
     return (
         <div className="wjs-chrome-site-title flex flex-col">
             {siteTitle ? (
-                <Link href="/" className={`${hook}text-2xl font-bold text-[var(--wjs-color-heading,currentColor)]`}>
+                <Link href="/" className={`${hook}text-2xl font-bold text-[var(--wjs-color-heading,currentColor)] pointer-coarse:inline-flex pointer-coarse:items-center pointer-coarse:min-h-11`}>
                     {siteTitle}
                 </Link>
             ) : null}

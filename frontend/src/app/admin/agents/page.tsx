@@ -87,8 +87,8 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
     return (
         <div>
             <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">{label}</span>
-                <button type="button" onClick={copy} className="text-[10px] font-black uppercase tracking-wider text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                <span className="text-[11px] font-black uppercase tracking-widest text-gray-400">{label}</span>
+                <button type="button" onClick={copy} className="text-[11px] font-black uppercase tracking-wider text-blue-600 hover:text-blue-800 flex items-center gap-1">
                     <i className={`fa-solid ${copied ? "fa-check" : "fa-copy"}`}></i>{copied ? t("agents.copied") : t("agents.copy")}
                 </button>
             </div>
@@ -301,7 +301,7 @@ export default function AgentsPage() {
     };
 
     return (
-        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+        <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader title={t("agents.title")} subtitle={t("agents.subtitle")} icon="fa-robot" />
 
             {/* One column until 2xl: beside the list, the form was ~290px wide at 1280 and cut its labels. */}
@@ -314,7 +314,7 @@ export default function AgentsPage() {
                     <form onSubmit={handleCreate} className="space-y-5">
                         <Input label={t("agents.name")} icon="fa-tag" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("agents.namePlaceholder")} />
                         <fieldset>
-                            <legend className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("agents.requested")}</legend>
+                            <legend className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("agents.requested")}</legend>
                             <p className="text-[11px] text-gray-400 leading-relaxed mb-2">{t("agents.requestedHelp")}</p>
                             <div className="grid gap-1.5 md:grid-cols-2 2xl:grid-cols-1">
                                 {vocabulary.map((c) => {
@@ -325,7 +325,7 @@ export default function AgentsPage() {
                                             <span>
                                                 <span className="text-xs font-bold text-gray-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                                                     <i className={`fa-solid ${CAP_ICONS[c]} text-gray-300 w-4 text-center`}></i>{t(`agents.cap.${capKey(c)}`)}
-                                                    <code className="text-[10px] font-mono text-gray-400">{c}</code>
+                                                    <code className="text-[11px] font-mono text-gray-400">{c}</code>
                                                 </span>
                                                 <span className="block text-[11px] text-gray-400 leading-snug mt-0.5">{t(`agents.capHelp.${capKey(c)}`)}</span>
                                             </span>
@@ -337,7 +337,7 @@ export default function AgentsPage() {
                         {steerableCombination(requested) && <SteerableWarning confirmation={publishConfirmation} />}
                         {canGrant && users.length > 0 && (
                             <div>
-                                <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("agents.boundUser")}</label>
+                                <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("agents.boundUser")}</label>
                                 <Select
                                     value={boundUser}
                                     onChange={setBoundUser}
@@ -346,7 +346,7 @@ export default function AgentsPage() {
                             </div>
                         )}
                         <div>
-                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("tokens.expires")}</label>
+                            <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("tokens.expires")}</label>
                             <Select
                                 value={expiry}
                                 onChange={setExpiry}
@@ -390,7 +390,7 @@ export default function AgentsPage() {
                             </div>
                             {(publishConfirmation || queue.length > 0) && (
                                 <div className="mt-5 border-t border-gray-100 pt-4" data-testid="agent-publish-queue">
-                                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">
+                                    <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-400 mb-3">
                                         {t("agents.queueTitle")} <span className="text-gray-300">({queue.length})</span>
                                     </h3>
                                     {queue.length === 0 ? (
@@ -464,7 +464,7 @@ export default function AgentsPage() {
                                         const cls = !granted ? "bg-gray-100 text-gray-400" : inert ? "bg-amber-50 text-amber-700 line-through" : "bg-blue-50 text-blue-700";
                                         return (
                                             <span key={cap} title={!granted ? t("agents.notGranted") : inert ? t("agents.inert") : undefined}
-                                                className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-md flex items-center gap-1 ${cls}`}>
+                                                className={`text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-md flex items-center gap-1 ${cls}`}>
                                                 <i className={`fa-solid ${granted ? (inert ? "fa-triangle-exclamation" : "fa-check") : "fa-hourglass-half"}`}></i>{cap}
                                             </span>
                                         );

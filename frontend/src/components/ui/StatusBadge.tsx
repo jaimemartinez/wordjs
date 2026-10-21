@@ -41,7 +41,7 @@ const statusMap: Record<string, StatusType> = {
 
 const sizeClasses: Record<BadgeSize, { container: string; dot: string; text: string }> = {
     sm: { container: "px-2 py-0.5 gap-1", dot: "w-1.5 h-1.5", text: "text-[8px]" },
-    md: { container: "px-3 py-1 gap-1.5", dot: "w-2 h-2", text: "text-[10px]" },
+    md: { container: "px-3 py-1 gap-1.5", dot: "w-2 h-2", text: "text-[11px]" },
     lg: { container: "px-4 py-1.5 gap-2", dot: "w-2.5 h-2.5", text: "text-xs" },
 };
 

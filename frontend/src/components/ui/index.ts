@@ -14,3 +14,7 @@ export { ActionCard } from "./ActionCard";
 export { Select } from "./Select";
 export { TimePicker } from "./TimePicker";
 
+export { DataTable, RowActionButton } from "./DataTable";
+export type { DataTableColumn, DataTableAction, DataTableSelection } from "./DataTable";
+export { Pagination } from "./Pagination";
+export { RowActionsMenu } from "./RowActionsMenu";

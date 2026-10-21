@@ -633,6 +633,13 @@ the boot error links there too.
 
 ### Changed
 
+- **The admin works on a phone and a tablet.** Every core list (posts, pages, media, comments, users,
+  categories, tags, audit log, form submissions, API tokens, backups, site addresses) renders through one
+  responsive table: labelled cards on a phone, columns that wait for room on a tablet, row actions that never
+  hide behind hover on a touch screen and a keyboard-accessible *More actions* menu. The sidebar is a drawer
+  below 1024 px, so a tablet gets the whole width; core screens have 44 px touch targets, phone-sized gutters
+  and readable 11 px labels; dialogs fit the viewport. Labels are tied to their fields, icon-only buttons are
+  named, and the media library and two sidebar entries that were Spanish-only are translated.
 - **The Footer settings page was retired.** `/admin/footer` redirects to the footer in the header &
   footer editor. Its settings are converted into the site footer composition by
   `POST /api/v1/chrome/migrate-legacy` (the editor's *Convert* button): losslessly (the old options are
@@ -928,6 +935,10 @@ the boot error links there too.
 
 ### Fixed
 
+- **Public header and footer on a touch screen.** Menu links, the site title and the logo are at least 44 px
+  tall where the pointer is a finger (a mouse keeps the theme's own line height), the drawer's close button is
+  44 px, and a header menu with submenus uses the drawer up to 1024 px on a touch screen: its dropdowns open on
+  hover or focus, and a tap on the parent link navigated away before either could happen.
 - **Static front page: plugin `[tag]` embeds come from the plugins' manifests.** The front page kept its
   own list (`[cards]` → card-gallery, `[vgallery]` → video-gallery). It now renders whatever tags the
   active plugins declare in their manifest `shortcodes` and render with their own site component, with

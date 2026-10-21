@@ -22,12 +22,12 @@ export function PluginRoleBadges({ role, t }: { role: Role; t: (key: string) => 
     if (!isPluginRole(role)) return null;
     return (
         <p className="mt-2 flex flex-wrap gap-1" data-plugin-role={role.plugin}>
-            <span className="text-[10px] px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-100 rounded-full font-bold">
+            <span className="text-[11px] px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-100 rounded-full font-bold">
                 <i className="fa-solid fa-plug mr-1" aria-hidden="true"></i>
                 {fill(t("roles.providedByPlugin"), role.plugin || "")}
             </span>
             {role.orphaned && (
-                <span className="text-[10px] px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-full font-bold">
+                <span className="text-[11px] px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-full font-bold">
                     {t("roles.orphanedBadge")}
                 </span>
             )}
@@ -38,7 +38,7 @@ export function PluginRoleBadges({ role, t }: { role: Role; t: (key: string) => 
 /** The read-only panel shown instead of the edit form when a plugin's role is selected. */
 export function PluginRolePanel({ slug, role, t, onClose }: { slug: string; role: Role; t: (key: string) => string; onClose: () => void }) {
     return (
-        <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 sticky top-8" data-plugin-role-panel={role.plugin}>
+        <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-5 sm:p-8 sticky top-8" data-plugin-role-panel={role.plugin}>
             <div className="flex flex-wrap justify-between items-start gap-3 mb-6">
                 <div>
                     <h2 className="text-xl font-bold text-gray-900">{role.name}</h2>

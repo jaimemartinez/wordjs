@@ -50,7 +50,7 @@ export default function SecurityPage() {
                         main site manages them (the server refuses everyone else). A single site is unchanged. */}
                     {certsOffered && (<>
                     {/* SSL / HTTPS Settings Section */}
-                    <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-blue-500 transition-all hover:shadow-blue-900/10">
+                    <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-blue-500 transition-all hover:shadow-blue-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-lock text-emerald-500 text-xl"></i>
@@ -79,7 +79,7 @@ export default function SecurityPage() {
                     </div>
 
                     {/* Auto-Renewal (ACME) Section */}
-                    <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-amber-500 transition-all hover:shadow-amber-900/10">
+                    <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-amber-500 transition-all hover:shadow-amber-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-arrows-rotate text-amber-500 text-xl"></i>
@@ -92,7 +92,7 @@ export default function SecurityPage() {
                     </div>
 
                     {/* Gateway Configuration */}
-                    <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-indigo-500 transition-all hover:shadow-indigo-900/10">
+                    <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-indigo-500 transition-all hover:shadow-indigo-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-server text-indigo-500 text-xl"></i>
@@ -120,7 +120,7 @@ export default function SecurityPage() {
                     </>)}
 
                     {/* Two-Factor Enforcement Policy */}
-                    <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-emerald-500 transition-all hover:shadow-emerald-900/10">
+                    <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-emerald-500 transition-all hover:shadow-emerald-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                                 <i className="fa-solid fa-shield-halved text-emerald-500 text-xl"></i>
@@ -532,7 +532,7 @@ function MfaPolicyForm() {
 
             <div className="flex flex-wrap items-end gap-4">
                 <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Grace period (days)</label>
+                    <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">Grace period (days)</label>
                     <input
                         type="number"
                         min={0}

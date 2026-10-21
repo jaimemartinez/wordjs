@@ -71,7 +71,7 @@ export function StatCard({ icon, value, label, color = "blue", trend, onClick }:
                             </span>
                         )}
                     </div>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 mt-1 block break-words" data-stat-label="">
+                    <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 mt-1 block break-words" data-stat-label="">
                         {label}
                     </span>
                 </div>
