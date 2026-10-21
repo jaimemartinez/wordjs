@@ -699,17 +699,28 @@ describe("a refused plugin admin page explains itself instead of rendering nothi
         expect(textOf(html)).not.toContain('Plugin Not Found');
     });
 
-    it("renders the caller's fallback for every other failure — never an empty page", async () => {
+    it("renders the caller's fallback for a plugin nobody answers for — never an empty page", async () => {
         const { loadRemotePluginModule } = await freshLoader();
-        for (const answer of [jsonResponse({}, 404), jsonResponse({}, 502)]) {
-            fetchMock.mockImplementation(async (url: string) => {
-                if (url === REGISTRY_URL) return registryResponse([]);
-                if (url === MENUS_URL) return jsonResponse([]);
-                return answer;
-            });
-            const mod = await loadRemotePluginModule('acme', 'admin', Fallback);
-            expect(renderToStaticMarkup(React.createElement(mod.default))).toBe('<h1>Plugin Not Found</h1>');
-        }
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([]);
+            if (url === MENUS_URL) return jsonResponse([]);
+            return jsonResponse({}, 404);
+        });
+        const mod = await loadRemotePluginModule('acme', 'admin', Fallback);
+        expect(renderToStaticMarkup(React.createElement(mod.default))).toBe('<h1>Plugin Not Found</h1>');
+    });
+
+    it("a 5xx is not \"not installed\": the screen is temporarily unavailable, with a retry (S4-09)", async () => {
+        const { loadRemotePluginModule } = await freshLoader();
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([]);
+            if (url === MENUS_URL) return jsonResponse([]);
+            return jsonResponse({}, 502);
+        });
+        const mod = await loadRemotePluginModule('acme', 'admin', Fallback);
+        const html = renderToStaticMarkup(React.createElement(mod.default));
+        expect(html).toContain('data-wjs-plugin-unavailable="acme"');
+        expect(html).not.toContain('Plugin Not Found');
     });
 
     it("loads the page on the next mount once the grant is given (the refusal was not cached)", async () => {
@@ -775,12 +786,14 @@ describe("createRemotePluginComponent — what /admin/plugin/<slug> renders when
         expect(await renderPage('never-installed')).toBe('<h1>Plugin Not Found</h1>');
     });
 
-    it("a 502 renders the page's fallback, not the notice (and asks no registry: it is not a refusal)", async () => {
+    it("a 502 renders the temporarily-unavailable card, not the grant notice (and asks no registry: it is not a refusal)", async () => {
         fetchMock.mockImplementation(async (url: string) => {
             if (url === REGISTRY_URL) return registryResponse([registryEntry('mail-server', {}, false)]);
             return jsonResponse({}, 502);
         });
-        expect(await renderPage('mail-server')).toBe('<h1>Plugin Not Found</h1>');
+        const html = await renderPage('mail-server');
+        expect(html).toContain('data-wjs-plugin-unavailable');
+        expect(html).not.toContain('browser:script');
         expect(fetchMock.mock.calls.some(([u]) => u === REGISTRY_URL)).toBe(false);
     });
 });

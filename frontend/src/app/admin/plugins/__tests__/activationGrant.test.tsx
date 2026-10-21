@@ -135,7 +135,8 @@ describe("the activation dialog in plugins/page.tsx", () => {
         expect(activationGrant({ grantedPermissions: ["database:read"] }, "browser:script")).toBe("stays-off");
     });
     it("the footer says activating grants everything only when it does", () => {
-        expect(page).toMatch(/activationLeavesSomeOff\(pluginToActivate, declaredTokens\(pluginToActivate\)\) \? t\('plugins\.activation\.footer\.partial'\) : t\('plugins\.activation\.footer'\)/);
+        // "partial" also when the administrator switched a requested permission off in the dialog (S4-17).
+        expect(page).toMatch(/\(activationDeclined\.size > 0 \|\| activationLeavesSomeOff\(pluginToActivate, declaredTokens\(pluginToActivate\)\)\) \? t\('plugins\.activation\.footer\.partial'\) : t\('plugins\.activation\.footer'\)/);
         expect(page).not.toContain("you are granting it strict access");
     });
     it("es/en/pt carry every new string", () => {

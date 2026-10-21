@@ -16,7 +16,7 @@ import React, { useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
-import { BLOCK_META, FALLBACK_GROUP, GROUP_MS_ICON, GROUP_ORDER } from "@/lib/blockCatalog";
+import { BLOCK_META, GROUP_MS_ICON, GROUP_ORDER, paletteGroupOf, paletteIconOf } from "@/lib/blockCatalog";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
 
@@ -50,7 +50,7 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
     const allGroups = useMemo(() => {
         void registryVersion; // dependencia deliberada: un register() debe recalcular los grupos
         const present = new Set<string>();
-        for (const def of registry.list()) present.add(BLOCK_META[def.type]?.group || FALLBACK_GROUP);
+        for (const def of registry.list()) present.add(paletteGroupOf(def.type, def.category));
         return [
             ...GROUP_ORDER.filter((g) => present.has(g)),
             ...Array.from(present).filter((g) => !GROUP_ORDER.includes(g)),
@@ -67,9 +67,9 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
             // legacy, reducido al punto de display; trStr matchea por cualquiera de los 3 idiomas
             // fuente y devuelve el input intacto si no está en el diccionario — plugins a salvo).
             const label = trStr(def.label || meta?.label || def.type, language);
-            const ms = meta?.ms || "widgets";
+            const ms = paletteIconOf(def.type, def.category);
             const desc = meta?.desc;
-            const group = meta?.group || FALLBACK_GROUP;
+            const group = paletteGroupOf(def.type, def.category);
             if (activeGroup && group !== activeGroup) continue;
             if (q && !`${label} ${def.type} ${desc || ""}`.toLowerCase().includes(q)) continue;
             (byGroup[group] ||= []).push({ name: def.type, label, ms, desc });

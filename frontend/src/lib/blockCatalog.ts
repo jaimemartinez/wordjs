@@ -107,6 +107,42 @@ export const GROUP_MS_ICON: Record<string, string> = {
     [FALLBACK_GROUP]: "widgets",
 };
 
+/**
+ * The palette group of a block the core catalog does not know (a plugin's): the `category` its
+ * definition declares, when it names one of the groups (in Spanish, English or Portuguese), else
+ * FALLBACK_GROUP. Every plugin block used to land in "Más" with the same generic icon (S4-12).
+ */
+// Keys are lower-case and accent-free (categoryKey): "Diseño", "Mídia" and "Dinâmicos" all match.
+const CATEGORY_ALIASES: Record<string, string> = {
+    "diseno": "Diseño", "design": "Diseño", "layout": "Diseño", "design (layout)": "Diseño",
+    "contenido": "Contenido", "content": "Contenido", "conteudo": "Contenido",
+    "medios": "Medios", "media": "Medios", "midia": "Medios",
+    "marketing": "Marketing",
+    "dinamicos": "Dinámicos", "dynamic": "Dinámicos",
+    "navegacion": "Navegación", "navigation": "Navegación", "navegacao": "Navegación",
+    // The category names the marketplace plugins declare (their own vocabulary), filed by what they are.
+    "comercio": "Dinámicos", "commerce": "Dinámicos", "tienda": "Dinámicos", "store": "Dinámicos", "shop": "Dinámicos",
+    "reservas": "Dinámicos", "bookings": "Dinámicos", "eventos": "Dinámicos", "events": "Dinámicos",
+    "empleos": "Dinámicos", "jobs": "Dinámicos", "encuestas": "Dinámicos", "polls": "Dinámicos",
+    "restaurante": "Dinámicos", "restaurant": "Dinámicos", "donaciones": "Dinámicos", "donations": "Dinámicos",
+    "membresias": "Dinámicos", "memberships": "Dinámicos",
+    "formularios": "Marketing", "forms": "Marketing", "social": "Marketing", "newsletter": "Marketing",
+    "faq": "Contenido", "testimonios": "Contenido", "testimonials": "Contenido",
+    "youtube": "Medios", "video gallery": "Medios", "photo carousel": "Medios", "card gallery": "Medios",
+    "galeria": "Medios", "gallery": "Medios",
+};
+const categoryKey = (category: unknown): string =>
+    typeof category === "string" ? category.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
+export function paletteGroupOf(type: string, category?: unknown): string {
+    const meta = BLOCK_META[type];
+    if (meta?.group) return meta.group;
+    return CATEGORY_ALIASES[categoryKey(category)] || FALLBACK_GROUP;
+}
+/** Its Material Symbol: the catalog's, else its group's (never the same "widgets" for every plugin block). */
+export function paletteIconOf(type: string, category?: unknown): string {
+    return BLOCK_META[type]?.ms || GROUP_MS_ICON[paletteGroupOf(type, category)] || "widgets";
+}
+
 export type BlockItem = { name: string; label: string; icon: string; ms: string; desc?: string; group: string };
 
 /**
