@@ -953,6 +953,32 @@ the boot error links there too.
 
 ### Fixed
 
+- **The admin, the editor and the bundled themes, from a three-mode QA pass.**
+  - *Dark mode:* with the OS in dark mode the admin stays fully light and readable (the Security Center,
+    Media storage, Network and the Dashboard chart had near-white text on white). The Verso editor's own dark
+    scheme is complete: pickers, menus, accent buttons and field boxes follow it.
+  - *404 and errors:* the public 404's button is visible again, and its texts, the error page and the
+    public controls of the Audio, Video, Off-canvas and Back-to-top blocks follow the site's language. An
+    unknown `/admin/…` address shows a not-found page inside the admin.
+  - *Themes:* a static front page now uses the theme's `front-page.json` → `page-{slug}.json` → `page.json`
+    instead of the blog index's `home.json`, so Gaceta and Vergel no longer squeeze the demo home page into a
+    narrow card with split words. Grid, Columns and Stats also collapse to their tablet / phone layout when
+    the content area itself is that narrow. The bundled themes ship English texts and a `screenshot.jpg`;
+    Circuito's header button points to a page that exists; archives and search no longer list the same
+    posts twice; the demo home page takes its colours from the active theme.
+  - *Editor:* the "More options" menu on phones and tablets shows its icons, not their names; the canvas
+    shows the site's real header and footer; the Motion panel no longer opens on every click; on a touch
+    screen a block can be tapped into an empty container; colour fields get a colour picker and size fields
+    their unit; a post's inspector says "Post"; internal block ids are no longer shown.
+  - *Admin:* the sidebar is grouped by task (Content, Appearance, Users, Plugins, Settings, Advanced);
+    screens that were still partly in Spanish or English are translated (Import, Site Health, Widgets,
+    Network, Account and more) and `<html lang>` follows the admin language; counters use singular forms;
+    tables wrap between words instead of mid-word; status tabs, the header & footer selector and dialogs
+    fit a phone; the mobile menu and dialogs move and keep keyboard focus and close with Escape; form
+    fields are labelled.
+  - *Default theme:* blocks placed outside a Section keep the site's column; a Quote's citation and an
+    Audio player's title are no longer painted as dark or gradient strips.
+
 - **Isolated plugins with their own tables start on PostgreSQL and MySQL/MariaDB servers on a private
   address, and a plugin's request can no longer take the whole process down.** While the host answered a
   plugin's database call it opened its own pool connections under that plugin's sandbox rules, so a database

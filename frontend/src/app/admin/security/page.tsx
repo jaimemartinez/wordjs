@@ -314,9 +314,9 @@ function GatewayConfigForm() {
     return (
         <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
             {notice && (
-                <div role="status" data-testid="gateway-serving-notice" className="md:col-span-2 p-5 bg-amber-50 dark:bg-amber-900/20 rounded-2xl border border-amber-200 dark:border-amber-800 flex items-start gap-4">
-                    <i className="fa-solid fa-triangle-exclamation text-xl text-amber-600 dark:text-amber-400 mt-0.5"></i>
-                    <div className="text-sm text-amber-900 dark:text-amber-200 space-y-3">
+                <div role="status" data-testid="gateway-serving-notice" className="md:col-span-2 p-5 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-4">
+                    <i className="fa-solid fa-triangle-exclamation text-xl text-amber-600 mt-0.5"></i>
+                    <div className="text-sm text-amber-900 space-y-3">
                         <p>{t(notice)}</p>
                         {needsCertificate && (
                             <button type="button" onClick={generateSelfSigned} disabled={generating} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold">
@@ -328,9 +328,9 @@ function GatewayConfigForm() {
                 </div>
             )}
             {typeof reported?.serving === 'string' && (
-                <div className="md:col-span-2 text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2" data-testid="gateway-serving">
+                <div className="md:col-span-2 text-sm text-gray-600 flex items-center gap-2" data-testid="gateway-serving">
                     <span className="text-xs uppercase tracking-wider text-gray-400 font-bold">{t('security.gateway.servingNow')}</span>
-                    <span className={`font-bold ${reported.serving === 'https' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>
+                    <span className={`font-bold ${reported.serving === 'https' ? 'text-emerald-600' : 'text-gray-700'}`}>
                         {reported.serving === 'https' ? t('security.gateway.httpsEnabled') : reported.serving === 'http' ? t('security.gateway.httpNoTls') : t('security.gateway.servingReloading')}
                     </span>
                 </div>
