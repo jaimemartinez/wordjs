@@ -1062,7 +1062,14 @@ export interface ThemePermissions {
     logic: { state: 'none' | 'running' | 'blocked' | 'error'; reason: string } | null;
 }
 
+export interface ThemeDoctorFinding { code: string; message: string; detail?: unknown }
+export interface ThemeDoctorReport { slug: string; available: boolean; errors: ThemeDoctorFinding[]; warnings: ThemeDoctorFinding[]; info: ThemeDoctorFinding[] }
 export const themesApi = {
+    /** Create a theme from four seed colours (a declarative theme.json the server compiles). */
+    create: (data: { slug: string; metadata: { name: string; description?: string }; seeds: { primary: string; secondary: string; bg: string; text: string }; tokens?: Record<string, string>; enforceContrast?: boolean }) =>
+        apiPost<{ slug: string; diagnostics: unknown[] }>("/themes", data),
+    /** The theme doctor: token contract, layout, templates and WCAG contrast findings (read-only). */
+    doctor: (slug: string) => apiGet<ThemeDoctorReport>(`/themes/${encodeURIComponent(slug)}/doctor`),
     list: () => apiGet<Theme[]>("/themes"),
     /**
      * Switch the active theme. `grant` is what the administrator left on in the activation dialog: the
@@ -1386,7 +1393,8 @@ export interface BackupFile {
 export const backupsApi = {
     list: () => apiGet<BackupFile[]>("/backups"),
     create: () => apiPost<{ filename: string; size: number; date: string }>("/backups", {}),
-    restore: (filename: string) => apiPost<{ success: boolean; results: any }>(`/backups/${filename}/restore`, {}),
+    /** restart: how the backend restarts itself to load what was restored (manual: restart it by hand; null: nothing to restart). */
+    restore: (filename: string) => apiPost<{ success: boolean; results: any; restart?: "supervisor" | "watch" | "service" | "manual" | null }>(`/backups/${filename}/restore`, {}),
     delete: (filename: string) => apiDelete<{ success: boolean }>(`/backups/${filename}`),
     download: (filename: string) => {
         const baseUrl = getBaseUrl();

@@ -18,12 +18,15 @@ export default function BackupsPage() {
     const [schedule, setSchedule] = useState("daily");
     const [scheduleTime, setScheduleTime] = useState("00:00");
     const [scheduleDay, setScheduleDay] = useState("1"); // Default Monday
+    // How many backups are kept (the oldest beyond it are removed after each new one; 0 keeps all).
+    const [retention, setRetention] = useState("7");
 
     // Track original state for "dirty" check
     const [originalSettings, setOriginalSettings] = useState({
         schedule: "daily",
         time: "00:00",
-        day: "1"
+        day: "1",
+        retention: "7"
     });
 
     const [savingSchedule, setSavingSchedule] = useState(false);
@@ -34,6 +37,8 @@ export default function BackupsPage() {
     // success toast away before anyone read it, and the admin was never told the service must restart.
     const [restored, setRestored] = useState<string | null>(null);
     const [restoring, setRestoring] = useState(false);
+    // The restore was followed by an automatic restart (nothing for the administrator to do).
+    const [restartedAuto, setRestartedAuto] = useState(false);
 
     const { confirm } = useModal();
     const { addToast } = useToast();
@@ -62,12 +67,14 @@ export default function BackupsPage() {
             const newSettings = {
                 schedule: settings.backup_schedule || "daily",
                 time: settings.backup_time || "00:00",
-                day: settings.backup_day ? settings.backup_day.toString() : "1"
+                day: settings.backup_day ? settings.backup_day.toString() : "1",
+                retention: settings.backup_retention !== undefined && settings.backup_retention !== null && settings.backup_retention !== "" ? String(settings.backup_retention) : "7"
             };
 
             setSchedule(newSettings.schedule);
             setScheduleTime(newSettings.time);
             setScheduleDay(newSettings.day);
+            setRetention(newSettings.retention);
             setOriginalSettings(newSettings);
         } catch (e) {
             console.error("Failed to load backup schedule", e);
@@ -77,7 +84,8 @@ export default function BackupsPage() {
     const hasChanges =
         schedule !== originalSettings.schedule ||
         scheduleTime !== originalSettings.time ||
-        scheduleDay !== originalSettings.day;
+        scheduleDay !== originalSettings.day ||
+        retention !== originalSettings.retention;
 
     const handleSaveChanges = async () => {
         setSavingSchedule(true);
@@ -85,13 +93,15 @@ export default function BackupsPage() {
             await settingsApi.update({
                 backup_schedule: schedule,
                 backup_time: scheduleTime,
-                backup_day: scheduleDay
+                backup_day: scheduleDay,
+                backup_retention: retention.trim()
             });
 
             setOriginalSettings({
                 schedule,
                 time: scheduleTime,
-                day: scheduleDay
+                day: scheduleDay,
+                retention: retention.trim()
             });
 
             addToast(t('backups.toast.scheduleSaved'), "success");
@@ -146,9 +156,19 @@ export default function BackupsPage() {
         setRestored(null);
         setRestoring(true);
         try {
-            await backupsApi.restore(filename);
+            const r = await backupsApi.restore(filename);
             addToast(t('backups.toast.restored'), "success");
             setRestored(filename);
+            // The backend restarts itself to load the restored plugins, themes and settings (backend
+            // core/restart): wait for it to answer again, then reload.
+            if (r.restart && r.restart !== "manual") {
+                setRestartedAuto(true);
+                await new Promise((res) => setTimeout(res, 4000));
+                for (let i = 0; i < 120; i++) {
+                    try { await backupsApi.list(); break; } catch { await new Promise((res) => setTimeout(res, 1000)); }
+                }
+                window.location.reload();
+            }
         } catch (err: any) {
             addToast(t('backups.toast.restoreFailed') + err.message, "error");
         } finally {
@@ -184,7 +204,7 @@ export default function BackupsPage() {
                     <i className="fa-solid fa-circle-check text-xl text-emerald-500 mt-0.5" aria-hidden="true"></i>
                     <div className="flex-1 min-w-0">
                         <p className="font-bold">{t('backups.restored.title')}</p>
-                        <p className="text-sm mt-1 break-words">{t('backups.restored.body').replace('{filename}', restored)}</p>
+                        <p className="text-sm mt-1 break-words">{(restartedAuto ? t('backups.restored.bodyAuto') : t('backups.restored.body')).replace('{filename}', restored)}</p>
                     </div>
                     <Button onClick={() => window.location.reload()} variant="secondary" className="shrink-0">
                         <i className="fa-solid fa-rotate-right mr-2" aria-hidden="true"></i>{t('backups.restored.reload')}
@@ -260,6 +280,22 @@ export default function BackupsPage() {
                                     />
                                 </div>
                             )}
+
+                            {/* How many backups to keep */}
+                            <label className="flex items-center gap-2 text-sm text-gray-600">
+                                <span>{t('backups.retention.label')}</span>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    max={365}
+                                    inputMode="numeric"
+                                    value={retention}
+                                    onChange={(e) => setRetention(e.target.value)}
+                                    className="w-20 rounded-xl border border-gray-200 px-3 py-2 text-sm"
+                                    data-testid="backup-retention"
+                                />
+                                <span className="text-xs text-gray-400">{t('backups.retention.help')}</span>
+                            </label>
 
                             {/* Time Picker for Daily/Weekly */}
                             {(schedule === 'daily' || schedule === 'weekly') && (

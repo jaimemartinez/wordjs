@@ -59,7 +59,9 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                 domains: parseDomains(),
                 staging: cfg.staging,
                 renewBeforeDays: Number(cfg.renewBeforeDays) || 30,
-                challengeType: 'http-01'
+                challengeType: 'http-01',
+                // Sent every time: leaving it out used to drop a port set earlier.
+                http01Port: cfg.http01Port || null
             });
             if (res?.error) { await alert(t('ssl.auto.saveFailed').replace('{error}', () => res.error)); }
             else { await alert(t('ssl.auto.saved')); await load(); }
@@ -170,6 +172,19 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     />
                     <p className="text-xs text-gray-500 ml-1">{t('ssl.auto.domainsHint')}</p>
                 </div>
+                <div className="space-y-2">
+                    <label htmlFor="acme-http01-port" className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{t('ssl.auto.port80')}</label>
+                    <input
+                        id="acme-http01-port"
+                        type="number" min={1} max={65535}
+                        value={cfg.http01Port ?? ''}
+                        onChange={e => setCfg({ ...cfg, http01Port: e.target.value === '' ? null : Number(e.target.value) })}
+                        placeholder={t('ssl.auto.port80Off')}
+                        data-testid="acme-http01-port"
+                        className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all font-mono text-gray-800 dark:text-gray-200"
+                    />
+                    <p className="text-xs text-gray-500 ml-1">{t('ssl.auto.port80Hint')}</p>
+                </div>
             </div>
 
             {/* Staging */}
@@ -184,8 +199,8 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                 <p>
                     {t('ssl.auto.note.runsIn')} <span className="font-semibold">{t('ssl.auto.note.splitDeployment')}</span> {t('ssl.auto.note.usesThe')}
                     <span className="font-semibold"> HTTP-01</span> {t('ssl.auto.note.challengeSo')}
-                    <span className="font-mono"> http://&lt;domain&gt;/.well-known/acme-challenge/</span> {t('ssl.auto.note.reachable')} <span className="font-mono">&quot;acme&quot;: {'{'} &quot;http01Port&quot;: 80 {'}'}</span> {t('ssl.auto.note.to')}
-                    <span className="font-mono"> backend/wordjs-config.json</span> {t('ssl.auto.note.proxy')} <span className="font-semibold">DNS</span> {t('ssl.auto.note.or')} <span className="font-semibold">{t('ssl.auto.note.customUpload')}</span> {t('ssl.auto.note.flowsAbove')}
+                    <span className="font-mono"> http://&lt;domain&gt;/.well-known/acme-challenge/</span> {t('ssl.auto.note.reachable')} <span className="font-semibold">{t('ssl.auto.port80')}</span>
+                    {t('ssl.auto.note.proxy')} <span className="font-semibold">DNS</span> {t('ssl.auto.note.or')} <span className="font-semibold">{t('ssl.auto.note.customUpload')}</span> {t('ssl.auto.note.flowsAbove')}
                 </p>
             </div>
 

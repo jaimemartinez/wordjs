@@ -15,28 +15,38 @@ server (this tutorial uses `www.example.com`; replace it everywhere), and ports 
 
 ## 1. Tell WordJS it sits behind a proxy
 
-Two settings change, both through a systemd drop-in so the generated unit stays untouched:
+Two settings change:
 
-- `WORDJS_HTTP=1` — serve plain HTTP; nginx does TLS.
-- `WORDJS_TRUST_PROXY=loopback` — believe the `X-Forwarded-*` headers only from nginx on the same
-  machine. Without it every visitor looks like `127.0.0.1` to rate limiting and account lockout, and
-  WordJS cannot tell that the browser used HTTPS.
+- **Trust the proxy.** In **Admin → Security → Server**, set *Reverse proxy in front of WordJS* to
+  **A proxy on this computer**, enter your password and click **Save and restart**. WordJS then believes
+  the `X-Forwarded-*` headers only from nginx on the same machine. Without it every visitor looks like
+  `127.0.0.1` to rate limiting and account lockout, and WordJS cannot tell that the browser used HTTPS.
+  WordJS restarts itself to apply it.
+- **Serve plain HTTP; nginx does TLS** (`WORDJS_HTTP=1`). This one decides how the process listens,
+  before any page can be shown, so it stays a service setting — a systemd drop-in keeps the generated
+  unit untouched:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/wordjs.service.d
 sudo tee /etc/systemd/system/wordjs.service.d/proxy.conf >/dev/null <<'EOF'
 [Service]
 Environment=WORDJS_HTTP=1
-Environment=WORDJS_TRUST_PROXY=loopback
 EOF
 sudo systemctl daemon-reload && sudo systemctl restart wordjs
 ```
 
+> From a terminal instead of the Security screen: add `Environment=WORDJS_TRUST_PROXY=loopback` to the
+> same drop-in.
+
 ## 2. Set the site's main address
 
 Every link, feed and email is built from the site's **main address**, and WordJS answers only the
-addresses it knows (anything else gets `421`). Make the public HTTPS address the main one. Run the
-command as the service account, from the site directory:
+addresses it knows (anything else gets `421`). Make the public HTTPS address the main one: in **Admin →
+Settings → Site address**, enter `https://www.example.com` as the main address, choose what happens to the
+old one (stop answering it, or redirect it to the new one), and confirm with your password. A running
+server applies it within seconds.
+
+From a terminal instead, as the service account, from the site directory:
 
 ```bash
 cd /srv/wordjs
@@ -45,8 +55,7 @@ sudo -u wordjs npm run site -- list
 ```
 
 `--drop-old` stops answering the previous address (`localhost:3000` if you kept the wizard's
-default); use `--redirect-old` instead to send visitors of the old address to the new one. The same
-setting is in **Admin → Settings → Site address**. A running server applies it within seconds.
+default); use `--redirect-old` instead to send visitors of the old address to the new one.
 
 ## 3. Install nginx and get a certificate
 

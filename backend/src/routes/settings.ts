@@ -99,6 +99,7 @@ const ALL_SETTINGS = [
     'backup_schedule', // Backup Scheduler Frequency
     'backup_time',     // Backup Time of Day (HH:mm)
     'backup_day',      // Backup Day (0-6)
+    'backup_retention', // How many backups to keep (core/backup pruneBackups; 0 = keep every one)
     // Opt-in email verification on self-registration (FRENTE C-3). '1' requires a newly self-registered
     // user to confirm their email via a tokenized link before they can log in; the auth layer fails this
     // CLOSED (treats it as OFF) when no mail provider can deliver. Admin-only (not in PUBLIC_SETTINGS).
@@ -369,6 +370,13 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
         }
         return null;
     },
+    // Settings → Backups: keep the newest N backups (0 keeps every one). A whole number, so a typo can
+    // neither switch pruning off by accident (parseInt('x') was read as the default) nor keep thousands.
+    backup_retention: (v: any) => {
+        const s = typeof v === 'number' ? String(v) : (typeof v === 'string' ? v.trim() : '');
+        if (!/^[0-9]{1,3}$/.test(s) || Number(s) > 365) return 'backup_retention must be a whole number from 0 (keep every backup) to 365.';
+        return null;
+    },
     WPLANG: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // unset → the resolver's "en"
         if (typeof v !== 'string' || !LOCALE_RE.test(v)) {
@@ -395,6 +403,7 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     // El validador ya garantizó que es reconocible; el `?? '0'` es solo un fail-closed defensivo por si
     // algún día se escribe por un camino que no valide (apagado es el lado seguro).
     redis_cache_enabled: (v: any) => booleanishSetting(v) ?? '0',
+    backup_retention: (v: any) => String(Number(String(v).trim())),
     graphql_introspection: (v: any) => booleanishSetting(v) ?? '0',
     author_legacy_slugs: (v: any) => booleanishSetting(v) ?? '0',
 };

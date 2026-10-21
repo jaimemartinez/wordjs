@@ -936,7 +936,14 @@ router.post('/acme-config', async (req: Request, res: Response) => {
             renewBeforeDays: Number(renewBeforeDays) > 0 ? Number(renewBeforeDays) : 30,
             challengeType: challengeType === 'dns-01' ? 'dns-01' : 'http-01'
         };
-        if (http01Port) newAcme.http01Port = Number(http01Port);
+        // The port-80 listener for HTTP-01 challenges: a whole port number, or empty to stop it.
+        if (http01Port !== undefined && http01Port !== null && http01Port !== '' && http01Port !== 0) {
+            const port = Number(http01Port);
+            if (!Number.isInteger(port) || port < 1 || port > 65535) {
+                return res.status(400).json({ error: 'The HTTP-01 listener port must be a whole number from 1 to 65535.' });
+            }
+            newAcme.http01Port = port;
+        }
 
         const { saveConfig } = require('../core/configManager');
         if (!saveConfig({ acme: newAcme })) {
@@ -945,6 +952,10 @@ router.post('/acme-config', async (req: Request, res: Response) => {
         // Reflect into the live singleton so the renewal job sees the change immediately.
         const config = require('../config/app');
         config.acme = newAcme;
+        // The listener follows at once (zero config, no restart): the monolith re-binds it through its hook;
+        // in split mode the gateway watches backend/wordjs-config.json and re-binds it within seconds.
+        const rebind = (global as any).__WORDJS_SET_ACME_HTTP01_PORT__;
+        if (typeof rebind === 'function') { try { rebind(newAcme.http01Port || 0); } catch { /* reported by the listener */ } }
 
         // If enabling, kick a renewal check in the background (don't block the response).
         if (newAcme.enabled) {

@@ -98,7 +98,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -915,6 +915,14 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites/999/handoff`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw })),
             alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        },
+        // Security → Server (routes/server-settings.ts): values are validated first, then the password; a
+        // body that changes nothing answers 200 with no restart, so the door is exercised and nothing moves.
+        {
+            site: 'server-settings.ts PUT /', name: 'PUT /system/server', persona: 'doorServerSettings',
+            send: (p: string, pw: string) => request(app).put(`${B}/system/server`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200 && r.body.restart === null,
         },
         // Turning the network on and off from the panel (Settings → Network): the password comes first,
         // then the second factor — these accounts have none, so the right password reaches that refusal
