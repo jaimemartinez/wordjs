@@ -1079,7 +1079,10 @@ the boot error links there too.
     lets an editor take an approval back. «Enable comments» and «Registered users only» now take effect on the
     public form and on `POST /comments`, and a signed-in visitor comments under their own name.
   - *Accounts*: «Sign out» ends this browser's session only; My Account → **Sessions** signs out everywhere.
-    A two-factor challenge completes one sign-in only. A rate-limited (429) or unreachable server no longer looks like a sign-out: the admin says so and retries
+    A two-factor challenge completes one sign-in only. The one-time secret window (API tokens, webhook
+    secrets, backup codes) follows the admin language, and for backup codes it says to regenerate them
+    rather than to «revoke and create a new one». Avatar bubbles show the first letter of a name, not a
+    leading «[». A rate-limited (429) or unreachable server no longer looks like a sign-out: the admin says so and retries
     on its own. The live notification stream is shared by every tab of a browser, backs off properly when
     refused, and past the per-user cap the server answers `429` with `Retry-After`.
   - *Users and roles*: the Team and Subscribers lists page, search and filter by role on the server (they
@@ -1090,7 +1093,8 @@ the boot error links there too.
   - *Settings*: the sign-up default role cannot be one that runs the site, `posts_per_page` and
     `admin_email` are validated, a refused save shows the server's reason, the admin email no longer promises
     a confirmation message that does not exist, the logo and icon are stored as site-relative paths (they
-    embedded the address the admin happened to use), and the dashboard counters show real totals.
+    embedded the address the admin happened to use), and the dashboard counters show real totals. In a
+    monolith the dashboard no longer reports «mTLS: OK / certificates valid» for a link that does not exist.
 
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL

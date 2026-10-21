@@ -87,11 +87,13 @@ const QuickAction = ({ href, icon, label, subLabel, color }: { href: string, ico
 
 const HealthIndicator = ({ label, status, detail, icon }: { label: string, status: string, detail: string, icon: string }) => {
     const isOk = status === 'OK';
-    const color = isOk ? 'emerald' : (status === 'WARNING' ? 'amber' : 'rose');
+    // NOT_APPLICABLE (mTLS in a single-process monolith) is neither healthy nor broken: neutral.
+    const color = isOk ? 'emerald' : status === 'NOT_APPLICABLE' ? 'slate' : (status === 'WARNING' ? 'amber' : 'rose');
     const C = {
         emerald: { bg: 'bg-emerald-100', text: 'text-emerald-600', dot: 'bg-emerald-500' },
         amber: { bg: 'bg-amber-100', text: 'text-amber-600', dot: 'bg-amber-500' },
         rose: { bg: 'bg-rose-100', text: 'text-rose-600', dot: 'bg-rose-500' },
+        slate: { bg: 'bg-slate-100', text: 'text-slate-500', dot: 'bg-slate-300' },
     }[color];
 
     return (
@@ -222,11 +224,13 @@ export default function DashboardPage() {
                             <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.database.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
                             <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">DB: {systemStatus.database.driver}</span>
                         </div>
+                        {systemStatus.mtls.status !== 'NOT_APPLICABLE' && (<>
                         <div className="w-px h-4 bg-gray-200"></div>
                         <div className="flex items-center gap-2">
                             <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.mtls.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
                             <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">mTLS: {systemStatus.mtls.status}</span>
                         </div>
+                        </>)}
                     </div>
                 )}
             </div>
@@ -293,7 +297,7 @@ export default function DashboardPage() {
                                 <HealthIndicator
                                     label={t('dashboard.health.security')}
                                     status={systemStatus.mtls.status}
-                                    detail={systemStatus.mtls.status === 'OK' ? t('dashboard.health.certs.valid') : systemStatus.mtls.status}
+                                    detail={systemStatus.mtls.status === 'OK' ? t('dashboard.health.certs.valid') : systemStatus.mtls.status === 'NOT_APPLICABLE' ? t('dashboard.health.mtls.notUsed') : systemStatus.mtls.status}
                                     icon="fa-shield-halved"
                                 />
                                 <HealthIndicator

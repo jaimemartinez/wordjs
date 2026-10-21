@@ -3,22 +3,30 @@
 import { useState } from "react";
 import DialogLayer from "./DialogLayer";
 import { Button } from "@/components/ui";
+import { useI18n } from "@/contexts/I18nContext";
 
 /**
  * One-time secret reveal. Shows a generated secret (API token / webhook signing secret) exactly once,
  * with a copy button and a clear "won't be shown again" warning. Rendered only when `secret` is set.
+ *
+ * `lostHint` says what to do if the secret is lost: a token is revoked and created again (the default),
+ * backup codes are REGENERATED — the token advice on the backup-codes screen was wrong. Every string
+ * follows the admin language (it was English only).
  */
 export default function SecretRevealModal({
     secret,
     title,
     description,
+    lostHint,
     onClose,
 }: {
     secret: string | null;
     title: string;
     description?: string;
+    lostHint?: string;
     onClose: () => void;
 }) {
+    const { t } = useI18n();
     const [copied, setCopied] = useState(false);
     if (!secret) return null;
 
@@ -42,7 +50,7 @@ export default function SecretRevealModal({
                     </div>
                     <div>
                         <h2 className="text-xl font-black italic tracking-tighter text-gray-800">{title}</h2>
-                        <p className="text-xs font-bold uppercase tracking-widest text-amber-600">Shown only once</p>
+                        <p className="text-xs font-bold uppercase tracking-widest text-amber-600">{t('secret.shownOnce')}</p>
                     </div>
                 </div>
 
@@ -54,7 +62,8 @@ export default function SecretRevealModal({
                     </code>
                     <button
                         onClick={copy}
-                        title="Copy to clipboard"
+                        title={t('secret.copyTitle')}
+                        aria-label={t('secret.copyTitle')}
                         className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-xl bg-white/10 text-white hover:bg-white/20 flex items-center justify-center transition-all"
                     >
                         <i className={`fa-solid ${copied ? "fa-check text-emerald-400" : "fa-copy"} text-sm`}></i>
@@ -63,15 +72,15 @@ export default function SecretRevealModal({
 
                 <div className="mt-4 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-xl px-4 py-3">
                     <i className="fa-solid fa-triangle-exclamation mt-0.5"></i>
-                    <span>Store this now — for your security it cannot be retrieved again. If you lose it, revoke and create a new one.</span>
+                    <span>{t('secret.storeNow')} {lostHint ?? t('secret.lostHint.token')}</span>
                 </div>
 
                 <div className="mt-6 flex justify-end gap-3">
                     <Button variant="secondary" onClick={copy} icon={copied ? "fa-check" : "fa-copy"}>
-                        {copied ? "Copied" : "Copy"}
+                        {copied ? t('secret.copied') : t('secret.copy')}
                     </Button>
                     <Button variant="primary" onClick={onClose} icon="fa-check">
-                        Done
+                        {t('secret.done')}
                     </Button>
                 </div>
             </div>

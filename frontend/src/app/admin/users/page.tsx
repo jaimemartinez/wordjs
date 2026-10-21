@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import UserFormModal from "./UserFormModal";
 import DeleteUserDialog from "./DeleteUserDialog";
 import { useRolesMap } from "@/lib/useRoleOptions";
+import { avatarInitial } from "@/lib/avatarInitial";
 import { roleDisplayName, roleNameFrom } from "@/lib/roleOptions";
 
 const PER_PAGE = 20;
@@ -145,7 +146,7 @@ export default function UsersPage() {
                                 cell: (user) => (
                                     <div className="flex items-center gap-4">
                                         <div className="w-11 h-11 md:w-12 md:h-12 shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-200" aria-hidden="true">
-                                            {user.displayName?.[0]?.toUpperCase() || user.username[0]?.toUpperCase()}
+                                            {avatarInitial(user.displayName, user.username)}
                                         </div>
                                         <div className="min-w-0">
                                             <button type="button" onClick={() => setSelectedUser(user)} className="text-left pointer-coarse:min-h-11">

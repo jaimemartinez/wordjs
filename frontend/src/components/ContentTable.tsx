@@ -25,6 +25,7 @@ import { parseServerDate } from "@/lib/serverDate";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { Button, DataTable, EmptyState, Pagination, StatusBadge } from "@/components/ui";
+import { avatarInitial } from "@/lib/avatarInitial";
 import type { DataTableAction, DataTableColumn } from "@/components/ui";
 
 const PER_PAGE = 20;
@@ -192,7 +193,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
             cell: (post) => (
                 <div className="flex items-center justify-end md:justify-start gap-3">
                     <div className="w-8 h-8 shrink-0 rounded-xl bg-gray-100 hidden md:flex items-center justify-center text-xs font-bold text-gray-500" aria-hidden="true">
-                        {post.author?.displayName?.[0] || 'U'}
+                        {avatarInitial(post.author?.displayName, post.author?.slug)}
                     </div>
                     <span className="text-sm font-bold text-gray-600">{post.author?.displayName || t('table.unknownAuthor')}</span>
                 </div>

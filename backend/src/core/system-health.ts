@@ -199,6 +199,9 @@ class SystemHealth {
     }
 
     static async checkMtls() {
+        // A monolith is ONE process: there is no hop between services to protect with mTLS, so the
+        // dashboard said "MTLS: OK / Certificates valid" about a link that does not exist.
+        if (process.env.WORDJS_MODE === 'mono') return { status: 'NOT_APPLICABLE', enabled: false };
         const certPath = path.resolve(config.mtls.cert);
         const caPath = path.resolve(config.mtls.ca);
 

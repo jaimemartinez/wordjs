@@ -245,3 +245,13 @@ describe("featured image picker", () => {
         expect(featured.initialFilters).toEqual({ mimeType: "image" });
     });
 });
+
+describe("avatar initial", () => {
+    it("REGRESSION: the bubble shows the first letter or digit, not punctuation", async () => {
+        const { avatarInitial } = await import("@/lib/avatarInitial");
+        expect(avatarInitial("[X2] sub", "x2_sub")).toBe("X");
+        expect(avatarInitial("ñandú")).toBe("Ñ");
+        expect(avatarInitial("  ", "7even")).toBe("7");
+        expect(avatarInitial(null, undefined)).toBe("?");
+    });
+});

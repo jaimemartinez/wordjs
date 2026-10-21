@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, isBadCurrentPassword } from "@/lib/api";
 import MfaSetup from "@/components/MfaSetup";
+import { avatarInitial } from "@/lib/avatarInitial";
 import { roleDisplayName } from "@/lib/roleOptions";
 import { registerTranslations } from "@/lib/i18n";
 
@@ -123,7 +124,7 @@ export default function AccountPage() {
     const btnCls = "px-6 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-gray-200 hover:shadow-blue-500/30 transition-all disabled:opacity-50";
     const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
 
-    const initials = (user?.displayName || user?.username || "?").trim().charAt(0).toUpperCase();
+    const initials = avatarInitial(user?.displayName, user?.username);
 
     return (
         // Root must own its scroll: the admin <main> is overflow-hidden, so a page that just
