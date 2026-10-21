@@ -55,7 +55,7 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                     <p className="text-sm text-gray-500 mt-1">{variants.length} {variants.length !== 1 ? t('fonts.stylesAvailable') : t('fonts.styleAvailable')}</p>
                 </div>
                 {isSystem && (
-                    <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded border border-amber-200 flex items-center gap-1.5 shadow-sm">
+                    <span className="text-[11px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded border border-amber-200 flex items-center gap-1.5 shadow-sm">
                         <i className="fa-solid fa-lock text-[8px]"></i> {t('fonts.system')}
                     </span>
                 )}
@@ -107,7 +107,7 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                                 <span>{font.variant}</span>
 
                                 {isProtected ? (
-                                    <i className={`fa-solid fa-lock text-[10px] ml-1 ${isActive ? 'text-blue-200' : 'text-gray-300'}`}></i>
+                                    <i className={`fa-solid fa-lock text-[11px] ml-1 ${isActive ? 'text-blue-200' : 'text-gray-300'}`}></i>
                                 ) : (
                                     <button
                                         onClick={(e) => {
@@ -123,7 +123,7 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                                         `}
                                         title={t('fonts.deleteVariant')}
                                     >
-                                        <i className="fa-solid fa-xmark text-[10px]"></i>
+                                        <i className="fa-solid fa-xmark text-[11px]"></i>
                                     </button>
                                 )}
                             </div>

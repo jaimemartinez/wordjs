@@ -35,18 +35,16 @@ import path from "node:path";
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const ROOTS = ["app/admin", "components"];
 
-// The screens that shipped the bug; each keeps at least one hover-gated control.
+// The screens that shipped the bug; each keeps at least one hover-gated control. The list screens
+// (users, categories, tokens, backups, posts/pages…) now draw their row actions through the shared
+// DataTable, which carries the gate for all of them.
 const FIXED_SCREENS = [
-    "app/admin/users/page.tsx",
+    "components/ui/DataTable.tsx",
     "app/admin/users/roles/page.tsx",
-    "app/admin/categories/page.tsx",
     "app/admin/media/page.tsx",
     "app/admin/menus/page.tsx",
-    "app/admin/tokens/page.tsx",
     "app/admin/plugins/page.tsx",
     "app/admin/settings/page.tsx",
-    "app/admin/settings/backups/page.tsx",
-    "components/ContentTable.tsx",
     "components/NotificationCenter.tsx",
     "components/verso/editor/PatternsPanel.tsx",
 ];
@@ -57,7 +55,9 @@ const HIDDEN = new RegExp(String.raw`^${WIDTH}opacity-0$`);
 /** A reveal that only a hovering pointer can trigger. */
 const HOVER_REVEAL = new RegExp(String.raw`^${WIDTH}(?:(?:group|peer)-hover(?:\/[\w-]+)?|hover):opacity-100$`);
 /** Hidden only where hover exists: the gate an interactive control uses. */
-const HOVER_GATED_HIDE = "[@media(hover:hover)]:opacity-0";
+// The gate, alone or applied from a breakpoint up (DataTable gates only its table layout: a card's
+// actions are always shown).
+const HOVER_GATED_HIDE = /^(?:(?:sm|md|lg|xl):)?\[@media\(hover:hover\)\]:opacity-0$/;
 const FOCUS_REVEAL = /^(?:group-)?focus(?:-within|-visible)?(?:\/[\w-]+)?:opacity-100$/;
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -150,7 +150,7 @@ describe("admin controls on screens without hover", () => {
 
     it("a hover-gated control is visible by default and revealed on hover and on keyboard focus", () => {
         const gated = SCANNED.flatMap(({ rel, lists }) =>
-            lists.filter((list) => tokensOf(list).includes(HOVER_GATED_HIDE)).map((list) => ({ rel, tokens: tokensOf(list) })));
+            lists.filter((list) => tokensOf(list).some((t) => HOVER_GATED_HIDE.test(t))).map((list) => ({ rel, tokens: tokensOf(list) })));
         const broken = gated
             .filter(({ tokens }) => tokens.some((t) => HIDDEN.test(t))
                 || !tokens.some((t) => HOVER_REVEAL.test(t))

@@ -84,7 +84,7 @@ export default function AccountPage() {
     };
 
     const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-    const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
+    const labelCls = "block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2";
     const btnCls = "px-6 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-gray-200 hover:shadow-blue-500/30 transition-all disabled:opacity-50";
     const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
 
@@ -115,7 +115,7 @@ export default function AccountPage() {
                             {/* The role's NAME, as the sidebar's user chip shows it (lib/roleOptions.ts roleDisplayName):
                                 the raw slug read «CONFERENCE_MANAGER_TEAM» to a plugin team member, «ADMINISTRATOR» in
                                 a Spanish admin. */}
-                            <span className="mt-1.5 inline-block max-w-full break-words text-[10px] font-black uppercase tracking-widest text-blue-600 bg-blue-50 px-3 py-1 rounded-full" data-account-role="">
+                            <span className="mt-1.5 inline-block max-w-full break-words text-[11px] font-black uppercase tracking-widest text-blue-600 bg-blue-50 px-3 py-1 rounded-full" data-account-role="">
                                 {roleDisplayName(user, t)}
                             </span>
                         </div>
@@ -139,12 +139,12 @@ export default function AccountPage() {
                             <form onSubmit={saveProfile} className={`${cardCls} space-y-5`}>
                                 <h2 className="font-bold text-gray-800">{t('account.profile')}</h2>
                                 <div>
-                                    <label className={labelCls}>{t('account.displayName')}</label>
-                                    <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
+                                    <label htmlFor="account-field-1" className={labelCls}>{t('account.displayName')}</label>
+                                    <input id="account-field-1" type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
                                 </div>
                                 <div>
-                                    <label className={labelCls}>{t('account.personalEmail')}</label>
-                                    <input type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} placeholder="name@gmail.com" className={inputCls} />
+                                    <label htmlFor="account-field-2" className={labelCls}>{t('account.personalEmail')}</label>
+                                    <input id="account-field-2" type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} placeholder="name@gmail.com" className={inputCls} />
                                     <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">{t('account.personalEmail.help')}</p>
                                 </div>
                                 {/* Appears only once the recovery address actually differs from the stored
@@ -152,8 +152,8 @@ export default function AccountPage() {
                                     demand a password to rename yourself. */}
                                 {profileNeedsPassword && (
                                     <div data-testid="profile-current-password">
-                                        <label className={labelCls}>{t('account.currentPassword')}</label>
-                                        <input type="password" value={profilePassword} onChange={(e) => setProfilePassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
+                                        <label htmlFor="account-field-3" className={labelCls}>{t('account.currentPassword')}</label>
+                                        <input id="account-field-3" type="password" value={profilePassword} onChange={(e) => setProfilePassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
                                     </div>
                                 )}
                                 <div className="flex justify-end">
@@ -165,17 +165,17 @@ export default function AccountPage() {
                             <form onSubmit={changePassword} className={`${cardCls} space-y-5`}>
                                 <h2 className="font-bold text-gray-800">{t('account.changePassword')}</h2>
                                 <div>
-                                    <label className={labelCls}>{t('account.currentPassword')}</label>
-                                    <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
+                                    <label htmlFor="account-field-4" className={labelCls}>{t('account.currentPassword')}</label>
+                                    <input id="account-field-4" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
                                 </div>
                                 <div>
-                                    <label className={labelCls}>{t('account.newPassword')}</label>
-                                    <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" required className={inputCls} />
+                                    <label htmlFor="account-field-5" className={labelCls}>{t('account.newPassword')}</label>
+                                    <input id="account-field-5" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" required className={inputCls} />
                                     <p className="text-[11px] text-gray-400 mt-2">{t('account.newPassword.help')}</p>
                                 </div>
                                 <div>
-                                    <label className={labelCls}>{t('account.confirmPassword')}</label>
-                                    <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" required className={inputCls} />
+                                    <label htmlFor="account-field-6" className={labelCls}>{t('account.confirmPassword')}</label>
+                                    <input id="account-field-6" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" required className={inputCls} />
                                 </div>
                                 <div className="flex justify-end">
                                     <button type="submit" disabled={changingPw} className={btnCls}>{changingPw ? t('account.changing') : t('account.changePassword')}</button>

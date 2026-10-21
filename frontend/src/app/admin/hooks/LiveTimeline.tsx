@@ -100,7 +100,7 @@ export default function LiveTimeline() {
             {/* Toolbar */}
             <div className="bg-slate-800 p-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-700">
                 <div className="flex flex-wrap items-center gap-4 gap-y-2">
-                    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-colors ${isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'}`}>
+                    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider transition-colors ${isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'}`}>
                         <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
                         {isConnected ? 'Live Connection' : 'Disconnected'}
                     </div>
@@ -129,7 +129,7 @@ export default function LiveTimeline() {
                     <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-4">
                         <i className="fa-solid fa-wave-square text-4xl opacity-20"></i>
                         <p className="italic">Waiting for system events...</p>
-                        <p className="text-[10px] bg-slate-800 px-3 py-1 rounded-full text-slate-500">Perform actions in another tab to see them here</p>
+                        <p className="text-[11px] bg-slate-800 px-3 py-1 rounded-full text-slate-500">Perform actions in another tab to see them here</p>
                     </div>
                 )}
                 {events.map((ev, i) => (
@@ -138,7 +138,7 @@ export default function LiveTimeline() {
                             +{((ev.timestamp - (events[0]?.timestamp || ev.timestamp)) / 1000).toFixed(3)}s
                         </span>
 
-                        <span className={`font-bold w-12 text-center uppercase text-[9px] rounded px-1 py-0.5 self-start select-none ${ev.type === 'action' ? 'text-blue-400 bg-blue-500/10' : 'text-pink-400 bg-pink-500/10'}`}>
+                        <span className={`font-bold w-12 text-center uppercase text-[11px] rounded px-1 py-0.5 self-start select-none ${ev.type === 'action' ? 'text-blue-400 bg-blue-500/10' : 'text-pink-400 bg-pink-500/10'}`}>
                             {ev.type}
                         </span>
 

@@ -358,7 +358,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             const st = sourcesStatus.find((s) => s.url === u);
                             return (
                                 <div key={u} className="flex items-center gap-2 bg-slate-50 border border-slate-150 rounded-xl px-3 py-2">
-                                    <span className="text-[10px] font-mono text-slate-400 w-4 shrink-0">{i + 1}</span>
+                                    <span className="text-[11px] font-mono text-slate-400 w-4 shrink-0">{i + 1}</span>
                                     <span className="flex-1 font-mono text-[11px] text-slate-700 truncate" title={u}>{u}</span>
                                     {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
                                     {st && (st.ok
@@ -378,7 +378,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             placeholder="https://mi-marketplace.com/catalog"
                             className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-[11px] font-mono outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
                         />
-                        <Button onClick={addSource} className="shrink-0"><FaPlus className="mr-1.5 text-[10px]" /> {t("plugins.marketplace.add")}</Button>
+                        <Button onClick={addSource} className="shrink-0"><FaPlus className="mr-1.5 text-[11px]" /> {t("plugins.marketplace.add")}</Button>
                     </div>
                     <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
                         <button onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50">{t("plugins.marketplace.resetDefault")}</button>
@@ -387,7 +387,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                 </div>
             )}
 
-            <p className="text-[10px] font-semibold text-slate-450/80 mb-6 bg-slate-50 border border-slate-150/60 px-4 py-2.5 rounded-xl inline-block shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
+            <p className="text-[11px] font-semibold text-slate-450/80 mb-6 bg-slate-50 border border-slate-150/60 px-4 py-2.5 rounded-xl inline-block shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
                 {sourcesStatus.length > 1
                     ? <>{fill(t("plugins.marketplace.sourcesCount"), { count: sourcesStatus.length })}</>
                     : <>{t("plugins.marketplace.source")} <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? t("plugins.marketplace.localCatalog") : (source || t("plugins.marketplace.noSourcesShort"))}</span></>}
@@ -413,7 +413,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                         </div>
                                         <div className="min-w-0">
                                             <h3 className="font-extrabold text-slate-900 group-hover:text-blue-600 transition-colors duration-300 truncate">{e.name}</h3>
-                                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">v{e.version} · {fmtKB(e.size)}</div>
+                                            <div className="text-[11px] text-slate-400 font-mono mt-0.5">v{e.version} · {fmtKB(e.size)}</div>
                                         </div>
                                     </div>
                                     <span className="text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200/40 text-slate-500 shrink-0 shadow-sm">{categoryLabel(e.category || "General", t)}</span>
@@ -443,7 +443,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
 
                                 {e.installed && !e.updateAvailable ? (
                                     <div className="flex items-center gap-2 text-emerald-600 text-xs font-black uppercase tracking-wider bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 justify-center w-full shadow-sm">
-                                        <FaCheck className="text-[10px]" /> {t(e.active ? "plugins.marketplace.installedActive" : "plugins.marketplace.installedInactive")}
+                                        <FaCheck className="text-[11px]" /> {t(e.active ? "plugins.marketplace.installedActive" : "plugins.marketplace.installedInactive")}
                                     </div>
                                 ) : e.installed && e.updateAvailable && !e.updatable ? (
                                     // Update exists but can't be applied in one click: this copy was installed by
@@ -482,7 +482,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                         </p>
                         {(confirmEntry.permissions || []).length > 0 && (
                             <>
-                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-3">{t("plugins.marketplace.requestedPermissions")}</div>
+                                <div className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3">{t("plugins.marketplace.requestedPermissions")}</div>
                                 <div className="space-y-2 mb-5 max-h-48 overflow-y-auto custom-scrollbar pr-1">
                                     {confirmEntry.permissions.map((p) => {
                                         const token = permToken(p);
@@ -491,12 +491,12 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                             <div key={token} className="flex items-center gap-2.5 text-xs font-medium bg-slate-50 border border-slate-100 rounded-xl p-2.5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
                                                 <span className={`w-2 h-2 rounded-full shrink-0 relative flex ${meta.risk === "high" ? "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.4)]" : meta.risk === "med" ? "bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.4)]" : "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.4)]"}`} />
                                                 <span className="font-mono text-slate-650 text-[11px] font-semibold">{token}</span>
-                                                <span className="text-slate-400 text-[10px] truncate ml-auto">{meta.label}</span>
+                                                <span className="text-slate-400 text-[11px] truncate ml-auto">{meta.label}</span>
                                             </div>
                                         );
                                     })}
                                 </div>
-                                <p className="text-[10px] text-slate-600 mb-5 italic bg-blue-50/50 border border-blue-100/50 rounded-xl p-3 leading-relaxed" data-install-grant-note="">{t(installGrantNoteKey(confirmEntry))}</p>
+                                <p className="text-[11px] text-slate-600 mb-5 italic bg-blue-50/50 border border-blue-100/50 rounded-xl p-3 leading-relaxed" data-install-grant-note="">{t(installGrantNoteKey(confirmEntry))}</p>
                             </>
                         )}
                         <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-100">
