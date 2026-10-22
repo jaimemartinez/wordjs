@@ -445,6 +445,8 @@ router.param('id', requireRouteId(NOT_FOUND));
 /** Body fields of POST /posts and PUT /posts/:id that are STRINGS (or absent). */
 const POST_BODY_STRING_FIELDS: readonly string[] = Object.freeze([
     'title', 'content', 'excerpt', 'status', 'type', 'slug', 'comment_status', 'date', 'language',
+    // The entry password (null or an empty string clears it) and the version stamp of the edit-conflict check.
+    'password', 'expectedModified',
 ]);
 
 /**
@@ -458,9 +460,10 @@ const POST_BODY_STRING_FIELDS: readonly string[] = Object.freeze([
  *   · translationId       — POST /posts/:id/translations only; parseInt + `!otherId` rejects the rest.
  *   · key / value         — POST /posts/:id/meta; `key` goes through metaKeyProblem, `value` may be
  *                           any JSON shape (sanitizeMetaValue walks it).
+ *   · sticky              — a boolean; applied only when `typeof sticky === 'boolean'`.
  */
 const POST_BODY_NON_STRING_FIELDS: readonly string[] = Object.freeze([
-    'parent', 'menu_order', 'categories', 'tags', 'meta', 'autosave', 'translationId', 'key', 'value',
+    'parent', 'menu_order', 'categories', 'tags', 'meta', 'autosave', 'translationId', 'key', 'value', 'sticky',
 ]);
 
 /**
@@ -474,7 +477,7 @@ const POST_BODY_NON_STRING_FIELDS: readonly string[] = Object.freeze([
  * back is a value whose shape has to be settled first, like every other one here.
  */
 const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
-    'page', 'per_page', 'status', 'type', 'search', 'orderby', 'order', 'author', 'categories', 'tags',
+    'page', 'per_page', 'status', 'type', 'search', 'orderby', 'order', 'author', 'categories', 'tags', 'sticky',
 ]);
 
 /**

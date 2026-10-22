@@ -98,14 +98,16 @@ const SQLITE_SHADOW_SUFFIXES = ['_data', '_idx', '_content', '_docsize', '_confi
 
 // Columns the SOURCE engine computes itself (Postgres `GENERATED ALWAYS … STORED` — posts.search_vector —
 // and MySQL generated columns). No engine accepts an INSERT into them (the target computes its own), so
-// the copy leaves them out. { table: Set(column) }.
+// the copy leaves them out. { table: Set(column) }. On MySQL only VIRTUAL/STORED GENERATED: MySQL 8 also
+// writes DEFAULT_GENERATED for every column whose default is an expression (`TEXT DEFAULT ('')`), and
+// matching `%GENERATED%` dropped all the text columns from a copy or a portable dump there.
 async function listGeneratedColumns(readAll, sourceDriverName) {
     let rows = [];
     try {
         if (sourceDriverName === 'postgres') {
             rows = await readAll("SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = current_schema() AND is_generated = 'ALWAYS'");
         } else if (sourceDriverName === 'mysql') {
-            rows = await readAll("SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = DATABASE() AND extra LIKE '%GENERATED%'");
+            rows = await readAll("SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = DATABASE() AND (extra LIKE '%VIRTUAL GENERATED%' OR extra LIKE '%STORED GENERATED%')");
         }
     } catch (_) { rows = []; }
     const out = {};
