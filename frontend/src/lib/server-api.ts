@@ -645,6 +645,16 @@ export const getPublicAssets = siteCache((): Promise<PublicAssets> =>
 );
 
 /**
+ * The active plugins' slugs, for the public tree's ActivePluginsProvider: read here, cached and purged with
+ * the plugin assets (an `active_plugins` write purges 'plugin-assets', core/frontend-purge), so each
+ * visitor's browser no longer asks for them on every page (QA S2-08). Null when the backend did not answer:
+ * the provider then fetches it in the browser as before.
+ */
+export const getActivePluginSlugs = siteCache((): Promise<string[] | null> =>
+    serverFetch<string[]>('/plugins/active', { revalidate: 120, tags: ['plugin-assets'] }).then((a) => (Array.isArray(a) ? a : null))
+);
+
+/**
  * Installed fonts, fetched on the SERVER so their @font-face rules can be emitted into the initial
  * SSR <head> (see app/_root/RootDocument.tsx). Previously fonts were injected only client-side (SystemFontsLoader
  * useEffect), so a public page's first paint had the inline `font-family` but no matching face and fell

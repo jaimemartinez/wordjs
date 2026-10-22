@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { commentThread } from "@/lib/commentThread";
+import { useNearViewport } from "@/lib/useNearViewport";
 import { commentsApi, Comment } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { formatSiteDate } from "@/lib/public/siteDate";
@@ -83,9 +84,12 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
         return () => { cancelled = true; };
     }, []);
 
+    // Asked for when the reader gets near the section, not on every visit (QA S2-08).
+    const rootRef = useRef<HTMLDivElement>(null);
+    const near = useNearViewport(rootRef);
     useEffect(() => {
-        loadComments();
-    }, [postId]);
+        if (near) loadComments();
+    }, [postId, near]);
 
     const loadComments = async () => {
         setLoading(true);
@@ -144,7 +148,8 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
         }
     };
 
-    if (loading) return <div className="py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">Loading comments...</div>;
+    // The placeholder carries the ref too: it is what sits where the comments will be until they load.
+    if (loading) return <div ref={rootRef} className="py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">Loading comments...</div>;
 
     // Token hooks below prefer UNDECLARED contract tokens (card-*/button-*/form-*): ui.css :root
     // pre-declares e.g. --wjs-color-danger (a SOLID color) and would beat any Tailwind-parity
@@ -156,7 +161,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
     const inputClass = "wjs-comment-field w-full px-4 py-2 border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-[var(--wjs-form-input-radius,0.5rem)] bg-[var(--wjs-bg-surface,#fff)] text-[var(--wjs-color-text-main,#111827)] focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent outline-none transition";
 
     return (
-        <div className="wjs-comments max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-[var(--wjs-radius-lg,0.75rem)]">
+        <div ref={rootRef} className="wjs-comments max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-[var(--wjs-radius-lg,0.75rem)]">
             <h3 className="wjs-comments-title text-2xl font-bold text-[var(--wjs-color-heading,#111827)] mb-8">
                 Comments ({comments.length})
             </h3>

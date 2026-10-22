@@ -302,6 +302,9 @@ router.post('/', authenticate, can('manage_options'), uploadFontSingle, asyncHan
         return res.status(400).json({ error: 'No file uploaded' });
     }
 
+    // Public pages carry the faces from the server (frontend RootDocument, cached under 'fonts'), and a
+    // visitor's browser no longer re-reads /fonts (QA S2-08): the cached pages are rebuilt now instead.
+    require('../core/frontend-purge').purgeFrontend(['fonts'], [], { immediate: true });
     res.status(201).json({
         message: 'Font uploaded successfully',
         file: req.file.filename,
@@ -412,6 +415,7 @@ router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(as
         }
 
         fs.unlinkSync(filePath);
+        require('../core/frontend-purge').purgeFrontend(['fonts'], [], { immediate: true });
         res.json({ message: 'Font deleted successfully' });
     } else {
         res.status(404).json({ error: 'Font not found' });

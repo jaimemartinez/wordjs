@@ -9,7 +9,7 @@ import ViewTransitions from "@/components/public/ViewTransitions";
 import { buildChromeSlots } from "@/components/public/ChromeSlots";
 import { buildChromeBindings, resolveEffectiveChrome } from "@/lib/chromeData";
 import { footerStrings } from "@/lib/public/uiStrings";
-import { getSettings, getPublicAssets, getMenuByLocation, getThemeChrome, checkSetupRequired, assertBackendAnswered } from "@/lib/server-api";
+import { getSettings, getPublicAssets, getActivePluginSlugs, getMenuByLocation, getThemeChrome, checkSetupRequired, assertBackendAnswered } from "@/lib/server-api";
 
 export default async function PublicLayout({
     children,
@@ -19,11 +19,12 @@ export default async function PublicLayout({
     // Fetch chrome data on the SERVER, in parallel, all cached (ISR) — so the Header/Footer render their
     // nav/logo in the initial HTML and each visitor's browser no longer re-fetches settings+menus on
     // hydration (a per-visit double-fetch that also delayed the chrome paint).
-    const [settings, assets, headerMenu, footerMenu] = await Promise.all([
+    const [settings, assets, headerMenu, footerMenu, activePlugins] = await Promise.all([
         getSettings().catch(() => null) as Promise<Record<string, string> | null>,
         getPublicAssets().catch(() => ({ scripts: [], styles: [] })),
         getMenuByLocation('header').catch(() => null),
         getMenuByLocation('footer').catch(() => null),
+        getActivePluginSlugs().catch(() => null),
     ]);
 
     // Fresh install → send the visitor straight to the setup wizard instead of an empty broken
@@ -103,6 +104,7 @@ export default async function PublicLayout({
             footerMenu={footerMenu?.items}
             footerSocials={footerSocials}
             footerStrings={footerStrings(settings)}
+            activePlugins={activePlugins}
         >
             {/* Feed auto-discovery — React hoists these to <head> on every public page.
                 The hrefs are the PUBLIC feed URLs, the ones a reader guesses and a validator expects:

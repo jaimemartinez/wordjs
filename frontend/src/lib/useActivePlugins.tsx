@@ -33,9 +33,11 @@ export function useActivePlugins(): ActivePluginsContextType {
 /**
  * Provider component that fetches and provides active plugin status
  */
-export function ActivePluginsProvider({ children }: { children: ReactNode }) {
-    const [activePlugins, setActivePlugins] = useState<string[]>([]);
-    const [loading, setLoading] = useState(true);
+export function ActivePluginsProvider({ children, initial }: { children: ReactNode; initial?: string[] }) {
+    // `initial`: the list the public server layout already read (cached, purged on activation), so a
+    // visitor's browser does not ask for it again on every page (QA S2-08). Without it, it is fetched.
+    const [activePlugins, setActivePlugins] = useState<string[]>(initial || []);
+    const [loading, setLoading] = useState(!initial);
 
     const fetchActivePlugins = async () => {
         try {
@@ -58,7 +60,8 @@ export function ActivePluginsProvider({ children }: { children: ReactNode }) {
     };
 
     useEffect(() => {
-        fetchActivePlugins();
+        if (!initial) fetchActivePlugins();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const isPluginActive = (slug: string): boolean => {

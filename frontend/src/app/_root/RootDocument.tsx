@@ -125,9 +125,8 @@ export default async function RootDocument({
                     rel="stylesheet"
                     href={`/public/vendor/fontawesome/css/all.min.css?v=${ASSET_VERSION}`}
                 />
-                {fontFaceCss && (
-                    <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss }} />
-                )}
+                {/* Always present, even empty: it tells SystemFontsLoader the server already wrote the faces. */}
+                <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss || "" }} />
             </head>
             {/* No font class on <body>: the public tree's body font is owned by the wordjs-ui.css
                 body rule (--wjs-font-family-base → var(--font-inter, …)); putting inter.className

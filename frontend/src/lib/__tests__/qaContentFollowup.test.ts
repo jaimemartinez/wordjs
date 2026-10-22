@@ -12,6 +12,7 @@ import { mediaTypeIcon } from "@/lib/mediaUsage";
 import { listAllEntries } from "@/lib/motionLibrary";
 import { paletteRowOrder } from "@/components/verso/editor/paletteActions";
 import { canEditImage, cropForAspect, dragCrop, editRequest, FULL_CROP, resultSize, turn } from "@/lib/imageEdit";
+import { needsClientFonts } from "@/components/SystemFontsLoader";
 
 describe("bulk actions run one write per row and report what failed", () => {
     it("keeps going past a failure and names the first reason", async () => {
@@ -174,5 +175,14 @@ describe("image editor arithmetic (media library)", () => {
         expect(moved.y).toBeCloseTo(0.6);
         const square = dragCrop({ x: 0.25, y: 0, width: 0.5, height: 1 }, "se", -0.2, 0, 1, 400, 200);
         expect(square.width * 400).toBeCloseTo(square.height * 200);
+    });
+});
+
+describe("public pages do not re-fetch what the server already wrote (page weight)", () => {
+    it("fonts are fetched in the browser only in the admin, or when the server wrote none", () => {
+        expect(needsClientFonts(true, "/welcome")).toBe(false);
+        expect(needsClientFonts(true, "/admin/fonts")).toBe(true);
+        expect(needsClientFonts(true, "/administer-things")).toBe(false);
+        expect(needsClientFonts(false, "/welcome")).toBe(true);
     });
 });
