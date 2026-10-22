@@ -412,8 +412,11 @@ test('a 2FA challenge completes ONE sign-in: replaying it with the next code is 
     const ok = await request(app).post(`${B}/auth/mfa`).set(SAME_ORIGIN).send({ mfaToken, code: totp.totp(secret) });
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
 
+    // The code of the NEXT 30-second step, wherever in the current step the clock is. `now + 31` lands two
+    // steps ahead when the clock is near the end of a step — outside the accepted window, a different answer.
+    const nextStepCode = () => totp.totp(secret, { time: (Math.floor(Date.now() / 1000 / 30) + 1) * 30 });
     const replay = await request(app).post(`${B}/auth/mfa`).set(SAME_ORIGIN)
-        .send({ mfaToken, code: totp.totp(secret, { time: Math.floor(Date.now() / 1000) + 31 }) });
+        .send({ mfaToken, code: nextStepCode() });
     assert.strictEqual(replay.status, 401, JSON.stringify(replay.body));
     assert.strictEqual(replay.body.code, 'rest_mfa_challenge_invalid');
 
@@ -423,7 +426,7 @@ test('a 2FA challenge completes ONE sign-in: replaying it with the next code is 
     assert.strictEqual(wrong.status, 401);
     assert.strictEqual(wrong.body.code, 'rest_mfa_invalid');
     const retry = await request(app).post(`${B}/auth/mfa`).set(SAME_ORIGIN)
-        .send({ mfaToken: second.body.mfaToken, code: totp.totp(secret, { time: Math.floor(Date.now() / 1000) + 31 }) });
+        .send({ mfaToken: second.body.mfaToken, code: nextStepCode() });
     assert.strictEqual(retry.status, 200, JSON.stringify(retry.body));
 });
 
