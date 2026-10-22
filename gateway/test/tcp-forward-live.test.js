@@ -30,10 +30,14 @@ describe('the real gateway: a TCP port forwarded to the backend node', () => {
     let frontendId;
     let tcp;
     const received = [];
+    let upstreamConnections = 0;
     before(async () => {
         up = await harness.startEchoUpstream('backend');
-        // One greeting per connection: the PROXY line and the client's bytes may arrive as one chunk or two.
+        // One greeting per connection, like an SMTP server: the PROXY line and the client's bytes arrive as
+        // one chunk or two (the gateway writes them separately), and answering each chunk would make two
+        // replies that the client may read as one.
         tcp = net.createServer((s) => {
+            upstreamConnections++;
             s.on('data', (d) => received.push(String(d)));
             s.once('data', () => s.write('220 hello\r\n'));
         });
@@ -71,6 +75,7 @@ describe('the real gateway: a TCP port forwarded to the backend node', () => {
             c.on('error', reject);
         });
         assert.strictEqual(answer, '220 hello\r\n');
+        assert.strictEqual(upstreamConnections, 1, 'one client connection opens exactly one connection to the backend node');
         assert.match(received.join(''), /^PROXY TCP4 127\.0\.0\.1 127\.0\.0\.1 \d+ \d+\r\nEHLO x\r\n/);
 
         const saved = JSON.parse(fs.readFileSync(path.join(gw.dir, 'gateway-config.json'), 'utf8'));
