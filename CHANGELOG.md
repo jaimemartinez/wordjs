@@ -981,6 +981,8 @@ the boot error links there too.
 
 ### Fixed
 
+- **Security Center: the protocol confirmation and the save notices in the admin's language.** After saving the HTTPS switch or the port, the notice (saved, the main address now, plain HTTP now, review the suggested address) was English-only. Both it and the protocol confirmation said "the gateway" even on a single-process (monolith) install, which has no gateway. They are now translated, and on a monolith the confirmation says "the server" and the notices name WordJS.
+
 - **Sign-in and account screens speak the admin's language, from the first paint.**
   - **Language decided on the server.** The admin's language was kept only in the browser, so the server rendered every sign-in screen in Spanish and it switched after loading. A fresh browser also started in Spanish on an English site. The choice now travels in a cookie too: `/login`, `/register`, `/reset-password`, `/verify-email` (also on network sites) and the admin render in it from the server. With no choice stored, the site's language decides, and `<html lang>` follows the screen.
   - **Screens no longer English- or Spanish-only.** `/reset-password` was English-only, while `/register` and `/verify-email` were Spanish-only. The same applies to the two-factor gate and an administrator's two-factor reset.
