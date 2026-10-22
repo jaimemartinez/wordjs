@@ -8,6 +8,8 @@ import { useI18n } from "@/contexts/I18nContext";
 import { plural } from "@/lib/i18n";
 import ConfirmationModal from "@/components/ConfirmationModal";
 import DialogLayer from "@/components/DialogLayer";
+import ImageEditor from "./ImageEditor";
+import { canEditImage } from "@/lib/imageEdit";
 import AiSuggestion from "@/components/AiSuggest";
 import { useToast } from "@/contexts/ToastContext";
 import { PageHeader, Button, EmptyState, DataTable, Pagination } from "@/components/ui";
@@ -96,7 +98,24 @@ function MediaDetailModal({
     const [draft, setDraft] = useState(original);
     const [saving, setSaving] = useState(false);
     const [changingVisibility, setChangingVisibility] = useState(false);
+    const [editingImage, setEditingImage] = useState(false);
+    const [restoring, setRestoring] = useState(false);
     const isPrivate = item.visibility === "private";
+    const editable = canEditImage(item.mimeType, item.storage);
+    const inBucket = item.storage === "s3" && canEditImage(item.mimeType);
+
+    const restoreOriginal = async () => {
+        setRestoring(true);
+        try {
+            const updated = await mediaApi.restoreOriginal(item.id);
+            onSaved(updated as EditableMediaItem);
+            addToast(t('media.edit.restored'), "success");
+        } catch (error) {
+            addToast(error instanceof Error && error.message ? error.message : t('media.edit.failed'), "error");
+        } finally {
+            setRestoring(false);
+        }
+    };
 
     // Private <-> public moves the stored files between the private store and the public uploads
     // folder on the server; it is its own request so it never mixes with an unsaved metadata draft.
@@ -253,6 +272,22 @@ function MediaDetailModal({
                         </div>
                     </div>
 
+                    {/* Image editing (QA S1-15): a new file is written; the earlier one stays for the pages that show it. */}
+                    {(editable || inBucket) && (
+                        <div className="mb-6 space-y-2">
+                            {editable ? (
+                                <div className="flex flex-wrap gap-2">
+                                    <Button variant="secondary" icon="fa-crop-simple" onClick={() => setEditingImage(true)}>{t('media.edit.button')}</Button>
+                                    {item.edited && (
+                                        <Button variant="ghost" icon="fa-clock-rotate-left" loading={restoring} disabled={restoring} onClick={restoreOriginal}>{t('media.edit.restore')}</Button>
+                                    )}
+                                </div>
+                            ) : (
+                                <p className="text-[11px] font-medium text-gray-500">{t('media.edit.bucket')}</p>
+                            )}
+                        </div>
+                    )}
+
                     <div className="space-y-3 mt-auto pt-6 border-t border-gray-100">
                         <Button
                             icon="fa-floppy-disk"
@@ -287,6 +322,13 @@ function MediaDetailModal({
                     </div>
                 </div>
             </div>
+            {editingImage && (
+                <ImageEditor
+                    item={item}
+                    onClose={() => setEditingImage(false)}
+                    onSaved={(updated) => { setEditingImage(false); onSaved(updated as EditableMediaItem); }}
+                />
+            )}
         </DialogLayer>
     );
 }

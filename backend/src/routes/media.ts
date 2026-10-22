@@ -33,6 +33,34 @@ function requestedVisibility(value: unknown): 'public' | 'private' | null | 'inv
 }
 
 /**
+ * May this caller change media item `mediaId` (its fields, its visibility, its image)? Null when they may;
+ * otherwise the status and body to answer. Shared by PUT /media/:id and the image edit routes.
+ */
+async function mediaWriteRefusal(req: Request, mediaId: number): Promise<{ status: number; body: any } | null> {
+    const refuse = (status: number, code: string, message: string) => ({ status, body: { code, message, data: { status } } });
+    const media = await Media.findById(mediaId);
+    if (!media) return refuse(404, 'rest_post_invalid_id', 'Invalid media ID.');
+
+    // THE ATTACHMENT RULE FIRST (core/attachment-visibility attachmentWriteRefusal): an item this caller
+    // may not even see — an attachment of an entry they may not read, someone else's private item — is the
+    // 404 GET /media/:id answers, so a write does not confirm what a read hides; and an item they see but
+    // whose entry they may not EDIT is 403. Without it an editor (edit_others_posts) rewrote, made public
+    // and deleted the files of entries of a type with its own capability family.
+    const attachmentRefusal = await attachmentWriteRefusal(req.user, await Post.findById(mediaId));
+    if (attachmentRefusal === 404) return refuse(404, 'rest_post_invalid_id', 'Invalid media ID.');
+    if (attachmentRefusal === 403) return refuse(403, 'rest_forbidden', 'You cannot edit this media.');
+
+    // SECURITY: Ownership check (prevents IDOR). The upload_files gate alone let any
+    // author/editor modify ANY user's media. Owners need edit_posts; editing another
+    // user's media requires the cross-user edit_others_posts capability. Admins ('*') pass.
+    const canEdit = media.author === req.user.id
+        ? req.user.can('edit_posts')
+        : req.user.can('edit_others_posts');
+    if (!canEdit) return refuse(403, 'rest_forbidden', 'You cannot edit this media.');
+    return null;
+}
+
+/**
  * Remove a file multer just wrote, but only from inside one of the two upload roots: multer chose the
  * path, yet the unlink must never be steerable outside the trees uploads are written to.
  */
@@ -790,43 +818,8 @@ router.post('/', authenticate, can('upload_files'), singleUpload, asyncHandler(a
  */
 router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
     const mediaId = parseInt(String(req.params.id), 10);
-    const media = await Media.findById(mediaId);
-
-    if (!media) {
-        return res.status(404).json({
-            code: 'rest_post_invalid_id',
-            message: 'Invalid media ID.',
-            data: { status: 404 }
-        });
-    }
-
-    // THE ATTACHMENT RULE FIRST (core/attachment-visibility attachmentWriteRefusal): an item this caller
-    // may not even see — an attachment of an entry they may not read, someone else's private item — is the
-    // 404 GET /media/:id answers, so a write does not confirm what a read hides; and an item they see but
-    // whose entry they may not EDIT is 403. Without it an editor (edit_others_posts) rewrote, made public
-    // and deleted the files of entries of a type with its own capability family.
-    const attachmentRefusal = await attachmentWriteRefusal(req.user, await Post.findById(mediaId));
-    if (attachmentRefusal === 404) {
-        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid media ID.', data: { status: 404 } });
-    }
-    if (attachmentRefusal === 403) {
-        return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this media.', data: { status: 403 } });
-    }
-
-    // SECURITY: Ownership check (prevents IDOR). The upload_files gate alone let any
-    // author/editor modify ANY user's media. Owners need edit_posts; editing another
-    // user's media requires the cross-user edit_others_posts capability. Admins ('*') pass.
-    const canEdit = media.author === req.user.id
-        ? req.user.can('edit_posts')
-        : req.user.can('edit_others_posts');
-
-    if (!canEdit) {
-        return res.status(403).json({
-            code: 'rest_forbidden',
-            message: 'You cannot edit this media.',
-            data: { status: 403 }
-        });
-    }
+    const refusal = await mediaWriteRefusal(req, mediaId);
+    if (refusal) return res.status(refusal.status).json(refusal.body);
 
     const { title, description, caption, alt } = req.body;
 
@@ -901,6 +894,186 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: R
  *       404:
  *         description: No such media item, or one this caller may not read (rest_post_invalid_id)
  */
+
+/**
+ * The image an edit route may work on: the item's current file on this node's disk, or why it cannot be
+ * edited. Items in the media bucket and items linked to another site have no local file to re-encode.
+ */
+async function editableImage(mediaId: number): Promise<{ media: any; root: string; file: string } | { status: number; code: string; message: string }> {
+    const media = await Media.findById(mediaId);
+    if (media.storage === 's3') {
+        return { status: 409, code: 'rest_media_edit_unavailable', message: 'This image is stored in the media bucket; images there cannot be edited yet.' };
+    }
+    if (await Media._isRemotelyLinked(mediaId)) {
+        return { status: 409, code: 'rest_media_edit_unavailable', message: 'This image is linked to a file on another site; there is no local file to edit.' };
+    }
+    const root = privateMedia.uploadsRootFor(media.visibility === 'private');
+    const file = Media._deletableFiles(media.mediaDetails && media.mediaDetails.file, {}, {}, root)[0];
+    if (!file || !fs.existsSync(file)) {
+        return { status: 409, code: 'media_file_missing', message: 'The stored file for this image could not be found.' };
+    }
+    return { media, root, file };
+}
+
+/** After the item's image changed: the pages that show it as their featured image are rebuilt now. */
+async function afterImageChange(mediaId: number): Promise<void> {
+    require('../core/site-upload-quota').invalidateUsage();
+    const purge = require('../core/frontend-purge');
+    for (const postId of await Media.featuredUsers(mediaId)) await purge.purgeForPost(postId);
+}
+
+/**
+ * @swagger
+ * /media/{id}/edit:
+ *   post:
+ *     summary: Rotate, flip, crop or scale down an image
+ *     description: >-
+ *       Same permission as PUT /media/{id}. The edited image is written under a new file name with its own
+ *       sizes, and the item points at it; the earlier files stay, so pages that already show them keep
+ *       working, and POST /media/{id}/restore-original brings the uploaded file back. The operations run in
+ *       this order - rotate, flip, crop, scale. JPEG, PNG and WebP images on this server's disk only.
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               rotate:
+ *                 type: integer
+ *                 description: Clockwise turn, a multiple of 90 degrees.
+ *               flipH:
+ *                 type: boolean
+ *                 description: Mirror left to right.
+ *               flipV:
+ *                 type: boolean
+ *                 description: Mirror top to bottom.
+ *               crop:
+ *                 type: object
+ *                 description: The area to keep, as fractions (0-1) of the rotated and flipped image.
+ *                 properties:
+ *                   x: { type: number }
+ *                   y: { type: number }
+ *                   width: { type: number }
+ *                   height: { type: number }
+ *               width:
+ *                 type: integer
+ *                 description: Scale down to this width in pixels, keeping the proportions (never enlarges).
+ *     responses:
+ *       200:
+ *         description: The updated media item
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Media'
+ *       400:
+ *         description: Not an editable image type, or invalid operations (rest_invalid_param)
+ *       403:
+ *         description: You cannot edit this media (rest_forbidden)
+ *       404:
+ *         description: No such media item, or one this caller may not read (rest_post_invalid_id)
+ *       409:
+ *         description: The image has no local file to edit (rest_media_edit_unavailable, media_file_missing)
+ *       413:
+ *         description: The site's storage quota has no room for the edited image
+ */
+router.post('/:id/edit', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const mediaId = parseInt(String(req.params.id), 10);
+    const refusal = await mediaWriteRefusal(req, mediaId);
+    if (refusal) return res.status(refusal.status).json(refusal.body);
+
+    const mediaEdit = require('../core/media-edit');
+    const parsed = mediaEdit.parseImageEdit(req.body);
+    if (parsed.error) return res.status(400).json({ code: 'rest_invalid_param', message: parsed.error, data: { status: 400 } });
+
+    const target = await editableImage(mediaId);
+    if ('status' in target) return res.status(target.status).json({ code: target.code, message: target.message, data: { status: target.status } });
+    const mimeType = String(target.media.mimeType || '');
+    if (!mediaEdit.EDITABLE_IMAGE_TYPES.includes(mimeType)) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'Only JPEG, PNG and WebP images can be edited.', data: { status: 400 } });
+    }
+
+    const dest = mediaEdit.editedFilePath(target.file);
+    let written: { width: number; height: number; filesize: number };
+    try {
+        written = await mediaEdit.writeEditedImage(target.file, mimeType, parsed.ops, dest);
+    } catch (err: any) {
+        try { if (fs.existsSync(dest)) fs.unlinkSync(dest); } catch { /* best effort */ }
+        log.warn(`Media edit: attachment ${mediaId} could not be re-encoded: ${require('../core/log-safe').logSafeError(err)}`);
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'This image could not be read to edit it.', data: { status: 400 } });
+    }
+    const quota = require('../core/site-upload-quota');
+    const quotaCheck = await quota.checkUploadFits(written.filesize);
+    if (!quotaCheck.ok) {
+        try { fs.unlinkSync(dest); } catch { /* best effort */ }
+        return res.status(413).json(quota.quotaExceededBody(quotaCheck));
+    }
+
+    const { sizes, sources } = await generateImageDerivatives(dest, mimeType);
+    const updated = await Media.replaceImage(mediaId, {
+        file: path.relative(target.root, dest).replace(/\\/g, '/'),
+        width: written.width, height: written.height, filesize: written.filesize, sizes, sources,
+    });
+    await afterImageChange(mediaId);
+    await recordAudit(req.user.id, 'media.edit', 'media', mediaId, {
+        rotate: parsed.ops.rotate, flipH: parsed.ops.flipH, flipV: parsed.ops.flipV, crop: !!parsed.ops.crop, width: parsed.ops.width,
+    });
+    res.json(updated);
+}));
+
+/**
+ * @swagger
+ * /media/{id}/restore-original:
+ *   post:
+ *     summary: Bring back the uploaded file of an edited image
+ *     description: Same permission as PUT /media/{id}. The edited file stays among the item's earlier files.
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: The updated media item
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Media'
+ *       403:
+ *         description: You cannot edit this media (rest_forbidden)
+ *       404:
+ *         description: No such media item, or one this caller may not read (rest_post_invalid_id)
+ *       409:
+ *         description: The image was never edited, or has no local file (rest_media_not_edited, rest_media_edit_unavailable)
+ */
+router.post('/:id/restore-original', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const mediaId = parseInt(String(req.params.id), 10);
+    const refusal = await mediaWriteRefusal(req, mediaId);
+    if (refusal) return res.status(refusal.status).json(refusal.body);
+    const target = await editableImage(mediaId);
+    if ('status' in target) return res.status(target.status).json({ code: target.code, message: target.message, data: { status: target.status } });
+    if (!target.media.edited) {
+        return res.status(409).json({ code: 'rest_media_not_edited', message: 'This image has not been edited.', data: { status: 409 } });
+    }
+    const updated = await Media.restoreOriginalImage(mediaId);
+    await afterImageChange(mediaId);
+    await recordAudit(req.user.id, 'media.restore_original', 'media', mediaId, {});
+    res.json(updated);
+}));
+
 /**
  * @swagger
  * /media/{id}/usage:

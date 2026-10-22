@@ -40,6 +40,13 @@ const REMOTE_SOURCE_META_KEY = '_wxr_remote_url';
 // core/media-storage is required lazily: it pulls in config/app + the S3 signer, and nothing on the
 // plain local path should pay for (or cycle through) it.
 const mediaStorageMod = () => require('../core/media-storage');
+
+/**
+ * The earlier files of an edited image (core/media-edit): `{original, previous: [...]}`, each a snapshot
+ * `{file, width, height, filesize, sizes, sources}`. Server-owned (core/protected-meta). They are kept
+ * because content keeps their URLs, and they move and go with the item like its current files.
+ */
+const IMAGE_VERSIONS_META_KEY = '_wjs_image_versions';
 /** post_meta key marking an attachment whose files live in the s3 media store (core/media-storage). */
 const mediaStorageMetaKey = (): string => mediaStorageMod().STORAGE_META_KEY;
 
@@ -156,6 +163,7 @@ class Media {
         const metadata = allMeta['_wp_attachment_metadata'] || {};
         const attachedFile = allMeta['_wp_attached_file'] || '';
         const alt = allMeta['_wp_attachment_image_alt'] || '';
+        const versions = allMeta[IMAGE_VERSIONS_META_KEY];
         const isPrivate = post.postStatus === privateMedia.PRIVATE_ATTACHMENT_STATUS;
 
         // AN ATTACHMENT WHOSE BYTES ARE SOMEWHERE ELSE. The WXR importer's `link` mode creates the row
@@ -233,6 +241,8 @@ class Media {
             relativePath,           // Explicit relative path
             deliveryUrl,            // Where to fetch it from (CDN when offloaded) - never stored
             storage: offloaded ? 's3' : 'local',
+            // Edited in the media library and different from the uploaded file (Restore original applies).
+            edited: !!(versions && versions.original && versions.original.file && versions.original.file !== (attachedFile || metadata.file)),
             mediaDetails: {
                 width: metadata.width || 0,
                 height: metadata.height || 0,
@@ -348,6 +358,62 @@ class Media {
     }
 
     /**
+     * Every file of the item under `rootDir`: the current ones and those of its earlier versions (an edited
+     * image keeps them, see IMAGE_VERSIONS_META_KEY), each proved inside the root by _deletableFiles. The
+     * current main file comes first; a file two versions share is listed once.
+     */
+    static async _allVersionFiles(id: number, details: any, rootDir: string): Promise<string[]> {
+        const files = Media._deletableFiles(details && details.file, details && details.sizes, details && details.sources, rootDir);
+        if (!files.length) return files;
+        const versions = await Post.getMeta(id, IMAGE_VERSIONS_META_KEY);
+        const snapshots = versions && typeof versions === 'object'
+            ? [versions.original, ...(Array.isArray(versions.previous) ? versions.previous : [])]
+            : [];
+        for (const v of snapshots) {
+            if (v && typeof v === 'object') files.push(...Media._deletableFiles(v.file, v.sizes, v.sources, rootDir));
+        }
+        return [...new Set(files)];
+    }
+
+    /**
+     * Point the item at a new image file written beside the current one (core/media-edit), keeping the
+     * current version among its earlier files. `next` carries the new file's path relative to the item's
+     * uploads root, its dimensions, size ladder and derivatives.
+     */
+    static async replaceImage(id: number, next: { file: string; width: number; height: number; filesize: number; sizes: any; sources: any }) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Media.replaceImage(id, next));
+        const media = await Media.findById(id);
+        if (!media) throw new Error('Media not found');
+        const d = media.mediaDetails || {};
+        const current = { file: d.file, width: d.width, height: d.height, filesize: d.filesize, sizes: d.sizes || {}, sources: d.sources || {} };
+        const stored = await Post.getMeta(id, IMAGE_VERSIONS_META_KEY);
+        const versions = stored && typeof stored === 'object' && stored.original
+            ? { original: stored.original, previous: Array.isArray(stored.previous) ? stored.previous : [] }
+            : { original: current, previous: [] as any[] };
+        if (versions.original.file !== current.file && !versions.previous.some((v: any) => v && v.file === current.file)) {
+            versions.previous.push(current);
+        }
+        await Post.updateMeta(id, IMAGE_VERSIONS_META_KEY, versions);
+        await Post.updateMeta(id, '_wp_attached_file', next.file);
+        await Post.updateMeta(id, '_wp_attachment_metadata', {
+            file: next.file, width: next.width, height: next.height, filesize: next.filesize,
+            sizes: next.sizes || {}, sources: next.sources || {},
+        });
+        if (media.visibility !== 'private') {
+            await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`/uploads/${next.file}`, id]);
+        }
+        await Post._invalidatePostCacheById(id);
+        return await Media.findById(id);
+    }
+
+    /** Make the uploaded file current again; the edited one stays among the earlier files. Null when never edited. */
+    static async restoreOriginalImage(id: number) {
+        const versions = await Post.getMeta(id, IMAGE_VERSIONS_META_KEY);
+        if (!versions || typeof versions !== 'object' || !versions.original || !versions.original.file) return null;
+        return await Media.replaceImage(id, versions.original);
+    }
+
+    /**
      * Does this attachment's row OWN the file its `_wp_attached_file` names, or merely point at it?
      *
      * A row owns a file when something wrote one for it — an upload, or a `download`-mode WXR import,
@@ -390,9 +456,7 @@ class Media {
         // A rollback must never leave a live attachment row pointing at a file we already removed.
         if (mayUnlink) {
             const root = privateMedia.uploadsRootFor(media.visibility === 'private');
-            const targets = Media._deletableFiles(
-                media.mediaDetails.file, media.mediaDetails.sizes, media.mediaDetails.sources, root
-            );
+            const targets = await Media._allVersionFiles(id, media.mediaDetails, root);
             // An offloaded item's objects go too - after the commit, like the local unlink, so a rollback
             // never leaves a live row pointing at objects already removed.
             const ms = media.storage === 's3' ? mediaStorageMod() : null;
@@ -461,8 +525,9 @@ class Media {
         const details = media.mediaDetails || {};
         const fromRoot = privateMedia.uploadsRootFor(isPrivate);
         const toRoot = privateMedia.uploadsRootFor(!isPrivate);
-        const fromFiles = Media._deletableFiles(details.file, details.sizes, details.sources, fromRoot);
-        const toFiles = Media._deletableFiles(details.file, details.sizes, details.sources, toRoot);
+        // The earlier files of an edited image move too: a private item must leave nothing in the public tree.
+        const fromFiles = await Media._allVersionFiles(id, details, fromRoot);
+        const toFiles = await Media._allVersionFiles(id, details, toRoot);
 
         // MEDIA OFFLOAD. Private media never lives in the bucket, so an offloaded item is first brought
         // back to this node's disk (the move below then works on local files, as it always has) and its

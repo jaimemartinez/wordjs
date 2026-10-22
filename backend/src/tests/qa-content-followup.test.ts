@@ -323,3 +323,60 @@ test('a fitted (not cropped) size of a 3:2 photo is named by its real dimensions
     // A cropped size really is w×h.
     assert.strictEqual(out.sizes.thumbnail.file, 'landscape-150x150.jpg', JSON.stringify(out.sizes.thumbnail));
 });
+
+// ── media: image editing (S1-15) ────────────────────────────────────────────────────────────────────
+
+test('an image is rotated, cropped and scaled into a new file; the earlier files stay, move and go with it', async () => {
+    const sharp = require('sharp');
+    const png = await sharp({ create: { width: 400, height: 200, channels: 3, background: { r: 10, g: 120, b: 200 } } }).png().toBuffer();
+    const up = await request(app).post(`${B}/media`).set(bearer('author1')).attach('file', png, { filename: 'edit-me.png', contentType: 'image/png' });
+    assert.strictEqual(up.status, 201, JSON.stringify(up.body));
+    const id = up.body.id;
+    const publicRoot = require('../core/private-media').uploadsRootFor(false);
+    const privateRoot = require('../core/private-media').uploadsRootFor(true);
+    const originalFile = path.join(publicRoot, up.body.mediaDetails.file);
+    assert.strictEqual(up.body.edited, false);
+
+    const edit = (who: string, body: any) => request(app).post(`${B}/media/${id}/edit`).set(bearer(who)).send(body);
+    assert.strictEqual((await edit('author1', { rotate: 45 })).status, 400);
+    assert.strictEqual((await edit('author1', {})).status, 400, 'nothing to change');
+    assert.strictEqual((await edit('author1', { crop: { x: 0.5, y: 0, width: 0.8, height: 1 } })).status, 400, 'outside the image');
+    assert.strictEqual((await edit('sub1', { rotate: 90 })).status, 403);
+    assert.strictEqual((await edit('editor1', { rotate: 90 })).status, 200, 'an editor may edit others’ media');
+
+    // 90° turn of the (now 200×400) image → 400×200; keep the left half → 200×200; scale to 100 wide.
+    const res = await edit('author1', { rotate: 90, crop: { x: 0, y: 0, width: 0.5, height: 1 }, width: 100 });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body.edited, true);
+    assert.strictEqual(res.body.mediaDetails.width, 100);
+    assert.strictEqual(res.body.mediaDetails.height, 100);
+    assert.match(res.body.mediaDetails.file, /edit-me[^/]*-e\d+\.png$/);
+    assert.notStrictEqual(res.body.sourceUrl, up.body.sourceUrl, 'a new URL — the old one is cached immutable');
+    const editedFile = path.join(publicRoot, res.body.mediaDetails.file);
+    assert.ok(fs.existsSync(editedFile));
+    assert.ok(fs.existsSync(originalFile), 'pages that show the uploaded file keep working');
+    const meta = await sharp(editedFile).metadata();
+    assert.deepStrictEqual([meta.width, meta.height], [100, 100]);
+
+    // The versions are server-owned: the generic meta surface cannot point them elsewhere.
+    assert.ok(require('../core/protected-meta').isProtectedPostMeta('_wjs_image_versions'));
+
+    const restored = await request(app).post(`${B}/media/${id}/restore-original`).set(bearer('author1'));
+    assert.strictEqual(restored.status, 200, JSON.stringify(restored.body));
+    assert.strictEqual(restored.body.edited, false);
+    assert.strictEqual(restored.body.mediaDetails.file, up.body.mediaDetails.file);
+    assert.strictEqual(restored.body.mediaDetails.width, 400);
+    assert.ok(fs.existsSync(editedFile), 'the edited file stays too');
+    assert.strictEqual((await request(app).post(`${B}/media/${id}/restore-original`).set(bearer('author1'))).status, 409, 'not edited now');
+
+    // Private: every version leaves the public tree.
+    const priv = await request(app).put(`${B}/media/${id}`).set(bearer('author1')).send({ visibility: 'private' });
+    assert.strictEqual(priv.status, 200, JSON.stringify(priv.body));
+    assert.ok(!fs.existsSync(originalFile) && !fs.existsSync(editedFile), 'nothing left in the public uploads');
+    assert.ok(fs.existsSync(path.join(privateRoot, res.body.mediaDetails.file)));
+
+    const del = await request(app).delete(`${B}/media/${id}`).set(bearer('author1'));
+    assert.ok([200, 204].includes(del.status), JSON.stringify(del.body));
+    assert.ok(!fs.existsSync(path.join(privateRoot, res.body.mediaDetails.file)), 'every version goes with the item');
+    assert.ok(!fs.existsSync(path.join(privateRoot, up.body.mediaDetails.file)));
+});

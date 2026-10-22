@@ -75,6 +75,9 @@ const PROTECTED_POST_META: Set<string> = new Set([
     // Where an attachment's bytes live (core/media-storage): server-owned, set only by the upload route,
     // the visibility move and the offload/restore migration.
     '_wjs_media_storage',
+    // The earlier files of an edited image (models/Media replaceImage): server-owned, because every
+    // file it names is moved with the item and deleted with it.
+    '_wjs_image_versions',
     // F4 snapshot envelopes are executable restore instructions. Allowing a generic meta request to
     // forge one would turn a later restore into an arbitrary core-column/meta write.
     REVISION_SNAPSHOT_META_KEY,

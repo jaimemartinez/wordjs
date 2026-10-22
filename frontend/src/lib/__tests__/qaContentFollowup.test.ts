@@ -11,6 +11,7 @@ import { commentThread } from "@/lib/commentThread";
 import { mediaTypeIcon } from "@/lib/mediaUsage";
 import { listAllEntries } from "@/lib/motionLibrary";
 import { paletteRowOrder } from "@/components/verso/editor/paletteActions";
+import { canEditImage, cropForAspect, dragCrop, editRequest, FULL_CROP, resultSize, turn } from "@/lib/imageEdit";
 
 describe("bulk actions run one write per row and report what failed", () => {
     it("keeps going past a failure and names the first reason", async () => {
@@ -134,5 +135,44 @@ describe("Ctrl+K: Enter runs a block once the author types", () => {
     it("lists actions first only while nothing is typed", () => {
         expect(paletteRowOrder("", 3, 5)).toEqual({ actionsFirst: true, actionOffset: 0, blockOffset: 3 });
         expect(paletteRowOrder("p", 1, 5)).toEqual({ actionsFirst: false, actionOffset: 5, blockOffset: 0 });
+    });
+});
+
+describe("image editor arithmetic (media library)", () => {
+    const base = { rotate: 0 as const, flipH: false, flipV: false, crop: FULL_CROP, width: null };
+    it("only JPEG, PNG and WebP on this server can be edited", () => {
+        expect(canEditImage("image/jpeg")).toBe(true);
+        expect(canEditImage("image/gif")).toBe(false);
+        expect(canEditImage("image/svg+xml")).toBe(false);
+        expect(canEditImage("image/png", "s3")).toBe(false);
+    });
+    it("turns wrap around", () => {
+        expect(turn(0, -90)).toBe(270);
+        expect(turn(270, 90)).toBe(0);
+    });
+    it("a ratio crop is the largest centred box", () => {
+        const c = cropForAspect(1, 400, 200);
+        expect(c.width).toBeCloseTo(0.5);
+        expect(c.x).toBeCloseTo(0.25);
+        expect(c.height).toBe(1);
+        expect(cropForAspect(null, 400, 200)).toEqual(FULL_CROP);
+    });
+    it("the result size follows the turn, the crop and the scale", () => {
+        expect(resultSize(400, 200, { ...base, rotate: 90 })).toEqual({ width: 200, height: 400 });
+        expect(resultSize(400, 200, { ...base, rotate: 90, crop: { x: 0, y: 0, width: 1, height: 0.5 }, width: 100 })).toEqual({ width: 100, height: 100 });
+        expect(resultSize(400, 200, { ...base, width: 1000 })).toEqual({ width: 400, height: 200 }); // never enlarges
+    });
+    it("asks the server only for what changed", () => {
+        expect(editRequest(400, 200, base)).toBeNull();
+        expect(editRequest(400, 200, { ...base, width: 1000 })).toBeNull();
+        expect(editRequest(400, 200, { ...base, rotate: 90, flipH: true, width: 120 })).toEqual({ rotate: 90, flipH: true, width: 120 });
+        expect(editRequest(400, 200, { ...base, crop: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 } })?.crop).toEqual({ x: 0.1, y: 0.1, width: 0.5, height: 0.5 });
+    });
+    it("dragging keeps the box inside the image, and a ratio box keeps its ratio", () => {
+        const moved = dragCrop({ x: 0.5, y: 0.5, width: 0.4, height: 0.4 }, "move", 0.5, 0.5, null, 100, 100);
+        expect(moved.x).toBeCloseTo(0.6);
+        expect(moved.y).toBeCloseTo(0.6);
+        const square = dragCrop({ x: 0.25, y: 0, width: 0.5, height: 1 }, "se", -0.2, 0, 1, 400, 200);
+        expect(square.width * 400).toBeCloseTo(square.height * 200);
     });
 });
