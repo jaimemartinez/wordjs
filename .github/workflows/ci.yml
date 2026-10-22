@@ -10,6 +10,9 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  # Daily run on main: the coverage ratchet no longer runs on pull requests (see backend-coverage).
+  schedule:
+    - cron: '17 6 * * *'
   # Manual dispatch exists for the F6 performance budget in backend/f0-baseline.json, which carries one
   # calibration per platform. A plain dispatch runs the whole workflow, `perf-budgets` included, enforcing
   # the committed linux calibration as push and pull_request do; `calibrate: true` runs `perf-budgets` in
@@ -481,13 +484,13 @@ jobs:
           node backend/scripts/verify-marketplace.js --rebuild
 
   backend-test:
-    name: Backend unit tests (shard ${{ matrix.shard }}/4)
+    name: Backend unit tests (shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     strategy:
-      # Every shard reports, so one red file does not hide whether the other three quarters are green.
+      # Every shard reports, so one red file does not hide whether the other shards are green.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     # HISTORY OF THIS BUDGET (it was the whole backend job's until the suite was sharded):
     # 22, sized to measured real work on a cold-cache day — Install 207s, Audit 196s, License gate 126s
     # of network steps, Type check 7s, Build 6s, Test 310s; RAISED to 32 when the coverage ratchet ran
@@ -498,7 +501,10 @@ jobs:
     # split by file COUNT, not by time, so one can draw more slow files than the others: budget a shard
     # at half the old suite rather than a quarter. 20 covers a cold install plus that and still turns a
     # hang red.
-    timeout-minutes: 20
+    #
+    # 2026-10-22: EIGHT shards (was four, ~8 min each) so a pull request's CI fits in ~10 minutes; the
+    # instrumented coverage pass no longer runs on pull requests, so the suite runs once per PR.
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -550,13 +556,14 @@ jobs:
         # into hard failures: the service containers above are wired precisely so those drivers ARE
         # exercised, so a container that never came up must fail the job, not slip through green. This is
         # the only CI coverage of the SQLite→MySQL translation layer (translateCreateTable/translateSql).
-        # The coverage ratchet runs the same suite, sharded the same way, in `backend-coverage-shard`.
+        # The coverage ratchet runs the same suite (in four instrumented shards) in `backend-coverage-shard`,
+        # on main and on the daily schedule only.
         # The wrapper hoists `--test-shard` in front of the file glob; after it, node would read the flag
         # as one more file pattern and every shard would run the whole suite.
         working-directory: backend
         env:
           WORDJS_CI_DB: '1'
-        run: npm test -- --test-shard=${{ matrix.shard }}/4
+        run: npm test -- --test-shard=${{ matrix.shard }}/8
 
   backend:
     # THE REQUIRED CHECK. Branch protection on main names "Backend (typecheck + test)" exactly; this job
@@ -601,6 +608,10 @@ jobs:
     # branch carrying the multisite engine suites as well; several of those suites take 3-4 minutes each
     # under coverage. 35 leaves that margin and still turns a hang red.
     name: Backend coverage (shard ${{ matrix.shard }}/4)
+    # NOT on pull requests (2026-10-22, owner: PR CI must fit in ~10 minutes). The instrumented pass is
+    # twice as slow as the plain suite; it runs on every push to main and daily, where a coverage drop
+    # is reported right after the merge instead of before it. Not a required check.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -686,7 +697,7 @@ jobs:
     # tail of the old single job, a few minutes). 20 covers it.
     name: Backend coverage (c8 ratchet)
     needs: backend-coverage-shard
-    if: always()
+    if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
