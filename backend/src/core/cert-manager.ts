@@ -207,7 +207,7 @@ function singleCertificateNameProblem(input: unknown, { wildcard = false } = {})
     if (/[\s,;]/.test(name)) {
         return {
             code: 'cert_one_name',
-            message: 'This form orders a certificate for one name. To cover several names (such as example.com and www.example.com) with one certificate, list them in Automatic renewal.',
+            message: 'This form orders a certificate for one name. To cover several names (such as example.com and www.example.com) with one certificate, list them in Automatic Certificate Renewal (Admin → Security).',
         };
     }
     if (name.startsWith('*.') && !wildcard) {

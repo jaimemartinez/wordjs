@@ -52,7 +52,7 @@ test('a list typed into the single-name form is refused with cert_one_name, and 
         const { out, reached } = await call('/auto-provision', { domain, email: 'admin@example.com' }, 'provisionAutoHTTP');
         assert.strictEqual(out.statusCode, 400, domain);
         assert.strictEqual(out.body.code, 'cert_one_name', domain);
-        assert.match(out.body.error, /Automatic renewal/, 'it says where several names go');
+        assert.match(out.body.error, /Automatic Certificate Renewal/, 'it says where several names go');
         assert.strictEqual(reached.length, 0, 'nothing was sent to the CA');
     }
 });

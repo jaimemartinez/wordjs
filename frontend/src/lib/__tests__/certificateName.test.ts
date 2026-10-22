@@ -7,7 +7,7 @@ describe("the single-name certificate form (production v2.8.0: a list failed as 
         for (const input of ["example.com, www.example.com", "example.com www.example.com", "a.example.com;b.example.com"]) {
             expect(singleCertificateNameProblem(input, "http"), input).toBe("cert_one_name");
         }
-        expect(translations.en[CERTIFICATE_NAME_MESSAGE_KEY.cert_one_name as keyof typeof translations.en]).toMatch(/Automatic renewal/);
+        expect(translations.en[CERTIFICATE_NAME_MESSAGE_KEY.cert_one_name as keyof typeof translations.en]).toMatch(/Automatic Certificate Renewal/);
     });
 
     it("lets one name through, a wildcard only over DNS, and asks for a name when empty", () => {

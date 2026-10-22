@@ -97,7 +97,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
     const last = cfg.lastRenewal;
 
     return (
-        <form onSubmit={save} className="space-y-6 scroll-mt-24" id="ssl-auto-renewal">
+        <form onSubmit={save} className="space-y-6">
             {/* Status row */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="p-4 bg-white/60 rounded-xl border border-amber-100">

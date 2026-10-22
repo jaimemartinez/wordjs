@@ -40,7 +40,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **The single-name certificate form says what is wrong with the name.** Typing several names
   (`example.com, www.example.com`) into Admin → Security → SSL failed with a generic "Certificate
   provisioning failed" after a round-trip to the CA client. The form now catches a list before sending and
-  points to Automatic renewal, which takes several names for one certificate. The server refuses the same
+  points to Automatic Certificate Renewal, which takes several names for one certificate. The server refuses the same
   cases up front with a `code`, as it does a name that is not a domain, or a wildcard over HTTP-01; the
   form shows each in the admin's language.
 

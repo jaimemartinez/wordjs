@@ -71,7 +71,7 @@ export default function SecurityPage() {
                     </div>
 
                     {/* Auto-Renewal (ACME) Section */}
-                    <div className="glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-amber-500 transition-all hover:shadow-amber-900/10">
+                    <div id="ssl-auto-renewal" className="scroll-mt-24 glass-panel rounded-3xl md:rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-amber-500 transition-all hover:shadow-amber-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
                             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
                                 <i className="fa-solid fa-arrows-rotate text-amber-500 text-xl"></i>
