@@ -201,3 +201,20 @@ response.
 Monolith, split and separate mode use the same code paths (the backend writes and redirects; the frontend
 server amends the CSP and the SSR rewrites URLs). Verify all three on a staging deployment before
 switching a production site.
+
+## Folders in the media library
+
+Admin → Media can sort files into folders (create, rename, nest, drag files onto a folder, *Move to…* one or
+many). **Folders are organisation only.** A file's path in `uploads/` — and in the bucket, when the library
+is offloaded — and its URL never change when it moves, so content that already links to it keeps working,
+and moving a file never touches storage.
+
+- A folder is a term of the internal taxonomy `wjs_media_folder` (not registered: no public archive, no
+  term routes, not in the sitemap); a file's folder is the protected post meta `_wjs_media_folder`. Both
+  live in the site's own tables, so each site of a network has its own folders, on SQLite, PostgreSQL and
+  MySQL alike.
+- Deleting a folder first moves its files and subfolders to the folder you choose (or out of every folder):
+  no file is deleted with it, and none is left pointing at a folder that no longer exists.
+- Private files can be filed like any other; the folder counts and lists only show a caller the files they
+  could see anyway.
+- A site export (Tools → Export) does not carry folders; a full backup does.

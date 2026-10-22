@@ -1259,6 +1259,8 @@ export interface MediaItem {
     storage?: "local" | "s3";
     /** Edited in the media library and different from the uploaded file («Restore original» applies). */
     edited?: boolean;
+    /** The media-library folder it is in; 0 = in no folder. Organisation only (the URL never depends on it). */
+    folder?: number;
     mediaDetails?: {
         width: number;
         height: number;
@@ -1300,7 +1302,12 @@ export interface MediaListOptions {
     order?: "asc" | "desc";
     /** "all" (server default), "public" or "private". Private items are only listed to uploaders. */
     visibility?: "all" | MediaVisibility;
+    /** A media folder's id (its files only), 0 for the files in no folder; absent = the whole library. */
+    folder?: number;
 }
+
+/** A media-library folder (GET /media/folders). Organisation only: a file's URL never depends on it. */
+export interface MediaFolder { id: number; name: string; parent: number; count: number }
 
 const mediaListQuery = (opts: MediaListOptions): URLSearchParams => {
     const params = new URLSearchParams();
@@ -1311,6 +1318,7 @@ const mediaListQuery = (opts: MediaListOptions): URLSearchParams => {
     if (opts.orderby) params.append("orderby", opts.orderby);
     if (opts.order) params.append("order", opts.order);
     if (opts.visibility) params.append("visibility", opts.visibility);
+    if (opts.folder !== undefined && opts.folder !== null) params.append("folder", String(opts.folder));
     return params;
 };
 
@@ -1344,10 +1352,14 @@ export const mediaApi = {
      * `visibility: "private"` goes in the QUERY STRING on purpose: the server picks the storage root
      * before the body is streamed, so a private file is never written under the public uploads tree.
      */
-    uploadWithProgress: (formData: FormData, onProgress: (progress: number) => void, opts: { visibility?: MediaVisibility } = {}): Promise<MediaItem> => {
+    uploadWithProgress: (formData: FormData, onProgress: (progress: number) => void, opts: { visibility?: MediaVisibility; folder?: number } = {}): Promise<MediaItem> => {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open("POST", opts.visibility === "private" ? `${API_URL}/media?visibility=private` : `${API_URL}/media`);
+            // Both in the QUERY STRING: the server decides where the file goes before the body is read.
+            const q = new URLSearchParams();
+            if (opts.visibility === "private") q.set("visibility", "private");
+            if (opts.folder) q.set("folder", String(opts.folder));
+            xhr.open("POST", q.toString() ? `${API_URL}/media?${q.toString()}` : `${API_URL}/media`);
             xhr.withCredentials = true; // Use HttpOnly cookies
             applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
 
@@ -1400,6 +1412,13 @@ export const mediaApi = {
         apiPost<MediaItem>(`/media/${id}/edit`, ops),
     restoreOriginal: (id: number) => apiPost<MediaItem>(`/media/${id}/restore-original`, {}),
     delete: (id: number) => apiDelete(`/media/${id}`),
+    // Folders (organisation only — moving a file never changes its URL).
+    folders: () => apiGet<{ folders: MediaFolder[]; unfiled: number; total: number }>("/media/folders"),
+    createFolder: (name: string, parent = 0) => apiPost<MediaFolder>("/media/folders", { name, parent }),
+    updateFolder: (id: number, data: { name?: string; parent?: number }) => apiPut<MediaFolder>(`/media/folders/${id}`, data),
+    /** Deletes the folder; its files and subfolders go to `moveTo` (0 = no folder) first. */
+    deleteFolder: (id: number, moveTo: number) => apiDelete<{ deleted: boolean; movedFiles: number; movedFolders: number }>(`/media/folders/${id}?moveTo=${moveTo}`),
+    moveToFolder: (ids: number[], folder: number) => apiPost<{ moved: number[]; refused: Array<{ id: number; code: string }>; folder: number }>("/media/folders/move", { ids, folder }),
 };
 
 export const menusApi = {

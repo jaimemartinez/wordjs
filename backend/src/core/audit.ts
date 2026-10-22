@@ -112,6 +112,12 @@ const AUDIT_ACTIONS = Object.freeze({
     // uploaded file made current again.
     MEDIA_EDIT: 'media.edit',
     MEDIA_RESTORE_ORIGINAL: 'media.restore_original',
+    // Media-library folders (core/media-folders): created {parent}, renamed or moved {renamed, parent}, deleted
+    // {moveTo, movedFiles, movedFolders}, and files moved into one {count} (the folder is the target id).
+    MEDIA_FOLDER_CREATE: 'media.folder.create',
+    MEDIA_FOLDER_UPDATE: 'media.folder.update',
+    MEDIA_FOLDER_DELETE: 'media.folder.delete',
+    MEDIA_MOVE: 'media.move',
     // Categories and tags ({taxonomy}).
     TERM_CREATE: 'term.create',
     TERM_UPDATE: 'term.update',

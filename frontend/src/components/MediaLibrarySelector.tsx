@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { mediaApi, MediaItem, MediaListOptions } from "@/lib/api";
+import { mediaApi, MediaItem, MediaListOptions, type MediaFolder } from "@/lib/api";
+import { flattenFolders, folderQuery, indentedLabel, type FolderSelection } from "@/lib/mediaFolders";
 import { useI18n } from "@/contexts/I18nContext";
 import MSym from "./editor/MSym";
 
@@ -176,6 +177,13 @@ export default function MediaLibrarySelector({ onSelect, selectedId, mimeType }:
     const [totalPages, setTotalPages] = useState(1);
     const [refreshKey, setRefreshKey] = useState(0);
     const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // The library's folders, to browse by (organisation only). Empty — and the picker hidden — for a
+    // caller who may not list them or a library without folders.
+    const [folders, setFolders] = useState<MediaFolder[]>([]);
+    const [folder, setFolder] = useState<FolderSelection>("all");
+    useEffect(() => {
+        mediaApi.folders().then((r) => setFolders(r.folders)).catch(() => setFolders([]));
+    }, []);
 
     // Debounce the search box → the `search` value that actually queries the SERVER (the old
     // client-side .filter() only ever saw the first page).
@@ -192,7 +200,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId, mimeType }:
         setLoading(true);
         setLoadError(false);
         try {
-            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search, mimeType, visibility: "public" }));
+            const res = await mediaApi.listPaged({ ...buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search, mimeType, visibility: "public" }), folder: folderQuery(folder) });
             setMedia(res.data);
             setTotal(res.total);
             setTotalPages(res.totalPages);
@@ -210,7 +218,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId, mimeType }:
         // `refreshKey` is intentionally a dependency: bumping it is how the refresh button re-runs
         // this exact query. eslint cannot see that, since the value is never read in the body.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, search, mimeType, refreshKey]);
+    }, [page, search, mimeType, refreshKey, folder]);
 
     useEffect(() => { loadMedia(); }, [loadMedia]);
 
@@ -231,6 +239,21 @@ export default function MediaLibrarySelector({ onSelect, selectedId, mimeType }:
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
                 />
+                {folders.length > 0 && (
+                    <>
+                        <label htmlFor="media-library-folder" className="sr-only">{t('media.folders.filter')}</label>
+                        <select
+                            id="media-library-folder"
+                            value={folder === "all" ? "all" : String(folder)}
+                            onChange={(e) => { setFolder(e.target.value === "all" ? "all" : Number(e.target.value)); setPage(1); }}
+                            className="min-h-11 px-3 border border-[var(--ed-outline-variant)] rounded-xl text-sm w-full sm:max-w-xs bg-[var(--ed-surface-container-lowest)] text-[var(--ed-on-surface)]"
+                        >
+                            <option value="all">{t('media.folders.all')}</option>
+                            <option value="0">{t('media.folders.unfiled')}</option>
+                            {flattenFolders(folders).map((f) => <option key={f.id} value={f.id}>{indentedLabel(f)}</option>)}
+                        </select>
+                    </>
+                )}
                 <div className="flex items-center justify-between sm:justify-end gap-3">
                     {total > 0 && (
                         <span className="text-xs font-medium text-[var(--ed-on-surface-variant)] whitespace-nowrap" aria-live="polite">
