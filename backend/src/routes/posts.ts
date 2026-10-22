@@ -1249,10 +1249,14 @@ const unlockLimiter = require('express-rate-limit')({
  *             properties:
  *               password: { type: string }
  *     responses:
- *       200: { description: The entry, unlocked. }
- *       403: { description: Wrong password. }
- *       404: { description: No such readable, password-protected entry. }
- *       429: { description: Too many attempts. }
+ *       200:
+ *         description: The entry, unlocked.
+ *       403:
+ *         description: Wrong password.
+ *       404:
+ *         description: No such readable, password-protected entry.
+ *       429:
+ *         description: Too many attempts.
  */
 /**
  * An entry password (WordPress `post_password`) is stored as the author typed it, so the comparison is
