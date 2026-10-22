@@ -19,7 +19,7 @@
 
 exports.metadata = {
     name: 'Analytics Tag',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Site-wide analytics tag (GA4, Plausible or Matomo) with cookie-consent gating',
     author: 'WordJS',
 };

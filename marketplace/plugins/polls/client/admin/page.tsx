@@ -14,8 +14,12 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
-const SHOW_RESULTS_LABELS = { after: "Tras votar", always: "Siempre", never: "Nunca" };
+// Labels are looked up through `t` at render time so they follow the admin's language;
+// an unknown mode falls back to the "after" label, as before.
+const SHOW_RESULTS_MODES = ["after", "always", "never"];
+const showResultsLabel = (t, mode) => t(`showResults.${SHOW_RESULTS_MODES.includes(mode) ? mode : "after"}`);
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 12;
 
@@ -75,6 +79,7 @@ function MiniBars({ poll }) {
 }
 
 function PollModal({ initial, onClose, onSaved }) {
+    const { t } = useT();
     const [question, setQuestion] = useState(initial ? initial.question : "");
     const [options, setOptions] = useState(() => {
         if (initial && Array.isArray(initial.options) && initial.options.length >= MIN_OPTIONS) {
@@ -100,10 +105,10 @@ function PollModal({ initial, onClose, onSaved }) {
         e.preventDefault();
         setError("");
         const q = question.trim();
-        if (!q) { setError("La pregunta es obligatoria."); return; }
+        if (!q) { setError(t("form.errQuestion")); return; }
         const cleaned = options.map((o) => ({ id: o.id, label: String(o.label || "").trim() }));
-        if (cleaned.some((o) => !o.label)) { setError("Todas las opciones deben tener texto."); return; }
-        if (cleaned.length < MIN_OPTIONS) { setError(`Se necesitan al menos ${MIN_OPTIONS} opciones.`); return; }
+        if (cleaned.some((o) => !o.label)) { setError(t("form.errOptionText")); return; }
+        if (cleaned.length < MIN_OPTIONS) { setError(t("form.errMinOptions", { min: MIN_OPTIONS })); return; }
         setBusy(true);
         try {
             const body = { question: q, options: cleaned, show_results: showResults };
@@ -111,7 +116,7 @@ function PollModal({ initial, onClose, onSaved }) {
             await apiPost("/plugin/polls/save", body);
             onSaved();
         } catch (err) {
-            setError(err?.message || "No se pudo guardar la encuesta.");
+            setError(err?.message || t("form.saveError"));
         } finally {
             setBusy(false);
         }
@@ -124,21 +129,21 @@ function PollModal({ initial, onClose, onSaved }) {
                 className="cf-letter"
                 role="dialog"
                 aria-modal="true"
-                aria-label={initial && initial.id ? "Editar encuesta" : "Nueva encuesta"}
+                aria-label={initial && initial.id ? t("form.editTitle") : t("form.newTitle")}
             >
                 <div className="cf-letter-body">
                     <h2 className="cf-editor-title">
                         <IconPen />
-                        {initial && initial.id ? "Editar encuesta" : "Nueva encuesta"}
+                        {initial && initial.id ? t("form.editTitle") : t("form.newTitle")}
                     </h2>
 
                     <div>
-                        <label className="cf-label" htmlFor="cf-poll-question">Pregunta</label>
-                        <input id="cf-poll-question" type="text" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="¿Cuál es tu opción favorita?" className="cf-input" required />
+                        <label className="cf-label" htmlFor="cf-poll-question">{t("form.question")}</label>
+                        <input id="cf-poll-question" type="text" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={t("form.questionPh")} className="cf-input" required />
                     </div>
 
                     <div style={{ marginTop: "1.15rem" }}>
-                        <span className="cf-label">Opciones ({options.length}/{MAX_OPTIONS})</span>
+                        <span className="cf-label">{t("form.options", { count: options.length, max: MAX_OPTIONS })}</span>
                         <div>
                             {options.map((o, i) => (
                                 <div key={o.id != null ? "opt-" + o.id : "new-" + i} className="cf-option-row">
@@ -146,8 +151,8 @@ function PollModal({ initial, onClose, onSaved }) {
                                         type="text"
                                         value={o.label}
                                         onChange={(e) => setOptionLabel(i, e.target.value)}
-                                        placeholder={"Opción " + (i + 1)}
-                                        aria-label={"Opción " + (i + 1)}
+                                        placeholder={t("form.option", { n: i + 1 })}
+                                        aria-label={t("form.option", { n: i + 1 })}
                                         className="cf-input"
                                     />
                                     <button
@@ -155,8 +160,8 @@ function PollModal({ initial, onClose, onSaved }) {
                                         onClick={() => removeOption(i)}
                                         disabled={options.length <= MIN_OPTIONS}
                                         className="cf-iconbtn is-danger"
-                                        title="Quitar opción"
-                                        aria-label="Quitar opción"
+                                        title={t("form.removeOption")}
+                                        aria-label={t("form.removeOption")}
                                     >
                                         ×
                                     </button>
@@ -165,30 +170,30 @@ function PollModal({ initial, onClose, onSaved }) {
                         </div>
                         {options.length < MAX_OPTIONS && (
                             <button type="button" onClick={addOption} className="cf-btn-ghost" style={{ marginTop: "0.7rem" }}>
-                                <IconPlus /> Agregar opción
+                                <IconPlus /> {t("form.addOption")}
                             </button>
                         )}
                         {initial && initial.id ? (
                             <p className="cf-help">
-                                Al editar se conservan los votos de las opciones existentes; quitar una opción no borra sus votos.
+                                {t("form.editHelp")}
                             </p>
                         ) : null}
                     </div>
 
                     <div style={{ marginTop: "1.15rem" }}>
-                        <label className="cf-label" htmlFor="cf-poll-show-results">Mostrar resultados</label>
+                        <label className="cf-label" htmlFor="cf-poll-show-results">{t("form.showResults")}</label>
                         <select id="cf-poll-show-results" value={showResults} onChange={(e) => setShowResults(e.target.value)} className="cf-select">
-                            <option value="after">{SHOW_RESULTS_LABELS.after}</option>
-                            <option value="always">{SHOW_RESULTS_LABELS.always}</option>
-                            <option value="never">{SHOW_RESULTS_LABELS.never}</option>
+                            <option value="after">{showResultsLabel(t, "after")}</option>
+                            <option value="always">{showResultsLabel(t, "always")}</option>
+                            <option value="never">{showResultsLabel(t, "never")}</option>
                         </select>
                     </div>
 
                     {error && <div role="alert" className="cf-flash is-error" style={{ margin: "1.15rem 0 0" }}>{error}</div>}
 
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.4rem" }}>
-                        <button type="button" onClick={onClose} disabled={busy} className="cf-btn-ghost">Cancelar</button>
-                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                        <button type="button" onClick={onClose} disabled={busy} className="cf-btn-ghost">{t("common.cancel")}</button>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                     </div>
                 </div>
             </form>
@@ -197,6 +202,7 @@ function PollModal({ initial, onClose, onSaved }) {
 }
 
 export default function PollsAdminPage() {
+    const { t } = useT();
     const [polls, setPolls] = useState(null); // null = loading
     const [modal, setModal] = useState(null); // null = closed, {} = new, {poll} = edit
     const [message, setMessage] = useState("");
@@ -207,7 +213,7 @@ export default function PollsAdminPage() {
             setPolls(await api("/plugin/polls/list"));
         } catch (err) {
             setPolls([]);
-            setMessage(`Error al cargar: ${err?.message || err}`);
+            setMessage(t("msg.loadError", { msg: err?.message || err }));
         }
     };
     useEffect(() => { load(); }, []);
@@ -218,20 +224,20 @@ export default function PollsAdminPage() {
             await apiPost(`/plugin/polls/${poll.id}/toggle`, {});
             await load();
         } catch (err) {
-            setMessage(`Error: ${err?.message || err}`);
+            setMessage(t("msg.error", { msg: err?.message || err }));
         } finally {
             setBusyId(null);
         }
     };
 
     const remove = async (poll) => {
-        if (typeof window !== "undefined" && !window.confirm(`¿Eliminar la encuesta "${poll.question}" y todos sus votos? Esta acción no se puede deshacer.`)) return;
+        if (typeof window !== "undefined" && !window.confirm(t("msg.deleteConfirm", { question: poll.question }))) return;
         setBusyId(poll.id); setMessage("");
         try {
             await apiDelete(`/plugin/polls/${poll.id}`);
             await load();
         } catch (err) {
-            setMessage(`Error: ${err?.message || err}`);
+            setMessage(t("msg.error", { msg: err?.message || err }));
         } finally {
             setBusyId(null);
         }
@@ -243,28 +249,28 @@ export default function PollsAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconChart /></div>
                 <div>
-                    <h1 className="cf-title">Encuestas</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Crea encuestas y publícalas con el bloque Polls del editor visual
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> Nueva encuesta</button>
+                <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> {t("app.newPoll")}</button>
             </div>
 
             {message && <div role="alert" className="cf-flash is-error">{message}</div>}
 
             {polls === null ? (
                 <div className="cf-empty">
-                    <span>Cargando…</span>
+                    <span>{t("list.loading")}</span>
                 </div>
             ) : polls.length === 0 ? (
                 <div className="cf-empty">
                     <IconChart />
-                    <span>Todavía no hay encuestas. Crea la primera con "Nueva encuesta".</span>
+                    <span>{t("list.empty")}</span>
                 </div>
             ) : (
                 <div>
@@ -275,29 +281,29 @@ export default function PollsAdminPage() {
                                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
                                         <h2 className="cf-form-name" style={{ wordBreak: "break-word" }}>{p.question}</h2>
                                         <span className={`cf-pill ${Number(p.is_open) ? "is-open" : "is-closed"}`}>
-                                            {Number(p.is_open) ? "Abierta" : "Cerrada"}
+                                            {Number(p.is_open) ? t("status.open") : t("status.closed")}
                                         </span>
                                     </div>
                                     <p className="cf-meta">
-                                        {p.total} {p.total === 1 ? "voto" : "votos"} · Resultados: {SHOW_RESULTS_LABELS[p.show_results] || SHOW_RESULTS_LABELS.after}
+                                        {t(p.total === 1 ? "meta.votes.one" : "meta.votes.other", { n: p.total })} · {t("meta.results", { mode: showResultsLabel(t, p.show_results) })}
                                     </p>
                                 </div>
                                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
                                     <button type="button" onClick={() => toggle(p)} disabled={busyId === p.id} className="cf-btn-ghost">
                                         {Number(p.is_open) ? <IconLock /> : <IconUnlock />}
-                                        {Number(p.is_open) ? "Cerrar" : "Abrir"}
+                                        {Number(p.is_open) ? t("action.close") : t("action.open")}
                                     </button>
                                     <button type="button" onClick={() => setModal(p)} disabled={busyId === p.id} className="cf-btn-ghost">
-                                        <IconPen /> Editar
+                                        <IconPen /> {t("common.edit")}
                                     </button>
                                     <button type="button" onClick={() => remove(p)} disabled={busyId === p.id} className="cf-btn-danger">
-                                        Eliminar
+                                        {t("common.delete")}
                                     </button>
                                 </div>
                             </div>
                             <MiniBars poll={p} />
                             <p className="cf-usage">
-                                Usa el bloque <strong>Polls</strong> con el ID <strong>{p.id}</strong>.
+                                {t("usage.p1")} <strong>Polls</strong> {t("usage.p2")} <strong>{p.id}</strong>{t("usage.p3")}
                             </p>
                         </div>
                     ))}

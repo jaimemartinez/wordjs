@@ -1,7 +1,7 @@
 {
     "id": "cookie-consent",
     "name": "Cookie Consent",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "GDPR cookie banner injected site-wide on every public page. The admin configures texts, position and theme; visitor choices are logged anonymously (no PII) for compliance stats, and consent can be re-requested from everyone by bumping the config version.",
     "author": "WordJS",
     "isolated": true,

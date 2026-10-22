@@ -1,7 +1,7 @@
 {
     "id": "notification-bar",
     "name": "Notification Bar",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Slim site-wide announcement bar (top or bottom): message + optional CTA link, dismissible with version-based re-show, colors, and an optional schedule window.",
     "author": "WordJS",
     "isolated": true,

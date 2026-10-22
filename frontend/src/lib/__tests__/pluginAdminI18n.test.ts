@@ -4,14 +4,24 @@ import path from "node:path";
 import ts from "typescript";
 
 /**
- * The payment and forms plugins' admin screens follow the admin language (X4-12): each ships a
+ * The marketplace plugins' admin screens follow the admin language (X4-12, S4-08): each ships a
  * client/admin/i18n.ts with es / en / pt tables, the three with the same keys, and its pages hold no
  * Spanish UI text outside that file.
  */
 
 const PLUGINS = path.resolve(__dirname, "../../../../marketplace/plugins");
-const SLUGS = ["contact-forms", "bookings", "donations", "digital-downloads", "memberships", "invoices", "event-tickets"];
+const SLUGS = [
+    "contact-forms", "bookings", "donations", "digital-downloads", "memberships", "invoices", "event-tickets",
+    // S4-08: every other marketplace plugin with an admin screen (mail-server has its own es/en table;
+    // conference-manager follows its own release train).
+    "analytics-tag", "auctions", "card-gallery", "cookie-consent", "events-calendar", "faq", "image-lightbox",
+    "job-board", "newsletter", "notification-bar", "online-store", "photo-carousel", "polls", "popup-builder",
+    "restaurant-menu", "social-share", "testimonials", "vendor-marketplace", "video-gallery", "youtube-videos",
+];
 const SPANISH = /[áéíóúñ¿¡]/i;
+// Site content, not admin UI: the cookie-consent preview draws the banner exactly as the public banner script
+// does, and that script's built-in link text is this literal.
+const SITE_CONTENT = new Set(["Política de cookies"]);
 
 function tables(file: string): Record<string, Set<string>> {
     const src = fs.readFileSync(file, "utf8");
@@ -38,14 +48,14 @@ function spanishLiterals(file: string): string[] {
         if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) text = n.text;
         else if (ts.isJsxText(n)) text = n.text.trim();
         else if (ts.isTemplateExpression(n)) text = n.head.text + n.templateSpans.map((s) => s.literal.text).join("");
-        if (text && SPANISH.test(text)) hits.push(`${path.basename(file)}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1} ${JSON.stringify(text.slice(0, 60))}`);
+        if (text && SPANISH.test(text) && !SITE_CONTENT.has(text)) hits.push(`${path.basename(file)}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1} ${JSON.stringify(text.slice(0, 60))}`);
         ts.forEachChild(n, visit);
     };
     visit(sf);
     return hits;
 }
 
-describe("payment and forms plugin admin screens are translated", () => {
+describe("marketplace plugin admin screens are translated", () => {
     for (const slug of SLUGS) {
         const dir = path.join(PLUGINS, slug, "client/admin");
         it(`${slug}: es / en / pt tables with the same keys`, () => {

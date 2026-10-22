@@ -54,6 +54,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   (it kept the generated mailbox address, and what was typed was appended to it); an existing account's stored
   address is left as it is. Relay settings saved while the queue runs in another process take effect at the next
   delivery: removing a relay no longer leaves queued mail failing with "Relay unavailable".
+- **Every marketplace plugin's admin screen follows the admin language.** The screens of analytics-tag, auctions,
+  card-gallery, cookie-consent, events-calendar, faq, image-lightbox, job-board, newsletter, notification-bar,
+  online-store, photo-carousel, polls, popup-builder, restaurant-menu, social-share, testimonials, vendor-marketplace,
+  video-gallery and youtube-videos are in English, Spanish and Portuguese (they were Spanish, some partly English), with
+  dates in the admin's locale. Content the plugins store or show to visitors (banner texts, default labels) is unchanged.
+  Each of them has a patch release.
 
 ## [2.8.0] - 2026-10-22
 

@@ -12,7 +12,7 @@
 
 exports.metadata = {
     name: 'Notification Bar',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Site-wide announcement bar with CTA link, dismissal and scheduling',
     author: 'WordJS',
 };

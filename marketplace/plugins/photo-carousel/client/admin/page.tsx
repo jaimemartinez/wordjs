@@ -7,6 +7,7 @@ import MediaPickerModal from "../../../../../frontend/src/components/MediaPicker
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader } from "../../../../../frontend/src/components/ui/PageHeader";
 import { Card } from "../../../../../frontend/src/components/ui/Card";
+import { useT } from "./i18n";
 
 // Local type definitions - plugin is self-contained
 interface CarouselImage {
@@ -57,6 +58,7 @@ export default function CarouselsPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const { alert, confirm } = useModal();
+    const { t } = useT();
 
     // Modal states
     const [isEditing, setIsEditing] = useState(false);
@@ -90,7 +92,7 @@ export default function CarouselsPage() {
             const data = await carouselsApi.list();
             setCarousels(data);
         } catch (err: any) {
-            setError("Failed to load carousels. Make sure the Photo Carousel plugin is active.");
+            setError(t("msg.loadError"));
             console.error(err);
         } finally {
             setLoading(false);
@@ -119,7 +121,7 @@ export default function CarouselsPage() {
 
     const handleSave = async () => {
         if (!formName.trim()) {
-            await alert("Please enter a name for the carousel");
+            await alert(t("msg.nameRequired"));
             return;
         }
 
@@ -145,19 +147,19 @@ export default function CarouselsPage() {
             setIsEditing(false);
             loadCarousels();
         } catch (err: any) {
-            await alert("Failed to save: " + (err.message || "Unknown error"));
+            await alert(t("msg.saveError", { msg: err.message || t("msg.unknownError") }));
         } finally {
             setSaving(false);
         }
     };
 
     const handleDelete = async (id: string) => {
-        if (!await confirm("Are you sure you want to delete this carousel? This action cannot be undone.", "Delete Carousel", true)) return;
+        if (!await confirm(t("confirm.deleteBody"), t("confirm.deleteTitle"), true)) return;
         try {
             await carouselsApi.delete(id);
             loadCarousels();
         } catch (err: any) {
-            await alert("Failed to delete: " + (err.message || "Unknown error"));
+            await alert(t("msg.deleteError", { msg: err.message || t("msg.unknownError") }));
         }
     };
 
@@ -180,7 +182,7 @@ export default function CarouselsPage() {
 
     const copyShortcode = async (id: string) => {
         navigator.clipboard.writeText(`[carousel id="${id}"]`);
-        await alert("Shortcode copied!");
+        await alert(t("msg.shortcodeCopied"));
     };
 
     if (loading) {
@@ -194,8 +196,8 @@ export default function CarouselsPage() {
     return (
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
-                title="Carruseles"
-                subtitle="Administra tus presentaciones de imágenes"
+                title={t("app.title")}
+                subtitle={t("app.subtitle")}
                 icon="fa-images"
             />
 
@@ -216,8 +218,8 @@ export default function CarouselsPage() {
                     <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center mb-4 text-2xl group-hover:scale-110 transition-transform">
                         <i className="fa-solid fa-plus"></i>
                     </div>
-                    <span className="font-bold text-lg">New Carousel</span>
-                    <p className="text-sm text-gray-400 mt-2 text-center max-w-[200px]">Create a new slideshow for your page headers or content.</p>
+                    <span className="font-bold text-lg">{t("grid.new")}</span>
+                    <p className="text-sm text-gray-400 mt-2 text-center max-w-[200px]">{t("grid.newHelp")}</p>
                 </div>
 
                 {carousels.map((carousel) => (
@@ -243,7 +245,7 @@ export default function CarouselsPage() {
                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60"></div>
 
                             <div className="absolute top-2 right-2 bg-black/50 backdrop-blur-md text-white px-2 py-1 rounded-lg text-xs font-medium border border-white/10">
-                                {carousel.images?.length || 0} images
+                                {t("grid.imageCount", { n: carousel.images?.length || 0 })}
                             </div>
 
                             {carousel.location && (
@@ -257,14 +259,14 @@ export default function CarouselsPage() {
                                 <button
                                     onClick={() => openEditModal(carousel)}
                                     className="w-10 h-10 bg-white text-blue-600 rounded-full shadow-lg hover:bg-blue-50 hover:scale-110 transition-all flex items-center justify-center"
-                                    title="Edit"
+                                    title={t("grid.edit")}
                                 >
                                     <i className="fa-solid fa-pencil"></i>
                                 </button>
                                 <button
                                     onClick={() => handleDelete(carousel.id)}
                                     className="w-10 h-10 bg-white text-red-500 rounded-full shadow-lg hover:bg-red-50 hover:scale-110 transition-all flex items-center justify-center"
-                                    title="Delete"
+                                    title={t("grid.delete")}
                                 >
                                     <i className="fa-solid fa-trash-can"></i>
                                 </button>
@@ -277,17 +279,17 @@ export default function CarouselsPage() {
                             <div className="flex items-center gap-3 text-xs text-gray-500 mb-4">
                                 <span className={`flex items-center gap-1 ${carousel.autoplay ? 'text-green-600' : 'text-gray-400'}`}>
                                     <i className={`fa-solid ${carousel.autoplay ? 'fa-play-circle' : 'fa-pause-circle'}`}></i>
-                                    {carousel.autoplay ? 'Autoplay' : 'Manual'}
+                                    {carousel.autoplay ? t("grid.autoplay") : t("grid.manual")}
                                 </span>
                                 <span className="w-1 h-1 bg-gray-300 rounded-full"></span>
-                                <span>{(carousel.interval || 5000) / 1000}s interval</span>
+                                <span>{t("grid.interval", { s: (carousel.interval || 5000) / 1000 })}</span>
                             </div>
 
                             <div className="mt-auto pt-4 border-t border-gray-100">
                                 <div
                                     className="bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-200 rounded-lg p-2 text-xs font-mono text-gray-500 hover:text-blue-700 cursor-pointer transition-colors flex justify-between items-center group/code"
                                     onClick={() => copyShortcode(carousel.id)}
-                                    title="Click to copy shortcode"
+                                    title={t("grid.copyShortcode")}
                                 >
                                     <span className="truncate flex-1">[carousel id="{carousel.id}"]</span>
                                     <i className="fa-regular fa-copy opacity-0 group-hover/code:opacity-100 transition-opacity"></i>
@@ -309,7 +311,7 @@ export default function CarouselsPage() {
                                     <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg">
                                         <i className={`fa-solid ${editingCarousel ? 'fa-pen-to-square' : 'fa-plus'}`}></i>
                                     </span>
-                                    {editingCarousel ? 'Edit Carousel' : 'New Carousel'}
+                                    {editingCarousel ? t("modal.edit") : t("modal.new")}
                                 </h2>
                                 <button
                                     onClick={() => setIsEditing(false)}
@@ -322,21 +324,21 @@ export default function CarouselsPage() {
                             <div className="p-8 overflow-y-auto space-y-8 custom-scrollbar">
                                 {/* Name */}
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Name</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.name")}</label>
                                     <input
                                         type="text"
                                         value={formName}
                                         onChange={(e) => setFormName(e.target.value)}
                                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium text-gray-800 placeholder:text-gray-400"
-                                        placeholder="e.g. Homepage Hero"
+                                        placeholder={t("modal.namePlaceholder")}
                                     />
                                 </div>
 
                                 {/* Images */}
                                 <div>
                                     <div className="flex justify-between items-center mb-3">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">Images ({formImages.length})</label>
-                                        <span className="text-xs text-gray-400">Drag to reorder</span>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">{t("modal.images", { n: formImages.length })}</label>
+                                        <span className="text-xs text-gray-400">{t("modal.dragHint")}</span>
                                     </div>
 
                                     <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 mb-4">
@@ -371,7 +373,7 @@ export default function CarouselsPage() {
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); removeImage(index); }}
                                                     className="absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-110 z-10 flex items-center justify-center text-xs"
-                                                    title="Remove image"
+                                                    title={t("modal.removeImage")}
                                                 >
                                                     <i className="fa-solid fa-xmark"></i>
                                                 </button>
@@ -388,7 +390,7 @@ export default function CarouselsPage() {
                                             <div className="w-10 h-10 rounded-full bg-gray-100 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
                                                 <i className="fa-solid fa-plus text-lg"></i>
                                             </div>
-                                            <span className="text-xs font-bold uppercase tracking-wide">Add Image</span>
+                                            <span className="text-xs font-bold uppercase tracking-wide">{t("modal.addImage")}</span>
                                         </button>
                                     </div>
 
@@ -402,56 +404,56 @@ export default function CarouselsPage() {
                                                     <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">
                                                         {editingImageIndex + 1}
                                                     </span>
-                                                    <h4 className="font-bold text-gray-800 text-sm">Image Details</h4>
+                                                    <h4 className="font-bold text-gray-800 text-sm">{t("modal.imageDetails")}</h4>
                                                 </div>
                                                 <button onClick={() => setEditingImageIndex(null)} className="text-gray-400 hover:text-gray-600 text-sm font-medium hover:underline">
-                                                    Done
+                                                    {t("modal.done")}
                                                 </button>
                                             </div>
 
                                             <div className="space-y-4 relative z-10">
                                                 <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Big Title</label>
+                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">{t("modal.bigTitle")}</label>
                                                     <input
                                                         type="text"
                                                         value={formImages[editingImageIndex].title || ''}
                                                         onChange={(e) => updateImageDetails(editingImageIndex, 'title', e.target.value)}
                                                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                                        placeholder="e.g. CONFERENCIAS"
+                                                        placeholder={t("modal.bigTitlePlaceholder")}
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Subtitle</label>
+                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">{t("modal.subtitle")}</label>
                                                     <input
                                                         type="text"
                                                         value={formImages[editingImageIndex].description || ''}
                                                         onChange={(e) => updateImageDetails(editingImageIndex, 'description', e.target.value)}
                                                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                                        placeholder="e.g. BUCARAMANGA"
+                                                        placeholder={t("modal.subtitlePlaceholder")}
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Paragraph Text</label>
+                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">{t("modal.paragraph")}</label>
                                                     <textarea
                                                         value={formImages[editingImageIndex].text || ''}
                                                         onChange={(e) => updateImageDetails(editingImageIndex, 'text', e.target.value)}
                                                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm h-20 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none resize-none"
-                                                        placeholder="Detailed description or message..."
+                                                        placeholder={t("modal.paragraphPlaceholder")}
                                                     />
                                                 </div>
                                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                     <div>
-                                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Button Text</label>
+                                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">{t("modal.buttonText")}</label>
                                                         <input
                                                             type="text"
                                                             value={formImages[editingImageIndex].buttonText || ''}
                                                             onChange={(e) => updateImageDetails(editingImageIndex, 'buttonText', e.target.value)}
                                                             className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                                            placeholder="Button Label"
+                                                            placeholder={t("modal.buttonTextPlaceholder")}
                                                         />
                                                     </div>
                                                     <div>
-                                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Button Link</label>
+                                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">{t("modal.buttonLink")}</label>
                                                         <input
                                                             type="text"
                                                             value={formImages[editingImageIndex].buttonLink || ''}
@@ -470,19 +472,19 @@ export default function CarouselsPage() {
                                 <div className="grid grid-cols-2 gap-6 bg-gray-50 rounded-2xl p-6 border border-gray-100">
                                     <div className="col-span-2">
                                         <h4 className="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                            <i className="fa-solid fa-sliders text-blue-500"></i> Settings
+                                            <i className="fa-solid fa-sliders text-blue-500"></i> {t("modal.settings")}
                                         </h4>
                                     </div>
                                     <div className="col-span-2 md:col-span-1">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Location</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.location")}</label>
                                         <div className="relative">
                                             <select
                                                 value={formLocation}
                                                 onChange={(e) => setFormLocation(e.target.value)}
                                                 className="w-full appearance-none px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium text-gray-700"
                                             >
-                                                <option value="">None (Shortcode usage)</option>
-                                                <option value="hero">Hero (Homepage)</option>
+                                                <option value="">{t("modal.locationNone")}</option>
+                                                <option value="hero">{t("modal.locationHero")}</option>
                                             </select>
                                             <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
                                                 <i className="fa-solid fa-chevron-down text-xs"></i>
@@ -490,15 +492,15 @@ export default function CarouselsPage() {
                                         </div>
                                     </div>
                                     <div className="col-span-2 md:col-span-1">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Autoplay</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.autoplay")}</label>
                                         <div className="relative">
                                             <select
                                                 value={formAutoplay ? "true" : "false"}
                                                 onChange={(e) => setFormAutoplay(e.target.value === "true")}
                                                 className="w-full appearance-none px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium text-gray-700"
                                             >
-                                                <option value="true">Enabled</option>
-                                                <option value="false">Disabled</option>
+                                                <option value="true">{t("modal.enabled")}</option>
+                                                <option value="false">{t("modal.disabled")}</option>
                                             </select>
                                             <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
                                                 <i className="fa-solid fa-chevron-down text-xs"></i>
@@ -506,7 +508,7 @@ export default function CarouselsPage() {
                                         </div>
                                     </div>
                                     <div className="col-span-2 md:col-span-2">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Interval</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.interval")}</label>
                                         <div className="flex gap-4 items-center">
                                             <input
                                                 type="range"
@@ -530,7 +532,7 @@ export default function CarouselsPage() {
                                     onClick={() => setIsEditing(false)}
                                     className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"
                                 >
-                                    Cancel
+                                    {t("modal.cancel")}
                                 </button>
                                 <button
                                     onClick={handleSave}
@@ -538,9 +540,9 @@ export default function CarouselsPage() {
                                     className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold hover:shadow-lg hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-70 disabled:shadow-none flex items-center gap-2"
                                 >
                                     {saving ? (
-                                        <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</>
+                                        <><i className="fa-solid fa-circle-notch fa-spin"></i> {t("modal.saving")}</>
                                     ) : (
-                                        <><i className="fa-solid fa-floppy-disk"></i> Save Carousel</>
+                                        <><i className="fa-solid fa-floppy-disk"></i> {t("modal.save")}</>
                                     )}
                                 </button>
                             </div>

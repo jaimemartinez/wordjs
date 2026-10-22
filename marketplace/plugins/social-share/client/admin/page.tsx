@@ -13,6 +13,7 @@
  */
 
 import React from "react";
+import { useT } from "./i18n";
 
 // Same 24x24 brand paths the Puck block draws (duplicated on purpose: each client entry stays
 // standalone, matching the youtube-videos template layout).
@@ -27,25 +28,25 @@ const ICON_PATHS = {
 };
 
 const NETWORKS = [
-    { key: "facebook", name: "Facebook", color: "#1877f2", desc: "Abre el diálogo para compartir de Facebook" },
-    { key: "x", name: "X (Twitter)", color: "#000000", desc: "Publica un post con el enlace y el título" },
-    { key: "whatsapp", name: "WhatsApp", color: "#25d366", desc: "Comparte por chat (wa.me)" },
-    { key: "linkedin", name: "LinkedIn", color: "#0a66c2", desc: "Comparte en tu red profesional" },
-    { key: "telegram", name: "Telegram", color: "#229ed9", desc: "Comparte por Telegram (t.me)" },
-    { key: "email", name: "Email", color: "#6b7280", desc: "Abre tu cliente de correo (mailto)" },
-    { key: "copyLink", name: "Copiar enlace", color: "#374151", desc: "Copia la URL al portapapeles" },
+    { key: "facebook", name: "Facebook", color: "#1877f2", descKey: "net.facebook.desc" },
+    { key: "x", name: "X (Twitter)", color: "#000000", descKey: "net.x.desc" },
+    { key: "whatsapp", name: "WhatsApp", color: "#25d366", descKey: "net.whatsapp.desc" },
+    { key: "linkedin", name: "LinkedIn", color: "#0a66c2", descKey: "net.linkedin.desc" },
+    { key: "telegram", name: "Telegram", color: "#229ed9", descKey: "net.telegram.desc" },
+    { key: "email", nameKey: "net.email.name", color: "#6b7280", descKey: "net.email.desc" },
+    { key: "copyLink", nameKey: "net.copyLink.name", color: "#374151", descKey: "net.copyLink.desc" },
 ];
 
 const SIZES = [
-    { label: "Pequeño", px: 32, icon: 16 },
-    { label: "Mediano", px: 40, icon: 20 },
-    { label: "Grande", px: 48, icon: 24 },
+    { labelKey: "size.small", px: 32, icon: 16 },
+    { labelKey: "size.medium", px: 40, icon: 20 },
+    { labelKey: "size.large", px: 48, icon: 24 },
 ];
 
 const SHAPES = [
-    { label: "Círculo", radius: "50%" },
-    { label: "Redondeado", radius: "12px" },
-    { label: "Cuadrado", radius: "0" },
+    { labelKey: "shape.circle", radius: "50%" },
+    { labelKey: "shape.rounded", radius: "12px" },
+    { labelKey: "shape.square", radius: "0" },
 ];
 
 /* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
@@ -102,15 +103,16 @@ const stepCls = "cf-step";
 const stepNumCls = "cf-step-num";
 
 export default function SocialShareAdminPage() {
+    const { t } = useT();
     return (
         <div className="cf-shell">
             {/* header: stamp + title + airmail rule */}
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconShare /></div>
                 <div>
-                    <h1 className="cf-title">Compartir Social</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Botones para compartir la página actual en redes sociales
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
@@ -118,45 +120,41 @@ export default function SocialShareAdminPage() {
 
             {/* How to use */}
             <div className="cf-card-item">
-                <h2 className="cf-card-title"><IconBook /> Cómo usar</h2>
+                <h2 className="cf-card-title"><IconBook /> {t("usage.title")}</h2>
                 <p className="cf-prose">
-                    Agrega el bloque <strong>SocialShare</strong> en el editor visual de cualquier página o entrada.
-                    Los botones comparten la URL y el título de la página donde se muestran — no necesitan
-                    configuración, claves ni llamadas al servidor.
+                    {t("usage.intro1")}<strong>SocialShare</strong>{t("usage.intro2")}
                 </p>
                 <div className="cf-steps">
                     <div className={stepCls}>
                         <span className={stepNumCls}>1</span>
-                        <p>Abre el editor visual de la página o entrada donde quieras los botones.</p>
+                        <p>{t("usage.step1")}</p>
                     </div>
                     <div className={stepCls}>
                         <span className={stepNumCls}>2</span>
-                        <p>Arrastra el bloque <strong>SocialShare</strong> (categoría "Social") al contenido.</p>
+                        <p>{t("usage.step2a")}<strong>SocialShare</strong>{t("usage.step2b")}</p>
                     </div>
                     <div className={stepCls}>
                         <span className={stepNumCls}>3</span>
                         <p>
-                            Elige qué redes mostrar y ajusta el título, el tamaño (pequeño / mediano / grande),
-                            la forma (círculo / redondeado / cuadrado), las etiquetas y la alineación.
+                            {t("usage.step3")}
                         </p>
                     </div>
                 </div>
                 <p className="cf-note">
-                    "Copiar enlace" usa el portapapeles del navegador y confirma con "¡Copiado!" durante 2 segundos.
-                    "Email" abre el cliente de correo del visitante.
+                    {t("usage.note")}
                 </p>
             </div>
 
             {/* Supported networks */}
             <div className="cf-card-item">
-                <h2 className="cf-card-title"><IconGlobe /> Redes soportadas</h2>
+                <h2 className="cf-card-title"><IconGlobe /> {t("networks.title")}</h2>
                 <div className="cf-net-grid">
                     {NETWORKS.map((n) => (
                         <div key={n.key} className="cf-net-tile">
                             <PreviewButton netKey={n.key} color={n.color} px={40} radius="50%" />
                             <div style={{ minWidth: 0 }}>
-                                <p className="cf-net-name">{n.name}</p>
-                                <p className="cf-net-desc">{n.desc}</p>
+                                <p className="cf-net-name">{n.nameKey ? t(n.nameKey) : n.name}</p>
+                                <p className="cf-net-desc">{t(n.descKey)}</p>
                             </div>
                         </div>
                     ))}
@@ -165,17 +163,16 @@ export default function SocialShareAdminPage() {
 
             {/* Visual preview */}
             <div className="cf-card-item">
-                <h2 className="cf-card-title" style={{ marginBottom: "0.35rem" }}><IconEye /> Vista previa</h2>
+                <h2 className="cf-card-title" style={{ marginBottom: "0.35rem" }}><IconEye /> {t("preview.title")}</h2>
                 <p className="cf-help" style={{ margin: "0 0 1.35rem" }}>
-                    Muestra estática de los tres tamaños y las tres formas — los botones reales se agregan con el
-                    bloque en el editor visual.
+                    {t("preview.help")}
                 </p>
 
                 <div>
                     {SIZES.map((s) => (
-                        <div key={s.label} className="cf-preview-group">
+                        <div key={s.labelKey} className="cf-preview-group">
                             <p className="cf-micro">
-                                {s.label} ({s.px} px)
+                                {t(s.labelKey)} ({s.px} px)
                             </p>
                             <div className="cf-preview-row">
                                 {NETWORKS.map((n) => (
@@ -186,16 +183,16 @@ export default function SocialShareAdminPage() {
                     ))}
 
                     <div className="cf-preview-group cf-divider">
-                        <p className="cf-micro">Formas</p>
+                        <p className="cf-micro">{t("preview.shapes")}</p>
                         <div className="cf-preview-row" style={{ gap: "1.5rem" }}>
                             {SHAPES.map((sh) => (
-                                <div key={sh.label} className="cf-shape-col">
+                                <div key={sh.labelKey} className="cf-shape-col">
                                     <div className="cf-preview-row">
                                         {NETWORKS.slice(0, 3).map((n) => (
                                             <PreviewButton key={n.key} netKey={n.key} color={n.color} px={40} radius={sh.radius} />
                                         ))}
                                     </div>
-                                    <p className="cf-shape-caption">{sh.label}</p>
+                                    <p className="cf-shape-caption">{t(sh.labelKey)}</p>
                                 </div>
                             ))}
                         </div>

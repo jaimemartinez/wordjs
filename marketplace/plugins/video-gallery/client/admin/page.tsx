@@ -6,6 +6,7 @@ import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader } from "../../../../../frontend/src/components/ui/PageHeader";
 import { Card } from "../../../../../frontend/src/components/ui/Card";
+import { useT } from "./i18n";
 
 interface Video {
     id?: number | string; // Updated to support string/legacy IDs
@@ -27,6 +28,7 @@ interface Gallery {
 
 
 export default function VideosAdminPage() {
+    const { t } = useT();
     // --- STATE ---
     const [view, setView] = useState<'list' | 'detail'>('list');
     const [galleries, setGalleries] = useState<Gallery[]>([]);
@@ -72,17 +74,17 @@ export default function VideosAdminPage() {
             setNewGalleryName("");
             setNewGalleryDesc("");
         } catch (err) {
-            await alert("Failed to create gallery");
+            await alert(t("create.error"));
         }
     };
 
     const deleteGallery = async (id: string) => {
-        if (!await confirm("Delete this gallery? All videos in it will be lost.", "Delete Gallery", true)) return;
+        if (!await confirm(t("gallery.confirmDelete"), t("gallery.confirmDeleteTitle"), true)) return;
         try {
             await apiDelete(`/plugin/video-gallery/galleries/${id}`);
             loadGalleries();
         } catch (err) {
-            await alert("Failed to delete gallery");
+            await alert(t("gallery.deleteError"));
         }
     };
 
@@ -122,14 +124,14 @@ export default function VideosAdminPage() {
             setEditingVideo(null);
         } catch (err) {
             console.error("Save error:", err);
-            await alert("Failed to save video");
+            await alert(t("video.saveError"));
         } finally {
             setSaving(false);
         }
     };
 
     const handleDeleteVideo = async (videoId: number | string) => {
-        if (!selectedGallery || !await confirm("¿Eliminar este video?", "Eliminar Video", true)) return;
+        if (!selectedGallery || !await confirm(t("video.confirmDelete"), t("video.confirmDeleteTitle"), true)) return;
 
         try {
             await apiDelete(`/plugin/video-gallery/galleries/${selectedGallery.id}/videos/${videoId}`);
@@ -157,7 +159,7 @@ export default function VideosAdminPage() {
     const newVideo = (): Video => ({
         title: "",
         youtube_url: "",
-        button_text: "VER EN YOUTUBE",
+        button_text: t("video.defaultButton"),
         description: "",
         sort_order: videos.length,
     });
@@ -168,8 +170,8 @@ export default function VideosAdminPage() {
         return (
             <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
                 <PageHeader
-                    title="Galerías de Video"
-                    subtitle="Administra tus colecciones de videos"
+                    title={t("list.title")}
+                    subtitle={t("list.subtitle")}
                     icon="fa-film"
                 />
 
@@ -177,29 +179,29 @@ export default function VideosAdminPage() {
                 {isCreatingGallery && (
                     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                         <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-                            <h3 className="text-xl font-bold mb-4">Nueva Galería</h3>
+                            <h3 className="text-xl font-bold mb-4">{t("list.newGallery")}</h3>
                             <input
                                 className="w-full border p-2 rounded mb-3"
-                                placeholder="Nombre de la galería"
+                                placeholder={t("create.namePlaceholder")}
                                 value={newGalleryName}
                                 onChange={e => setNewGalleryName(e.target.value)}
                             />
                             <textarea
                                 className="w-full border p-2 rounded mb-4"
-                                placeholder="Descripción (opcional)"
+                                placeholder={t("create.descPlaceholder")}
                                 value={newGalleryDesc}
                                 onChange={e => setNewGalleryDesc(e.target.value)}
                             />
                             <div className="flex justify-end gap-2">
-                                <button onClick={() => setIsCreatingGallery(false)} className="px-4 py-2 text-gray-600">Cancelar</button>
-                                <button onClick={handleCreateGallery} disabled={!newGalleryName} className="px-4 py-2 bg-blue-600 text-white rounded">Crear</button>
+                                <button onClick={() => setIsCreatingGallery(false)} className="px-4 py-2 text-gray-600">{t("common.cancel")}</button>
+                                <button onClick={handleCreateGallery} disabled={!newGalleryName} className="px-4 py-2 bg-blue-600 text-white rounded">{t("create.submit")}</button>
                             </div>
                         </div>
                     </div>
                 )}
 
                 {loading ? (
-                    <div className="text-center py-12 text-gray-500">Cargando galerías...</div>
+                    <div className="text-center py-12 text-gray-500">{t("list.loading")}</div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {/* Add New Card */}
@@ -211,7 +213,7 @@ export default function VideosAdminPage() {
                             <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center mb-4 text-2xl group-hover:scale-110 transition-transform">
                                 <i className="fa-solid fa-plus"></i>
                             </div>
-                            <span className="font-bold text-lg">Nueva Galería</span>
+                            <span className="font-bold text-lg">{t("list.newGallery")}</span>
                         </div>
 
                         {galleries.map(g => (
@@ -229,23 +231,23 @@ export default function VideosAdminPage() {
                                         </div>
                                         <div>
                                             <h3 className="font-bold text-lg text-gray-800 group-hover:text-blue-600 transition-colors line-clamp-1">{g.name}</h3>
-                                            <p className="text-xs text-gray-500">{g.videoCount} videos</p>
+                                            <p className="text-xs text-gray-500">{t("list.videoCount", { n: g.videoCount })}</p>
                                         </div>
                                     </div>
-                                    <p className="text-sm text-gray-500 line-clamp-2 mb-4">{g.description || "Sin descripción"}</p>
+                                    <p className="text-sm text-gray-500 line-clamp-2 mb-4">{g.description || t("list.noDescription")}</p>
                                 </div>
 
                                 <button
                                     onClick={(e) => { e.stopPropagation(); deleteGallery(g.id); }}
                                     className="absolute top-4 right-4 text-gray-300 hover:text-red-500 transition-colors"
-                                    title="Eliminar galería"
+                                    title={t("list.deleteGallery")}
                                 >
                                     <i className="fa-solid fa-trash"></i>
                                 </button>
 
                                 <div className="mt-auto pt-4 border-t border-gray-100 flex justify-between items-center text-sm">
-                                    <span className="text-gray-400 text-xs font-mono truncate">ID: {g.id}</span>
-                                    <span className="text-blue-600 font-medium group-hover:translate-x-1 transition-transform">Gestionar &rarr;</span>
+                                    <span className="text-gray-400 text-xs font-mono truncate">{t("list.id", { id: g.id })}</span>
+                                    <span className="text-blue-600 font-medium group-hover:translate-x-1 transition-transform">{t("list.manage")} &rarr;</span>
                                 </div>
                             </Card>
                         ))}
@@ -260,19 +262,19 @@ export default function VideosAdminPage() {
 
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
-                title={selectedGallery?.name || "Galería Detail"}
-                subtitle="Gestionando videos de esta galería"
+                title={selectedGallery?.name || t("detail.fallbackTitle")}
+                subtitle={t("detail.subtitle")}
                 icon="fa-photo-film"
                 backButton={{
                     onClick: () => { setView('list'); setSelectedGallery(null); },
-                    label: "Volver a Galerías"
+                    label: t("detail.back")
                 }}
                 actions={
                     <button
                         onClick={() => setEditingVideo(newVideo())}
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20"
                     >
-                        + Agregar Video
+                        {t("detail.addVideoPlus")}
                     </button>
                 }
             />
@@ -281,12 +283,12 @@ export default function VideosAdminPage() {
             {videos.length === 0 ? (
                 <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
                     <div className="text-gray-400 text-6xl mb-4"><i className="fa-solid fa-film"></i></div>
-                    <p className="text-gray-500 mb-4">Esta galería está vacía.</p>
+                    <p className="text-gray-500 mb-4">{t("detail.empty")}</p>
                     <button
                         onClick={() => setEditingVideo(newVideo())}
                         className="px-6 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 font-medium"
                     >
-                        Agregar Video
+                        {t("detail.addVideo")}
                     </button>
                 </div>
             ) : (
@@ -315,7 +317,7 @@ export default function VideosAdminPage() {
                                     });
                                 } catch (err) {
                                     console.error("Failed to reorder:", err);
-                                    await alert("Failed to save new order");
+                                    await alert(t("detail.reorderError"));
                                 }
                             }}
                         >
@@ -348,14 +350,14 @@ export default function VideosAdminPage() {
                                         <button
                                             onClick={() => setEditingVideo(video)}
                                             className="w-12 h-12 bg-white text-blue-600 rounded-full shadow-lg hover:bg-blue-50 hover:scale-110 transition-all flex items-center justify-center"
-                                            title="Editar"
+                                            title={t("detail.edit")}
                                         >
                                             <i className="fa-solid fa-pencil text-lg"></i>
                                         </button>
                                         <button
                                             onClick={() => handleDeleteVideo(video.id!)}
                                             className="w-12 h-12 bg-white text-red-500 rounded-full shadow-lg hover:bg-red-50 hover:scale-110 transition-all flex items-center justify-center"
-                                            title="Eliminar"
+                                            title={t("detail.delete")}
                                         >
                                             <i className="fa-solid fa-trash-can text-lg"></i>
                                         </button>
@@ -369,7 +371,7 @@ export default function VideosAdminPage() {
 
                                     <div className="flex items-center justify-between mt-4">
                                         <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                                            {video.button_text || 'BOTÓN'}
+                                            {video.button_text || t("detail.buttonFallback")}
                                         </span>
                                         <a
                                             href={video.youtube_url}
@@ -398,7 +400,7 @@ export default function VideosAdminPage() {
                                 <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg">
                                     <i className={`fa-solid ${editingVideo.id ? 'fa-pen-to-square' : 'fa-plus'}`}></i>
                                 </span>
-                                {editingVideo.id ? "Editar Video" : "Nuevo Video"}
+                                {editingVideo.id ? t("modal.edit") : t("modal.new")}
                             </h2>
                             <button
                                 onClick={() => setEditingVideo(null)}
@@ -410,18 +412,18 @@ export default function VideosAdminPage() {
 
                         <div className="p-8 overflow-y-auto max-h-[75vh] space-y-6 custom-scrollbar">
                             <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Título del Video</label>
+                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.title")}</label>
                                 <input
                                     type="text"
                                     value={editingVideo.title}
                                     onChange={(e) => setEditingVideo({ ...editingVideo, title: e.target.value })}
                                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium text-gray-800"
-                                    placeholder="e.g. Conferencia Anual 2024"
+                                    placeholder={t("modal.titlePlaceholder")}
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">YouTube URL</label>
+                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.url")}</label>
                                 <div className="relative">
                                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                         <i className="fa-brands fa-youtube text-red-500"></i>
@@ -439,7 +441,7 @@ export default function VideosAdminPage() {
                                     <div className="mt-3 relative rounded-xl overflow-hidden aspect-video shadow-md border border-gray-100 group">
                                         <img
                                             src={extractThumbnailPreview(editingVideo.youtube_url)!}
-                                            alt="Preview"
+                                            alt={t("modal.preview")}
                                             className="w-full h-full object-cover"
                                         />
                                         <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -451,17 +453,17 @@ export default function VideosAdminPage() {
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Texto del Botón</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.buttonText")}</label>
                                     <input
                                         type="text"
                                         value={editingVideo.button_text}
                                         onChange={(e) => setEditingVideo({ ...editingVideo, button_text: e.target.value })}
                                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                        placeholder="VER VIDEO"
+                                        placeholder={t("modal.buttonPlaceholder")}
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Orden Manual</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.order")}</label>
                                     <input
                                         type="number"
                                         value={editingVideo.sort_order}
@@ -472,12 +474,12 @@ export default function VideosAdminPage() {
                             </div>
 
                             <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Descripción</label>
+                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("modal.description")}</label>
                                 <textarea
                                     value={editingVideo.description || ""}
                                     onChange={(e) => setEditingVideo({ ...editingVideo, description: e.target.value })}
                                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none min-h-[100px] resize-y"
-                                    placeholder="Breve descripción del contenido..."
+                                    placeholder={t("modal.descPlaceholder")}
                                 />
                             </div>
                         </div>
@@ -487,7 +489,7 @@ export default function VideosAdminPage() {
                                 onClick={() => setEditingVideo(null)}
                                 className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"
                             >
-                                Cancelar
+                                {t("common.cancel")}
                             </button>
                             <button
                                 onClick={handleSaveVideo}
@@ -495,9 +497,9 @@ export default function VideosAdminPage() {
                                 className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold hover:shadow-lg hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-70 disabled:shadow-none flex items-center gap-2"
                             >
                                 {saving ? (
-                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> Guardando...</>
+                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> {t("modal.saving")}</>
                                 ) : (
-                                    <><i className="fa-solid fa-floppy-disk"></i> Guardar Video</>
+                                    <><i className="fa-solid fa-floppy-disk"></i> {t("modal.save")}</>
                                 )}
                             </button>
                         </div>

@@ -15,7 +15,7 @@
 
 exports.metadata = {
     name: 'FAQ',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'FAQ with categories + Verso accordion block with FAQPage JSON-LD rich-results markup',
     author: 'WordJS',
 };

@@ -15,12 +15,14 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
+// Status label keys resolve through t() at render time (see i18n.ts).
 const STATUS_META = {
-    active: { label: "Activa", cls: "is-active" },
-    ended: { label: "Finalizada", cls: "is-ended" },
-    cancelled: { label: "Cancelada", cls: "is-cancelled" },
-    draft: { label: "Borrador", cls: "is-draft" },
+    active: { labelKey: "status.active", cls: "is-active" },
+    ended: { labelKey: "status.ended", cls: "is-ended" },
+    cancelled: { labelKey: "status.cancelled", cls: "is-cancelled" },
+    draft: { labelKey: "status.draft", cls: "is-draft" },
 };
 
 const EMPTY_FORM = {
@@ -38,10 +40,10 @@ const EMPTY_FORM = {
 
 // ---- helpers (module level) ----------------------------------------------------------------------
 
-function fmtMoney(cents, symbol) {
+function fmtMoney(cents, symbol, locale) {
     const n = (Number(cents) || 0) / 100;
     const hasDec = Math.round(n * 100) % 100 !== 0;
-    return (symbol || "$") + n.toLocaleString("es", { minimumFractionDigits: hasDec ? 2 : 0, maximumFractionDigits: 2 });
+    return (symbol || "$") + n.toLocaleString(locale || "es", { minimumFractionDigits: hasDec ? 2 : 0, maximumFractionDigits: 2 });
 }
 
 // Units string ("12.50" / "12,50") -> integer cents, or null when invalid.
@@ -67,10 +69,10 @@ function localInputToUtc(v) {
     return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
-function fmtRemaining(endsAtMs, nowMs) {
+function fmtRemaining(endsAtMs, nowMs, endedLabel) {
     if (!endsAtMs) return "—";
     const left = endsAtMs - nowMs;
-    if (left <= 0) return "Finalizada";
+    if (left <= 0) return endedLabel;
     const s = Math.floor(left / 1000);
     const d = Math.floor(s / 86400);
     const h = Math.floor((s % 86400) / 3600);
@@ -119,6 +121,7 @@ const IconImage = (props) => (
 );
 
 export default function AuctionsAdminPage() {
+    const { t, locale } = useT();
     const [tab, setTab] = useState("auctions");
     const [auctions, setAuctions] = useState([]);
     const [symbol, setSymbol] = useState("$");
@@ -150,7 +153,7 @@ export default function AuctionsAdminPage() {
             setSymbol(r.currencySymbol || "$");
             setSymbolDraft(r.currencySymbol || "$");
         } catch (e) {
-            setMsg(`Error al cargar subastas: ${e?.message || e}`);
+            setMsg(t("msg.loadAuctionsError", { msg: e?.message || e }));
         }
     };
 
@@ -160,7 +163,7 @@ export default function AuctionsAdminPage() {
             const r = await api(`/plugin/auctions/bids?auction_id=${encodeURIComponent(auctionId)}`);
             setBids(r.bids || []);
         } catch (e) {
-            setMsg(`Error al cargar pujas: ${e?.message || e}`);
+            setMsg(t("msg.loadBidsError", { msg: e?.message || e }));
         }
     };
 
@@ -170,7 +173,7 @@ export default function AuctionsAdminPage() {
             setReport(r.report || []);
             setSymbol(r.currencySymbol || "$");
         } catch (e) {
-            setMsg(`Error al cargar el reporte: ${e?.message || e}`);
+            setMsg(t("msg.loadReportError", { msg: e?.message || e }));
         }
     };
 
@@ -184,8 +187,8 @@ export default function AuctionsAdminPage() {
 
     useEffect(() => { loadAuctions(); loadSettings(); }, []);
     useEffect(() => {
-        const t = setInterval(() => setNowMs(Date.now()), 1000);
-        return () => clearInterval(t);
+        const timer = setInterval(() => setNowMs(Date.now()), 1000);
+        return () => clearInterval(timer);
     }, []);
     useEffect(() => {
         if (tab === "bids") loadBids(bidsAuction);
@@ -216,9 +219,9 @@ export default function AuctionsAdminPage() {
         setFormErr("");
         const startCents = toCents(form.start_price);
         const incCents = toCents(form.min_increment);
-        if (startCents === null) return setFormErr("Precio inicial inválido.");
-        if (incCents === null || incCents <= 0) return setFormErr("El incremento mínimo debe ser mayor que 0.");
-        if (!form.ends_at) return setFormErr("La fecha de fin es obligatoria.");
+        if (startCents === null) return setFormErr(t("form.invalidStartPrice"));
+        if (incCents === null || incCents <= 0) return setFormErr(t("form.invalidIncrement"));
+        if (!form.ends_at) return setFormErr(t("form.endsRequired"));
         const body = {
             title: form.title,
             description: form.description,
@@ -240,7 +243,7 @@ export default function AuctionsAdminPage() {
             if (modal.mode === "create") await apiPost("/plugin/auctions/auctions", body);
             else await apiPut(`/plugin/auctions/auctions/${modal.id}`, body);
             setModal(null);
-            setMsg(modal.mode === "create" ? "Subasta creada." : "Subasta actualizada.");
+            setMsg(modal.mode === "create" ? t("msg.created") : t("msg.updated"));
             loadAuctions();
         } catch (err) {
             setFormErr(err?.message || String(err));
@@ -250,24 +253,24 @@ export default function AuctionsAdminPage() {
     };
 
     const endNow = async (a) => {
-        if (!window.confirm(`¿Finalizar ahora la subasta "${a.title}"? El líder actual será el ganador.`)) return;
-        try { await apiPost(`/plugin/auctions/auctions/${a.id}/end-now`, {}); setMsg("Subasta finalizada."); loadAuctions(); }
-        catch (e) { setMsg(`Error: ${e?.message || e}`); }
+        if (!window.confirm(t("confirm.endNow", { title: a.title }))) return;
+        try { await apiPost(`/plugin/auctions/auctions/${a.id}/end-now`, {}); setMsg(t("msg.ended")); loadAuctions(); }
+        catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
     const cancelAuction = async (a) => {
-        if (!window.confirm(`¿Cancelar la subasta "${a.title}"? No habrá ganador.`)) return;
-        try { await apiPost(`/plugin/auctions/auctions/${a.id}/cancel`, {}); setMsg("Subasta cancelada."); loadAuctions(); }
-        catch (e) { setMsg(`Error: ${e?.message || e}`); }
+        if (!window.confirm(t("confirm.cancel", { title: a.title }))) return;
+        try { await apiPost(`/plugin/auctions/auctions/${a.id}/cancel`, {}); setMsg(t("msg.cancelled")); loadAuctions(); }
+        catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
     const deleteAuction = async (a) => {
-        if (!window.confirm(`¿Eliminar la subasta "${a.title}" y TODAS sus pujas? Esta acción no se puede deshacer.`)) return;
-        try { await apiDelete(`/plugin/auctions/auctions/${a.id}`); setMsg("Subasta eliminada."); loadAuctions(); }
-        catch (e) { setMsg(`Error: ${e?.message || e}`); }
+        if (!window.confirm(t("confirm.delete", { title: a.title }))) return;
+        try { await apiDelete(`/plugin/auctions/auctions/${a.id}`); setMsg(t("msg.deleted")); loadAuctions(); }
+        catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
     const deleteBid = async (b) => {
-        if (!window.confirm(`¿Eliminar la puja de ${b.bidder_name} por ${fmtMoney(b.amount_cents, symbol)}? El precio actual se recalcula automáticamente.`)) return;
-        try { await apiDelete(`/plugin/auctions/bids/${b.id}`); setMsg("Puja eliminada."); loadBids(bidsAuction); loadAuctions(); }
-        catch (e) { setMsg(`Error: ${e?.message || e}`); }
+        if (!window.confirm(t("confirm.deleteBid", { name: b.bidder_name, amount: fmtMoney(b.amount_cents, symbol, locale) }))) return;
+        try { await apiDelete(`/plugin/auctions/bids/${b.id}`); setMsg(t("msg.bidDeleted")); loadBids(bidsAuction); loadAuctions(); }
+        catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
     const saveSymbol = async () => {
         try {
@@ -279,8 +282,8 @@ export default function AuctionsAdminPage() {
             setSymbol(r.currencySymbol || "$");
             if (r.bidVerification) setBidVerification(r.bidVerification);
             if (r.maxBidJumpPercent !== undefined) setJumpPercent(String(r.maxBidJumpPercent));
-            setMsg("Ajustes guardados.");
-        } catch (e) { setMsg(`Error: ${e?.message || e}`); }
+            setMsg(t("settings.saved"));
+        } catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
 
     const tabBtn = (id, label) => (
@@ -302,8 +305,8 @@ export default function AuctionsAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconGavel /></div>
                 <div>
-                    <h1 className="cf-title">Subastas</h1>
-                    <p className="cf-subtitle">Pujas públicas · incremento mínimo · extensión anti-sniping · ganadores</p>
+                    <h1 className="cf-title">{t("app.title")}</h1>
+                    <p className="cf-subtitle">{t("app.subtitle")}</p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
@@ -311,12 +314,12 @@ export default function AuctionsAdminPage() {
             {/* tabs + currency symbol */}
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.9rem", marginBottom: "1.5rem" }}>
                 <div className="cf-tabs" role="tablist" style={{ marginBottom: 0 }}>
-                    {tabBtn("auctions", "Subastas")}
-                    {tabBtn("bids", "Pujas")}
-                    {tabBtn("report", "Reporte")}
+                    {tabBtn("auctions", t("tab.auctions"))}
+                    {tabBtn("bids", t("tab.bids"))}
+                    {tabBtn("report", t("tab.report"))}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
-                    <label className="cf-label" htmlFor="au-symbol" style={{ marginBottom: 0 }}>Moneda</label>
+                    <label className="cf-label" htmlFor="au-symbol" style={{ marginBottom: 0 }}>{t("settings.currency")}</label>
                     <input
                         id="au-symbol"
                         type="text"
@@ -325,20 +328,20 @@ export default function AuctionsAdminPage() {
                         className="cf-input cf-symbol-input"
                         maxLength={8}
                     />
-                    <label className="cf-label" htmlFor="au-verify" style={{ marginBottom: 0 }}>Quién puja</label>
+                    <label className="cf-label" htmlFor="au-verify" style={{ marginBottom: 0 }}>{t("settings.whoBids")}</label>
                     <select id="au-verify" className="cf-input" style={{ width: "auto" }} value={bidVerification} onChange={(e) => setBidVerification(e.target.value)}>
-                        <option value="email">Correo confirmado con código</option>
-                        <option value="login">Solo usuarios con sesión</option>
-                        <option value="none">Cualquiera (sin verificar)</option>
+                        <option value="email">{t("settings.verifyEmail")}</option>
+                        <option value="login">{t("settings.verifyLogin")}</option>
+                        <option value="none">{t("settings.verifyNone")}</option>
                     </select>
-                    <label className="cf-label" htmlFor="au-jump" style={{ marginBottom: 0 }} title="Cuánto puede subir el precio una sola puja (0 = sin límite)">Salto máx. %</label>
+                    <label className="cf-label" htmlFor="au-jump" style={{ marginBottom: 0 }} title={t("settings.jumpHelp")}>{t("settings.jump")}</label>
                     <input id="au-jump" type="number" min={0} max={10000} className="cf-input cf-symbol-input" value={jumpPercent} onChange={(e) => setJumpPercent(e.target.value)} />
-                    <button type="button" onClick={saveSymbol} className="cf-btn-ghost">Guardar</button>
+                    <button type="button" onClick={saveSymbol} className="cf-btn-ghost">{t("common.save")}</button>
                 </div>
             </div>
 
             {msg && (
-                <div role={/Error|falló/i.test(msg) ? "alert" : "status"} className={`cf-flash ${/Error|falló/i.test(msg) ? "is-error" : "is-ok"}`}>
+                <div role={/Error|Erro|falló/i.test(msg) ? "alert" : "status"} className={`cf-flash ${/Error|Erro|falló/i.test(msg) ? "is-error" : "is-ok"}`}>
                     {msg}
                 </div>
             )}
@@ -347,12 +350,12 @@ export default function AuctionsAdminPage() {
             {tab === "auctions" && (
                 <div>
                     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                        <button type="button" onClick={openCreate} className="cf-btn"><IconPlus /> Nueva subasta</button>
+                        <button type="button" onClick={openCreate} className="cf-btn"><IconPlus /> {t("auctions.new")}</button>
                     </div>
                     {auctions.length === 0 ? (
                         <div className="cf-empty">
                             <IconGavel />
-                            <span>Sin subastas todavía — crea la primera con "Nueva subasta".</span>
+                            <span>{t("auctions.empty")}</span>
                         </div>
                     ) : (
                         <div className="cf-auction-grid">
@@ -365,31 +368,31 @@ export default function AuctionsAdminPage() {
                                                 // eslint-disable-next-line @next/next/no-img-element
                                                 <img src={a.image_url} alt={a.title} className="cf-thumb" />
                                             ) : (
-                                                <div className="cf-thumb-empty"><IconImage /><span>Sin foto</span></div>
+                                                <div className="cf-thumb-empty"><IconImage /><span>{t("auctions.noPhoto")}</span></div>
                                             )}
                                             <div style={{ minWidth: 0, flex: 1 }}>
                                                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.5rem" }}>
                                                     <h3 className="cf-auction-title">{a.title}</h3>
-                                                    <span className={`cf-status ${meta.cls}`}>{meta.label}</span>
+                                                    <span className={`cf-status ${meta.cls}`}>{t(meta.labelKey)}</span>
                                                 </div>
-                                                <p className="cf-price">{fmtMoney(a.currentPriceCents, symbol)}</p>
+                                                <p className="cf-price">{fmtMoney(a.currentPriceCents, symbol, locale)}</p>
                                                 <p className="cf-meta cf-countdown">
-                                                    {a.bidCount} puja{a.bidCount === 1 ? "" : "s"}
-                                                    {a.status === "active" ? ` · ${fmtRemaining(a.endsAtMs, nowMs)}` : ""}
-                                                    {!a.is_published ? " · no publicada" : ""}
+                                                    {t(a.bidCount === 1 ? "auctions.bidOne" : "auctions.bidMany", { n: a.bidCount })}
+                                                    {a.status === "active" ? ` · ${fmtRemaining(a.endsAtMs, nowMs, t("status.ended"))}` : ""}
+                                                    {!a.is_published ? t("auctions.unpublished") : ""}
                                                 </p>
                                             </div>
                                         </div>
                                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "1rem" }}>
-                                            <button type="button" onClick={() => openEdit(a)} className="cf-btn-ghost"><IconPen /> Editar</button>
-                                            <button type="button" onClick={() => { setBidsAuction(String(a.id)); setTab("bids"); }} className="cf-btn-ghost">Pujas</button>
+                                            <button type="button" onClick={() => openEdit(a)} className="cf-btn-ghost"><IconPen /> {t("common.edit")}</button>
+                                            <button type="button" onClick={() => { setBidsAuction(String(a.id)); setTab("bids"); }} className="cf-btn-ghost">{t("auctions.bids")}</button>
                                             {a.status === "active" && (
-                                                <button type="button" onClick={() => endNow(a)} className="cf-btn-ghost">Finalizar ahora</button>
+                                                <button type="button" onClick={() => endNow(a)} className="cf-btn-ghost">{t("auctions.endNow")}</button>
                                             )}
                                             {(a.status === "active" || a.status === "draft") && (
-                                                <button type="button" onClick={() => cancelAuction(a)} className="cf-btn-ghost">Cancelar</button>
+                                                <button type="button" onClick={() => cancelAuction(a)} className="cf-btn-ghost">{t("common.cancel")}</button>
                                             )}
-                                            <button type="button" onClick={() => deleteAuction(a)} className="cf-btn-danger">Eliminar</button>
+                                            <button type="button" onClick={() => deleteAuction(a)} className="cf-btn-danger">{t("common.delete")}</button>
                                         </div>
                                     </div>
                                 );
@@ -397,8 +400,7 @@ export default function AuctionsAdminPage() {
                         </div>
                     )}
                     <p className="cf-help" style={{ marginTop: "1.5rem" }}>
-                        En el editor visual, agrega el bloque <strong>Auctions</strong> — muestra la cuadrícula de subastas
-                        activas (o una sola, indicando su slug) con cuenta regresiva y formulario de puja.
+                        {t("auctions.usage1")}<strong>Auctions</strong>{t("auctions.usage2")}
                     </p>
                 </div>
             )}
@@ -407,20 +409,20 @@ export default function AuctionsAdminPage() {
             {tab === "bids" && (
                 <div className="cf-card-item">
                     <div style={{ marginBottom: "1.15rem" }}>
-                        <label className="cf-label" htmlFor="au-bids-auction">Subasta</label>
+                        <label className="cf-label" htmlFor="au-bids-auction">{t("bids.auction")}</label>
                         <select id="au-bids-auction" value={bidsAuction} onChange={(e) => setBidsAuction(e.target.value)} className="cf-select">
-                            <option value="">— Selecciona una subasta —</option>
+                            <option value="">{t("bids.select")}</option>
                             {auctions.map((a) => (
-                                <option key={a.id} value={String(a.id)}>{a.title} ({STATUS_META[a.status]?.label || a.status})</option>
+                                <option key={a.id} value={String(a.id)}>{a.title} ({STATUS_META[a.status] ? t(STATUS_META[a.status].labelKey) : a.status})</option>
                             ))}
                         </select>
                     </div>
                     {!bidsAuction ? (
-                        <p className="cf-help">Selecciona una subasta para ver sus pujas (incluye correos — solo visible aquí).</p>
+                        <p className="cf-help">{t("bids.selectHelp")}</p>
                     ) : bids.length === 0 ? (
                         <div className="cf-empty">
                             <IconTrophy />
-                            <span>Esta subasta no tiene pujas todavía.</span>
+                            <span>{t("bids.empty")}</span>
                         </div>
                     ) : (
                         <div className="cf-table-wrap">
@@ -428,23 +430,23 @@ export default function AuctionsAdminPage() {
                                 <thead>
                                     <tr>
                                         <th style={{ width: "2rem" }}>#</th>
-                                        <th>Nombre</th>
-                                        <th>Correo</th>
-                                        <th>Monto</th>
-                                        <th>Fecha</th>
+                                        <th>{t("bids.name")}</th>
+                                        <th>{t("bids.email")}</th>
+                                        <th>{t("bids.amount")}</th>
+                                        <th>{t("bids.date")}</th>
                                         <th style={{ width: "5rem" }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {bids.map((b, i) => (
                                         <tr key={b.id} className={i === 0 ? "is-top" : ""}>
-                                            <td>{i === 0 ? <span className="cf-trophy" role="img" aria-label="Puja líder" title="Puja líder"><IconTrophy /></span> : i + 1}</td>
+                                            <td>{i === 0 ? <span className="cf-trophy" role="img" aria-label={t("bids.leading")} title={t("bids.leading")}><IconTrophy /></span> : i + 1}</td>
                                             <td className="cf-cell-name">{b.bidder_name}</td>
                                             <td>{b.bidder_email}</td>
-                                            <td className="cf-cell-money">{fmtMoney(b.amount_cents, symbol)}</td>
-                                            <td className="cf-cell-date">{b.createdAtMs ? new Date(b.createdAtMs).toLocaleString() : b.created_at}</td>
+                                            <td className="cf-cell-money">{fmtMoney(b.amount_cents, symbol, locale)}</td>
+                                            <td className="cf-cell-date">{b.createdAtMs ? new Date(b.createdAtMs).toLocaleString(locale) : b.created_at}</td>
                                             <td style={{ textAlign: "right" }}>
-                                                <button type="button" onClick={() => deleteBid(b)} className="cf-btn-danger">Eliminar</button>
+                                                <button type="button" onClick={() => deleteBid(b)} className="cf-btn-danger">{t("common.delete")}</button>
                                             </td>
                                         </tr>
                                     ))}
@@ -458,23 +460,23 @@ export default function AuctionsAdminPage() {
             {/* ============================ TAB: REPORTE ============================ */}
             {tab === "report" && (
                 <div className="cf-card-item">
-                    <h2 className="cf-editor-title"><IconTrophy /> Ganadores y contacto para la entrega</h2>
+                    <h2 className="cf-editor-title"><IconTrophy /> {t("report.title")}</h2>
                     {report.length === 0 ? (
                         <div className="cf-empty">
                             <IconGavel />
-                            <span>Sin subastas todavía.</span>
+                            <span>{t("report.empty")}</span>
                         </div>
                     ) : (
                         <div className="cf-table-wrap">
                             <table className="cf-table is-plain">
                                 <thead>
                                     <tr>
-                                        <th>Subasta</th>
-                                        <th>Estado</th>
-                                        <th>Pujas</th>
-                                        <th>Precio final / actual</th>
-                                        <th>Ganador · contacto</th>
-                                        <th>Cierre</th>
+                                        <th>{t("report.auction")}</th>
+                                        <th>{t("report.status")}</th>
+                                        <th>{t("report.bids")}</th>
+                                        <th>{t("report.price")}</th>
+                                        <th>{t("report.winner")}</th>
+                                        <th>{t("report.closes")}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -483,11 +485,11 @@ export default function AuctionsAdminPage() {
                                             <td className="cf-cell-name">{r.title}</td>
                                             <td>
                                                 <span className={`cf-status ${(STATUS_META[r.status] || STATUS_META.draft).cls}`}>
-                                                    {(STATUS_META[r.status] || STATUS_META.draft).label}
+                                                    {t((STATUS_META[r.status] || STATUS_META.draft).labelKey)}
                                                 </span>
                                             </td>
                                             <td>{r.bidCount}</td>
-                                            <td className="cf-cell-money">{fmtMoney(r.finalPriceCents, symbol)}</td>
+                                            <td className="cf-cell-money">{fmtMoney(r.finalPriceCents, symbol, locale)}</td>
                                             <td>
                                                 {r.status === "ended" ? (
                                                     r.winnerName ? (
@@ -496,18 +498,18 @@ export default function AuctionsAdminPage() {
                                                             <p className="cf-winner-mail">{r.winnerEmail}</p>
                                                         </div>
                                                     ) : (
-                                                        <span className="cf-void">Sin pujas — desierta</span>
+                                                        <span className="cf-void">{t("report.void")}</span>
                                                     )
                                                 ) : r.leaderName ? (
                                                     <div>
-                                                        <p className="cf-leader-name">Líder: {r.leaderName}</p>
+                                                        <p className="cf-leader-name">{t("report.leader", { name: r.leaderName })}</p>
                                                         <p className="cf-leader-mail">{r.leaderEmail}</p>
                                                     </div>
                                                 ) : (
                                                     <span className="cf-void">—</span>
                                                 )}
                                             </td>
-                                            <td className="cf-cell-date">{r.endsAtMs ? new Date(r.endsAtMs).toLocaleString() : r.ends_at}</td>
+                                            <td className="cf-cell-date">{r.endsAtMs ? new Date(r.endsAtMs).toLocaleString(locale) : r.ends_at}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -526,63 +528,63 @@ export default function AuctionsAdminPage() {
                         className="cf-letter"
                         role="dialog"
                         aria-modal="true"
-                        aria-label={modal.mode === "create" ? "Nueva subasta" : "Editar subasta"}
+                        aria-label={modal.mode === "create" ? t("form.new") : t("form.edit")}
                     >
                         <div className="cf-letter-body">
                             <h2 className="cf-editor-title">
                                 <IconPen />
-                                {modal.mode === "create" ? "Nueva subasta" : "Editar subasta"}
+                                {modal.mode === "create" ? t("form.new") : t("form.edit")}
                             </h2>
                             <div className="cf-grid">
                                 <div className="cf-span-2">
-                                    <label className="cf-label" htmlFor="au-title">Título *</label>
+                                    <label className="cf-label" htmlFor="au-title">{t("form.title")}</label>
                                     <input id="au-title" type="text" value={form.title} onChange={(e) => setF("title", e.target.value)} className="cf-input" required maxLength={200} />
                                 </div>
                                 <div className="cf-span-2">
-                                    <label className="cf-label" htmlFor="au-desc">Descripción</label>
+                                    <label className="cf-label" htmlFor="au-desc">{t("form.description")}</label>
                                     <textarea id="au-desc" value={form.description} onChange={(e) => setF("description", e.target.value)} className="cf-input" rows={3} />
                                 </div>
                                 <div className="cf-span-2">
-                                    <label className="cf-label" htmlFor="au-image">URL de la imagen</label>
-                                    <input id="au-image" type="text" value={form.image_url} onChange={(e) => setF("image_url", e.target.value)} className="cf-input" placeholder="https://… o /uploads/…" />
+                                    <label className="cf-label" htmlFor="au-image">{t("form.imageUrl")}</label>
+                                    <input id="au-image" type="text" value={form.image_url} onChange={(e) => setF("image_url", e.target.value)} className="cf-input" placeholder={t("form.imagePlaceholder")} />
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="au-start-price">Precio inicial ({symbol}) *</label>
+                                    <label className="cf-label" htmlFor="au-start-price">{t("form.startPrice", { symbol })}</label>
                                     <input id="au-start-price" type="number" step="0.01" min="0" value={form.start_price} onChange={(e) => setF("start_price", e.target.value)} className="cf-input" required />
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="au-min-inc">Incremento mínimo ({symbol}) *</label>
+                                    <label className="cf-label" htmlFor="au-min-inc">{t("form.minIncrement", { symbol })}</label>
                                     <input id="au-min-inc" type="number" step="0.01" min="0.01" value={form.min_increment} onChange={(e) => setF("min_increment", e.target.value)} className="cf-input" required />
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="au-starts">Inicio (opcional)</label>
+                                    <label className="cf-label" htmlFor="au-starts">{t("form.startsAt")}</label>
                                     <input id="au-starts" type="datetime-local" value={form.starts_at} onChange={(e) => setF("starts_at", e.target.value)} className="cf-input" />
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="au-ends">Fin *</label>
+                                    <label className="cf-label" htmlFor="au-ends">{t("form.endsAt")}</label>
                                     <input id="au-ends" type="datetime-local" value={form.ends_at} onChange={(e) => setF("ends_at", e.target.value)} className="cf-input" required />
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="au-snipe">Anti-sniping (minutos)</label>
+                                    <label className="cf-label" htmlFor="au-snipe">{t("form.antiSnipe")}</label>
                                     <input id="au-snipe" type="number" min="0" max="120" value={form.anti_snipe_min} onChange={(e) => setF("anti_snipe_min", e.target.value)} className="cf-input" />
-                                    <p className="cf-help">Una puja en los últimos N minutos extiende el cierre N minutos.</p>
+                                    <p className="cf-help">{t("form.antiSnipeHelp")}</p>
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="au-status">Estado</label>
+                                    <label className="cf-label" htmlFor="au-status">{t("form.status")}</label>
                                     <select id="au-status" value={form.status} onChange={(e) => setF("status", e.target.value)} className="cf-select">
-                                        <option value="active">Activa</option>
-                                        <option value="draft">Borrador</option>
+                                        <option value="active">{t("status.active")}</option>
+                                        <option value="draft">{t("status.draft")}</option>
                                     </select>
                                     <label className="cf-check" htmlFor="au-published" style={{ marginTop: "0.35rem" }}>
                                         <input id="au-published" type="checkbox" checked={form.is_published} onChange={(e) => setF("is_published", e.target.checked)} />
-                                        Publicada (visible en el sitio)
+                                        {t("form.published")}
                                     </label>
                                 </div>
                             </div>
                             {formErr && <div role="alert" className="cf-flash is-error" style={{ marginTop: "1.15rem", marginBottom: 0 }}>{formErr}</div>}
                             <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}>
-                                <button type="button" onClick={() => setModal(null)} disabled={busy} className="cf-btn-ghost">Cancelar</button>
-                                <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                                <button type="button" onClick={() => setModal(null)} disabled={busy} className="cf-btn-ghost">{t("common.cancel")}</button>
+                                <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                             </div>
                         </div>
                     </form>

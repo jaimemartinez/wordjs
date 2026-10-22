@@ -12,6 +12,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import MediaPickerModal from "../../../../../frontend/src/components/MediaPickerModal";
+import { useT } from "./i18n";
 
 const B = "/plugin/online-store";
 
@@ -25,7 +26,7 @@ const btnMiniCls = "px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 roun
 const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
 
 const ORDER_STATUSES = ["new", "processing", "shipped", "completed", "cancelled"];
-const STATUS_LABELS = { new: "Nuevo", processing: "En proceso", shipped: "Enviado", completed: "Completado", cancelled: "Cancelado" };
+const STATUS_LABELS = { new: "status.new", processing: "status.processing", shipped: "status.shipped", completed: "status.completed", cancelled: "status.cancelled" };
 const STATUS_PILL = {
     new: "bg-blue-100 text-blue-700",
     processing: "bg-amber-100 text-amber-700",
@@ -34,9 +35,9 @@ const STATUS_PILL = {
     cancelled: "bg-gray-200 text-gray-500",
 };
 const PAYMENT_STATUSES = ["pending", "paid", "cancelled", "refunded"];
-const PAY_LABELS = { pending: "Pendiente", paid: "Pagado", cancelled: "Cancelado", refunded: "Reembolsado" };
+const PAY_LABELS = { pending: "pay.pending", paid: "pay.paid", cancelled: "pay.cancelled", refunded: "pay.refunded" };
 const PAY_PILL = { pending: "bg-amber-100 text-amber-700", paid: "bg-green-100 text-green-700", cancelled: "bg-gray-200 text-gray-500", refunded: "bg-rose-100 text-rose-700" };
-const SHIP_LABELS = { pickup: "Recogida en tienda", zone: "Zona", flat: "Envío estándar", "": "Envío estándar" };
+const SHIP_LABELS = { pickup: "ship.pickup", zone: "ship.zone", flat: "ship.flat", "": "ship.flat" };
 
 // Normalize a locale-typed number string: strip whitespace, treat a comma as either a thousands
 // separator ("1,234.56" -> "1234.56") or a decimal comma ("1,50" -> "1.50"). Without this, the
@@ -68,13 +69,14 @@ const bpToInput = (bp) => {
 
 // Module-level modal (never define a component inside a component).
 function Modal({ title, onClose, children, wide }) {
+    const { t } = useT();
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-gray-900/50" onClick={onClose} />
             <div className={`relative bg-white rounded-3xl shadow-2xl w-full ${wide ? "max-w-3xl" : "max-w-lg"} max-h-[90vh] overflow-y-auto p-6 sm:p-8`}>
                 <div className="flex items-center justify-between mb-6">
                     <h3 className="text-lg font-black text-gray-900 tracking-tight">{title}</h3>
-                    <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none font-bold" aria-label="Cerrar">&#215;</button>
+                    <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none font-bold" aria-label={t("common.close")}>&#215;</button>
                 </div>
                 {children}
             </div>
@@ -88,6 +90,11 @@ const EMPTY_ZONE = { id: 0, name: "", rate: "", freeOver: "", taxPercent: "", is
 const EMPTY_VARIANT = { id: 0, name: "", sku: "", price: "", stock: "", is_active: true };
 
 export default function OnlineStoreAdminPage() {
+    const { t } = useT();
+    // Label maps hold i18n keys; unknown values render as received.
+    const statusLabel = (s) => (STATUS_LABELS[s] ? t(STATUS_LABELS[s]) : s);
+    const payLabel = (s) => (PAY_LABELS[s] ? t(PAY_LABELS[s]) : s);
+    const shipLabel = (m) => (SHIP_LABELS[m] ? t(SHIP_LABELS[m]) : t("ship.fallback"));
     const [tab, setTab] = useState("orders");
     const [msg, setMsg] = useState(null); // { ok, text }
     const [busy, setBusy] = useState(false);
@@ -168,35 +175,35 @@ export default function OnlineStoreAdminPage() {
             setOrders(d.orders || []);
             setCounts(d.counts || {});
             setOrdersTotal(d.total || 0);
-        } catch (e) { flash(false, `Error al cargar pedidos: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("err.loadOrders", { msg: e?.message || e })); }
     };
 
     const loadProducts = async () => {
         try {
             const d = await api(`${B}/products`);
             setProducts(d.products || []);
-        } catch (e) { flash(false, `Error al cargar productos: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("err.loadProducts", { msg: e?.message || e })); }
     };
 
     const loadCoupons = async () => {
         try {
             const d = await api(`${B}/coupons`);
             setCoupons(d.coupons || []);
-        } catch (e) { flash(false, `Error al cargar cupones: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("err.loadCoupons", { msg: e?.message || e })); }
     };
 
     const loadZones = async () => {
         try {
             const d = await api(`${B}/shipping-zones`);
             setZones(d.zones || []);
-        } catch (e) { flash(false, `Error al cargar zonas: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("err.loadZones", { msg: e?.message || e })); }
     };
 
     const loadReport = async (days = reportDays) => {
         try {
             const d = await api(`${B}/reports?days=${days}`);
             setReport(d);
-        } catch (e) { flash(false, `Error al cargar el informe: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("err.loadReport", { msg: e?.message || e })); }
     };
 
     useEffect(() => { loadConfig(); loadOrders(); loadProducts(); loadCoupons(); loadZones(); }, []);
@@ -208,38 +215,38 @@ export default function OnlineStoreAdminPage() {
             const d = await apiPost(`${B}/orders/${id}/status`, { status });
             setDetail(d.order);
             loadOrders();
-        } catch (e) { flash(false, `Error: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("common.error", { msg: e?.message || e })); }
     };
     const applyPaymentStatus = async (id, payment_status) => {
         try {
             const d = await apiPost(`${B}/orders/${id}/payment`, { payment_status });
             setDetail(d.order);
             loadOrders();
-            if (payment_status === "paid") flash(true, "Pago marcado como recibido (se intentó enviar el recibo por correo).");
-        } catch (e) { flash(false, `Error: ${e?.message || e}`); }
+            if (payment_status === "paid") flash(true, t("msg.paidReceipt"));
+        } catch (e) { flash(false, t("common.error", { msg: e?.message || e })); }
     };
     const deleteOrder = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm("¿Eliminar este pedido definitivamente?")) return;
+        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteOrder"))) return;
         try {
             await apiDelete(`${B}/orders/${id}`);
             setDetail(null);
             loadOrders();
-            flash(true, "Pedido eliminado.");
-        } catch (e) { flash(false, `Error: ${e?.message || e}`); }
+            flash(true, t("msg.orderDeleted"));
+        } catch (e) { flash(false, t("common.error", { msg: e?.message || e })); }
     };
     const submitRefund = async (e) => {
         e.preventDefault();
         const f = refundForm;
         const cents = parseMoney(f.amount);
-        if (cents === null || cents < 1) { flash(false, "Importe de reembolso no válido."); return; }
+        if (cents === null || cents < 1) { flash(false, t("err.refundAmount")); return; }
         setBusy(true);
         try {
             const d = await apiPost(`${B}/orders/${f.order.id}/refund`, { amount_cents: cents, restock: !!f.restock });
             setRefundForm(null);
             setDetail(d.order);
             loadOrders();
-            flash(true, d.refund_id ? `Reembolso emitido en Stripe (${d.refund_id}).` : "Reembolso registrado (pago manual: devuelve el dinero por tu canal).");
-        } catch (err) { flash(false, `Error al reembolsar: ${err?.message || err}`); }
+            flash(true, d.refund_id ? t("msg.refundStripe", { id: d.refund_id }) : t("msg.refundManual"));
+        } catch (err) { flash(false, t("err.refund", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
     const exportCsv = async () => {
@@ -252,12 +259,12 @@ export default function OnlineStoreAdminPage() {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = d.filename || "pedidos.csv";
+            a.download = d.filename || t("csv.orders");
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-        } catch (e) { flash(false, `Error al exportar: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("common.exportError", { msg: e?.message || e })); }
         finally { setBusy(false); }
     };
     const exportReportCsv = async () => {
@@ -268,12 +275,12 @@ export default function OnlineStoreAdminPage() {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = d.filename || "informe.csv";
+            a.download = d.filename || t("csv.report");
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-        } catch (e) { flash(false, `Error al exportar: ${e?.message || e}`); }
+        } catch (e) { flash(false, t("common.exportError", { msg: e?.message || e })); }
         finally { setBusy(false); }
     };
 
@@ -298,11 +305,11 @@ export default function OnlineStoreAdminPage() {
         e.preventDefault();
         const f = productForm;
         const cents = parseMoney(f.price);
-        if (cents === null) { flash(false, "Precio no válido."); return; }
+        if (cents === null) { flash(false, t("err.price")); return; }
         let stock = -1;
         if (String(f.stock).trim() !== "") {
             stock = parseInt(f.stock, 10);
-            if (!Number.isInteger(stock) || stock < -1) { flash(false, "Stock no válido (usa un entero, vacío o -1 = ilimitado)."); return; }
+            if (!Number.isInteger(stock) || stock < -1) { flash(false, t("err.stock")); return; }
         }
         const variants = [];
         for (const v of f.variants) {
@@ -310,12 +317,12 @@ export default function OnlineStoreAdminPage() {
             let vPrice = -1;
             if (String(v.price).trim() !== "") {
                 vPrice = parseMoney(v.price);
-                if (vPrice === null) { flash(false, `Precio no válido en la variante "${v.name}".`); return; }
+                if (vPrice === null) { flash(false, t("err.variantPrice", { name: v.name })); return; }
             }
             let vStock = -1;
             if (String(v.stock).trim() !== "") {
                 vStock = parseInt(v.stock, 10);
-                if (!Number.isInteger(vStock) || vStock < -1) { flash(false, `Stock no válido en la variante "${v.name}".`); return; }
+                if (!Number.isInteger(vStock) || vStock < -1) { flash(false, t("err.variantStock", { name: v.name })); return; }
             }
             variants.push({ id: v.id || undefined, name: v.name, sku: v.sku, price_cents: vPrice, stock: vStock, is_active: !!v.is_active });
         }
@@ -336,17 +343,17 @@ export default function OnlineStoreAdminPage() {
             });
             setProductForm(null);
             loadProducts();
-            flash(true, "Producto guardado.");
-        } catch (err) { flash(false, `Error al guardar: ${err?.message || err}`); }
+            flash(true, t("msg.productSaved"));
+        } catch (err) { flash(false, t("common.saveError", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
     const deleteProduct = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm("¿Eliminar este producto?")) return;
+        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteProduct"))) return;
         try {
             await apiDelete(`${B}/products/${id}`);
             loadProducts();
-            flash(true, "Producto eliminado.");
-        } catch (e) { flash(false, `Error: ${e?.message || e}`); }
+            flash(true, t("msg.productDeleted"));
+        } catch (e) { flash(false, t("common.error", { msg: e?.message || e })); }
     };
     const setVariantField = (idx, field, value) => {
         const next = productForm.variants.slice();
@@ -373,17 +380,17 @@ export default function OnlineStoreAdminPage() {
         let value;
         if (f.type === "percent") {
             value = parseInt(f.value, 10);
-            if (!Number.isInteger(value) || value < 1 || value > 100) { flash(false, "El porcentaje debe ser un entero entre 1 y 100."); return; }
+            if (!Number.isInteger(value) || value < 1 || value > 100) { flash(false, t("err.couponPercent")); return; }
         } else {
             value = parseMoney(f.value);
-            if (value === null || value < 1) { flash(false, "El monto del descuento no es válido."); return; }
+            if (value === null || value < 1) { flash(false, t("err.couponAmount")); return; }
         }
         const minTotal = String(f.minTotal).trim() === "" ? 0 : parseMoney(f.minTotal);
-        if (minTotal === null) { flash(false, "La compra mínima no es válida."); return; }
+        if (minTotal === null) { flash(false, t("err.couponMin")); return; }
         let maxUses = -1;
         if (String(f.maxUses).trim() !== "") {
             maxUses = parseInt(f.maxUses, 10);
-            if (!Number.isInteger(maxUses) || maxUses < -1) { flash(false, "Usos máximos no válidos (vacío o -1 = ilimitado)."); return; }
+            if (!Number.isInteger(maxUses) || maxUses < -1) { flash(false, t("err.couponMaxUses")); return; }
         }
         setBusy(true);
         try {
@@ -398,17 +405,17 @@ export default function OnlineStoreAdminPage() {
             });
             setCouponForm(null);
             loadCoupons();
-            flash(true, "Cupón guardado.");
-        } catch (err) { flash(false, `Error al guardar: ${err?.message || err}`); }
+            flash(true, t("msg.couponSaved"));
+        } catch (err) { flash(false, t("common.saveError", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
     const deleteCoupon = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm("¿Eliminar este cupón?")) return;
+        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteCoupon"))) return;
         try {
             await apiDelete(`${B}/coupons/${id}`);
             loadCoupons();
-            flash(true, "Cupón eliminado.");
-        } catch (e) { flash(false, `Error: ${e?.message || e}`); }
+            flash(true, t("msg.couponDeleted"));
+        } catch (e) { flash(false, t("common.error", { msg: e?.message || e })); }
     };
 
     // ---- shipping/taxes actions ----
@@ -416,13 +423,13 @@ export default function OnlineStoreAdminPage() {
         e.preventDefault();
         const f = zoneForm;
         const rate = String(f.rate).trim() === "" ? 0 : parseMoney(f.rate);
-        if (rate === null) { flash(false, "Tarifa no válida."); return; }
+        if (rate === null) { flash(false, t("err.rate")); return; }
         const freeOver = String(f.freeOver).trim() === "" ? -1 : parseMoney(f.freeOver);
-        if (freeOver === null) { flash(false, "El umbral de envío gratis no es válido."); return; }
+        if (freeOver === null) { flash(false, t("err.freeOver")); return; }
         let taxBp = -1;
         if (String(f.taxPercent).trim() !== "") {
             taxBp = parsePercent(f.taxPercent);
-            if (taxBp === null) { flash(false, "Impuesto no válido (0–50%)."); return; }
+            if (taxBp === null) { flash(false, t("err.tax")); return; }
         }
         setBusy(true);
         try {
@@ -436,17 +443,17 @@ export default function OnlineStoreAdminPage() {
             });
             setZoneForm(null);
             loadZones();
-            flash(true, "Zona guardada.");
-        } catch (err) { flash(false, `Error al guardar: ${err?.message || err}`); }
+            flash(true, t("msg.zoneSaved"));
+        } catch (err) { flash(false, t("common.saveError", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
     const deleteZone = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm("¿Eliminar esta zona de envío?")) return;
+        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteZone"))) return;
         try {
             await apiDelete(`${B}/shipping-zones/${id}`);
             loadZones();
-            flash(true, "Zona eliminada.");
-        } catch (e) { flash(false, `Error: ${e?.message || e}`); }
+            flash(true, t("msg.zoneDeleted"));
+        } catch (e) { flash(false, t("common.error", { msg: e?.message || e })); }
     };
     const saveShipCfg = async (e) => {
         e.preventDefault();
@@ -454,7 +461,7 @@ export default function OnlineStoreAdminPage() {
         let taxBp = 0;
         if (String(f.taxPercent).trim() !== "") {
             taxBp = parsePercent(f.taxPercent);
-            if (taxBp === null) { flash(false, "Impuesto no válido (0–50%)."); return; }
+            if (taxBp === null) { flash(false, t("err.tax")); return; }
         }
         setBusy(true);
         try {
@@ -465,8 +472,8 @@ export default function OnlineStoreAdminPage() {
                 taxLabel: f.taxLabel || "Impuestos",
             });
             setCfg(c);
-            flash(true, "Envío e impuestos guardados.");
-        } catch (err) { flash(false, `Error al guardar: ${err?.message || err}`); }
+            flash(true, t("msg.shipSaved"));
+        } catch (err) { flash(false, t("common.saveError", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
@@ -475,7 +482,7 @@ export default function OnlineStoreAdminPage() {
         e.preventDefault();
         const f = cfgForm;
         const shippingCents = String(f.shipping).trim() === "" ? 0 : parseMoney(f.shipping);
-        if (shippingCents === null) { flash(false, "El costo de envío no es válido."); return; }
+        if (shippingCents === null) { flash(false, t("err.shipping")); return; }
         setBusy(true);
         try {
             const c = await apiPost(`${B}/config`, {
@@ -500,40 +507,40 @@ export default function OnlineStoreAdminPage() {
                 setHasStripeKey(!!s.hasKey);
             }
             setStripeKeyInput("");
-            flash(true, "Configuración guardada.");
-        } catch (err) { flash(false, `Error al guardar: ${err?.message || err}`); }
+            flash(true, t("msg.configSaved"));
+        } catch (err) { flash(false, t("common.saveError", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
     const detailRemaining = detail ? Math.max(0, (Number(detail.total_cents) || 0) - (Number(detail.refund_cents) || 0)) : 0;
 
     const tabs = [
-        { id: "orders", label: `Pedidos${ordersTotal ? ` (${ordersTotal})` : ""}` },
-        { id: "products", label: "Productos" },
-        { id: "coupons", label: "Cupones" },
-        { id: "shipping", label: "Envío e impuestos" },
-        { id: "reports", label: "Informes" },
-        { id: "config", label: "Configuración" },
+        { id: "orders", label: ordersTotal ? t("tab.ordersCount", { n: ordersTotal }) : t("tab.orders") },
+        { id: "products", label: t("tab.products") },
+        { id: "coupons", label: t("tab.coupons") },
+        { id: "shipping", label: t("tab.shipping") },
+        { id: "reports", label: t("tab.reports") },
+        { id: "config", label: t("tab.config") },
     ];
 
     return (
         <div className="max-w-6xl mx-auto p-4 sm:p-8">
             <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Tienda Online</h1>
+                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">{t("app.title")}</h1>
                 <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Variantes · zonas de envío · impuestos · reembolsos · informes · Stripe
+                    {t("app.subtitle")}
                 </p>
             </div>
 
             <div className="flex flex-wrap gap-2 mb-6">
-                {tabs.map((t) => (
+                {tabs.map((tb) => (
                     <button
-                        key={t.id}
+                        key={tb.id}
                         type="button"
-                        onClick={() => { setTab(t.id); setMsg(null); }}
-                        className={`px-4 py-2 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === t.id ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                        onClick={() => { setTab(tb.id); setMsg(null); }}
+                        className={`px-4 py-2 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === tb.id ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
                     >
-                        {t.label}
+                        {tb.label}
                     </button>
                 ))}
             </div>
@@ -549,37 +556,37 @@ export default function OnlineStoreAdminPage() {
                 <div className={cardCls}>
                     <div className="flex flex-wrap items-center gap-3 mb-6">
                         <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); loadOrders(e.target.value, orderSearch); }} className="px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl font-medium outline-none">
-                            <option value="">Todos los estados</option>
+                            <option value="">{t("orders.allStatuses")}</option>
                             {ORDER_STATUSES.map((s) => (
-                                <option key={s} value={s}>{STATUS_LABELS[s]}{counts[s] ? ` (${counts[s]})` : ""}</option>
+                                <option key={s} value={s}>{statusLabel(s)}{counts[s] ? ` (${counts[s]})` : ""}</option>
                             ))}
                         </select>
                         <input
                             type="search"
-                            placeholder="Buscar cliente, email o código…"
+                            placeholder={t("orders.searchPlaceholder")}
                             value={orderSearch}
                             onChange={(e) => setOrderSearch(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") loadOrders(statusFilter, orderSearch); }}
                             className="flex-1 min-w-[200px] px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl font-medium outline-none"
                         />
-                        <button type="button" onClick={() => loadOrders(statusFilter, orderSearch)} className={btnGhostCls}>Buscar</button>
-                        <button type="button" onClick={exportCsv} disabled={busy} className={btnCls}>Exportar CSV</button>
+                        <button type="button" onClick={() => loadOrders(statusFilter, orderSearch)} className={btnGhostCls}>{t("orders.search")}</button>
+                        <button type="button" onClick={exportCsv} disabled={busy} className={btnCls}>{t("common.exportCsv")}</button>
                     </div>
 
                     {orders.length === 0 ? (
-                        <p className="text-sm text-gray-400">No hay pedidos todavía.</p>
+                        <p className="text-sm text-gray-400">{t("orders.empty")}</p>
                     ) : (
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
                                         <th className="py-3 pr-4">#</th>
-                                        <th className="py-3 pr-4">Fecha</th>
-                                        <th className="py-3 pr-4">Cliente</th>
-                                        <th className="py-3 pr-4">Entrega</th>
-                                        <th className="py-3 pr-4">Total</th>
-                                        <th className="py-3 pr-4">Pago</th>
-                                        <th className="py-3 pr-4">Estado</th>
+                                        <th className="py-3 pr-4">{t("orders.colDate")}</th>
+                                        <th className="py-3 pr-4">{t("orders.colCustomer")}</th>
+                                        <th className="py-3 pr-4">{t("orders.colDelivery")}</th>
+                                        <th className="py-3 pr-4">{t("orders.colTotal")}</th>
+                                        <th className="py-3 pr-4">{t("orders.colPayment")}</th>
+                                        <th className="py-3 pr-4">{t("orders.colStatus")}</th>
                                         <th className="py-3"></th>
                                     </tr>
                                 </thead>
@@ -593,24 +600,24 @@ export default function OnlineStoreAdminPage() {
                                                 <div className="text-xs text-gray-400">{o.customer_email}</div>
                                             </td>
                                             <td className="py-3 pr-4 text-xs text-gray-500">
-                                                {o.shipping_method === "zone" ? (o.shipping_zone_name || "Zona") : SHIP_LABELS[o.shipping_method] || "Envío"}
+                                                {o.shipping_method === "zone" ? (o.shipping_zone_name || t("ship.zone")) : shipLabel(o.shipping_method)}
                                             </td>
                                             <td className="py-3 pr-4 font-black">
                                                 {fmt(o.total_cents)}
-                                                {Number(o.refund_cents) > 0 && <div className="text-[10px] text-rose-500 font-bold">-{fmt(o.refund_cents)} dev.</div>}
+                                                {Number(o.refund_cents) > 0 && <div className="text-[10px] text-rose-500 font-bold">{t("orders.refundedShort", { amount: fmt(o.refund_cents) })}</div>}
                                             </td>
                                             <td className="py-3 pr-4">
                                                 <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${PAY_PILL[o.payment_status] || "bg-gray-100 text-gray-500"}`}>
-                                                    {PAY_LABELS[o.payment_status] || o.payment_status}
+                                                    {payLabel(o.payment_status)}
                                                 </span>
                                             </td>
                                             <td className="py-3 pr-4">
                                                 <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${STATUS_PILL[o.status] || "bg-gray-100 text-gray-500"}`}>
-                                                    {STATUS_LABELS[o.status] || o.status}
+                                                    {statusLabel(o.status)}
                                                 </span>
                                             </td>
                                             <td className="py-3 text-right">
-                                                <button type="button" onClick={() => setDetail(o)} className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px]"}>Ver</button>
+                                                <button type="button" onClick={() => setDetail(o)} className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px]"}>{t("orders.view")}</button>
                                             </td>
                                         </tr>
                                     ))}
@@ -625,11 +632,11 @@ export default function OnlineStoreAdminPage() {
             {tab === "products" && (
                 <div className={cardCls}>
                     <div className="flex items-center justify-between mb-6">
-                        <h2 className="font-bold text-gray-800">Productos ({products.length})</h2>
-                        <button type="button" onClick={() => openProductForm(null)} className={btnCls}>Nuevo producto</button>
+                        <h2 className="font-bold text-gray-800">{t("products.title", { n: products.length })}</h2>
+                        <button type="button" onClick={() => openProductForm(null)} className={btnCls}>{t("products.new")}</button>
                     </div>
                     {products.length === 0 ? (
-                        <p className="text-sm text-gray-400">Sin productos — crea el primero para que aparezca en el bloque OnlineStore.</p>
+                        <p className="text-sm text-gray-400">{t("products.empty")}</p>
                     ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                             {products.map((p) => {
@@ -648,19 +655,19 @@ export default function OnlineStoreAdminPage() {
                                         <div className="p-4 flex flex-col gap-1 flex-1">
                                             <div className="flex items-center gap-2">
                                                 <span className="font-bold text-gray-800 flex-1 truncate">{p.name}</span>
-                                                {!p.is_published && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 text-[9px] font-black uppercase">Oculto</span>}
+                                                {!p.is_published && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 text-[9px] font-black uppercase">{t("products.hidden")}</span>}
                                             </div>
                                             <div className="text-xs text-gray-400">
-                                                {p.category || "Sin categoría"} · {totalStock < 0 ? "Stock ilimitado" : `Stock: ${totalStock}`}
-                                                {activeVariants.length > 0 && ` · ${activeVariants.length} variante${activeVariants.length > 1 ? "s" : ""}`}
-                                                {(p.images || []).length > 0 && ` · ${p.images.length} img`}
+                                                {p.category || t("products.noCategory")} · {totalStock < 0 ? t("products.unlimitedStock") : t("products.stock", { n: totalStock })}
+                                                {activeVariants.length > 0 && t(activeVariants.length > 1 ? "products.variantMany" : "products.variantOne", { n: activeVariants.length })}
+                                                {(p.images || []).length > 0 && t("products.images", { n: p.images.length })}
                                             </div>
                                             <div className="font-black text-gray-900 mt-1">{fmt(p.price_cents)}</div>
                                             <div className="flex gap-2 mt-3">
                                                 <button type="button" onClick={() => openProductForm(p)} className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px]"}>
-                                                    Editar
+                                                    {t("common.edit")}
                                                 </button>
-                                                <button type="button" onClick={() => deleteProduct(p.id)} className={btnDangerCls}>Eliminar</button>
+                                                <button type="button" onClick={() => deleteProduct(p.id)} className={btnDangerCls}>{t("common.delete")}</button>
                                             </div>
                                         </div>
                                     </div>
@@ -675,21 +682,21 @@ export default function OnlineStoreAdminPage() {
             {tab === "coupons" && (
                 <div className={cardCls}>
                     <div className="flex items-center justify-between mb-6">
-                        <h2 className="font-bold text-gray-800">Cupones ({coupons.length})</h2>
-                        <button type="button" onClick={() => setCouponForm({ ...EMPTY_COUPON })} className={btnCls}>Nuevo cupón</button>
+                        <h2 className="font-bold text-gray-800">{t("coupons.title", { n: coupons.length })}</h2>
+                        <button type="button" onClick={() => setCouponForm({ ...EMPTY_COUPON })} className={btnCls}>{t("coupons.new")}</button>
                     </div>
                     {coupons.length === 0 ? (
-                        <p className="text-sm text-gray-400">Sin cupones todavía.</p>
+                        <p className="text-sm text-gray-400">{t("coupons.empty")}</p>
                     ) : (
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                        <th className="py-3 pr-4">Código</th>
-                                        <th className="py-3 pr-4">Descuento</th>
-                                        <th className="py-3 pr-4">Mínimo</th>
-                                        <th className="py-3 pr-4">Usos</th>
-                                        <th className="py-3 pr-4">Activo</th>
+                                        <th className="py-3 pr-4">{t("coupons.colCode")}</th>
+                                        <th className="py-3 pr-4">{t("coupons.colDiscount")}</th>
+                                        <th className="py-3 pr-4">{t("coupons.colMin")}</th>
+                                        <th className="py-3 pr-4">{t("coupons.colUses")}</th>
+                                        <th className="py-3 pr-4">{t("coupons.colActive")}</th>
                                         <th className="py-3"></th>
                                     </tr>
                                 </thead>
@@ -702,7 +709,7 @@ export default function OnlineStoreAdminPage() {
                                             <td className="py-3 pr-4">{c.used_count}{c.max_uses >= 0 ? ` / ${c.max_uses}` : " / ∞"}</td>
                                             <td className="py-3 pr-4">
                                                 <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${c.is_active ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-500"}`}>
-                                                    {c.is_active ? "Sí" : "No"}
+                                                    {c.is_active ? t("common.yes") : t("common.no")}
                                                 </span>
                                             </td>
                                             <td className="py-3 text-right whitespace-nowrap">
@@ -717,9 +724,9 @@ export default function OnlineStoreAdminPage() {
                                                     })}
                                                     className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px] mr-2"}
                                                 >
-                                                    Editar
+                                                    {t("common.edit")}
                                                 </button>
-                                                <button type="button" onClick={() => deleteCoupon(c.id)} className={btnDangerCls}>Eliminar</button>
+                                                <button type="button" onClick={() => deleteCoupon(c.id)} className={btnDangerCls}>{t("common.delete")}</button>
                                             </td>
                                         </tr>
                                     ))}
@@ -735,25 +742,24 @@ export default function OnlineStoreAdminPage() {
                 <div className="space-y-6">
                     <div className={cardCls}>
                         <div className="flex items-center justify-between mb-2">
-                            <h2 className="font-bold text-gray-800">Zonas de envío ({zones.length})</h2>
-                            <button type="button" onClick={() => setZoneForm({ ...EMPTY_ZONE })} className={btnCls}>Nueva zona</button>
+                            <h2 className="font-bold text-gray-800">{t("shipping.zonesTitle", { n: zones.length })}</h2>
+                            <button type="button" onClick={() => setZoneForm({ ...EMPTY_ZONE })} className={btnCls}>{t("shipping.newZone")}</button>
                         </div>
                         <p className="text-xs text-gray-400 mb-6">
-                            Con zonas activas, el cliente elige una en el checkout y su tarifa reemplaza el envío fijo de Configuración.
-                            Sin zonas, se usa el envío fijo.
+                            {t("shipping.help")}
                         </p>
                         {zones.length === 0 ? (
-                            <p className="text-sm text-gray-400">Sin zonas — se aplica el envío fijo de la pestaña Configuración.</p>
+                            <p className="text-sm text-gray-400">{t("shipping.empty")}</p>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
                                         <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                            <th className="py-3 pr-4">Zona</th>
-                                            <th className="py-3 pr-4">Tarifa</th>
-                                            <th className="py-3 pr-4">Gratis desde</th>
-                                            <th className="py-3 pr-4">Impuesto</th>
-                                            <th className="py-3 pr-4">Activa</th>
+                                            <th className="py-3 pr-4">{t("shipping.colZone")}</th>
+                                            <th className="py-3 pr-4">{t("shipping.colRate")}</th>
+                                            <th className="py-3 pr-4">{t("shipping.colFreeFrom")}</th>
+                                            <th className="py-3 pr-4">{t("shipping.colTax")}</th>
+                                            <th className="py-3 pr-4">{t("shipping.colActive")}</th>
                                             <th className="py-3"></th>
                                         </tr>
                                     </thead>
@@ -761,12 +767,12 @@ export default function OnlineStoreAdminPage() {
                                         {zones.map((z) => (
                                             <tr key={z.id} className="border-b border-gray-50 hover:bg-gray-50/60">
                                                 <td className="py-3 pr-4 font-bold text-gray-800">{z.name}</td>
-                                                <td className="py-3 pr-4">{z.rate_cents > 0 ? fmt(z.rate_cents) : "Gratis"}</td>
+                                                <td className="py-3 pr-4">{z.rate_cents > 0 ? fmt(z.rate_cents) : t("shipping.free")}</td>
                                                 <td className="py-3 pr-4">{z.free_over_cents >= 0 ? fmt(z.free_over_cents) : "—"}</td>
-                                                <td className="py-3 pr-4">{z.tax_rate_bp >= 0 ? `${bpToInput(z.tax_rate_bp)}%` : "Predeterminado"}</td>
+                                                <td className="py-3 pr-4">{z.tax_rate_bp >= 0 ? `${bpToInput(z.tax_rate_bp)}%` : t("shipping.default")}</td>
                                                 <td className="py-3 pr-4">
                                                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${z.is_active ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-500"}`}>
-                                                        {z.is_active ? "Sí" : "No"}
+                                                        {z.is_active ? t("common.yes") : t("common.no")}
                                                     </span>
                                                 </td>
                                                 <td className="py-3 text-right whitespace-nowrap">
@@ -781,9 +787,9 @@ export default function OnlineStoreAdminPage() {
                                                         })}
                                                         className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px] mr-2"}
                                                     >
-                                                        Editar
+                                                        {t("common.edit")}
                                                     </button>
-                                                    <button type="button" onClick={() => deleteZone(z.id)} className={btnDangerCls}>Eliminar</button>
+                                                    <button type="button" onClick={() => deleteZone(z.id)} className={btnDangerCls}>{t("common.delete")}</button>
                                                 </td>
                                             </tr>
                                         ))}
@@ -795,28 +801,28 @@ export default function OnlineStoreAdminPage() {
 
                     {shipCfgForm && (
                         <form onSubmit={saveShipCfg} className={cardCls + " space-y-5"}>
-                            <h2 className="font-bold text-gray-800">Recogida e impuestos</h2>
+                            <h2 className="font-bold text-gray-800">{t("pickup.title")}</h2>
                             <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
                                 <input type="checkbox" checked={!!shipCfgForm.pickupEnabled} onChange={(e) => setShipCfgForm({ ...shipCfgForm, pickupEnabled: e.target.checked })} />
-                                Ofrecer recogida en tienda (sin costo de envío)
+                                {t("pickup.enabled")}
                             </label>
                             <div>
-                                <label className={labelCls}>Instrucciones de recogida</label>
+                                <label className={labelCls}>{t("pickup.instructions")}</label>
                                 <textarea rows={2} value={shipCfgForm.pickupInstructions} onChange={(e) => setShipCfgForm({ ...shipCfgForm, pickupInstructions: e.target.value })} className={inputCls} maxLength={1000} />
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div>
-                                    <label className={labelCls}>Impuesto predeterminado (%)</label>
-                                    <input type="text" inputMode="decimal" value={shipCfgForm.taxPercent} onChange={(e) => setShipCfgForm({ ...shipCfgForm, taxPercent: e.target.value })} placeholder="0 = sin impuesto" className={inputCls} />
-                                    <p className="text-[11px] text-gray-400 mt-2">Se aplica sobre los productos (tras descuento), nunca sobre el envío. Cada zona puede definir su propio %.</p>
+                                    <label className={labelCls}>{t("tax.default")}</label>
+                                    <input type="text" inputMode="decimal" value={shipCfgForm.taxPercent} onChange={(e) => setShipCfgForm({ ...shipCfgForm, taxPercent: e.target.value })} placeholder={t("tax.placeholder")} className={inputCls} />
+                                    <p className="text-[11px] text-gray-400 mt-2">{t("tax.help")}</p>
                                 </div>
                                 <div>
-                                    <label className={labelCls}>Etiqueta del impuesto</label>
-                                    <input type="text" value={shipCfgForm.taxLabel} onChange={(e) => setShipCfgForm({ ...shipCfgForm, taxLabel: e.target.value })} placeholder="IVA" className={inputCls} maxLength={50} />
+                                    <label className={labelCls}>{t("tax.label")}</label>
+                                    <input type="text" value={shipCfgForm.taxLabel} onChange={(e) => setShipCfgForm({ ...shipCfgForm, taxLabel: e.target.value })} placeholder={t("tax.labelPlaceholder")} className={inputCls} maxLength={50} />
                                 </div>
                             </div>
                             <div className="flex justify-end">
-                                <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                                <button type="submit" disabled={busy} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                             </div>
                         </form>
                     )}
@@ -834,23 +840,23 @@ export default function OnlineStoreAdminPage() {
                                 onClick={() => setReportDays(d)}
                                 className={`px-4 py-2 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${reportDays === d ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
                             >
-                                {d === 365 ? "12 meses" : `${d} días`}
+                                {d === 365 ? t("reports.months12") : t("reports.days", { n: d })}
                             </button>
                         ))}
                         <div className="flex-1" />
-                        <button type="button" onClick={exportReportCsv} disabled={busy || !report} className={btnCls}>Exportar CSV</button>
+                        <button type="button" onClick={exportReportCsv} disabled={busy || !report} className={btnCls}>{t("common.exportCsv")}</button>
                     </div>
 
                     {!report ? (
-                        <p className="text-sm text-gray-400">Cargando informe…</p>
+                        <p className="text-sm text-gray-400">{t("reports.loading")}</p>
                     ) : (
                         <>
                             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                                 {[
-                                    { label: "Ingresos", value: fmt(report.totals.revenue_cents), sub: `${report.totals.paid_orders} pedidos pagados` },
-                                    { label: "Neto (tras reembolsos)", value: fmt(report.totals.net_cents), sub: `-${fmt(report.totals.refunds_cents)} reembolsado` },
-                                    { label: "Ticket medio", value: fmt(report.totals.avg_order_cents), sub: `${report.totals.items_sold} artículos` },
-                                    { label: "Pedidos", value: String(report.totals.orders), sub: `${fmt(report.totals.discount_cents)} en descuentos` },
+                                    { label: t("reports.revenue"), value: fmt(report.totals.revenue_cents), sub: t("reports.paidOrders", { n: report.totals.paid_orders }) },
+                                    { label: t("reports.net"), value: fmt(report.totals.net_cents), sub: t("reports.refunded", { amount: fmt(report.totals.refunds_cents) }) },
+                                    { label: t("reports.avg"), value: fmt(report.totals.avg_order_cents), sub: t("reports.items", { n: report.totals.items_sold }) },
+                                    { label: t("reports.orders"), value: String(report.totals.orders), sub: t("reports.discounts", { amount: fmt(report.totals.discount_cents) }) },
                                 ].map((s) => (
                                     <div key={s.label} className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-5">
                                         <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">{s.label}</div>
@@ -861,8 +867,8 @@ export default function OnlineStoreAdminPage() {
                             </div>
 
                             <div className={cardCls}>
-                                <h3 className="font-bold text-gray-800 mb-1">Ingresos por {report.granularity === "month" ? "mes" : "día"}</h3>
-                                <p className="text-[11px] text-gray-400 mb-4">Impuestos: {fmt(report.totals.tax_cents)} · Envíos: {fmt(report.totals.shipping_cents)}{report.truncated ? " · (ventana truncada a los últimos 5000 pedidos)" : ""}</p>
+                                <h3 className="font-bold text-gray-800 mb-1">{report.granularity === "month" ? t("reports.byMonth") : t("reports.byDay")}</h3>
+                                <p className="text-[11px] text-gray-400 mb-4">{t("reports.taxShip", { tax: fmt(report.totals.tax_cents), ship: fmt(report.totals.shipping_cents) })}{report.truncated ? t("reports.truncated") : ""}</p>
                                 {(() => {
                                     const max = Math.max(1, ...report.series.map((b) => b.revenue_cents));
                                     return (
@@ -872,7 +878,7 @@ export default function OnlineStoreAdminPage() {
                                                     <div
                                                         className="w-full rounded-t-md bg-blue-500/80 hover:bg-blue-600 transition-all"
                                                         style={{ height: `${Math.max(b.revenue_cents > 0 ? 4 : 1, Math.round((b.revenue_cents / max) * 100))}%` }}
-                                                        title={`${b.date}: ${fmt(b.revenue_cents)} (${b.orders} pedidos)`}
+                                                        title={t("reports.barTitle", { date: b.date, amount: fmt(b.revenue_cents), n: b.orders })}
                                                     />
                                                     {report.series.length <= 32 && (
                                                         <div className="absolute -bottom-5 text-[8px] text-gray-400 font-bold whitespace-nowrap">{b.date.slice(5)}</div>
@@ -886,16 +892,16 @@ export default function OnlineStoreAdminPage() {
 
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 <div className={cardCls}>
-                                    <h3 className="font-bold text-gray-800 mb-4">Productos más vendidos</h3>
+                                    <h3 className="font-bold text-gray-800 mb-4">{t("reports.topProducts")}</h3>
                                     {report.topProducts.length === 0 ? (
-                                        <p className="text-sm text-gray-400">Sin ventas pagadas en el periodo.</p>
+                                        <p className="text-sm text-gray-400">{t("reports.noSales")}</p>
                                     ) : (
                                         <table className="w-full text-sm">
                                             <thead>
                                                 <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                                    <th className="py-2 pr-4">Producto</th>
-                                                    <th className="py-2 pr-4">Uds.</th>
-                                                    <th className="py-2 text-right">Ingresos</th>
+                                                    <th className="py-2 pr-4">{t("reports.colProduct")}</th>
+                                                    <th className="py-2 pr-4">{t("reports.colUnits")}</th>
+                                                    <th className="py-2 text-right">{t("reports.colRevenue")}</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -911,16 +917,16 @@ export default function OnlineStoreAdminPage() {
                                     )}
                                 </div>
                                 <div className={cardCls}>
-                                    <h3 className="font-bold text-gray-800 mb-4">Cupones usados</h3>
+                                    <h3 className="font-bold text-gray-800 mb-4">{t("reports.couponsUsed")}</h3>
                                     {report.couponUsage.length === 0 ? (
-                                        <p className="text-sm text-gray-400">Sin cupones en el periodo.</p>
+                                        <p className="text-sm text-gray-400">{t("reports.noCoupons")}</p>
                                     ) : (
                                         <table className="w-full text-sm">
                                             <thead>
                                                 <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                                    <th className="py-2 pr-4">Cupón</th>
-                                                    <th className="py-2 pr-4">Usos</th>
-                                                    <th className="py-2 text-right">Descuento</th>
+                                                    <th className="py-2 pr-4">{t("reports.colCoupon")}</th>
+                                                    <th className="py-2 pr-4">{t("reports.colUses")}</th>
+                                                    <th className="py-2 text-right">{t("reports.colDiscount")}</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -946,101 +952,97 @@ export default function OnlineStoreAdminPage() {
                 <form onSubmit={saveConfig} className={cardCls + " space-y-5 max-w-2xl"}>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div>
-                            <label className={labelCls}>Símbolo de moneda</label>
+                            <label className={labelCls}>{t("config.currencySymbol")}</label>
                             <input type="text" value={cfgForm.currencySymbol} onChange={(e) => setCfgForm({ ...cfgForm, currencySymbol: e.target.value })} className={inputCls} maxLength={8} />
                         </div>
                         <div>
-                            <label className={labelCls}>Código de moneda (ISO)</label>
+                            <label className={labelCls}>{t("config.currencyCode")}</label>
                             <input type="text" value={cfgForm.currencyCode} onChange={(e) => setCfgForm({ ...cfgForm, currencyCode: e.target.value })} placeholder="USD" className={inputCls} maxLength={3} />
                         </div>
                         <div>
-                            <label className={labelCls}>Envío fijo ({cfgForm.currencySymbol})</label>
+                            <label className={labelCls}>{t("config.flatShipping", { symbol: cfgForm.currencySymbol })}</label>
                             <input type="text" inputMode="decimal" value={cfgForm.shipping} onChange={(e) => setCfgForm({ ...cfgForm, shipping: e.target.value })} placeholder="0.00" className={inputCls} />
-                            <p className="text-[11px] text-gray-400 mt-2">Solo aplica cuando no hay zonas de envío activas.</p>
+                            <p className="text-[11px] text-gray-400 mt-2">{t("config.flatShippingHelp")}</p>
                         </div>
                     </div>
                     <div>
-                        <label className={labelCls}>Instrucciones de pago manual</label>
+                        <label className={labelCls}>{t("config.manualInstructions")}</label>
                         <textarea rows={3} value={cfgForm.manualPaymentInstructions} onChange={(e) => setCfgForm({ ...cfgForm, manualPaymentInstructions: e.target.value })} className={inputCls} maxLength={2000} />
-                        <p className="text-[11px] text-gray-400 mt-2">Se muestran al cliente al elegir pago manual y se incluyen en el correo de confirmación.</p>
+                        <p className="text-[11px] text-gray-400 mt-2">{t("config.manualHelp")}</p>
                     </div>
                     <div>
-                        <label className={labelCls}>Correo de la tienda (notificaciones de pedidos)</label>
-                        <input type="email" value={cfgForm.storeEmail} onChange={(e) => setCfgForm({ ...cfgForm, storeEmail: e.target.value })} placeholder="ventas@mitienda.com" className={inputCls} maxLength={200} />
+                        <label className={labelCls}>{t("config.storeEmail")}</label>
+                        <input type="email" value={cfgForm.storeEmail} onChange={(e) => setCfgForm({ ...cfgForm, storeEmail: e.target.value })} placeholder={t("config.storeEmailPlaceholder")} className={inputCls} maxLength={200} />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className={labelCls}>Reserva de pedidos con tarjeta (minutos)</label>
+                            <label className={labelCls}>{t("config.cardTtl")}</label>
                             <input type="number" min={30} max={1440} value={cfgForm.cardPendingTtlMinutes} onChange={(e) => setCfgForm({ ...cfgForm, cardPendingTtlMinutes: e.target.value })} className={inputCls} />
                         </div>
                         <div>
-                            <label className={labelCls}>Reserva de pedidos con pago manual (horas)</label>
+                            <label className={labelCls}>{t("config.manualTtl")}</label>
                             <input type="number" min={0} max={720} value={cfgForm.manualPendingTtlHours} onChange={(e) => setCfgForm({ ...cfgForm, manualPendingTtlHours: e.target.value })} className={inputCls} />
-                            <p className="text-[11px] text-gray-400 mt-2">Los pedidos nuevos sin pagar se cancelan al vencer y devuelven el stock y el cupón. 0 = no vencen.</p>
+                            <p className="text-[11px] text-gray-400 mt-2">{t("config.ttlHelp")}</p>
                         </div>
                         <div>
-                            <label className={labelCls}>Máximo de unidades por artículo</label>
+                            <label className={labelCls}>{t("config.maxLine")}</label>
                             <input type="number" min={1} max={99} value={cfgForm.maxLineQty} onChange={(e) => setCfgForm({ ...cfgForm, maxLineQty: e.target.value })} className={inputCls} />
                         </div>
                         <div>
-                            <label className={labelCls}>Máximo de unidades por pedido</label>
+                            <label className={labelCls}>{t("config.maxOrder")}</label>
                             <input type="number" min={1} max={10000} value={cfgForm.maxOrderQty} onChange={(e) => setCfgForm({ ...cfgForm, maxOrderQty: e.target.value })} className={inputCls} />
                         </div>
                     </div>
                     <div className="pt-4 border-t border-gray-100">
                         <label className={labelCls}>
-                            Stripe secret key {hasStripeKey ? <span className="text-green-600">· configurada</span> : <span className="text-gray-300">· sin configurar</span>}
+                            {t("config.stripeKey")} {hasStripeKey ? <span className="text-green-600">{t("config.stripeSet")}</span> : <span className="text-gray-300">{t("config.stripeUnset")}</span>}
                         </label>
                         <input
                             type="password"
                             value={stripeKeyInput}
                             onChange={(e) => { setStripeKeyInput(e.target.value); setClearStripeKey(false); }}
-                            placeholder={hasStripeKey ? "(configurada — escribe para reemplazar)" : "sk_live_… / sk_test_…"}
+                            placeholder={hasStripeKey ? t("config.stripePlaceholderSet") : "sk_live_… / sk_test_…"}
                             className={inputCls}
                             autoComplete="new-password"
                         />
                         <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
-                            La key nunca se muestra de vuelta (solo escribir). Con key configurada, el checkout ofrece
-                            "Tarjeta (Stripe)" y los reembolsos de tarjeta se emiten desde el pedido. <strong>Webhook (opcional):</strong> apunta
-                            un endpoint de Stripe a <span className="font-mono">/api/v1/plugin/online-store/public/stripe-webhook</span> — cada
-                            evento se re-verifica contra la API de Stripe antes de tocar el pedido, y un reconciliador revisa
-                            los pagos pendientes cada 5 minutos aunque no configures webhook.
+                            {t("config.stripeHelp1")}<strong>{t("config.stripeWebhook")}</strong>{t("config.stripeHelp2")}<span className="font-mono">/api/v1/plugin/online-store/public/stripe-webhook</span>{t("config.stripeHelp3")}
                         </p>
                         {hasStripeKey && (
                             <label className="flex items-center gap-2 mt-2 text-[11px] text-gray-500 cursor-pointer select-none">
                                 <input type="checkbox" checked={clearStripeKey} onChange={(e) => { setClearStripeKey(e.target.checked); if (e.target.checked) setStripeKeyInput(""); }} />
-                                Quitar la key (desactivar Stripe)
+                                {t("config.stripeClear")}
                             </label>
                         )}
                     </div>
                     <div className="flex justify-end">
-                        <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar configuración"}</button>
+                        <button type="submit" disabled={busy} className={btnCls}>{busy ? t("common.saving") : t("config.save")}</button>
                     </div>
                 </form>
             )}
 
             {/* ============================ MODAL: DETALLE PEDIDO ============================ */}
             {detail && (
-                <Modal title={`Pedido #${detail.id}`} onClose={() => setDetail(null)} wide>
+                <Modal title={t("detail.title", { id: detail.id })} onClose={() => setDetail(null)} wide>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 text-sm">
                         <div>
-                            <div className={labelCls}>Cliente</div>
+                            <div className={labelCls}>{t("detail.customer")}</div>
                             <div className="font-bold text-gray-800">{detail.customer_name}</div>
                             <div className="text-gray-500">{detail.customer_email}</div>
                             {detail.customer_phone && <div className="text-gray-500">{detail.customer_phone}</div>}
                             {detail.customer_address && <div className="text-gray-500 whitespace-pre-line">{detail.customer_address}</div>}
-                            {Number(detail.user_id) > 0 && <div className="text-[11px] text-blue-500 font-bold mt-1">Cliente con cuenta (#{detail.user_id})</div>}
+                            {Number(detail.user_id) > 0 && <div className="text-[11px] text-blue-500 font-bold mt-1">{t("detail.account", { id: detail.user_id })}</div>}
                         </div>
                         <div>
-                            <div className={labelCls}>Pedido</div>
-                            <div className="text-gray-500">Fecha: {String(detail.created_at || "").slice(0, 16)}</div>
-                            <div className="text-gray-500">Código: <span className="font-mono text-xs">{detail.token}</span></div>
-                            <div className="text-gray-500">Método: {detail.payment_method === "stripe" ? "Tarjeta (Stripe)" : "Pago manual"}</div>
+                            <div className={labelCls}>{t("detail.order")}</div>
+                            <div className="text-gray-500">{t("detail.date", { date: String(detail.created_at || "").slice(0, 16) })}</div>
+                            <div className="text-gray-500">{t("detail.code")}<span className="font-mono text-xs">{detail.token}</span></div>
+                            <div className="text-gray-500">{t("detail.method", { method: detail.payment_method === "stripe" ? t("detail.card") : t("detail.manual") })}</div>
                             <div className="text-gray-500">
-                                Entrega: {detail.shipping_method === "zone" ? `Zona — ${detail.shipping_zone_name || ""}` : SHIP_LABELS[detail.shipping_method] || "Envío"}
+                                {t("detail.delivery", { delivery: detail.shipping_method === "zone" ? t("detail.zone", { name: detail.shipping_zone_name || "" }) : shipLabel(detail.shipping_method) })}
                             </div>
-                            {detail.coupon_code && <div className="text-gray-500">Cupón: <span className="font-mono">{detail.coupon_code}</span></div>}
-                            {detail.refund_id && <div className="text-gray-500">Reembolso Stripe: <span className="font-mono text-xs">{detail.refund_id}</span></div>}
+                            {detail.coupon_code && <div className="text-gray-500">{t("detail.coupon")}<span className="font-mono">{detail.coupon_code}</span></div>}
+                            {detail.refund_id && <div className="text-gray-500">{t("detail.stripeRefund")}<span className="font-mono text-xs">{detail.refund_id}</span></div>}
                         </div>
                     </div>
 
@@ -1048,10 +1050,10 @@ export default function OnlineStoreAdminPage() {
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                    <th className="py-2 pr-4">Producto</th>
-                                    <th className="py-2 pr-4">Precio</th>
-                                    <th className="py-2 pr-4">Cant.</th>
-                                    <th className="py-2 text-right">Importe</th>
+                                    <th className="py-2 pr-4">{t("detail.colProduct")}</th>
+                                    <th className="py-2 pr-4">{t("detail.colPrice")}</th>
+                                    <th className="py-2 pr-4">{t("detail.colQty")}</th>
+                                    <th className="py-2 text-right">{t("detail.colAmount")}</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1072,35 +1074,35 @@ export default function OnlineStoreAdminPage() {
                     </div>
 
                     <div className="text-sm space-y-1 mb-6 max-w-xs ml-auto">
-                        <div className="flex justify-between text-gray-500"><span>Subtotal</span><span>{fmt(detail.subtotal_cents)}</span></div>
-                        {detail.discount_cents > 0 && <div className="flex justify-between text-gray-500"><span>Descuento</span><span>-{fmt(detail.discount_cents)}</span></div>}
-                        <div className="flex justify-between text-gray-500"><span>Envío</span><span>{fmt(detail.shipping_cents)}</span></div>
+                        <div className="flex justify-between text-gray-500"><span>{t("detail.subtotal")}</span><span>{fmt(detail.subtotal_cents)}</span></div>
+                        {detail.discount_cents > 0 && <div className="flex justify-between text-gray-500"><span>{t("detail.discount")}</span><span>-{fmt(detail.discount_cents)}</span></div>}
+                        <div className="flex justify-between text-gray-500"><span>{t("detail.shipping")}</span><span>{fmt(detail.shipping_cents)}</span></div>
                         {Number(detail.tax_cents) > 0 && (
-                            <div className="flex justify-between text-gray-500"><span>{(cfg && cfg.taxLabel) || "Impuestos"} ({bpToInput(detail.tax_rate_bp)}%)</span><span>{fmt(detail.tax_cents)}</span></div>
+                            <div className="flex justify-between text-gray-500"><span>{(cfg && cfg.taxLabel) || t("detail.taxes")} ({bpToInput(detail.tax_rate_bp)}%)</span><span>{fmt(detail.tax_cents)}</span></div>
                         )}
-                        <div className="flex justify-between font-black text-gray-900 text-base"><span>Total</span><span>{fmt(detail.total_cents)}</span></div>
+                        <div className="flex justify-between font-black text-gray-900 text-base"><span>{t("detail.total")}</span><span>{fmt(detail.total_cents)}</span></div>
                         {Number(detail.refund_cents) > 0 && (
-                            <div className="flex justify-between text-rose-600 font-bold"><span>Reembolsado</span><span>-{fmt(detail.refund_cents)}</span></div>
+                            <div className="flex justify-between text-rose-600 font-bold"><span>{t("detail.refunded")}</span><span>-{fmt(detail.refund_cents)}</span></div>
                         )}
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                         <div>
-                            <label className={labelCls}>Estado del pedido</label>
+                            <label className={labelCls}>{t("detail.orderStatus")}</label>
                             <select value={detail.status} onChange={(e) => applyOrderStatus(detail.id, e.target.value)} className={inputCls}>
-                                {ORDER_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+                                {ORDER_STATUSES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
                             </select>
                         </div>
                         <div>
-                            <label className={labelCls}>Estado del pago</label>
+                            <label className={labelCls}>{t("detail.paymentStatus")}</label>
                             <select value={detail.payment_status} onChange={(e) => applyPaymentStatus(detail.id, e.target.value)} className={inputCls}>
-                                {PAYMENT_STATUSES.map((s) => <option key={s} value={s}>{PAY_LABELS[s]}</option>)}
+                                {PAYMENT_STATUSES.map((s) => <option key={s} value={s}>{payLabel(s)}</option>)}
                             </select>
                         </div>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                        <button type="button" onClick={() => deleteOrder(detail.id)} className={btnDangerCls}>Eliminar pedido</button>
+                        <button type="button" onClick={() => deleteOrder(detail.id)} className={btnDangerCls}>{t("detail.delete")}</button>
                         <div className="flex gap-3">
                             {(detail.payment_status === "paid" || detail.payment_status === "refunded") && detailRemaining > 0 && (
                                 <button
@@ -1108,10 +1110,10 @@ export default function OnlineStoreAdminPage() {
                                     onClick={() => setRefundForm({ order: detail, amount: centsToInput(detailRemaining), restock: false })}
                                     className={btnGhostCls}
                                 >
-                                    Reembolsar…
+                                    {t("detail.refund")}
                                 </button>
                             )}
-                            <button type="button" onClick={() => setDetail(null)} className={btnGhostCls}>Cerrar</button>
+                            <button type="button" onClick={() => setDetail(null)} className={btnGhostCls}>{t("common.close")}</button>
                         </div>
                     </div>
                 </Modal>
@@ -1119,24 +1121,24 @@ export default function OnlineStoreAdminPage() {
 
             {/* ============================ MODAL: REEMBOLSO ============================ */}
             {refundForm && (
-                <Modal title={`Reembolsar pedido #${refundForm.order.id}`} onClose={() => setRefundForm(null)}>
+                <Modal title={t("refund.title", { id: refundForm.order.id })} onClose={() => setRefundForm(null)}>
                     <form onSubmit={submitRefund} className="space-y-4">
                         <p className="text-sm text-gray-500">
                             {refundForm.order.payment_method === "stripe"
-                                ? "Se emitirá un reembolso REAL en Stripe al medio de pago original."
-                                : "Pago manual: el reembolso se registra en el pedido y deberás devolver el dinero por tu canal."}
+                                ? t("refund.stripe")
+                                : t("refund.manual")}
                         </p>
                         <div>
-                            <label className={labelCls}>Importe a reembolsar ({symbol}) — máx. {fmt(Math.max(0, refundForm.order.total_cents - (refundForm.order.refund_cents || 0)))}</label>
+                            <label className={labelCls}>{t("refund.amount", { symbol, max: fmt(Math.max(0, refundForm.order.total_cents - (refundForm.order.refund_cents || 0))) })}</label>
                             <input type="text" inputMode="decimal" value={refundForm.amount} onChange={(e) => setRefundForm({ ...refundForm, amount: e.target.value })} className={inputCls} required />
                         </div>
                         <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
                             <input type="checkbox" checked={!!refundForm.restock} onChange={(e) => setRefundForm({ ...refundForm, restock: e.target.checked })} />
-                            Devolver artículos al inventario y cancelar el pedido
+                            {t("refund.restock")}
                         </label>
                         <div className="flex justify-end gap-3">
-                            <button type="button" onClick={() => setRefundForm(null)} className={btnGhostCls}>Cancelar</button>
-                            <button type="submit" disabled={busy} className={btnCls}>{busy ? "Procesando…" : "Emitir reembolso"}</button>
+                            <button type="button" onClick={() => setRefundForm(null)} className={btnGhostCls}>{t("common.cancel")}</button>
+                            <button type="submit" disabled={busy} className={btnCls}>{busy ? t("refund.processing") : t("refund.submit")}</button>
                         </div>
                     </form>
                 </Modal>
@@ -1144,48 +1146,48 @@ export default function OnlineStoreAdminPage() {
 
             {/* ============================ MODAL: PRODUCTO ============================ */}
             {productForm && (
-                <Modal title={productForm.id ? "Editar producto" : "Nuevo producto"} onClose={() => setProductForm(null)} wide>
+                <Modal title={productForm.id ? t("product.edit") : t("products.new")} onClose={() => setProductForm(null)} wide>
                     <form onSubmit={saveProduct} className="space-y-4">
                         <div>
-                            <label className={labelCls}>Nombre *</label>
+                            <label className={labelCls}>{t("product.name")}</label>
                             <input type="text" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} className={inputCls} required maxLength={200} />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className={labelCls}>Precio base ({symbol}) *</label>
+                                <label className={labelCls}>{t("product.price", { symbol })}</label>
                                 <input type="text" inputMode="decimal" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} placeholder="19.99" className={inputCls} required />
                             </div>
                             <div>
-                                <label className={labelCls}>Stock (vacío = ilimitado)</label>
+                                <label className={labelCls}>{t("product.stock")}</label>
                                 <input type="text" inputMode="numeric" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} placeholder="∞" className={inputCls} disabled={productForm.variants.some((v) => String(v.name).trim() && v.is_active)} />
                                 {productForm.variants.some((v) => String(v.name).trim() && v.is_active) && (
-                                    <p className="text-[11px] text-gray-400 mt-1">Con variantes activas, el stock se controla por variante.</p>
+                                    <p className="text-[11px] text-gray-400 mt-1">{t("product.stockByVariant")}</p>
                                 )}
                             </div>
                         </div>
                         <div>
-                            <label className={labelCls}>Descripción</label>
+                            <label className={labelCls}>{t("product.description")}</label>
                             <textarea rows={3} value={productForm.description} onChange={(e) => setProductForm({ ...productForm, description: e.target.value })} className={inputCls} maxLength={5000} />
                         </div>
                         <div>
-                            <label className={labelCls}>Imagen principal</label>
+                            <label className={labelCls}>{t("product.image")}</label>
                             <div className="flex gap-2">
-                                <input type="text" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} placeholder="/uploads/2026/07/producto.jpg" className={inputCls} maxLength={1000} />
-                                <button type="button" onClick={() => setMediaTarget("cover")} className={btnGhostCls + " whitespace-nowrap"}>Elegir…</button>
+                                <input type="text" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} placeholder={t("product.imagePlaceholder")} className={inputCls} maxLength={1000} />
+                                <button type="button" onClick={() => setMediaTarget("cover")} className={btnGhostCls + " whitespace-nowrap"}>{t("product.choose")}</button>
                             </div>
                         </div>
 
                         {/* ---- gallery ---- */}
                         <div className="pt-2 border-t border-gray-100">
                             <div className="flex items-center justify-between mb-2">
-                                <label className={labelCls + " mb-0"}>Galería ({productForm.images.length}/12)</label>
+                                <label className={labelCls + " mb-0"}>{t("product.gallery", { n: productForm.images.length })}</label>
                                 <div className="flex gap-2">
-                                    <button type="button" onClick={() => setMediaTarget("gallery")} disabled={productForm.images.length >= 12} className={btnMiniCls}>+ Biblioteca</button>
-                                    <button type="button" onClick={() => setProductForm({ ...productForm, images: [...productForm.images, { url: "", alt: "" }] })} disabled={productForm.images.length >= 12} className={btnMiniCls}>+ URL</button>
+                                    <button type="button" onClick={() => setMediaTarget("gallery")} disabled={productForm.images.length >= 12} className={btnMiniCls}>{t("product.library")}</button>
+                                    <button type="button" onClick={() => setProductForm({ ...productForm, images: [...productForm.images, { url: "", alt: "" }] })} disabled={productForm.images.length >= 12} className={btnMiniCls}>{t("product.addUrl")}</button>
                                 </div>
                             </div>
                             {productForm.images.length === 0 ? (
-                                <p className="text-xs text-gray-400">Sin imágenes adicionales — la ficha del producto mostrará solo la imagen principal.</p>
+                                <p className="text-xs text-gray-400">{t("product.noImages")}</p>
                             ) : (
                                 <div className="space-y-2">
                                     {productForm.images.map((im, idx) => (
@@ -1197,7 +1199,7 @@ export default function OnlineStoreAdminPage() {
                                                 <div className="w-10 h-10 rounded-lg bg-gray-50 flex-shrink-0" />
                                             )}
                                             <input type="text" value={im.url} onChange={(e) => setImageField(idx, "url", e.target.value)} placeholder="/uploads/…" className={inputSmCls} />
-                                            <input type="text" value={im.alt} onChange={(e) => setImageField(idx, "alt", e.target.value)} placeholder="Texto alt" className={inputSmCls + " max-w-[130px]"} />
+                                            <input type="text" value={im.alt} onChange={(e) => setImageField(idx, "alt", e.target.value)} placeholder={t("product.altPlaceholder")} className={inputSmCls + " max-w-[130px]"} />
                                             <button type="button" onClick={() => moveImage(idx, -1)} disabled={idx === 0} className={btnMiniCls}>↑</button>
                                             <button type="button" onClick={() => moveImage(idx, 1)} disabled={idx === productForm.images.length - 1} className={btnMiniCls}>↓</button>
                                             <button type="button" onClick={() => setProductForm({ ...productForm, images: productForm.images.filter((_, i) => i !== idx) })} className={btnDangerCls}>&#215;</button>
@@ -1210,49 +1212,49 @@ export default function OnlineStoreAdminPage() {
                         {/* ---- variants ---- */}
                         <div className="pt-2 border-t border-gray-100">
                             <div className="flex items-center justify-between mb-2">
-                                <label className={labelCls + " mb-0"}>Variantes ({productForm.variants.length}/40)</label>
+                                <label className={labelCls + " mb-0"}>{t("product.variants", { n: productForm.variants.length })}</label>
                                 <button
                                     type="button"
                                     onClick={() => setProductForm({ ...productForm, variants: [...productForm.variants, { ...EMPTY_VARIANT }] })}
                                     disabled={productForm.variants.length >= 40}
                                     className={btnMiniCls}
                                 >
-                                    + Variante
+                                    {t("product.addVariant")}
                                 </button>
                             </div>
                             {productForm.variants.length === 0 ? (
-                                <p className="text-xs text-gray-400">Sin variantes — el producto se vende con el precio y stock base. Añade variantes para tallas, colores, etc.</p>
+                                <p className="text-xs text-gray-400">{t("product.noVariants")}</p>
                             ) : (
                                 <div className="space-y-2">
                                     <div className="grid grid-cols-[1fr_90px_80px_70px_60px_34px] gap-2 text-[9px] font-black uppercase tracking-widest text-gray-400 px-1">
-                                        <span>Nombre (p. ej. Talla M)</span><span>SKU</span><span>Precio</span><span>Stock</span><span>Activa</span><span></span>
+                                        <span>{t("product.vName")}</span><span>{t("product.vSku")}</span><span>{t("product.vPrice")}</span><span>{t("product.vStock")}</span><span>{t("product.vActive")}</span><span></span>
                                     </div>
                                     {productForm.variants.map((v, idx) => (
                                         <div key={idx} className="grid grid-cols-[1fr_90px_80px_70px_60px_34px] gap-2 items-center">
-                                            <input type="text" value={v.name} onChange={(e) => setVariantField(idx, "name", e.target.value)} placeholder="Talla M / Rojo" className={inputSmCls} maxLength={120} />
-                                            <input type="text" value={v.sku} onChange={(e) => setVariantField(idx, "sku", e.target.value)} placeholder="SKU" className={inputSmCls} maxLength={60} />
-                                            <input type="text" inputMode="decimal" value={v.price} onChange={(e) => setVariantField(idx, "price", e.target.value)} placeholder="base" className={inputSmCls} title="Vacío = usa el precio base del producto" />
+                                            <input type="text" value={v.name} onChange={(e) => setVariantField(idx, "name", e.target.value)} placeholder={t("product.vNamePlaceholder")} className={inputSmCls} maxLength={120} />
+                                            <input type="text" value={v.sku} onChange={(e) => setVariantField(idx, "sku", e.target.value)} placeholder={t("product.vSkuPlaceholder")} className={inputSmCls} maxLength={60} />
+                                            <input type="text" inputMode="decimal" value={v.price} onChange={(e) => setVariantField(idx, "price", e.target.value)} placeholder={t("product.vPricePlaceholder")} className={inputSmCls} title={t("product.vPriceTitle")} />
                                             <input type="text" inputMode="numeric" value={v.stock} onChange={(e) => setVariantField(idx, "stock", e.target.value)} placeholder="∞" className={inputSmCls} />
                                             <input type="checkbox" checked={!!v.is_active} onChange={(e) => setVariantField(idx, "is_active", e.target.checked)} className="justify-self-center" />
                                             <button type="button" onClick={() => setProductForm({ ...productForm, variants: productForm.variants.filter((_, i) => i !== idx) })} className={btnDangerCls + " justify-self-center"}>&#215;</button>
                                         </div>
                                     ))}
-                                    <p className="text-[11px] text-gray-400">Precio vacío = usa el precio base. Stock vacío = ilimitado. El stock se descuenta por variante al vender.</p>
+                                    <p className="text-[11px] text-gray-400">{t("product.variantsHelp")}</p>
                                 </div>
                             )}
                         </div>
 
                         <div>
-                            <label className={labelCls}>Categoría</label>
-                            <input type="text" value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} placeholder="ropa, accesorios…" className={inputCls} maxLength={100} />
+                            <label className={labelCls}>{t("product.category")}</label>
+                            <input type="text" value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} placeholder={t("product.categoryPlaceholder")} className={inputCls} maxLength={100} />
                         </div>
                         <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
                             <input type="checkbox" checked={!!productForm.is_published} onChange={(e) => setProductForm({ ...productForm, is_published: e.target.checked })} />
-                            Publicado (visible en la tienda)
+                            {t("product.published")}
                         </label>
                         <div className="flex justify-end gap-3">
-                            <button type="button" onClick={() => setProductForm(null)} className={btnGhostCls}>Cancelar</button>
-                            <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                            <button type="button" onClick={() => setProductForm(null)} className={btnGhostCls}>{t("common.cancel")}</button>
+                            <button type="submit" disabled={busy} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                         </div>
                     </form>
                 </Modal>
@@ -1260,42 +1262,42 @@ export default function OnlineStoreAdminPage() {
 
             {/* ============================ MODAL: CUPÓN ============================ */}
             {couponForm && (
-                <Modal title={couponForm.id ? "Editar cupón" : "Nuevo cupón"} onClose={() => setCouponForm(null)}>
+                <Modal title={couponForm.id ? t("coupon.edit") : t("coupons.new")} onClose={() => setCouponForm(null)}>
                     <form onSubmit={saveCoupon} className="space-y-4">
                         <div>
-                            <label className={labelCls}>Código *</label>
-                            <input type="text" value={couponForm.code} onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })} placeholder="VERANO10" className={inputCls + " font-mono uppercase"} required maxLength={50} />
+                            <label className={labelCls}>{t("coupon.code")}</label>
+                            <input type="text" value={couponForm.code} onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })} placeholder={t("coupon.codePlaceholder")} className={inputCls + " font-mono uppercase"} required maxLength={50} />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className={labelCls}>Tipo</label>
+                                <label className={labelCls}>{t("coupon.type")}</label>
                                 <select value={couponForm.type} onChange={(e) => setCouponForm({ ...couponForm, type: e.target.value })} className={inputCls}>
-                                    <option value="percent">Porcentaje (%)</option>
-                                    <option value="fixed">Monto fijo ({symbol})</option>
+                                    <option value="percent">{t("coupon.percent")}</option>
+                                    <option value="fixed">{t("coupon.fixed", { symbol })}</option>
                                 </select>
                             </div>
                             <div>
-                                <label className={labelCls}>{couponForm.type === "percent" ? "Porcentaje (1–100)" : `Monto (${symbol})`}</label>
+                                <label className={labelCls}>{couponForm.type === "percent" ? t("coupon.percentValue") : t("coupon.amountValue", { symbol })}</label>
                                 <input type="text" inputMode="decimal" value={couponForm.value} onChange={(e) => setCouponForm({ ...couponForm, value: e.target.value })} placeholder={couponForm.type === "percent" ? "10" : "5.00"} className={inputCls} required />
                             </div>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className={labelCls}>Compra mínima ({symbol})</label>
+                                <label className={labelCls}>{t("coupon.minTotal", { symbol })}</label>
                                 <input type="text" inputMode="decimal" value={couponForm.minTotal} onChange={(e) => setCouponForm({ ...couponForm, minTotal: e.target.value })} placeholder="0.00" className={inputCls} />
                             </div>
                             <div>
-                                <label className={labelCls}>Usos máximos (vacío = ∞)</label>
+                                <label className={labelCls}>{t("coupon.maxUses")}</label>
                                 <input type="text" inputMode="numeric" value={couponForm.maxUses} onChange={(e) => setCouponForm({ ...couponForm, maxUses: e.target.value })} placeholder="∞" className={inputCls} />
                             </div>
                         </div>
                         <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
                             <input type="checkbox" checked={!!couponForm.is_active} onChange={(e) => setCouponForm({ ...couponForm, is_active: e.target.checked })} />
-                            Activo
+                            {t("coupon.active")}
                         </label>
                         <div className="flex justify-end gap-3">
-                            <button type="button" onClick={() => setCouponForm(null)} className={btnGhostCls}>Cancelar</button>
-                            <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                            <button type="button" onClick={() => setCouponForm(null)} className={btnGhostCls}>{t("common.cancel")}</button>
+                            <button type="submit" disabled={busy} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                         </div>
                     </form>
                 </Modal>
@@ -1303,33 +1305,33 @@ export default function OnlineStoreAdminPage() {
 
             {/* ============================ MODAL: ZONA DE ENVÍO ============================ */}
             {zoneForm && (
-                <Modal title={zoneForm.id ? "Editar zona" : "Nueva zona de envío"} onClose={() => setZoneForm(null)}>
+                <Modal title={zoneForm.id ? t("zone.edit") : t("zone.new")} onClose={() => setZoneForm(null)}>
                     <form onSubmit={saveZone} className="space-y-4">
                         <div>
-                            <label className={labelCls}>Nombre de la zona *</label>
-                            <input type="text" value={zoneForm.name} onChange={(e) => setZoneForm({ ...zoneForm, name: e.target.value })} placeholder="Nacional, CDMX, Internacional…" className={inputCls} required maxLength={100} />
+                            <label className={labelCls}>{t("zone.name")}</label>
+                            <input type="text" value={zoneForm.name} onChange={(e) => setZoneForm({ ...zoneForm, name: e.target.value })} placeholder={t("zone.namePlaceholder")} className={inputCls} required maxLength={100} />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className={labelCls}>Tarifa ({symbol})</label>
-                                <input type="text" inputMode="decimal" value={zoneForm.rate} onChange={(e) => setZoneForm({ ...zoneForm, rate: e.target.value })} placeholder="0 = gratis" className={inputCls} />
+                                <label className={labelCls}>{t("zone.rate", { symbol })}</label>
+                                <input type="text" inputMode="decimal" value={zoneForm.rate} onChange={(e) => setZoneForm({ ...zoneForm, rate: e.target.value })} placeholder={t("zone.ratePlaceholder")} className={inputCls} />
                             </div>
                             <div>
-                                <label className={labelCls}>Gratis desde ({symbol}, vacío = nunca)</label>
+                                <label className={labelCls}>{t("zone.freeOver", { symbol })}</label>
                                 <input type="text" inputMode="decimal" value={zoneForm.freeOver} onChange={(e) => setZoneForm({ ...zoneForm, freeOver: e.target.value })} placeholder="100.00" className={inputCls} />
                             </div>
                         </div>
                         <div>
-                            <label className={labelCls}>Impuesto de la zona (%, vacío = predeterminado)</label>
+                            <label className={labelCls}>{t("zone.tax")}</label>
                             <input type="text" inputMode="decimal" value={zoneForm.taxPercent} onChange={(e) => setZoneForm({ ...zoneForm, taxPercent: e.target.value })} placeholder="16" className={inputCls} />
                         </div>
                         <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
                             <input type="checkbox" checked={!!zoneForm.is_active} onChange={(e) => setZoneForm({ ...zoneForm, is_active: e.target.checked })} />
-                            Activa (visible en el checkout)
+                            {t("zone.active")}
                         </label>
                         <div className="flex justify-end gap-3">
-                            <button type="button" onClick={() => setZoneForm(null)} className={btnGhostCls}>Cancelar</button>
-                            <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                            <button type="button" onClick={() => setZoneForm(null)} className={btnGhostCls}>{t("common.cancel")}</button>
+                            <button type="submit" disabled={busy} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                         </div>
                     </form>
                 </Modal>

@@ -15,18 +15,19 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
 const STATUS_META = {
-    pending: { label: "Pendiente", cls: "is-pending" },
-    confirmed: { label: "Confirmado", cls: "is-confirmed" },
-    unsubscribed: { label: "Cancelado", cls: "is-unsub" },
+    pending: { labelKey: "status.pending", cls: "is-pending" },
+    confirmed: { labelKey: "status.confirmed", cls: "is-confirmed" },
+    unsubscribed: { labelKey: "status.unsubscribed", cls: "is-unsub" },
 };
 
 const FILTER_CHIPS = [
-    { value: "", label: "Todos" },
-    { value: "confirmed", label: "Confirmados" },
-    { value: "pending", label: "Pendientes" },
-    { value: "unsubscribed", label: "Cancelados" },
+    { value: "", labelKey: "filter.all" },
+    { value: "confirmed", labelKey: "filter.confirmed" },
+    { value: "pending", labelKey: "filter.pending" },
+    { value: "unsubscribed", labelKey: "filter.unsubscribed" },
 ];
 
 /* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
@@ -80,6 +81,7 @@ function StatCard({ label, value, accent }) {
 }
 
 function CampaignModal({ campaign, onClose, onSaved }) {
+    const { t } = useT();
     const [subject, setSubject] = useState(campaign?.subject || "");
     const [bodyHtml, setBodyHtml] = useState(campaign?.body_html || "");
     const [busy, setBusy] = useState(false);
@@ -95,7 +97,7 @@ function CampaignModal({ campaign, onClose, onSaved }) {
             const saved = await apiPost("/plugin/newsletter/campaigns", payload);
             onSaved(saved);
         } catch (err) {
-            setError(err?.message || "No se pudo guardar la campaña.");
+            setError(err?.message || t("modal.saveError"));
         } finally {
             setBusy(false);
         }
@@ -107,7 +109,7 @@ function CampaignModal({ campaign, onClose, onSaved }) {
                 className="cf-letter"
                 role="dialog"
                 aria-modal="true"
-                aria-label={campaign?.id ? "Editar campaña" : "Nueva campaña"}
+                aria-label={campaign?.id ? t("modal.edit") : t("modal.new")}
                 style={{ maxWidth: "42rem" }}
                 onClick={(e) => e.stopPropagation()}
             >
@@ -115,34 +117,33 @@ function CampaignModal({ campaign, onClose, onSaved }) {
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.35rem" }}>
                         <h2 className="cf-editor-title" style={{ marginBottom: 0 }}>
                             <IconPen />
-                            {campaign?.id ? "Editar campaña" : "Nueva campaña"}
+                            {campaign?.id ? t("modal.edit") : t("modal.new")}
                         </h2>
-                        <button type="button" onClick={onClose} aria-label="Cerrar" className="cf-iconbtn">✕</button>
+                        <button type="button" onClick={onClose} aria-label={t("common.close")} className="cf-iconbtn">✕</button>
                     </div>
                     <form onSubmit={save} style={{ display: "grid", gap: "1.15rem" }}>
                         <div>
-                            <label className="cf-label" htmlFor="nl-subject">Asunto</label>
-                            <input id="nl-subject" type="text" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Novedades de este mes" className="cf-input" required maxLength={300} />
+                            <label className="cf-label" htmlFor="nl-subject">{t("modal.subject")}</label>
+                            <input id="nl-subject" type="text" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder={t("modal.subjectPlaceholder")} className="cf-input" required maxLength={300} />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="nl-body">Contenido (HTML)</label>
+                            <label className="cf-label" htmlFor="nl-body">{t("modal.body")}</label>
                             <textarea
                                 id="nl-body"
                                 value={bodyHtml}
                                 onChange={(e) => setBodyHtml(e.target.value)}
-                                placeholder={"<h1>Hola</h1>\n<p>Escribe aquí el contenido del boletín…</p>"}
+                                placeholder={t("modal.bodyPlaceholder")}
                                 className="cf-textarea"
                                 required
                             />
                             <p className="cf-help">
-                                Se permite HTML básico: &lt;h1&gt;–&lt;h3&gt;, &lt;p&gt;, &lt;a&gt;, &lt;strong&gt;, &lt;em&gt;, &lt;ul&gt;/&lt;li&gt;, &lt;img&gt;…
-                                El enlace para cancelar la suscripción se añade automáticamente al final de cada correo.
+                                {t("modal.help")}
                             </p>
                         </div>
                         {error && <div role="alert" className="cf-flash is-error" style={{ marginBottom: 0 }}>{error}</div>}
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem" }}>
-                            <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
-                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar borrador"}</button>
+                            <button type="button" onClick={onClose} className="cf-btn-ghost">{t("common.cancel")}</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? t("modal.saving") : t("modal.saveDraft")}</button>
                         </div>
                     </form>
                 </div>
@@ -152,6 +153,7 @@ function CampaignModal({ campaign, onClose, onSaved }) {
 }
 
 export default function NewsletterAdminPage() {
+    const { t, locale } = useT();
     const [tab, setTab] = useState("subs"); // 'subs' | 'camps'
     const [subs, setSubs] = useState([]);
     const [stats, setStats] = useState({ total: 0, confirmed: 0, pending: 0, unsubscribed: 0 });
@@ -189,8 +191,8 @@ export default function NewsletterAdminPage() {
 
     // Debounced reload when the filter/search change.
     useEffect(() => {
-        const t = setTimeout(loadSubs, 250);
-        return () => clearTimeout(t);
+        const timer = setTimeout(loadSubs, 250);
+        return () => clearTimeout(timer);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [statusFilter, search]);
 
@@ -200,12 +202,12 @@ export default function NewsletterAdminPage() {
     }, []);
 
     const deleteSubscriber = async (id) => {
-        if (!window.confirm("¿Eliminar este suscriptor definitivamente?")) return;
+        if (!window.confirm(t("subs.confirmDelete"))) return;
         try {
             await apiDelete(`/plugin/newsletter/subscribers/${id}`);
             loadSubs();
         } catch (err) {
-            setNotice({ kind: "err", text: err?.message || "No se pudo eliminar el suscriptor." });
+            setNotice({ kind: "err", text: err?.message || t("subs.deleteError") });
         }
     };
 
@@ -216,56 +218,56 @@ export default function NewsletterAdminPage() {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = data.filename || "suscriptores.csv";
+            a.download = data.filename || t("subs.csvName");
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
         } catch (err) {
-            setNotice({ kind: "err", text: err?.message || "No se pudo exportar el CSV." });
+            setNotice({ kind: "err", text: err?.message || t("subs.exportError") });
         }
     };
 
     const deleteCampaign = async (camp) => {
-        if (!window.confirm(`¿Eliminar la campaña "${camp.subject}"?`)) return;
+        if (!window.confirm(t("camps.confirmDelete", { subject: camp.subject }))) return;
         try {
             await apiDelete(`/plugin/newsletter/campaigns/${camp.id}`);
             loadCampaigns();
         } catch (err) {
-            setNotice({ kind: "err", text: err?.message || "No se pudo eliminar la campaña." });
+            setNotice({ kind: "err", text: err?.message || t("camps.deleteError") });
         }
     };
 
     const sendTest = async (camp) => {
-        const to = window.prompt("Correo para enviar la prueba:");
+        const to = window.prompt(t("camps.testPrompt"));
         if (!to || !to.trim()) return;
         try {
             await apiPost(`/plugin/newsletter/campaigns/${camp.id}/test`, { to: to.trim() });
-            setNotice({ kind: "ok", text: `Prueba enviada a ${to.trim()}.` });
+            setNotice({ kind: "ok", text: t("camps.testSent", { to: to.trim() }) });
         } catch (err) {
-            setNotice({ kind: "warn", text: err?.message || "No se pudo enviar la prueba." });
+            setNotice({ kind: "warn", text: err?.message || t("camps.testError") });
         }
     };
 
     const sendCampaign = async (camp) => {
         const n = stats.confirmed || 0;
         if (n === 0) {
-            setNotice({ kind: "warn", text: "No hay suscriptores confirmados a los que enviar." });
+            setNotice({ kind: "warn", text: t("camps.noConfirmed") });
             return;
         }
-        if (!window.confirm(`¿Enviar "${camp.subject}" a ${n} suscriptores confirmados? Esta acción no se puede deshacer.`)) return;
+        if (!window.confirm(t("camps.confirmSend", { subject: camp.subject, n }))) return;
         setSendingId(camp.id);
         setNotice(null);
         try {
             const r = await apiPost(`/plugin/newsletter/campaigns/${camp.id}/send`, {});
             setNotice({
                 kind: "ok",
-                text: `Campaña enviada: ${r.sent} correos enviados${r.failed ? `, ${r.failed} fallidos` : ""}.`,
+                text: t("camps.sent", { sent: r.sent, failed: r.failed ? t("camps.sentFailed", { n: r.failed }) : "" }),
             });
             loadCampaigns();
         } catch (err) {
             // The 502 mail-unavailable error surfaces here (apiPost throws with the server message).
-            setNotice({ kind: "warn", text: err?.message || "No se pudo enviar la campaña." });
+            setNotice({ kind: "warn", text: err?.message || t("camps.sendError") });
             loadCampaigns();
         } finally {
             setSendingId(null);
@@ -275,7 +277,7 @@ export default function NewsletterAdminPage() {
     const fmtDate = (v) => {
         if (!v) return "—";
         const d = new Date(String(v).includes("T") ? v : `${v}Z`.replace(" ", "T"));
-        return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString();
+        return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString(locale);
     };
 
     return (
@@ -284,8 +286,8 @@ export default function NewsletterAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconSend /></div>
                 <div>
-                    <h1 className="cf-title">Newsletter</h1>
-                    <p className="cf-subtitle">Suscriptores + campañas de correo con enlace de baja automático</p>
+                    <h1 className="cf-title">{t("app.title")}</h1>
+                    <p className="cf-subtitle">{t("app.subtitle")}</p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
@@ -297,23 +299,23 @@ export default function NewsletterAdminPage() {
                 >
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem" }}>
                         <span>{notice.text}</span>
-                        <button type="button" className="cf-flash-x" onClick={() => setNotice(null)} aria-label="Cerrar aviso">✕</button>
+                        <button type="button" className="cf-flash-x" onClick={() => setNotice(null)} aria-label={t("app.closeNotice")}>✕</button>
                     </div>
                 </div>
             )}
 
             {mailError && (
                 <div role="alert" className="cf-flash is-warn">
-                    No se pudo enviar el correo de confirmación ({mailError.message}). Las nuevas suscripciones quedan pendientes hasta que el correo funcione.
+                    {t("app.mailError", { msg: mailError.message })}
                 </div>
             )}
 
             {/* stat tiles */}
             <div className="cf-stats">
-                <StatCard label="Total" value={stats.total} />
-                <StatCard label="Confirmados" value={stats.confirmed} accent="is-ok" />
-                <StatCard label="Pendientes" value={stats.pending} accent="is-warn" />
-                <StatCard label="Cancelados" value={stats.unsubscribed} accent="is-muted" />
+                <StatCard label={t("stats.total")} value={stats.total} />
+                <StatCard label={t("filter.confirmed")} value={stats.confirmed} accent="is-ok" />
+                <StatCard label={t("filter.pending")} value={stats.pending} accent="is-warn" />
+                <StatCard label={t("filter.unsubscribed")} value={stats.unsubscribed} accent="is-muted" />
             </div>
 
             {/* tabs */}
@@ -325,7 +327,7 @@ export default function NewsletterAdminPage() {
                     className={`cf-tab ${tab === "subs" ? "is-active" : ""}`}
                     onClick={() => setTab("subs")}
                 >
-                    Suscriptores
+                    {t("tab.subs")}
                 </button>
                 <button
                     type="button"
@@ -334,7 +336,7 @@ export default function NewsletterAdminPage() {
                     className={`cf-tab ${tab === "camps" ? "is-active" : ""}`}
                     onClick={() => setTab("camps")}
                 >
-                    Campañas
+                    {t("tab.camps")}
                 </button>
             </div>
 
@@ -351,7 +353,7 @@ export default function NewsletterAdminPage() {
                                     onClick={() => setStatusFilter(c.value)}
                                     className={`cf-chip-filter ${statusFilter === c.value ? "is-active" : ""}`}
                                 >
-                                    {c.label}
+                                    {t(c.labelKey)}
                                 </button>
                             ))}
                         </div>
@@ -359,13 +361,13 @@ export default function NewsletterAdminPage() {
                             type="text"
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            placeholder="Buscar por correo o nombre…"
-                            aria-label="Buscar por correo o nombre"
+                            placeholder={t("subs.searchPlaceholder")}
+                            aria-label={t("subs.searchLabel")}
                             className="cf-input"
                             style={{ flex: 1, minWidth: "200px", width: "auto" }}
                         />
                         <button type="button" onClick={exportCsv} className="cf-btn-ghost">
-                            <IconDownload /> Exportar CSV
+                            <IconDownload /> {t("subs.exportCsv")}
                         </button>
                     </div>
 
@@ -373,7 +375,7 @@ export default function NewsletterAdminPage() {
                         <div className="cf-empty">
                             <IconUsers />
                             <span>
-                                No hay suscriptores{statusFilter || search ? " con ese filtro" : " todavía — agrega el bloque Newsletter a una página"}.
+                                {statusFilter || search ? t("subs.emptyFiltered") : t("subs.emptyNone")}
                             </span>
                         </div>
                     ) : (
@@ -381,10 +383,10 @@ export default function NewsletterAdminPage() {
                             <table className="cf-table">
                                 <thead>
                                     <tr>
-                                        <th>Correo</th>
-                                        <th>Nombre</th>
-                                        <th>Estado</th>
-                                        <th>Fecha</th>
+                                        <th>{t("subs.colEmail")}</th>
+                                        <th>{t("subs.colName")}</th>
+                                        <th>{t("subs.colStatus")}</th>
+                                        <th>{t("subs.colDate")}</th>
                                         <th style={{ width: "2.5rem" }}></th>
                                     </tr>
                                 </thead>
@@ -396,7 +398,7 @@ export default function NewsletterAdminPage() {
                                                 <td className="cf-cell-email">{s.email}</td>
                                                 <td>{s.name || "—"}</td>
                                                 <td>
-                                                    <span className={`cf-pill ${meta.cls}`}>{meta.label}</span>
+                                                    <span className={`cf-pill ${meta.cls}`}>{t(meta.labelKey)}</span>
                                                 </td>
                                                 <td className="cf-cell-date">{fmtDate(s.created_at)}</td>
                                                 <td style={{ textAlign: "right" }}>
@@ -405,7 +407,7 @@ export default function NewsletterAdminPage() {
                                                         onClick={() => deleteSubscriber(s.id)}
                                                         className="cf-btn-danger"
                                                     >
-                                                        Eliminar
+                                                        {t("common.delete")}
                                                     </button>
                                                 </td>
                                             </tr>
@@ -422,16 +424,16 @@ export default function NewsletterAdminPage() {
             {tab === "camps" && (
                 <div className="cf-card-item">
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.15rem" }}>
-                        <h2 className="cf-form-name">Campañas</h2>
+                        <h2 className="cf-form-name">{t("camps.title")}</h2>
                         <button type="button" onClick={() => setEditing({})} className="cf-btn">
-                            <IconPlus /> Nueva campaña
+                            <IconPlus /> {t("camps.new")}
                         </button>
                     </div>
 
                     {campaigns.length === 0 ? (
                         <div className="cf-empty">
                             <IconEnvelope />
-                            <span>No hay campañas todavía — crea la primera con "Nueva campaña".</span>
+                            <span>{t("camps.empty")}</span>
                         </div>
                     ) : (
                         <div>
@@ -441,21 +443,21 @@ export default function NewsletterAdminPage() {
                                         <p className="cf-camp-subject">{c.subject}</p>
                                         <p className="cf-camp-meta">
                                             {c.status === "sent"
-                                                ? `Enviada · ${c.sent_count} enviados${c.fail_count ? ` · ${c.fail_count} fallidos` : ""} · ${fmtDate(c.sent_at)}`
-                                                : `Borrador · creada ${fmtDate(c.created_at)}`}
+                                                ? t("camps.metaSent", { sent: c.sent_count, failed: c.fail_count ? t("camps.metaFailed", { n: c.fail_count }) : "", date: fmtDate(c.sent_at) })
+                                                : t("camps.metaDraft", { date: fmtDate(c.created_at) })}
                                         </p>
                                     </div>
                                     <span className={`cf-pill ${c.status === "sent" ? "is-sent" : "is-draft"}`}>
-                                        {c.status === "sent" ? "Enviada" : "Borrador"}
+                                        {c.status === "sent" ? t("camps.statusSent") : t("camps.statusDraft")}
                                     </span>
                                     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                                         {c.status === "draft" && (
                                             <button type="button" onClick={() => setEditing(c)} className="cf-btn-ghost">
-                                                <IconPen /> Editar
+                                                <IconPen /> {t("common.edit")}
                                             </button>
                                         )}
                                         <button type="button" onClick={() => sendTest(c)} className="cf-btn-ghost">
-                                            <IconSend /> Enviar prueba
+                                            <IconSend /> {t("camps.sendTest")}
                                         </button>
                                         {c.status === "draft" && (
                                             <button
@@ -464,7 +466,7 @@ export default function NewsletterAdminPage() {
                                                 disabled={sendingId === c.id}
                                                 className="cf-btn"
                                             >
-                                                <IconSend /> {sendingId === c.id ? "Enviando…" : `Enviar a ${stats.confirmed} confirmados`}
+                                                <IconSend /> {sendingId === c.id ? t("camps.sending") : t("camps.sendTo", { n: stats.confirmed })}
                                             </button>
                                         )}
                                         <button
@@ -472,7 +474,7 @@ export default function NewsletterAdminPage() {
                                             onClick={() => deleteCampaign(c)}
                                             className="cf-btn-danger"
                                         >
-                                            Eliminar
+                                            {t("common.delete")}
                                         </button>
                                     </div>
                                 </div>
@@ -481,9 +483,7 @@ export default function NewsletterAdminPage() {
                     )}
 
                     <p className="cf-footnote">
-                        Los envíos van únicamente a los suscriptores <strong>confirmados</strong>. Cada correo incluye
-                        automáticamente un enlace para cancelar la suscripción. Usa "Enviar prueba" para revisar el
-                        resultado antes del envío definitivo.
+                        {t("camps.footnote1")}<strong>{t("camps.footnoteStrong")}</strong>{t("camps.footnote2")}
                     </p>
                 </div>
             )}
@@ -494,7 +494,7 @@ export default function NewsletterAdminPage() {
                     onClose={() => setEditing(null)}
                     onSaved={() => {
                         setEditing(null);
-                        setNotice({ kind: "ok", text: "Campaña guardada." });
+                        setNotice({ kind: "ok", text: t("camps.saved") });
                         loadCampaigns();
                     }}
                 />

@@ -1,7 +1,7 @@
 {
     "id": "image-lightbox",
     "name": "Image Lightbox",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Site-wide click-to-zoom lightbox for content images: dark overlay, captions from alt text, prev/next navigation with keyboard support and neighbor preloading. Zero-config by default, with a small admin page to toggle it, toggle captions and adjust the content scope selector. WordPress parity: Simple Lightbox / FooBox / Easy FancyBox.",
     "author": "WordJS",
     "isolated": true,

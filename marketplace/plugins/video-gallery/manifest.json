@@ -1,7 +1,7 @@
 {
     "id": "video-gallery",
     "name": "Video Gallery",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Manage and display YouTube video carousels",
     "author": "WordJS",
     "isolated": true,
