@@ -19,6 +19,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   accepted, as WordPress accepts them — from an import and from an upload. WordPress's own site-editor records
   (`wp_navigation`, templates, global styles, fonts, Customizer CSS) are no longer imported as posts whose
   link is a 404; the import leaves them out and the summary says how many.
+- **PostgreSQL: a plugin's first insert after activation no longer fails.** When a plugin created a table with
+  an auto-numbered id (`SERIAL` or `IDENTITY`) after it was activated — a mail server's first message, for
+  instance — its own database role was given the table but not the counter that numbers its rows, so the first
+  insert failed with "permission denied for sequence …" until the server was restarted. The counter is now
+  granted together with the table. MySQL/MariaDB were not affected.
 
 ## [2.8.0] - 2026-10-22
 
