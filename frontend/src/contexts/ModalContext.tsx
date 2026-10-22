@@ -10,25 +10,43 @@ export interface DialogLabels {
     cancelText?: string;
 }
 
+/** What a prompt's text box starts with and how it is typed. */
+export interface PromptOptions extends DialogLabels {
+    defaultValue?: string;
+    placeholder?: string;
+    /** The input's type: "text" (default), "email", "url" or "number". */
+    inputType?: "text" | "email" | "url" | "number";
+}
+
 interface ModalContextType {
     alert: (message: string, title?: string, labels?: DialogLabels) => Promise<void>;
     confirm: (message: string, title?: string, isDanger?: boolean, labels?: DialogLabels) => Promise<boolean>;
+    /**
+     * The host's replacement for the browser's prompt(), which WordJS never uses: resolves to what the
+     * reader typed, or null when they cancel (Cancel, Escape or the backdrop).
+     */
+    prompt: (message: string, title?: string, options?: PromptOptions) => Promise<string | null>;
 }
 
 /** The dialog on screen as the caller asked for it; what it left out is filled in when it renders. */
 export interface ModalRequest {
-    type: "alert" | "confirm";
+    type: "alert" | "confirm" | "prompt";
     message: string;
     title?: string;
     isDanger: boolean;
     labels: DialogLabels;
+    /** Set for a prompt: its text box. */
+    input?: { defaultValue: string; placeholder?: string; inputType: "text" | "email" | "url" | "number" };
 }
 
 export interface ModalController extends ModalContextType {
     current: () => ModalRequest | null;
     subscribe: (listener: () => void) => () => void;
-    /** The reader answered: true = the confirming button, false = Cancel, Escape or the backdrop. */
-    answer: (confirmed: boolean) => void;
+    /**
+     * The reader answered: true = the confirming button, false = Cancel, Escape or the backdrop. A prompt
+     * passes the text it holds with a true answer.
+     */
+    answer: (confirmed: boolean, value?: string) => void;
 }
 
 /**
@@ -37,7 +55,7 @@ export interface ModalController extends ModalContextType {
  */
 export function createModalController(): ModalController {
     let current: ModalRequest | null = null;
-    let settle: (confirmed: boolean) => void = () => { };
+    let settle: (confirmed: boolean, value?: string) => void = () => { };
     const listeners = new Set<() => void>();
 
     const show = (next: ModalRequest | null) => {
@@ -45,7 +63,7 @@ export function createModalController(): ModalController {
         listeners.forEach((listener) => listener());
     };
     const open = (request: ModalRequest) => new Promise<boolean>((resolve) => {
-        settle = resolve;
+        settle = (confirmed) => resolve(confirmed);
         show(request);
     });
 
@@ -54,12 +72,17 @@ export function createModalController(): ModalController {
             open({ type: "alert", message, title, isDanger: false, labels }).then(() => undefined),
         confirm: (message, title, isDanger = false, labels = {}) =>
             open({ type: "confirm", message, title, isDanger, labels }),
-        answer: (confirmed) => {
+        prompt: (message, title, options = {}) => new Promise<string | null>((resolve) => {
+            const { defaultValue = "", placeholder, inputType = "text", ...labels } = options;
+            settle = (confirmed, value) => resolve(confirmed ? (value ?? defaultValue) : null);
+            show({ type: "prompt", message, title, isDanger: false, labels, input: { defaultValue, placeholder, inputType } });
+        }),
+        answer: (confirmed, value) => {
             // ConfirmationModal's confirming button calls onConfirm and then onClose: the first answer wins.
             const resolve = settle;
             settle = () => { };
             show(null);
-            resolve(confirmed);
+            resolve(confirmed, value);
         },
         current: () => current,
         subscribe: (listener) => {
@@ -72,9 +95,10 @@ export function createModalController(): ModalController {
 /** The title and button labels a request shows: the caller's own, else the defaults in `lang`. */
 export function modalText(request: ModalRequest, lang: Language) {
     const isAlert = request.type === "alert";
+    const isPrompt = request.type === "prompt";
     return {
-        title: request.title ?? t(isAlert ? "dialog.alert.title" : "dialog.confirm.title", lang),
-        confirmText: request.labels.confirmText ?? t(isAlert ? "dialog.ok" : "dialog.confirm", lang),
+        title: request.title ?? t(isAlert ? "dialog.alert.title" : isPrompt ? "dialog.prompt.title" : "dialog.confirm.title", lang),
+        confirmText: request.labels.confirmText ?? t(isAlert || isPrompt ? "dialog.ok" : "dialog.confirm", lang),
         cancelText: request.labels.cancelText ?? t("dialog.cancel", lang),
     };
 }
@@ -92,12 +116,13 @@ export function ModalDialog({ controller }: { controller: ModalController }) {
         <ConfirmationModal
             isOpen={!!request}
             onClose={() => controller.answer(false)}
-            onConfirm={() => controller.answer(true)}
+            onConfirm={(value) => controller.answer(true, value)}
             title={text?.title ?? ""}
             message={request?.message ?? ""}
             isDanger={request?.isDanger ?? false}
             confirmText={text?.confirmText}
             cancelText={text?.cancelText}
+            input={request?.input}
         />
     );
 }
@@ -106,7 +131,7 @@ const ModalContext = createContext<ModalContextType | undefined>(undefined);
 
 export function ModalProvider({ children }: { children: ReactNode }) {
     const [controller] = useState(createModalController);
-    const value = useMemo<ModalContextType>(() => ({ alert: controller.alert, confirm: controller.confirm }), [controller]);
+    const value = useMemo<ModalContextType>(() => ({ alert: controller.alert, confirm: controller.confirm, prompt: controller.prompt }), [controller]);
 
     return (
         <ModalContext.Provider value={value}>

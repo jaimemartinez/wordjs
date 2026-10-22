@@ -17,6 +17,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **Menus:** add posts, categories and tags as well as pages; nest items as submenus (indent and outdent, or pick the parent) and open an item in a new tab.
 - **Threaded public comments** with a *Reply* button; a comment published at once (no moderation) appears without reloading.
 - **Tags you can create from the editor's tag field.**
+- **`useModal().prompt()` and a gate against the browser's own dialogs.** WordJS never uses the browser's
+  `alert()`, `confirm()` or `prompt()`: they block the page, cannot be translated, and some embedders suppress
+  them so the action silently never happens. The host dialog gains `prompt(message, title, { defaultValue,
+  placeholder, inputType })`, which resolves to the text, or `null` when cancelled, in the reader's language.
+  The frontend's ESLint refuses the native dialogs. A repository test scans the frontend, the backend's
+  public assets and themes, the gateway and every marketplace plugin, and tells a `confirm` taken from
+  `useModal()` (allowed) from the browser global. The plugin files still being moved over are on a list
+  that only shrinks.
 
 ### Fixed
 

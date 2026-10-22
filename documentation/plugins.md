@@ -926,7 +926,11 @@ coordinators, a vendor, a field team opening a QR link. Declare it in the manife
 
 **What the page gets.** The bare portal layout — no theme header or footer, no admin shell — with
 `ModalProvider`, `I18nProvider` and `ToastProvider` mounted, so `useModal()`, `useI18n()` and `useToast()`
-work. It may import the same host modules as an admin page (`@/lib/api`, `@/lib/csrf`,
+work. **Never call the browser's own `alert()`, `confirm()` or `prompt()`** (nor `window.*`): use
+`useModal()` — `alert(message)`, `confirm(message, title, isDanger)` (a `Promise<boolean>`) and
+`prompt(message, title, { defaultValue, placeholder, inputType })` (a `Promise<string | null>`, `null` when
+cancelled) — or a toast. A repository test (`frontend/src/lib/__tests__/noNativeDialogs.test.ts`) fails on
+any native dialog in a marketplace plugin, the admin, the themes and the portals. It may import the same host modules as an admin page (`@/lib/api`, `@/lib/csrf`,
 `@/contexts/ToastContext`, …); a portal that posts with its own `fetch` must spread `csrfHeaders()` from
 `@/lib/csrf` into a mutating request that carries cookies. Your own look is your own: copy the UI
 primitives you want into your plugin rather than importing another plugin's.
