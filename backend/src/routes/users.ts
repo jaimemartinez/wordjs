@@ -1740,7 +1740,9 @@ router.put('/me/avatar', (req: Request, res: Response, next: any) => {
         return invalid();
     }
     const name = `${Number(req.user.id)}-${require('crypto').randomBytes(6).toString('hex')}.webp`;
-    require('fs').writeFileSync(require('path').join(avatarDir(), name), webp);
+    // A new file under a random name, created exclusively (never an existing path) and readable by this
+    // process only — the backend itself serves /uploads.
+    require('fs').writeFileSync(require('path').join(avatarDir(), name), webp, { flag: 'wx', mode: 0o600 });
     const previous = req.user.meta && req.user.meta.avatar_url;
     await User.updateMeta(req.user.id, 'avatar_url', `/uploads/avatars/${name}`);
     removeAvatarFile(previous);
