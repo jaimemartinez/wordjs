@@ -540,12 +540,19 @@ test('mysql (real): migration 0020 lists duplicates instead of failing, and adds
     if (!ctx) return;
     try {
         await require('../config/database').initializeSchema(ctx.driver, true);
+        // A database from before migration 0020: no email key yet (initializeSchema just made one), and no
+        // functional LOWER(user_email) index either (MySQL 8 can build one; MariaDB cannot).
+        await ctx.driver.exec('ALTER TABLE users DROP INDEX uq_users_email');
+        await ctx.driver.exec('ALTER TABLE users DROP COLUMN user_email_key');
+        const functional = await ctx.driver.get("SELECT 1 AS ok FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'users' AND index_name = 'idx_users_email' LIMIT 1");
+        if (functional) await ctx.driver.exec('ALTER TABLE users DROP INDEX idx_users_email');
         await ctx.driver.run("INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES ('a', 'x', 'dup@example.com', 'A')");
         await ctx.driver.run("INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES ('b', 'x', 'DUP@example.com', 'B')");
         const { ensureMysqlUniqueKeys } = require('../core/mysql-unique-keys');
         const ctxm = { exec: (s: string) => ctx.driver.exec(s), get: (s: string, p?: any[]) => ctx.driver.get(s, p), all: (s: string, p?: any[]) => ctx.driver.all(s, p) };
         const first = await ensureMysqlUniqueKeys(ctxm);
-        assert.ok(first.skipped.includes('uq_users_email') && first.created.includes('uq_posts_slug'));
+        // The email key is listed and left out; the others were already built by initializeSchema.
+        assert.deepStrictEqual(first, { created: [], skipped: ['uq_users_email'] });
         await ctx.driver.run("DELETE FROM users WHERE user_login = 'b'");
         const second = await ensureMysqlUniqueKeys(ctxm);
         assert.deepStrictEqual(second.created, ['uq_users_email']);
@@ -593,8 +600,10 @@ test('mysql (real): a backup without mysqldump — the portable dump restores ev
         await ctx.driver.run("DELETE FROM users");
         await ctx.driver.run("UPDATE posts SET post_title = 'changed'");
         await pd.restorePortableDump(file, { driver: 'mysql', db: ctx.driver });
-        const u = await ctx.driver.all('SELECT display_name, user_email_key FROM users');
-        assert.deepStrictEqual(u.map((r: any) => [r.display_name, r.user_email_key]), [['Ä 🎉', 'a@example.com']], 'rows back; the generated key recomputed');
+        const u = await ctx.driver.all('SELECT * FROM users');
+        const captured = fs.readFileSync(file, 'utf8').split('\n').filter((l: string) => l.startsWith('{"t":"users"'));
+        assert.deepStrictEqual(u.map((r: any) => [r.display_name, r.user_email_key]), [['Ä 🎉', 'a@example.com']],
+            `rows back; the generated key recomputed. Captured: ${captured.join(' | ')} — read back: ${JSON.stringify(u)}`);
         const p = await ctx.driver.get('SELECT post_title, CHAR_LENGTH(post_content) AS l FROM posts');
         assert.strictEqual(p.post_title, 'p');
         assert.strictEqual(Number(p.l), 80_000);

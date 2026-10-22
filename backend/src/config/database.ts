@@ -805,7 +805,10 @@ async function initializeSchema(db: any, isAsync = false) {
   // schema-migrations (which dedupes/defensively guards first).
   // MySQL/MariaDB have neither expression nor partial indexes: the email and slug rules are generated key
   // columns there, built by schema migration 0020 (core/mysql-unique-keys.ts) — not attempted here.
-  const isMysqlEngine = driverName === 'mysql' || driverName === 'mariadb';
+  // The engine of the database being built, not of the process: an engine switch (and its tests) hands
+  // this a MySQL driver while the running site is still on another engine.
+  const builtDriver = (db && db.constructor && db.constructor.name) || '';
+  const isMysqlEngine = builtDriver === 'MysqlDriver' || (builtDriver !== 'PostgresDriver' && (driverName === 'mysql' || driverName === 'mariadb'));
   const uniqueIndexes = [
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users (user_login)',
     ...(isMysqlEngine ? [] : [
