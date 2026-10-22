@@ -200,13 +200,34 @@ describe("EditorRenderer — estructura", () => {
     handle.setInlineEditing("h1");
     const html = render(handle, registry, { editorChrome: true });
     // El activo no se atenúa…
-    expect(html).toMatch(/<div data-wjs-block-id="h1" data-wjs-node-key="h1"><h2/);
+    expect(html).toMatch(/<div data-wjs-block-id="h1" data-wjs-node-key="h1" data-verso-inline-path=""><h2/);
     // …los demás sí.
     expect(html).toMatch(/data-wjs-node-key="t1" class="[^"]*opacity-40/);
     expect(html).toMatch(/data-wjs-node-key="card1" class="[^"]*opacity-40/);
     // Sin editorChrome, nadie se atenúa.
     const plain = render(handle, registry);
     expect(plain).not.toContain("opacity-40");
+  });
+
+  it("nunca atenúa los bloques que CONTIENEN el activo: su opacidad la heredaría el texto que se escribe", () => {
+    // Regresión (FALLOS 128): h1 vive en Section > Grid. Atenuar sec1 o grid1 dejaba el texto en
+    // edición al 40% — casi invisible sobre fondo claro.
+    const { handle, registry } = makeEditor();
+    handle.setInlineEditing("h1");
+    const html = render(handle, registry, { editorChrome: true });
+    for (const ancestor of ["sec1", "grid1"]) {
+      expect(html).toMatch(new RegExp(`<div data-wjs-block-id="${ancestor}" data-wjs-node-key="${ancestor}" data-verso-inline-path="">`));
+    }
+    // Lo que no lo contiene sigue atenuado (y fuera del camino): el foco no se pierde.
+    expect(html).toMatch(/data-wjs-node-key="h2top" class="[^"]*opacity-40/);
+    expect(html).not.toMatch(/data-wjs-node-key="h2top"[^>]*data-verso-inline-path/);
+    // Sin edición inline nadie está en el camino.
+    handle.setInlineEditing(null);
+    expect(render(handle, registry, { editorChrome: true })).not.toContain("data-verso-inline-path");
+    // Y en todo el camino desde la raíz hasta el texto en edición no hay ninguna opacidad.
+    const editing = html.indexOf('data-wjs-block-id="h1"');
+    const open = html.slice(0, editing).split("<div").filter((tag) => !tag.includes("</div>"));
+    expect(open.join("<div")).not.toContain("opacity-40");
   });
 });
 

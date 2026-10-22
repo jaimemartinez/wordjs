@@ -24,6 +24,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   instance — its own database role was given the table but not the counter that numbers its rows, so the first
   insert failed with "permission denied for sequence …" until the server was restarted. The counter is now
   granted together with the table. MySQL/MariaDB were not affected.
+- **Verso: the text you are editing keeps its real colour.** Editing a text in place dimmed every other block
+  to 40% opacity, including the blocks that contain the edited one, such as its Section or column. A
+  container's opacity applies to everything inside it, so the text being written faded and was nearly
+  invisible on a light background. A text animated by a scroll interaction also stayed frozen at the opacity
+  the canvas scroll gave it. While a text is edited, the blocks that contain it are no longer dimmed, and its
+  own and its containers' interactions and entrance animations show their resting state. The animation comes
+  back when editing ends.
 
 ## [2.8.0] - 2026-10-22
 
