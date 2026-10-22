@@ -66,15 +66,15 @@ One backend + one frontend per gateway needs **no** shared database or filesyste
 
 WordJS ships **downloadable, pre-compiled bundles** so an operator can deploy without cloning the repo or building anything locally. If you just want to run WordJS, grab a release ZIP instead of following the from-source installation steps below.
 
-> **Latest release:** [v2.7.0](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
+> **Latest release:** [v2.8.0](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
 
 ### How a release is cut (maintainers)
 
 Push a version tag and the release pipeline does the rest:
 
 ```bash
-git tag v2.7.0
-git push origin v2.7.0
+git tag v2.8.0
+git push origin v2.8.0
 ```
 
 A `v*` tag triggers **`.github/workflows/release.yml`**. It runs a **`verify`** job first — `npm run ci:all` (the parallel workspace installer, root `scripts/ci-install.mjs`), then the dependency-audit gate (`scripts/ci-audit.mjs`, which wraps `npm audit --omit=dev --audit-level=high` and blocks on any high/critical advisory in production dependencies) in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, a strict backend type check (`npx tsc --noEmit`) and the backend unit tests (`npm test`). Nothing is built or published unless that job is green. The **`build-release`** job (`needs: verify`) then runs `npm run ci:all` again followed by `npm run bundle-release` (root `scripts/make-release.js`). The packager:
@@ -459,10 +459,10 @@ Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 2
 A minimal chart lives at **[`deploy/helm/wordjs`](../deploy/helm/wordjs)**.
 
 ```bash
-docker build -t <registry>/wordjs:2.7.0 . && docker push <registry>/wordjs:2.7.0
+docker build -t <registry>/wordjs:2.8.0 . && docker push <registry>/wordjs:2.8.0
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
-  --set image.repository=<registry>/wordjs --set image.tag=2.7.0 \
+  --set image.repository=<registry>/wordjs --set image.tag=2.8.0 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 kubectl -n wordjs port-forward deployment/wordjs 3000:3000   # then browse /install

@@ -90,8 +90,11 @@ describe('database TLS upgrade note', () => {
             assert.ok(section.includes(must), `the note covers ${must}`);
         }
         const changelog = fs.readFileSync(path.join(REPO, 'CHANGELOG.md'), 'utf8');
-        const unreleased = changelog.slice(changelog.indexOf('## [Unreleased]'), changelog.indexOf('\n## [', changelog.indexOf('## [Unreleased]') + 5));
-        assert.match(unreleased, /Upgrade note/);
-        assert.ok(unreleased.includes(`database.md#${anchor}`), 'the CHANGELOG links the note');
+        // [Unreleased] plus the newest release: a version bump moves the entry from the first to the second.
+        const start = changelog.indexOf('## [Unreleased]');
+        const latest = changelog.indexOf('\n## [', start + 5);
+        const recent = changelog.slice(start, changelog.indexOf('\n## [', latest + 5));
+        assert.match(recent, /Upgrade note/);
+        assert.ok(recent.includes(`database.md#${anchor}`), 'the CHANGELOG links the note');
     });
 });
