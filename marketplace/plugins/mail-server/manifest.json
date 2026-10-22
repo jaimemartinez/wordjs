@@ -1,7 +1,7 @@
 {
     "id": "mail-server",
     "name": "Mail Server",
-    "version": "3.2.0",
+    "version": "3.2.1",
     "description": "Complete mail server: responsive webmail (filters, blocked senders, templates, scheduled send, auto-forward) and a server console (mailboxes and quotas, aliases, outbound queue, policies) on a real MTA with DKIM/SPF/DNS tooling",
     "author": "WordJS",
     "isolated": true,

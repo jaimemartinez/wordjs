@@ -50,6 +50,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   points to Automatic Certificate Renewal, which takes several names for one certificate. The server refuses the same
   cases up front with a `code`, as it does a name that is not a domain, or a wildcard over HTTP-01; the
   form shows each in the admin's language.
+- **mail-server 3.2.1.** Turning *Professional mail account* off in the user form gives the email field back
+  (it kept the generated mailbox address, and what was typed was appended to it); an existing account's stored
+  address is left as it is. Relay settings saved while the queue runs in another process take effect at the next
+  delivery: removing a relay no longer leaves queued mail failing with "Relay unavailable".
 
 ## [2.8.0] - 2026-10-22
 
