@@ -55,3 +55,17 @@ test('the job timeout leaves room for both attempts and the bounded wait', () =>
     // the suite: a ceiling at 15 would cancel exactly the runs the retry exists to save.
     assert.ok(minutes >= 20, `verso-e2e timeout-minutes is ${minutes}; it must cover the install retry path`);
 });
+
+// 2026-10-22: the stalled Ubuntu mirror cost 6–15 minutes per PR. The image already ships every library
+// Chromium needs, so apt must not be on the happy path at all — only behind a failed launch.
+test('the happy path installs the browser alone and proves it launches before any apt', () => {
+    const { job, step: whole } = e2eJob();
+    const step = whole.slice(whole.indexOf('run: |')); // the commands only, not the comment that explains them
+    const plain = step.search(/npx playwright install chromium/);
+    const firstApt = step.search(/--with-deps|apt\.conf\.d|sudo /);
+    assert.ok(plain >= 0, 'the step no longer installs the browser without system deps');
+    const launch = step.search(/launches && exit 0/);
+    assert.ok(launch > plain, 'nothing proves the browser launches before falling back to apt');
+    assert.ok(firstApt > launch, 'apt runs before the launch check — every PR would pay for the stalled mirror again');
+    assert.match(job, /uses: actions\/cache@v\d+\n\s+with:\n\s+path: ~\/\.cache\/ms-playwright\n/, 'the browser download is not cached between runs');
+});
