@@ -184,7 +184,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.30.0
+**ID:** `conference-manager` | **Version:** 2.31.0
 
 Complex business logic for managing church conferences.
 
@@ -194,8 +194,13 @@ Complex business logic for managing church conferences.
         with `required`/`unique` flags). Dynamic values are canonicalised server-side (`"0030"` → `"30"`), so the
         admin form and the coordinator portal store the same representation. A new conference starts with
         **no field** (and no assignment rule); the base fields — Nombre, Apellido, Email, Teléfono, Género, Grupo
-        familiar — are **templates** (`POST /fields { conference_id, template, label? }`) created with the
+        familiar, Requiere hospedaje — are **templates** (`POST /fields { conference_id, template, label? }`) created with the
         exact column, type, options and role the other features read (`409 field_exists` for a second copy).
+        «Requiere hospedaje» (2.31.0, template `lodging`, column `needs_lodging`) is a `switch` field stored as
+        `Sí` / `No`: an attendee who answers «No» is left out of every automatic assignment (admin run, a
+        location's run, «Sugerir reparto»), is not counted as «sin habitación», and `POST /inscriptions/:id/assign`
+        and `POST /portal/lodging/assign` refuse to place them (400); switching an attendee to «No» frees the bed
+        they held. A blank answer, or a form without the field, means the attendee needs lodging.
         Every field can be edited and deleted while the form is unpublished (a published form stays locked),
         and every feature works without the base fields: names fall back to the other form fields fit for a
         name — never a unique field (an ID document), a contact (email, phone) or notes — or the attendee's

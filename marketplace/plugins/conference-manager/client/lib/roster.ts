@@ -12,6 +12,7 @@
  * (backend/scripts/plugin-stylesheet.js).
  */
 import { COARSE_FIELDS_CSS } from './overlay';
+import { needsLodging } from './lodgingView';
 
 export type RosterField = { id?: number; name: string; label?: string | null; type?: string | null; role?: string | null; is_unique?: number | boolean | null; options?: string | null };
 export type RosterPerson = Record<string, any> & { id: number };
@@ -160,7 +161,8 @@ export function applyRosterFilters(
         if (f.pending && !hasPending(p)) return false;
         if (f.hideCancelled && isCancelled(p)) return false;
         if (f.room === 'with' && p.room_id == null) return false;
-        if (f.room === 'without' && p.room_id != null) return false;
+        // «Sin habitación» = still waiting for a bed: «Requiere hospedaje: No» is not (2.31.0, as GET /inscriptions?assigned=false).
+        if (f.room === 'without' && (p.room_id != null || !needsLodging(p))) return false;
         if (q) {
             const hay = ctx.haystackOf ? ctx.haystackOf(p) : rowHaystack(p, ctx.fields);
             if (!matchesQuery(hay, q)) return false;

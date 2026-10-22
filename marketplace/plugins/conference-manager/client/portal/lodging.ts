@@ -122,6 +122,11 @@ export type LodgingData = {
     window_open?: boolean | null;
     rooms?: LodgingRoom[];
     unassigned?: LodgingAttendee[];
+    /**
+     * conference-manager 2.31.0: the location's attendees who answered «No» to «Requiere hospedaje». They are
+     * never in `unassigned` and the server refuses to place them (400). Older plugins send none.
+     */
+    no_lodging?: LodgingAttendee[];
     placed_elsewhere?: PlacedElsewhere[];
     rules?: { conference?: LodgingRule[]; location?: LodgingRule[] } | null;
     fields?: LodgingField[];

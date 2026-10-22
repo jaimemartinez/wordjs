@@ -55,9 +55,21 @@ export interface LvPerson {
     location?: string | null;
     gender?: string | null;
     family_group?: string | null;
+    /** «Requiere hospedaje» (2.31.0): 'No' = never placed in a room; blank / 'Sí' = needs one. */
+    needs_lodging?: string | null;
     custom_data?: Record<string, unknown> | null;
     [column: string]: unknown;
 }
+
+/**
+ * Does `p` need a bed? Only an explicit «No» on the «Requiere hospedaje» switch says otherwise (mirror of
+ * index.js needsLodging): the engine skips them and the server refuses to place them by hand.
+ */
+export const needsLodging = (p: object | null | undefined): boolean =>
+    !p || String((p as { needs_lodging?: unknown }).needs_lodging ?? '').trim().toLowerCase() !== 'no';
+
+/** Non-cancelled and in need of a bed: who the board, the counters and the pickers wait for. */
+const waitsForBed = (p: LvPerson): boolean => p.status !== 'cancelled' && needsLodging(p);
 
 export interface LvField {
     name: string;
@@ -72,7 +84,7 @@ export interface LvField {
  * validated location is NOT one of them (2.17.0): the administration adjusts a reviewed arrangement directly
  * — see reviewedLocationOf for the notice the explorer shows instead.
  */
-export type BlockKey = 'board.cancelled' | 'board.moving' | 'board.room.foreign' | 'board.room.full' | 'board.room.shared.full' | 'board.room.locked';
+export type BlockKey = 'board.cancelled' | 'board.no.lodging' | 'board.moving' | 'board.room.foreign' | 'board.room.full' | 'board.room.shared.full' | 'board.room.locked';
 
 // ---------------------------------------------------------------------------------------------
 // Small shared helpers (moved here from admin/page.tsx so the explorer never imports the page)
@@ -366,9 +378,16 @@ export function hotelStats(hotel: LvHotel, idx?: OccupantIndex | null, locations
     return { rooms: rooms.length, beds, occupied, free, full, withFree, empty, pct, locations: list, poolRooms };
 }
 
-/** Non-cancelled attendees without a room (what the run button and the «Sin asignar» counter count). */
+/**
+ * Non-cancelled attendees without a room who need one (what the run button and the «Sin asignar» counter
+ * count) — «Requiere hospedaje: No» is not waiting for anything.
+ */
 export const unassignedCount = (people: LvPerson[] | null | undefined): number =>
-    (people || []).filter(p => p.room_id == null && p.status !== 'cancelled').length;
+    (people || []).filter(p => p.room_id == null && waitsForBed(p)).length;
+
+/** Non-cancelled attendees who answered «No» to «Requiere hospedaje» and hold no bed. */
+export const noLodgingCount = (people: LvPerson[] | null | undefined): number =>
+    (people || []).filter(p => p.room_id == null && p.status !== 'cancelled' && !needsLodging(p)).length;
 
 /**
  * The explorer's chip after a conference-wide run (POST /assignment/run). `remaining` is EVERYONE the run left
@@ -410,6 +429,7 @@ export interface EligibilityCtx {
  */
 export function dragBlock(p: LvPerson, ctx: EligibilityCtx): BlockKey | null {
     if (p.status === 'cancelled') return 'board.cancelled';
+    if (!needsLodging(p)) return 'board.no.lodging';
     if (ctx.pending && ctx.pending.has(p.id)) return 'board.moving';
     return null;
 }
@@ -560,20 +580,21 @@ export function assignCandidates(people: LvPerson[] | null | undefined, room: Lv
     return out.map(x => x.p);
 }
 
-export interface CandidateExclusions { cancelled: number; foreign: number; moving: number; noBed: number; locked: number }
+export interface CandidateExclusions { cancelled: number; noLodging: number; foreign: number; moving: number; noBed: number; locked: number }
 
 /**
  * Why attendees are missing from the picker (counted among the ones it would otherwise list: the
  * unassigned, plus the placed ones when `includePlaced`), so the picker never hides people silently.
  */
 export function candidateExclusions(people: LvPerson[] | null | undefined, room: LvRoom, ctx: EligibilityCtx, includePlaced = false): CandidateExclusions {
-    const out: CandidateExclusions = { cancelled: 0, foreign: 0, moving: 0, noBed: 0, locked: 0 };
+    const out: CandidateExclusions = { cancelled: 0, noLodging: 0, foreign: 0, moving: 0, noBed: 0, locked: 0 };
     const inside = (people || []).filter(x => Number(x.room_id) === Number(room.id));
     for (const p of people || []) {
         if (Number(p.room_id) === Number(room.id)) continue;
         if (p.room_id != null && !includePlaced) continue;
         const why = dragBlock(p, ctx);
         if (why === 'board.cancelled') out.cancelled++;
+        else if (why === 'board.no.lodging') out.noLodging++;
         else if (why === 'board.moving') out.moving++;
         else if (room.location_id != null && Number(room.location_id) !== rawLocationId(p)) out.foreign++;
         else if (!sharedBedFree(room, p, inside)) out.noBed++;   // a shared room with no bed left for p's location
@@ -701,7 +722,7 @@ export function neighbors<T extends { id: number }>(list: T[], id: number | null
 export interface UnassignedGroup { key: string; name: string; reviewed: boolean; status: string | null; people: LvPerson[] }
 
 /**
- * Non-cancelled attendees without a room, filtered by the search box and the location filter, grouped
+ * Non-cancelled attendees without a room who need one, filtered by the search box and the location filter, grouped
  * by (display) location; groups sorted by name with "no location" last, people by display name.
  */
 export function groupUnassigned(
@@ -716,7 +737,7 @@ export function groupUnassigned(
     const groups = new Map<string, UnassignedGroup & { names: Map<number, string> }>();
     let total = 0;
     for (const p of people || []) {
-        if (p.room_id != null || p.status === 'cancelled') continue;
+        if (p.room_id != null || !waitsForBed(p)) continue;
         const locId = personLocationId(p, locs);
         if (opts.location) {
             if (opts.location === POOL_FILTER ? locId != null : String(locId ?? '') !== opts.location) continue;

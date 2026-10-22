@@ -32,7 +32,7 @@ import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStr
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
 import LodgingExplorer from "./LodgingExplorer";
-import { fillVars, genderKey, hotelStats, lodgingStatusMeta, personDisplayName, indexOccupants, moveAdjustments, occupantLocationIds, reviewedLocationOf, reviewedLocationsAmong, runSummaryOf, sharedBedFree, lockMismatch, lockText, pinnedHere } from "../lib/lodgingView";
+import { fillVars, genderKey, hotelStats, lodgingStatusMeta, personDisplayName, indexOccupants, moveAdjustments, occupantLocationIds, reviewedLocationOf, reviewedLocationsAmong, runSummaryOf, sharedBedFree, lockMismatch, lockText, pinnedHere, needsLodging } from "../lib/lodgingView";
 // Staff & permissions (2.15.0): who sees which view and which controls (perms.tsx); «Equipo y permisos».
 import { PermsProvider, usePerms, hasAnySection, ReadOnlyNotice, canReadRoster, canReadHotels } from "./perms";
 import type { Perms } from "./perms";
@@ -41,7 +41,7 @@ import BadgesPage from "./BadgesPage";
 import { BadgeActions } from "./BadgeActions";
 import { useTx } from "./MealScanner";
 // Form fields (2.16.0): templates for the base fields, what a deletion switches off, rules on deleted fields.
-import { fieldDependents, isOrphanFeeRule, missingRuleFields, moveItem, publishRefusal, templateStates, TEMPLATE_OPEN_CLASS, TEMPLATE_DONE_CLASS, TEMPLATE_DESC_CLASS } from "../lib/fields";
+import { fieldDependents, isOrphanFeeRule, isSwitchOn, LODGING_FIELD, missingRuleFields, moveItem, publishRefusal, SWITCH_OFF, SWITCH_ON, templateStates, TEMPLATE_OPEN_CLASS, TEMPLATE_DONE_CLASS, TEMPLATE_DESC_CLASS } from "../lib/fields";
 import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
 // Inscription tables + «Pagos de cuotas» (2.18.0): browser-side search / filters / paging, the person sheet
 // (⋮), split fee payments.
@@ -1608,7 +1608,23 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                             <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1 mb-1.5">
                                                 {field.label} {field.is_required ? <span className="text-rose-500">*</span> : ''}
                                             </label>
-                                            {field.type === 'select' ? (
+                                            {field.type === 'switch' ? (
+                                                // A Sí / No switch (2.31.0 — «Requiere hospedaje»). Blank reads as «Sí».
+                                                <button
+                                                    type="button"
+                                                    role="switch"
+                                                    aria-checked={isSwitchOn(formData[field.name])}
+                                                    aria-label={field.label}
+                                                    data-cm-switch={field.name}
+                                                    onClick={() => handleFormChange(field.name, isSwitchOn(formData[field.name]) ? SWITCH_OFF : SWITCH_ON)}
+                                                    className="inline-flex items-center gap-3 min-h-[44px] py-1 text-sm font-semibold text-gray-800"
+                                                >
+                                                    <span className={`relative inline-block w-11 h-6 rounded-full transition-colors ${isSwitchOn(formData[field.name]) ? 'bg-blue-600' : 'bg-gray-300'}`} aria-hidden="true">
+                                                        <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${isSwitchOn(formData[field.name]) ? 'translate-x-5' : ''}`}></span>
+                                                    </span>
+                                                    {isSwitchOn(formData[field.name]) ? SWITCH_ON : SWITCH_OFF}
+                                                </button>
+                                            ) : field.type === 'select' ? (
                                                 <select
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
@@ -1741,7 +1757,10 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                     <i className="fa-solid fa-xmark"></i> {t('unassign.room') || 'Quitar asignación actual'}
                                 </button>
                             )}
-                            {assignLoading ? (
+                            {!needsLodging(assignTarget) && !assignTarget.room_id ? (
+                                // «Requiere hospedaje: No» (2.31.0): the server refuses any room for them.
+                                <p className="text-sm text-gray-500 text-center py-6" data-cm-no-lodging=""><i className="fa-solid fa-bed mr-2 opacity-40" aria-hidden="true"></i>{tx('board.no.lodging', 'No requiere hospedaje: no se le puede asignar habitación')}</p>
+                            ) : assignLoading ? (
                                 <div className="text-center py-10"><div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>
                             ) : assignHotels.length === 0 ? (
                                 <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-xl border border-dashed">
@@ -3367,7 +3386,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
         { value: 'text', label: t('type.text'), icon: 'fa-font', color: 'text-blue-500', bg: 'bg-blue-50' },
         { value: 'number', label: t('type.number'), icon: 'fa-hashtag', color: 'text-indigo-500', bg: 'bg-indigo-50' },
         { value: 'select', label: t('type.select'), icon: 'fa-list-ul', color: 'text-purple-500', bg: 'bg-purple-50' },
-        { value: 'date', label: t('type.date'), icon: 'fa-calendar-day', color: 'text-orange-500', bg: 'bg-orange-50' }
+        { value: 'date', label: t('type.date'), icon: 'fa-calendar-day', color: 'text-orange-500', bg: 'bg-orange-50' },
+        { value: 'switch', label: tx('type.switch', 'Sí / No (interruptor)'), icon: 'fa-toggle-on', color: 'text-emerald-500', bg: 'bg-emerald-50' }
     ];
 
     const loadData = async () => {
@@ -3746,6 +3766,11 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                         <i className="fa-solid fa-chevron-down text-[10px]"></i>
                                                     </div>
                                                 </div>
+                                            ) : f.type === 'switch' ? (
+                                                <div className="flex items-center gap-3 p-1 text-xs font-medium text-gray-400 italic">
+                                                    <span className="relative inline-block w-11 h-6 rounded-full bg-blue-600/60" aria-hidden="true"><span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow translate-x-5"></span></span>
+                                                    {SWITCH_ON}
+                                                </div>
                                             ) : (
                                                 <div className="w-full border-2 border-gray-100 rounded-2xl p-3 bg-gray-50/30 text-xs font-medium text-gray-400 italic">
                                                     {f.type === 'date' ? 'AAAA-MM-DD' : `Ingrese ${f.label.toLowerCase()}...`}
@@ -3851,6 +3876,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{t('field.type')}</label>
                                         <button
                                             type="button"
+                                            disabled={formData.name === LODGING_FIELD}
+                                            title={formData.name === LODGING_FIELD ? tx('field.lodging.type.fixed', 'El campo «Requiere hospedaje» siempre es un interruptor Sí / No.') : undefined}
                                             onClick={() => setOpenSelect(openSelect === 'type' ? null : 'type')}
                                             className={`w-full flex items-center justify-between border-2 rounded-xl px-4 py-3 transition-all outline-none font-medium ${openSelect === 'type' ? 'bg-white border-blue-500 ring-4 ring-blue-500/10' : 'bg-gray-50/30 border-gray-100 hover:border-gray-200'}`}
                                         >
@@ -4158,7 +4185,8 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
             setLoadFailed(false);
             // Cancelled attendees are neither placed by the engine nor listed by the board — the header
             // counts (and the run button's gate) leave them out too.
-            const live = (inscriptionsData || []).filter(i => i.status !== 'cancelled');
+            // «Requiere hospedaje: No» (2.31.0) is not waiting for a bed either (unless one is still held).
+            const live = (inscriptionsData || []).filter(i => i.status !== 'cancelled' && (i.room_id || needsLodging(i)));
             const assigned = live.filter(i => i.room_id).length;
             setStats({ total: live.length, assigned, unassigned: live.length - assigned });
         } catch (e) {

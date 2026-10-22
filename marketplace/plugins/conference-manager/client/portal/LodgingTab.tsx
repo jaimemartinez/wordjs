@@ -271,6 +271,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
     const editable = canEditLodging(status) && d.can_edit !== false;
     const rooms = Array.isArray(d.rooms) ? d.rooms : [];
     const unassigned = Array.isArray(d.unassigned) ? d.unassigned : [];
+    const noLodging = Array.isArray(d.no_lodging) ? d.no_lodging : [];
     const elsewhere = Array.isArray(d.placed_elsewhere) ? d.placed_elsewhere : [];
     const violations = Array.isArray(d.violations) ? d.violations : [];
     const adminRules = Array.isArray(d.rules?.conference) ? d.rules.conference : [];
@@ -367,6 +368,14 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                 {status !== 'draft' && summary.unplaced > 0 && (
                     <Notice tone="amber" icon="fa-user-clock">
                         <span className="font-black">{unassignedLabel(summary.unplaced)}.</span> {unassignedHint(status)}
+                    </Notice>
+                )}
+                {noLodging.length > 0 && (
+                    // «Requiere hospedaje: No» (2.31.0): never offered for a room, here or by the automatic assignment.
+                    <Notice tone="blue" icon="fa-bed" data-testid="lodging-no-lodging">
+                        <span className="font-black">{noLodging.length === 1 ? '1 participante no requiere hospedaje' : `${noLodging.length} participantes no requieren hospedaje`}:</span>{' '}
+                        {noLodging.map((a) => String(a.display_name || [a.first_name, a.last_name].filter(Boolean).join(' ') || `#${a.id}`)).join(', ')}.
+                        <span className="block text-xs opacity-70 mt-0.5">No entran en la asignación automática ni se les puede asignar habitación.</span>
                     </Notice>
                 )}
             </HeroCard>

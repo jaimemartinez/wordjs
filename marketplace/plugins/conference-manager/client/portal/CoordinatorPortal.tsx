@@ -6,7 +6,7 @@ import { ToastProvider, useToast } from "@/contexts/ToastContext";
 import { csrfHeaders } from "@/lib/csrf";
 // Pure form helpers (seeding, string-only values, request body, money) — see form.ts for the contract
 // with conference-manager: values travel as strings, the SERVER canonicalises numbers.
-import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, paymentMethodsOf, seatsLabel, type PortalField } from "./form";
+import { SWITCH_OFF, SWITCH_ON, fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, isSwitchOn, paymentMethodsOf, seatsLabel, type PortalField } from "./form";
 // The Hospedajes tab (lodging per location): its own data flow, one GET /portal/lodging, mounted only while selected.
 import Hospedajes from "./LodgingTab";
 // Participantes: the paged roster with compact rows and the «⋮» participant sheet (participants.ts holds the rules).
@@ -786,6 +786,22 @@ function LocationPortalContent() {
                                                         onChange={(v: string) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })}
                                                         groups={groups}
                                                     />
+                                                ) : field.type === 'switch' ? (
+                                                    // A Sí / No switch (2.31.0 — «Requiere hospedaje»).
+                                                    <button
+                                                        id={id}
+                                                        type="button"
+                                                        role="switch"
+                                                        aria-checked={isSwitchOn(formData[field.name])}
+                                                        data-cm-switch={field.name}
+                                                        onClick={() => setFormData({ ...formData, [field.name]: isSwitchOn(formData[field.name]) ? SWITCH_OFF : SWITCH_ON })}
+                                                        className="inline-flex items-center gap-3 min-h-[44px] py-1 text-sm font-semibold text-gray-800"
+                                                    >
+                                                        <span className={cx("relative inline-block w-11 h-6 rounded-full transition-colors", isSwitchOn(formData[field.name]) ? "bg-blue-600" : "bg-gray-300")} aria-hidden="true">
+                                                            <span className={cx("absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform", isSwitchOn(formData[field.name]) ? "translate-x-5" : "")}></span>
+                                                        </span>
+                                                        {isSwitchOn(formData[field.name]) ? SWITCH_ON : SWITCH_OFF}
+                                                    </button>
                                                 ) : field.type === 'select' ? (
                                                     <select
                                                         id={id}

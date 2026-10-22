@@ -101,7 +101,18 @@ exports.init = async function (wordjs) {
         gender: { name: 'gender', label: 'Género', type: 'select', options: 'M, F', is_required: 1, role: 'gender', is_group: 0 },
         // Grouping is a FLAG, not a role (the boot migration clears the legacy 'family_group' role).
         family_group: { name: 'family_group', label: 'Grupo Familiar', type: 'text', options: '', is_required: 0, role: '', is_group: 1 },
+        // «Requiere hospedaje» (2.31.0): a Sí / No switch. «No» keeps the person out of every room — the automatic
+        // assignment skips them and a manual one (admin or coordinator) is refused. See needsLodging.
+        lodging: { name: 'needs_lodging', label: 'Requiere hospedaje', type: 'switch', options: '', is_required: 0, role: 'lodging', is_group: 0 },
     });
+    // The lodging switch's column and its two canonical values. A form without the field (or a value left
+    // blank) means the person NEEDS lodging: nothing changes for a conference that never added it.
+    const LODGING_FIELD = 'needs_lodging';
+    const SWITCH_ON = 'Sí', SWITCH_OFF = 'No';
+    const needsLodging = (p) => !p || p[LODGING_FIELD] !== SWITCH_OFF;
+    // SQL twin of needsLodging (the column always exists: the boot migration adds it).
+    const lodgingSql = (col = LODGING_FIELD) => `(${col} IS NULL OR ${col} <> '${SWITCH_OFF}')`;
+    const NO_LODGING_MSG = 'Este participante indicó que no requiere hospedaje: no se le puede asignar habitación.';
 
     // Only a safe SQL identifier may go into ALTER TABLE ... ADD COLUMN <name>. Reject anything else.
     const isSafeColumn = (s) => typeof s === 'string' && /^[a-z_][a-z0-9_]{0,62}$/.test(s);
@@ -655,6 +666,12 @@ exports.init = async function (wordjs) {
             if (canon === null) throw httpError(400, `El campo «${field.label || field.name}» debe ser un número.`);
             return canon;
         }
+        if (field.type === 'switch') {
+            const k = s.toLowerCase();
+            if (['sí', 'si', 'yes', 'true', '1', 'on'].includes(k)) return SWITCH_ON;
+            if (['no', 'false', '0', 'off'].includes(k)) return SWITCH_OFF;
+            throw httpError(400, `El campo «${field.label || field.name}» debe ser Sí o No.`);
+        }
         if (field.type === 'select') {
             const opts = fieldOptions(field);
             if (opts.length && !opts.includes(s)) throw httpError(400, `El valor de «${field.label || field.name}» no es una opción válida.`);
@@ -883,6 +900,9 @@ exports.init = async function (wordjs) {
         await addColumnIfMissing(T.rooms, 'share_lock', 'TEXT');
         await addColumnIfMissing(T.rooms, 'blocked', 'INT');
         await addColumnIfMissing(T.inscriptions, 'room_locked', 'INT');
+        // The «Requiere hospedaje» switch's column (2.31.0) exists even before a form adds the field, so the
+        // engine's SQL can always read it (lodgingSql).
+        await addColumnIfMissing(T.inscriptions, LODGING_FIELD, 'TEXT');
         // A hotel's position (2.23.0): 'lat,lng' (6 decimals) from the link or coordinates the admin pasted —
         // TEXT, never REAL (a Postgres REAL is float4 and would move the pin by metres).
         await addColumnIfMissing(T.hotels, 'geo', 'TEXT');
@@ -2547,7 +2567,7 @@ exports.init = async function (wordjs) {
         if (q.family_group) { where += ` AND i.family_group = ?`; params.push(q.family_group); }
         if (q.payment_status) { where += ` AND i.payment_status = ?`; params.push(q.payment_status); }
         if (q.assigned === 'true') where += ` AND i.room_id IS NOT NULL`;
-        else if (q.assigned === 'false') where += ` AND i.room_id IS NULL`;
+        else if (q.assigned === 'false') where += ` AND i.room_id IS NULL AND ${lodgingSql('i.' + LODGING_FIELD)}`;
         return where;
     }
 
@@ -2637,7 +2657,7 @@ exports.init = async function (wordjs) {
 
     // Closed allowlist of field types (the admin builder offers text/number/select/date; the rest are
     // accepted for API callers and render as text inputs on the portal).
-    const FIELD_TYPES = new Set(['text', 'number', 'select', 'textarea', 'date', 'email', 'tel', 'notes']);
+    const FIELD_TYPES = new Set(['text', 'number', 'select', 'textarea', 'date', 'email', 'tel', 'notes', 'switch']);
     // Field creation is check-then-insert (a template refuses a duplicate): serialised in this process.
     let fieldsLock = Promise.resolve();
     const withFieldsLock = (fn) => {
@@ -2714,8 +2734,10 @@ exports.init = async function (wordjs) {
             if (id) {
                 // Column name is immutable after creation; the flags + cosmetic attributes can change
                 // anytime (they don't alter the column). Publish still freezes the field's type.
-                const existing = await db.get(`SELECT type, conference_id FROM ${T.fields} WHERE id = ?`, [id]);
+                const existing = await db.get(`SELECT type, conference_id, name FROM ${T.fields} WHERE id = ?`, [id]);
                 if (!existing) return res.status(404).json({ error: 'Campo no encontrado.' });
+                // «Requiere hospedaje» stays a Sí / No switch: the assignment reads its «No».
+                if (existing.name === LODGING_FIELD && type !== 'switch') return res.status(400).json({ error: 'El campo «Requiere hospedaje» siempre es un interruptor Sí / No.' });
                 if (String(existing.conference_id) !== String(conference_id)) return res.status(403).json({ error: 'El campo no pertenece a esta conferencia.' });
                 if (conf.is_form_published && existing.type !== type) {
                     return res.status(400).json({ error: 'No se puede cambiar el tipo de un campo después de publicar el formulario.' });
@@ -2736,6 +2758,8 @@ exports.init = async function (wordjs) {
                 // the generated `f_…` fallback only for names that are not identifiers at all.
                 const requested = typeof name === 'string' ? name.trim() : '';
                 if (requested && isReservedFieldName(requested)) return res.status(400).json({ error: 'Ese nombre de campo está reservado por el sistema.' });
+                // The lodging switch's column is the template's alone (the assignment reads its «No»).
+                if (requested === LODGING_FIELD) return res.status(400).json({ error: 'Para preguntar si requiere hospedaje, usa la plantilla «Requiere hospedaje».' });
                 const colName = isSafeColumn(requested) ? requested : ('f_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
                 const clash = await db.get(`SELECT id FROM ${T.fields} WHERE conference_id = ? AND name = ?`, [conference_id, colName]);
                 if (clash) return res.status(409).json({ error: 'Ya existe un campo con ese nombre en este formulario.' });
@@ -2755,7 +2779,7 @@ exports.init = async function (wordjs) {
     http.route('delete', '/fields/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'settings', 'manage')) return;
         try {
-            const field = await db.get(`SELECT conference_id FROM ${T.fields} WHERE id = ?`, [req.params.id]);
+            const field = await db.get(`SELECT conference_id, name FROM ${T.fields} WHERE id = ?`, [req.params.id]);
             if (field) {
                 const conf = await db.get(`SELECT is_form_published FROM ${T.conferences} WHERE id = ?`, [field.conference_id]);
                 if (conf?.is_form_published) {
@@ -2763,6 +2787,8 @@ exports.init = async function (wordjs) {
                 }
             }
             await db.run(`DELETE FROM ${T.fields} WHERE id = ?`, [req.params.id]);
+            // Without the switch everyone needs lodging again: its answers must not keep anyone out of a room.
+            if (field && field.name === LODGING_FIELD) await db.run(`UPDATE ${T.inscriptions} SET ${LODGING_FIELD} = NULL WHERE conference_id = ?`, [field.conference_id]);
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -2937,7 +2963,7 @@ exports.init = async function (wordjs) {
                 + ` (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = l.id) + (SELECT COUNT(*) FROM ${T.roomBeds} b WHERE b.location_id = l.id) AS rooms_allotted,`
                 + ` (SELECT COALESCE(SUM(r.capacity), 0) FROM ${T.rooms} r WHERE r.location_id = l.id) + (SELECT COALESCE(SUM(b.beds), 0) FROM ${T.roomBeds} b WHERE b.location_id = l.id) AS beds_allotted,`
                 + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND i.room_id IS NOT NULL) AS lodged,`
-                + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND i.room_id IS NULL AND ${occupiedSql('i.status')}) AS unlodged`
+                + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND i.room_id IS NULL AND ${occupiedSql('i.status')} AND ${lodgingSql('i.' + LODGING_FIELD)}) AS unlodged`
                 + ` FROM ${T.locations} l WHERE l.conference_id = ? ORDER BY l.name`, [conference_id]);
             for (const l of locations) {
                 l.payment_methods = enabledPaymentMethods(l);
@@ -5177,7 +5203,9 @@ exports.init = async function (wordjs) {
             // assignment lock (a conference-wide run holds it while it loads and flushes, and must not stall
             // every notes edit). The others decide on the row as it is under the lock (re-read there), where
             // every lodging status transition runs too: the statuses read are the ones the write lands on.
-            const touchesLodging = locationChanges || newStatus === 'cancelled';
+            // «Requiere hospedaje» switched to No (2.31.0) frees the bed too, like a cancellation.
+            const dropsLodging = vals[LODGING_FIELD] === SWITCH_OFF;
+            const touchesLodging = locationChanges || newStatus === 'cancelled' || dropsLodging;
             const writeEdit = async (extraSets = [], extraParams = []) => {
                 const s = [...sets, ...extraSets];
                 if (!s.length) return false;
@@ -5197,7 +5225,7 @@ exports.init = async function (wordjs) {
                 const hasBed = cur.room_id != null;
                 let freeBed = false;
                 if (hasBed) {
-                    if (newStatus === 'cancelled') freeBed = true;
+                    if (newStatus === 'cancelled' || dropsLodging) freeBed = true;
                     else if (locationChanges) {
                         const curRoom = await db.get(`SELECT id, location_id, capacity FROM ${T.rooms} WHERE id = ?`, [cur.room_id]);
                         if (curRoom && curRoom.location_id != null && Number(curRoom.location_id) !== (loc ? Number(loc.id) : NaN)) freeBed = true;
@@ -5383,6 +5411,7 @@ exports.init = async function (wordjs) {
                     return stampAdminAdjustment(req, [cur.location_id]);
                 }
                 if (person.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
+                if (!needsLodging(person)) throw httpError(400, NO_LODGING_MSG);
                 const room = await db.get(
                     `SELECT r.*, h.conference_id, l.name AS location_name,
                             (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) as occupied
@@ -6040,9 +6069,9 @@ exports.init = async function (wordjs) {
             frozenRows: () => db.all(`SELECT id, name, lodging_status FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conferenceId]),
             delegatedLocations: () => delegatedLocations(conferenceId),
             // A location's attendees still without a bed (also the overflow's participants).
-            participants: (lid) => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND location_id = ? AND room_id IS NULL AND ${occupiedSql()} ORDER BY id`, [conferenceId, lid]),
+            participants: (lid) => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND location_id = ? AND room_id IS NULL AND ${occupiedSql()} AND ${lodgingSql()} ORDER BY id`, [conferenceId, lid]),
             // The pool scope's: no location, or a location with no bed of its own that is not frozen.
-            poolParticipants: () => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND (location_id IS NULL OR location_id NOT IN (SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL )) AND (location_id IS NULL OR location_id NOT IN (${SHARE_LOCATIONS_SQL()} )) AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )) ORDER BY id`, [conferenceId]),
+            poolParticipants: () => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND ${lodgingSql()} AND (location_id IS NULL OR location_id NOT IN (SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL )) AND (location_id IS NULL OR location_id NOT IN (${SHARE_LOCATIONS_SQL()} )) AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )) ORDER BY id`, [conferenceId]),
             // A scope's rooms: every pool room (null), or a location's whole and shared rooms.
             scopeRooms: (lid) => { const s = inRooms(lid); return db.all(`SELECT r.*, h.name as hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${s.sql} ORDER BY ${lid == null ? 'r.id' : 'h.id, r.id'}`, s.params); },
             scopeOccupants: (lid) => { const s = inRooms(lid); return db.all(`SELECT i.* FROM ${T.inscriptions} i WHERE i.room_id IN (SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${s.sql} ) ORDER BY i.id`, s.params); },
@@ -6050,7 +6079,8 @@ exports.init = async function (wordjs) {
             lockFields: () => shareLockFields(conferenceId),
             flush: async (placements) => {
                 const writes = [];
-                for (const [personId, roomId] of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ?`, [roomId, personId]]);
+                // Never a «Requiere hospedaje: No» (2.31.0), whatever chose them: the write itself refuses.
+                for (const [personId, roomId] of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ? AND ${lodgingSql()}`, [roomId, personId]]);
                 await runBatched(writes);
             },
             unassignedByLocation: async (ids) => {
@@ -6058,7 +6088,7 @@ exports.init = async function (wordjs) {
                 if (!ids.length) return out;
                 const marks = ids.map(() => '?').join(', ');
                 const counts = await db.all(
-                    `SELECT location_id, COUNT(*) AS n FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND location_id IN (${marks}) GROUP BY location_id`,
+                    `SELECT location_id, COUNT(*) AS n FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND ${lodgingSql()} AND location_id IN (${marks}) GROUP BY location_id`,
                     [conferenceId, ...ids]);
                 for (const c of counts) out.set(Number(c.location_id), Number(c.n) || 0);
                 return out;
@@ -6762,7 +6792,8 @@ exports.init = async function (wordjs) {
             rooms: rooms.map(r => ({ ...r, id: Number(r.id), location_id: r.location_id == null ? null : Number(r.location_id) })),
             reportOrder: reportOrder.map(r => Number(r.id)),
             roomBeds: roomBeds.map(b => ({ id: Number(b.id), room_id: Number(b.room_id), location_id: Number(b.location_id), beds: Number(b.beds) || 0 })),
-            people: people.map(p => ({ ...p, id: Number(p.id), room_id: p.room_id == null ? null : Number(p.room_id), location_id: p.location_id == null ? null : Number(p.location_id) })),
+            // Whoever said they need no lodging and holds no bed is nobody's to place (dbAssignmentIo's lodgingSql).
+            people: people.filter(p => p.room_id != null || needsLodging(p)).map(p => ({ ...p, id: Number(p.id), room_id: p.room_id == null ? null : Number(p.room_id), location_id: p.location_id == null ? null : Number(p.location_id) })),
         };
     }
     const cloneSnapshot = (s) => ({ ...s, rooms: s.rooms.map(r => ({ ...r })), roomBeds: s.roomBeds.map(b => ({ ...b })), people: s.people.map(p => ({ ...p })) });
@@ -7766,7 +7797,7 @@ exports.init = async function (wordjs) {
                 if (c.after.kind === 'shared') for (const x of c.after.shares) writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds) VALUES (?, ?, ?)`, [c.room_id, x.location_id, x.beds]]);
             }
         }
-        for (const x of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ? AND room_id IS NULL`, [x.room_id, x.inscription_id]]);
+        for (const x of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ? AND room_id IS NULL AND ${lodgingSql()}`, [x.room_id, x.inscription_id]]);
         await runBatched(writes);
     }
 
@@ -7901,7 +7932,7 @@ exports.init = async function (wordjs) {
 
         const roomIds = new Set(roomRows.map(r => Number(r.id)));
         const occByRoom = new Map();
-        const unassignedRows = [], elsewhereRows = [];
+        const unassignedRows = [], elsewhereRows = [], noLodgingRows = [];
         for (const p of people) {
             const cancelled = p.status === 'cancelled';
             if (p.room_id != null && roomIds.has(Number(p.room_id))) {
@@ -7912,6 +7943,8 @@ exports.init = async function (wordjs) {
                 continue;                       // a cancelled attendee never occupies a bed and is not "sin habitación"
             } else if (p.room_id != null) {
                 elsewhereRows.push(p);          // placed by the admin outside L's allotted rooms (pool or another location)
+            } else if (!needsLodging(p)) {
+                noLodgingRows.push(p);          // «Requiere hospedaje: No» (2.31.0): not waiting for a bed, never assignable
             } else {
                 unassignedRows.push(p);
             }
@@ -7964,6 +7997,7 @@ exports.init = async function (wordjs) {
             },
             rooms,
             unassigned: unassignedRows.map(projectAttendee),
+            no_lodging: noLodgingRows.map(projectAttendee),
             placed_elsewhere: elsewhereRows.map(p => ({ id: p.id, first_name: p.first_name, last_name: p.last_name, display_name: displayNameOf(p), hotel_name: p.hotel_name, room_number: p.room_number })),
             rules: ruleSplit,
             fields,
@@ -8328,7 +8362,7 @@ exports.init = async function (wordjs) {
     async function portalLodgingSummary(location) {
         const row = await db.get(
             `SELECT (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = ?) + (SELECT COUNT(*) FROM ${T.roomBeds} b WHERE b.location_id = ?) AS rooms_allotted,`
-            + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND i.room_id IS NULL AND ${occupiedSql('i.status')}) AS unlodged`,
+            + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND i.room_id IS NULL AND ${occupiedSql('i.status')} AND ${lodgingSql('i.' + LODGING_FIELD)}) AS unlodged`,
             [location.id, location.id, location.id, location.conference_id]);
         return {
             lodging_status: lodgingStatusOf(location),
@@ -8421,6 +8455,8 @@ exports.init = async function (wordjs) {
                 can_edit: status === 'draft' && win.open,
                 rooms: view.rooms,
                 unassigned: view.unassigned,
+                // «Requiere hospedaje: No» (2.31.0): shown apart, never offered for a room.
+                no_lodging: view.no_lodging,
                 placed_elsewhere: view.placed_elsewhere,
                 rules: { conference: view.rules.conference.map(portalRuleProjection), location: view.rules.location.map(portalRuleProjection) },
                 fields: view.fields,
@@ -8480,6 +8516,7 @@ exports.init = async function (wordjs) {
                     [location.id, location.id, roomId, location.id, location.id, location.conference_id]);
                 if (!room) throw httpError(404, 'Habitación no encontrada.');
                 if (ins.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
+                if (!needsLodging(ins)) throw httpError(400, NO_LODGING_MSG);
                 const alreadyHere = Number(ins.room_id) === Number(room.id);
                 if (alreadyHere) return;
                 if (isBlocked(room)) throw httpError(409, HELD_ROOM_MSG);
@@ -8620,7 +8657,7 @@ exports.init = async function (wordjs) {
                 const c = await db.get(
                     `SELECT COUNT(*) AS present,`
                     + ` SUM(CASE WHEN i.room_id IN (${LOCATION_ROOMS_SQL()}) THEN 1 ELSE 0 END) AS placed`
-                    + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND ${occupiedSql('i.status')}`,
+                    + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND ${occupiedSql('i.status')} AND ${lodgingSql('i.' + LODGING_FIELD)}`,
                     [location.id, location.id, location.id, location.conference_id]);
                 const present = Number(c && c.present) || 0, placed = Number(c && c.placed) || 0;
                 if (present > 0 && placed === 0) throw httpError(400, 'No hay ninguna asignación de hospedaje para enviar.');

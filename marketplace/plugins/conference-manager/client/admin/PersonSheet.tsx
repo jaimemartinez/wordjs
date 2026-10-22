@@ -37,6 +37,7 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import { conferenceApi } from "../lib/conference";
+import { needsLodging } from "../lib/lodgingView";
 import { LAYER, revealInOverlay } from "../lib/overlay";
 import { toCents } from "../lib/feeSplit";
 import { fmtDay, fmtStamp, personBalance } from "../lib/feePayments";
@@ -211,7 +212,7 @@ export function PersonSheet({
                 {!brief && <section className={sectionCls} data-person-section="lodging">
                     <h3 className={titleCls}><i className="fa-solid fa-bed" aria-hidden="true"></i>{tx('lodging', 'Alojamiento')}</h3>
                     <p className="text-sm font-bold text-gray-900">
-                        {p.room_id ? tx('roster.room.full', '{hotel} · Habitación {room}', { hotel: p.hotel_name || '—', room: p.room_number || '—' }) : <span className="text-gray-600">{tx('roster.room.none', 'Sin habitación')}</span>}
+                        {p.room_id ? tx('roster.room.full', '{hotel} · Habitación {room}', { hotel: p.hotel_name || '—', room: p.room_number || '—' }) : <span className="text-gray-600">{needsLodging(p) ? tx('roster.room.none', 'Sin habitación') : tx('roster.room.not.needed', 'No requiere hospedaje')}</span>}
                     </p>
                     {/* A submitted / validated arrangement is no lock (2.17.0): the room dialog this opens says the
                         change is recorded as an administration adjustment (lodging.adjust.notice). */}
