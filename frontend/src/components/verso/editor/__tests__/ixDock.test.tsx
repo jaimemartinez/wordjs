@@ -182,7 +182,7 @@ describe("Verso on a phone or a tablet — nothing is desktop-only", () => {
         const menu = src.slice(start, src.indexOf("{onSave && (", start));
         expect(menu).toMatch(/className="relative xl:hidden"/);
         for (const needle of [
-            "<HistoryControls", "onStatusChange(e.target.value)", 'type="datetime-local"', "handlePreview()",
+            "<HistoryControls", "onStatusChange(e.target.value)", "<DateTimePicker", "handlePreview()",
             "replayAnimations(frameDoc)", "setGuidesOn(!guidesOn)", 'setRailView("patterns")', "setMediaOpen(true)",
             "setCommentsOpen(true)", "setShowRevisions(true)", "setA11yOpen(true)", "setCmdkOpen(true)",
         ]) expect(menu, needle).toContain(needle);

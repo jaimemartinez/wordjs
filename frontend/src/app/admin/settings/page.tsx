@@ -1,5 +1,7 @@
 "use client";
 
+import { normalizeWeekStart, weekdayNames } from "@/lib/datePicker";
+import { resetWeekStart } from "@/lib/useWeekStart";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { SITE_ADDRESS_SETTINGS_PATH } from "@/lib/siteAddress";
@@ -75,7 +77,7 @@ export default function SettingsPage() {
     const viewerNetwork = useOptionalAuth()?.user?.network;
     const networkToolsOffered = !viewerNetwork || (viewerNetwork.mainSite && viewerNetwork.networkAdmin);
     const isAdministrator = useOptionalAuth()?.user?.role === 'administrator';
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const [settings, setSettings] = useState({
         blogname: "",
         blogdescription: "",
@@ -104,6 +106,8 @@ export default function SettingsPage() {
         WPLANG: "en_US",
         site_text_direction: "",
         timezone_string: "UTC",
+        // The first day of the week of the admin's calendars (components/ui/DatePicker); WordPress's option.
+        start_of_week: "1",
     });
     const [roles, setRoles] = useState<Record<string, Role>>({});
     // Reading / writing / discussion / media settings that had no control (QA M2-06), saved with the rest.
@@ -207,6 +211,7 @@ export default function SettingsPage() {
                 WPLANG: data.WPLANG || "en_US",
                 site_text_direction: data.site_text_direction || "",
                 timezone_string: data.timezone_string || "UTC",
+                start_of_week: String(normalizeWeekStart((data as Record<string, unknown>).start_of_week)),
             });
             setBehaviour(siteBehaviourFrom(data as Record<string, unknown>));
             const effective = Number((data as Record<string, unknown>).upload_max_bytes);
@@ -225,6 +230,7 @@ export default function SettingsPage() {
 
         try {
             await settingsApi.update({ ...settings, ...behaviour });
+            resetWeekStart(settings.start_of_week);
             setSaved(true);
             setTimeout(() => setSaved(false), 3000);
         } catch (error) {
@@ -511,6 +517,17 @@ export default function SettingsPage() {
                                 </div>
 
                                 <DateTimeFormats values={behaviour} onChange={setBehaviour} />
+
+                                {/* The admin calendars' first day of the week (start_of_week, 0 = Sunday). */}
+                                <div className="space-y-2">
+                                    <ModernSelect
+                                        label={t('settings.site.weekStart')}
+                                        value={settings.start_of_week}
+                                        onChange={(e) => setSettings({ ...settings, start_of_week: e.target.value })}
+                                        options={weekdayNames(language, 0).map((d, i) => ({ value: String(i), label: d.long.charAt(0).toLocaleUpperCase() + d.long.slice(1) }))}
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">{t('settings.site.weekStart.help')}</p>
+                                </div>
 
                                 <div className="space-y-2">
                                     <ModernSelect

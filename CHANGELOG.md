@@ -10,6 +10,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 - **Folders in the media library.** Admin → Media has a folder tree beside the library (a panel on phones): create, rename and nest folders, browse them (the address keeps the folder), upload straight into the current one, and move files by dragging them onto a folder or with *Move to…* — one file from its details, or many at once. Deleting a folder asks where its files and subfolders go; no file is ever deleted with it or left in a folder that no longer exists. The editor's media picker browses by folder too. Folders are organisation only: moving a file never changes its URL, so content that links to it keeps working. Anyone who uploads can create folders and move the files they may edit; renaming and deleting folders is for editors. (`GET`/`POST /api/v1/media/folders`, `PUT`/`DELETE /api/v1/media/folders/:id`, `POST /api/v1/media/folders/move`, `?folder=` on `GET /api/v1/media` and on uploads.)
 
+- **The admin's own calendar.** Date fields used the browser's native picker, which looked different in every
+  browser and OS, ignored the admin palette and the editor's dark mode, and followed the browser's language.
+  The new shared `DatePicker` / `DateTimePicker` replaces it:
+  - **Behaviour.** A popover calendar with month and year navigation, Today, Clear and min/max. Keyboard
+    navigation and ARIA follow the WAI-ARIA date picker dialog pattern, and on phones it opens as a bottom
+    sheet with 44px targets.
+  - **Language and look.** Month and day names are in the admin language (es/en/pt). The week starts on the
+    site's first day of the week, a new **Settings → General** field (`start_of_week`, 0–6, validated). Inside
+    Verso the calendar follows the editor's palette, light or dark.
+  - **Where.** It now powers the alias expiry in Settings → Site address and the publish / scheduled date in
+    the Verso editor.
+  - **No data migration.** Stored values keep the native inputs' format (`YYYY-MM-DD`, `YYYY-MM-DDTHH:mm`).
+  - **Plugins.** Plugin admin screens can import it from `@/components/ui/DatePicker` (a new host module of
+    the plugin UI kit) without any core change per plugin; see the plugin guide.
+
 ### Fixed
 
 - **Plugin screens use the WordJS dialogs instead of the browser's pop-ups.** Every delete, cancel, revoke

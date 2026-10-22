@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { DatePicker } from "@/components/ui/DatePicker";
 import DialogLayer from "@/components/DialogLayer";
 import { useSearchParams } from "next/navigation";
 import { PageHeader, DataTable } from "@/components/ui";
@@ -266,12 +267,11 @@ function AliasDialog({ state, previous, prefillUrl, fromRefused, t, onSubmit, on
                 </div>
                 <div>
                     <label className={labelCls} htmlFor="alias-expires">{t("siteAddress.field.expires")}</label>
-                    <input
+                    <DatePicker
                         id="alias-expires"
-                        type="date"
                         value={shownExpiry}
-                        onChange={(e) => { setExpiryTouched(true); setExpiryDate(e.target.value); }}
-                        className={inputCls}
+                        onChange={(v) => { setExpiryTouched(true); setExpiryDate(v); }}
+                        className="rounded-2xl border-2 px-4 py-3 text-sm"
                     />
                     <p className="mt-1 text-xs text-gray-400">
                         {tunnelDefault ? t("siteAddress.field.expires.tunnelHelp") : (!shownExpiry ? t("siteAddress.field.expires.none") : null)}

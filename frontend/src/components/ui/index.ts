@@ -13,6 +13,7 @@ export { Input } from "./Input";
 export { ActionCard } from "./ActionCard";
 export { Select } from "./Select";
 export { TimePicker } from "./TimePicker";
+export { DatePicker, DateTimePicker } from "./DatePicker";
 
 export { DataTable, RowActionButton } from "./DataTable";
 export type { DataTableColumn, DataTableAction, DataTableSelection } from "./DataTable";

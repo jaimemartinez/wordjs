@@ -216,7 +216,7 @@ test('the reading/writing/discussion settings are validated, and the dead keys a
     assert.strictEqual((await putSettings({ thumbnail_size_w: '-5' })).status, 400);
     assert.strictEqual((await putSettings({ default_category: '987654' })).status, 400, 'an existing category');
     const all = await request(app).get(`${B}/settings/all`).set(bearer('admin'));
-    for (const dead of ['default_post_format', 'default_pingback_flag', 'default_ping_status', 'permalink_structure', 'start_of_week']) {
+    for (const dead of ['default_post_format', 'default_pingback_flag', 'default_ping_status', 'permalink_structure']) {
         assert.ok(!(dead in all.body), `${dead} is no longer a setting`);
     }
 });
