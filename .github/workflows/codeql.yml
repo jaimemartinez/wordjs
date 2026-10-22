@@ -18,6 +18,12 @@ on:
 # `permissions:` REPLACES this block rather than adding to it, so `security-events: write` still
 # reaches the upload step. This exists so a job added here later starts read-only by default instead
 # of inheriting the repository's default token scope.
+# A newer push to the same PR or branch supersedes the running one (2026-10-22, owner: PR CI ~10 min; the
+# free plan runs ~20 jobs at once, so superseded runs on main only delay the ones that matter).
+concurrency:
+  group: codeql-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

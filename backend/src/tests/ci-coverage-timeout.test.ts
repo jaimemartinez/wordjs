@@ -11,9 +11,10 @@
  * options of `test:coverage:check`, (b) the coverage shards together cover the whole suite, and (c) each
  * shard still has a ceiling above its share of the measured worst case.
  *
- * 2026-10-22 (owner: a pull request's CI must fit in ~10 minutes): the instrumented pass no longer runs
- * on pull requests, only on main and on the daily schedule, and the plain unit suite runs in eight
- * shards. The two matrices are independent now; each must list 1..N matching its own /N.
+ * 2026-10-22 (owner: a pull request's CI must fit in ~10 minutes): the instrumented pass runs only on
+ * the daily schedule and on manual dispatch (not on pull requests, not on every merge), and the plain
+ * unit suite runs in eight shards. The two matrices are independent now; each must list 1..N matching
+ * its own /N.
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -58,11 +59,13 @@ test('each sharded job runs every shard of the whole suite exactly once', () => 
     }
 });
 
-test('the instrumented pass stays off pull requests, and still runs on main and daily', () => {
-    assert.match(job('backend-coverage-shard'), /\n {4}if: github\.event_name != 'pull_request'\n/, 'the coverage shards must not run on pull requests (PR CI budget ~10 min)');
+test('the instrumented pass runs only on the daily schedule and on manual dispatch', () => {
+    const gate = "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
+    assert.ok(job('backend-coverage-shard').includes(`\n    if: ${gate.slice(1, -1)}\n`), 'the coverage shards must run only on schedule/dispatch (PR CI budget ~10 min, runner queue)');
+    assert.ok(job('backend-coverage').includes(`\n    if: always() && ${gate}\n`), 'the ratchet must run only on schedule/dispatch, and still even when a shard failed');
     const ci = fs.readFileSync(CI, 'utf8').replace(/\r\n/g, '\n');
-    assert.match(ci, /\n {2}push:\n {4}branches: \[main\]/, 'the ratchet must still run on every push to main');
     assert.match(ci, /\n {2}schedule:\n {4}- cron: /, 'the ratchet must still run on a daily schedule');
+    assert.match(ci, /\n {2}group: ci-\$\{\{ github\.workflow \}\}-\$\{\{ github\.event_name == 'schedule' && 'schedule' \|\|/, 'the schedule needs its own concurrency group, or a merge would cancel the coverage run');
 });
 
 test('the merged report applies exactly the ratchet of test:coverage:check', () => {
@@ -80,7 +83,7 @@ test('the merged report applies exactly the ratchet of test:coverage:check', () 
 
 test('the aggregate jobs cannot be skipped into a pass', () => {
     for (const id of ['backend', 'backend-coverage']) {
-        assert.match(job(id), /\n {4}if: always\(\)( && github\.event_name != 'pull_request')?\n/, `${id} must run even when a dependency failed — a skipped required check counts as passing`);
+        assert.match(job(id), /\n {4}if: always\(\)( && \(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'\))?\n/, `${id} must run even when a dependency failed — a skipped required check counts as passing`);
         assert.match(job(id), /!= "success"/, `${id} must fail unless every job it needs succeeded`);
     }
     assert.match(job('backend'), /\n {4}if: always\(\)\n/, 'the required aggregate must run on every event, pull requests included');

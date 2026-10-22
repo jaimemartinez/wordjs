@@ -39,9 +39,18 @@ name: F6 certification
 # processes, ~4s each); install + the phase suites dominate the rest.
 
 on:
+  # Pushes to main only: a pushed PR branch is already covered by `pull_request`, and running both
+  # doubled these jobs on every push (2026-10-22).
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# A newer push to the same PR or branch supersedes the running one (2026-10-22, owner: PR CI ~10 min; the
+# free plan runs ~20 jobs at once, so superseded runs on main only delay the ones that matter).
+concurrency:
+  group: f6-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

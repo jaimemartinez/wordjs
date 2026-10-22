@@ -10,7 +10,7 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-  # Daily run on main: the coverage ratchet no longer runs on pull requests (see backend-coverage).
+  # Daily run on main: the coverage ratchet runs only here and on manual dispatch (see backend-coverage).
   schedule:
     - cron: '17 6 * * *'
   # Manual dispatch exists for the F6 performance budget in backend/f0-baseline.json, which carries one
@@ -42,8 +42,11 @@ permissions:
 # reported against a commit nobody will merge, and it is holding two runners the new run needs.
 # main is exempt (every merge commit must keep its own complete record).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # The daily schedule gets its own group so a merge never cancels the coverage run. Superseded runs on main
+  # are cancelled too (2026-10-22, owner): the free plan runs ~20 jobs at once and the newest commit is the
+  # one that matters.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # EVERY JOB BELOW CARRIES A `timeout-minutes`, because GitHub's default is SIX HOURS.
 #
@@ -608,10 +611,10 @@ jobs:
     # branch carrying the multisite engine suites as well; several of those suites take 3-4 minutes each
     # under coverage. 35 leaves that margin and still turns a hang red.
     name: Backend coverage (shard ${{ matrix.shard }}/4)
-    # NOT on pull requests (2026-10-22, owner: PR CI must fit in ~10 minutes). The instrumented pass is
-    # twice as slow as the plain suite; it runs on every push to main and daily, where a coverage drop
-    # is reported right after the merge instead of before it. Not a required check.
-    if: github.event_name != 'pull_request'
+    # ONLY on the daily schedule and on manual dispatch (2026-10-22, owner: PR CI must fit in ~10 minutes,
+    # and each merge's instrumented pass held runners for ~17 min). The pass is twice as slow as the plain
+    # suite; a coverage drop is reported by the next daily run. Not a required check.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -697,7 +700,7 @@ jobs:
     # tail of the old single job, a few minutes). 20 covers it.
     name: Backend coverage (c8 ratchet)
     needs: backend-coverage-shard
-    if: always() && github.event_name != 'pull_request'
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
