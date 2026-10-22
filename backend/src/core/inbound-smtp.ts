@@ -196,13 +196,23 @@ async function tlsMaterial(name: string): Promise<{ key: string; cert: string; i
         const x = new crypto.X509Certificate(pem);
         return { x, info: { subject: String(x.subject || ''), validTo: String(x.validTo || ''), selfSigned: x.subject === x.issuer } };
     };
+    // Read without checking for existence first, and replace by rename: no window between a check and the
+    // use of the file (a missing or unreadable pair simply falls through to generating a new one).
+    const readPair = (): { key: string; cert: string } | null => {
+        try { return { key: fs.readFileSync(keyFile, 'utf8'), cert: fs.readFileSync(certFile, 'utf8') }; } catch { return null; }
+    };
+    // A fresh name created exclusively ('wx'), then renamed over the target: the target is never written in place.
+    const writeAtomic = (file: string, data: string, mode: number) => {
+        const tmp = `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+        fs.writeFileSync(tmp, data, { mode, flag: 'wx' });
+        fs.renameSync(tmp, file);
+    };
     try {
-        if (fs.existsSync(keyFile) && fs.existsSync(certFile)) {
-            const key = fs.readFileSync(keyFile, 'utf8');
-            const cert = fs.readFileSync(certFile, 'utf8');
-            const { x, info } = describe(cert);
+        const pair = readPair();
+        if (pair) {
+            const { x, info } = describe(pair.cert);
             const fresh = Date.parse(x.validTo) - Date.now() > 30 * 24 * 60 * 60 * 1000;
-            if (fresh && x.checkHost(cn) !== undefined) return { key, cert, info };
+            if (fresh && x.checkHost(cn) !== undefined) return { key: pair.key, cert: pair.cert, info };
         }
         const selfsigned = require('selfsigned');
         const pems = await selfsigned.generate([{ name: 'commonName', value: cn }], {
@@ -210,9 +220,8 @@ async function tlsMaterial(name: string): Promise<{ key: string; cert: string; i
             extensions: [{ name: 'subjectAltName', altNames: [{ type: 2, value: cn }] }],
         });
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        fs.writeFileSync(keyFile, pems.private, { mode: 0o600 });
-        try { fs.chmodSync(keyFile, 0o600); } catch { /* not supported on this filesystem */ }
-        fs.writeFileSync(certFile, pems.cert, { mode: 0o644 });
+        writeAtomic(keyFile, pems.private, 0o600);
+        writeAtomic(certFile, pems.cert, 0o644);
         log.info(`[InboundSMTP] generated this install's STARTTLS certificate for ${cn}`);
         return { key: pems.private, cert: pems.cert, info: describe(pems.cert).info };
     } catch (e: any) {
