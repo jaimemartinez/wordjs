@@ -1220,7 +1220,7 @@ const unlockLimiter = require('express-rate-limit')({
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req: Request) => `${require('../core/client-ip').clientIpBucket(req)}:${String((req.params as any).id || '')}`,
+    keyGenerator: (req: Request<Partial<IdParams>>) => `${require('../core/client-ip').clientIpBucket(req)}:${String(req.params.id || '')}`,
     message: { code: 'rest_post_unlock_rate_limited', message: 'Too many attempts. Try again later.', data: { status: 429 } },
 });
 
@@ -1271,12 +1271,14 @@ function unlockPasswordMatches(given: string, stored: string): boolean {
     return same && a.length === b.length;
 }
 
-router.post('/:id/unlock', unlockLimiter, optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
+interface UnlockBody { password?: unknown }
+
+router.post('/:id/unlock', unlockLimiter, optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams, UnlockBody>, res: Response) => {
     const post = await Post.findById(parseInt(req.params.id, 10));
     if (!post || isHiddenFromRest(post) || !isPasswordProtected(post) || !(await canReadThroughRest(req.user, post))) {
         return res.status(404).json(NOT_FOUND);
     }
-    const given = typeof (req.body as any)?.password === 'string' ? (req.body as any).password : '';
+    const given = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!given || !unlockPasswordMatches(given, String(post.postPassword))) {
         return res.status(403).json({ code: 'rest_post_incorrect_password', message: 'Incorrect password.', data: { status: 403 } });
     }
