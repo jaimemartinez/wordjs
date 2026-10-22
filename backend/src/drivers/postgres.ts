@@ -499,10 +499,28 @@ class PostgresDriver extends DatabaseDriverInterface {
         const seqs = await this.pool.query(`SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema=current_schema() AND sequence_name LIKE $1`, [prefix + '%']);
         for (const row of seqs.rows) { const sn = escapeIdentifier(safeIdent(row.sequence_name)); await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE ${sn} TO ${r}`); }
     }
-    /** GRANT the role CRUD on ONE newly-created table (called right after createTable). */
+    /**
+     * GRANT the role CRUD on ONE newly-created table (called right after createTable) AND USAGE on the
+     * sequences that table owns. A SERIAL / BIGSERIAL / IDENTITY column draws its value from a sequence the
+     * INSERT runs nextval() on, so without the sequence grant every INSERT of a table created after the
+     * plugin was provisioned failed with "permission denied for sequence <table>_id_seq" — until a restart
+     * re-ran grantPluginPrefix, which grants the prefix's sequences. The owned sequences are read from
+     * pg_depend ('a' = serial, 'i' = identity), so a sequence named differently from <table>_<col>_seq counts.
+     */
     async grantPluginTable(role: string, table: string) {
         const r = escapeIdentifier(safeIdent(role)); const tn = escapeIdentifier(safeIdent(table));
         await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tn} TO ${r}`);
+        const seqs = await this.pool.query(
+            `SELECT s.relname AS seq FROM pg_class s
+               JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = s.oid
+                               AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
+               JOIN pg_class t ON t.oid = d.refobjid
+               JOIN pg_namespace n ON n.oid = t.relnamespace
+              WHERE s.relkind = 'S' AND t.relname = $1 AND n.nspname = current_schema()`,
+            [safeIdent(table)]);
+        for (const row of seqs.rows) {
+            await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE ${escapeIdentifier(safeIdent(row.seq))} TO ${r}`);
+        }
     }
     /** Drop the plugin's role on uninstall (best-effort; its tables are dropped separately). */
     async dropPluginRole(role: string) {
