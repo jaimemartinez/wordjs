@@ -57,7 +57,10 @@ describe('siteAddressRefusalKey', () => {
             'network.addressFailed', 'network.otherAddresses', 'security.gateway.servingNow', 'security.gateway.servingReloading',
             'security.gateway.servingMismatchOn', 'security.gateway.servingMismatchOff', 'security.gateway.noCertificateOn',
             'security.gateway.generateSelfSigned', 'security.gateway.generateFailed', 'security.gateway.confirmTitle',
-            'security.gateway.confirmTransportOn', 'security.gateway.confirmTransportOff'];
+            'security.gateway.confirmTransportOn', 'security.gateway.confirmTransportOff',
+            'cluster.forwardsTitle', 'cluster.forwardsHelp', 'cluster.forwardsNone', 'cluster.forwardsEdit', 'cluster.forwardPort', 'cluster.forwardTargetPort',
+            'cluster.forwardProxy', 'cluster.forwardListening', 'cluster.forwardNotListening', 'cluster.forwardAdd', 'cluster.forwardRemove', 'cluster.forwardsSave',
+            'cluster.forwardsSaved', 'cluster.forwardsSavedWithErrors', 'cluster.forwardsFailed'];
         for (const lang of ['en', 'es', 'pt']) {
             for (const key of keys) expect((translations as any)[lang][key], `${lang} ${key}`).toBeTruthy();
         }

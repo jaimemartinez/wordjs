@@ -98,7 +98,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorUpdate'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkAddress', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -952,6 +952,12 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => request(app).post(`${B}/system/cluster/nodes/remove`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, url: 'https://10.0.0.2:4000' }),
             alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+        },
+        {
+            site: 'cluster.ts PUT /forwards', name: 'PUT /system/cluster/forwards', persona: 'doorClusterForwards',
+            send: (p: string, pw: string) => request(app).put(`${B}/system/cluster/forwards`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, forwards: [] }),
+            alsoExpect: (r: any) => r.status === 502 && r.body.code === 'cluster_gateway_unreachable',
         },
         // Admin → Updates (routes/update.ts): the password first, then the second factor (none here), so
         // nothing is downloaded, backed up or installed.

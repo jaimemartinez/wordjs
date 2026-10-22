@@ -45,6 +45,8 @@ const hostEdge = require('./host-edge');
 const siteCerts = require('./site-certs');
 // The one reading of gateway-config.json's `ssl` block (primary, workers and control plane alike).
 const tlsMode = require('./tls-mode');
+// TCP ports forwarded to the backend node (Admin → Servers), e.g. SMTP in separate mode.
+const tcpForward = require('./tcp-forward');
 const upstreamDown = require('./upstream-down');
 // A browser that cancels a request must not end a worker: every listener below is guarded.
 const { installClientAbortGuard, isClientAbort } = require('./client-abort');
@@ -409,6 +411,30 @@ if (cluster.isPrimary) {
     };
 
     loadRegistry();
+
+    // The ports this gateway forwards to the backend node (src/tcp-forward.js). Applied at boot from
+    // gateway-config.json and changed from the panel (POST /tcp-forwards on the control plane below).
+    // The target host is always a registered backend node, healthy ones first.
+    const backendHosts = () => {
+        const group = registry.get('/api');
+        if (!group || !group.targets) return [];
+        const urls = [...group.targets];
+        const healthy = urls.filter((u) => !group.metrics || !group.metrics.get || (group.metrics.get(u) || {}).status !== 'Failing');
+        const hosts = [];
+        for (const u of (healthy.length ? healthy : urls)) {
+            try { hosts.push(new URL(u).hostname.replace(/^\[|\]$/g, '')); } catch { /* not a URL */ }
+        }
+        return hosts;
+    };
+    const forwarder = tcpForward.createForwarder({ backendHosts, logger });
+    const reservedPorts = () => [FINAL_PORT, parseInt(config.gatewayInternalPort, 10) || 3100,
+        parseInt(config.gatewayEnrollPort, 10) || ((parseInt(config.gatewayInternalPort, 10) || 3100) + 1),
+        Number((config.acme || {}).http01Port) || 0].filter(Boolean);
+    {
+        const boot = tcpForward.sanitizeForwards(Array.isArray(config.tcpForwards) ? config.tcpForwards : [], reservedPorts());
+        if (boot.error) logger.warn(`[Gateway] [Forward] tcpForwards in gateway-config.json ignored: ${boot.error}`);
+        else if (boot.value.length) forwarder.apply(boot.value);
+    }
 
     const registrySnapshot = () => {
         const data = {};
@@ -866,7 +892,7 @@ if (cluster.isPrimary) {
                 });
                 const caFingerprintNow = () => clusterCa.caFingerprint(fs.readFileSync(path.join(CERTS_DIR, 'cluster-ca.crt'), 'utf8'));
                 internalApp.get('/cluster', requireIdentity(['backend']), (req, res) => {
-                    if (!clusterInitialized()) return res.json({ initialized: false, gateway: gatewaySelf(), nodes: nodesWithCerts(), tokens: [], removed: removedNodes.list() });
+                    if (!clusterInitialized()) return res.json({ initialized: false, gateway: gatewaySelf(), nodes: nodesWithCerts(), tokens: [], removed: removedNodes.list(), forwards: forwarder.status() });
                     res.json({
                         initialized: true,
                         advertiseHost: config.gatewayAdvertiseHost || null,
@@ -876,7 +902,28 @@ if (cluster.isPrimary) {
                         nodes: nodesWithCerts(),
                         tokens: clusterCa.tokenStore(TOKENS_FILE).list().filter((t) => !t.used && !t.expired),
                         removed: removedNodes.list(),
+                        forwards: forwarder.status(),
                     });
+                });
+                // The ports forwarded to the backend node, as listening now, and replacing them (the backend
+                // has already checked who asks: an administrator, with their password).
+                internalApp.get('/tcp-forwards', requireIdentity(['backend']), (req, res) => {
+                    res.json({ forwards: forwarder.status() });
+                });
+                internalApp.post('/tcp-forwards', requireIdentity(['backend']), (req, res) => {
+                    syncConfigFromDisk();
+                    const checked = tcpForward.sanitizeForwards(req.body && req.body.forwards, reservedPorts());
+                    if (checked.error) return res.status(400).json({ error: checked.error, code: 'cluster_invalid_forward' });
+                    try {
+                        config.tcpForwards = checked.value;
+                        writeGatewayConfig(GATEWAY_CONFIG_PATH, configToWrite());
+                    } catch (e) {
+                        return res.status(500).json({ error: `could not save the forwards: ${e.message}` });
+                    }
+                    forwarder.apply(checked.value);
+                    logger.info(`[Gateway] [Forward] ${checked.value.length} forward(s) set from the admin panel`);
+                    // Binding is asynchronous: give the listeners a moment so the answer says what happened.
+                    setTimeout(() => res.json({ forwards: forwarder.status() }), 300);
                 });
                 internalApp.post('/cluster/token', requireIdentity(['backend']), (req, res) => {
                     if (!clusterInitialized()) return res.status(409).json({ error: 'This gateway has no cluster CA yet.', code: 'cluster_not_initialized' });
