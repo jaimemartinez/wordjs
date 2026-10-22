@@ -18,7 +18,7 @@ const User = require('../models/User');
 // refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
 // sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
 // unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, sessionHandoff, trustedHost, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS } = require('../middleware/auth');
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, sessionRemembered, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, sessionHandoff, trustedHost, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS } = require('../middleware/auth');
 const networkHandoff = require('../core/network-handoff');
 const { refuseHandoffSession } = networkHandoff;
 const { isAdmin, can } = require('../middleware/permissions');
@@ -411,7 +411,18 @@ async function endLoginAttempt(u: any): Promise<void> {
 // and a non-`secure` CSRF cookie. Called per request rather than snapshotted at module load, so a
 // config change (installer, tests) is not frozen into the first require of this file — and WITH the
 // request, because `secure` now depends on which of the site's addresses the cookie is set for.
-const COOKIE_OPTIONS = (req: Request): CookieOptions => sessionCookieOptions(req);
+const COOKIE_OPTIONS = (req: Request, remember = sessionRemembered(req)): CookieOptions => sessionCookieOptions(req, remember);
+
+/**
+ * «Remember me» on the sign-in form. Only an explicit "no" (false, "0", "false", "off") gives a
+ * browser-session cookie; an absent field keeps the persistent one, so API clients and older forms
+ * behave as before.
+ */
+function rememberChoice(body: any): boolean {
+    const v = body ? body.remember : undefined;
+    if (v === false || v === 0) return false;
+    return !(typeof v === 'string' && ['0', 'false', 'off', 'no'].includes(v.trim().toLowerCase()));
+}
 
 /**
  * GET /auth/me is the first call the admin makes, and an anonymous caller gets 401 — which the login
@@ -842,6 +853,13 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
  *                 type: string
  *               password:
  *                 type: string
+ *               remember:
+ *                 type: boolean
+ *                 default: true
+ *                 description: >-
+ *                   «Remember me». false issues a browser-session cookie (ended when the browser closes) and
+ *                   every refresh of that session keeps it; true or absent keeps the 7-day cookie. With
+ *                   two-factor authentication the choice is carried to POST /auth/mfa.
 *     responses:
  *       200:
  *         description: >-
@@ -1006,7 +1024,7 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
         // Second factor: if the account has MFA enabled, do NOT issue the session yet. Return a short-lived
         // challenge token; the client must call POST /auth/mfa with a valid TOTP or backup code to finish.
         if (await mfa.isEnabled(user.id)) {
-            return res.json({ mfaRequired: true, mfaToken: mfa.signChallenge(user.id) });
+            return res.json({ mfaRequired: true, mfaToken: mfa.signChallenge(user.id, { remember: rememberChoice(req.body) }) });
         }
 
         // A COMPLETED login — recorded where the session is actually issued, never where the password
@@ -1016,8 +1034,9 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
             username: auditText(user.userLogin), method: 'password', ip: auditText(ip, 45)
         });
 
-        const token = generateToken(user, req);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
+        const remember = rememberChoice(req.body);
+        const token = generateToken(user, req, { remember });
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req, remember))) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } catch (error) {
         await recordLoginFail(lockId);
@@ -2529,8 +2548,10 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
         });
         // `mfa: true` stamps the session as second-factor verified (`amr`), which is what lets a user whose
         // role requires 2FA mint an API token from it without typing a fresh code (POST /auth/tokens).
-        const token = generateToken(user, req, { mfa: true });
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
+        // The «Remember me» choice made on the password step rides in the signed challenge.
+        const remember = challenge.remember !== false;
+        const token = generateToken(user, req, { mfa: true, remember });
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req, remember))) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } finally {
         await endLoginAttempt(lockKey);

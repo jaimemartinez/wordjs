@@ -13,9 +13,12 @@ import { useEffect, useId, useRef, useState } from "react";
 import DialogLayer from "@/components/DialogLayer";
 import { apiGetPaged, usersApi, type User } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { runEach } from "@/lib/bulkRun";
 
 interface DeleteUserDialogProps {
-    user: User;
+    /** One account, or several (the bulk action on the users list). */
+    user?: User;
+    users?: User[];
     /** The signed-in administrator — the default recipient of the content. */
     currentUserId?: number;
     onClose: () => void;
@@ -30,7 +33,11 @@ async function countAuthoredEntries(userId: number): Promise<number> {
     return totals.reduce((a, b) => a + b, 0);
 }
 
-export default function DeleteUserDialog({ user, currentUserId, onClose, onDeleted }: DeleteUserDialogProps) {
+export default function DeleteUserDialog({ user: single, users: many, currentUserId, onClose, onDeleted }: DeleteUserDialogProps) {
+    const targets = many && many.length ? many : (single ? [single] : []);
+    const user = targets[0];
+    const bulk = targets.length > 1;
+    const targetKey = targets.map((u) => u.id).join(",");
     const { t } = useI18n();
     const titleId = useId();
     const cancelRef = useRef<HTMLButtonElement>(null);
@@ -42,13 +49,15 @@ export default function DeleteUserDialog({ user, currentUserId, onClose, onDelet
 
     useEffect(() => {
         let cancelled = false;
-        countAuthoredEntries(user.id).then((n) => { if (!cancelled) setEntries(n); });
+        const ids = new Set(targetKey.split(",").map(Number));
+        Promise.all([...ids].map((id) => countAuthoredEntries(id)))
+            .then((counts) => { if (!cancelled) setEntries(counts.reduce((a, b) => a + b, 0)); });
         // Team accounts (anyone but subscribers) can carry a byline; the first page is enough to choose from.
         usersApi.listPaged({ excludeRole: "subscriber", perPage: 100 })
-            .then((r) => { if (!cancelled) setCandidates(r.data.filter((u) => u.id !== user.id)); })
+            .then((r) => { if (!cancelled) setCandidates(r.data.filter((u) => !ids.has(u.id))); })
             .catch(() => { /* the "keep unattributed" choice still works */ });
         return () => { cancelled = true; };
-    }, [user.id]);
+    }, [targetKey]);
 
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) { e.preventDefault(); onClose(); } };
@@ -57,18 +66,19 @@ export default function DeleteUserDialog({ user, currentUserId, onClose, onDelet
         return () => { document.removeEventListener("keydown", onKeyDown); clearTimeout(focus); };
     }, [busy, onClose]);
 
-    const name = user.displayName || user.username;
+    if (!user) return null;
+    const name = bulk ? t("users.bulk.count").replace("{n}", String(targets.length)) : (user.displayName || user.username);
     const confirm = async () => {
         setBusy(true);
         setError("");
-        try {
-            await usersApi.delete(user.id, entries ? (reassignTo ? Number(reassignTo) : undefined) : undefined);
-            onDeleted();
-            onClose();
-        } catch (err: any) {
-            setError(err?.message || t("users.delete.failed"));
-            setBusy(false);
-        }
+        const reassign = entries ? (reassignTo ? Number(reassignTo) : undefined) : undefined;
+        const result = await runEach(targets.map((u) => u.id), (id) => usersApi.delete(id, reassign));
+        if (result.done.length) onDeleted();
+        if (!result.failed.length) { onClose(); return; }
+        setError(bulk
+            ? `${t("users.bulk.deleteFailed").replace("{n}", String(result.failed.length))} ${result.failed[0].reason}`
+            : (result.failed[0].reason || t("users.delete.failed")));
+        setBusy(false);
     };
 
     return (
@@ -82,9 +92,15 @@ export default function DeleteUserDialog({ user, currentUserId, onClose, onDelet
                         </div>
                         <h3 id={titleId} className="text-xl font-bold text-gray-900 break-words">{t("users.delete.titleNamed").replace("{name}", name)}</h3>
                     </div>
-                    <p className="text-gray-600 leading-relaxed break-words">
-                        {t("users.delete.body").replace("{name}", name).replace("{login}", user.username)}
-                    </p>
+                    {bulk ? (
+                        <p className="text-gray-600 leading-relaxed break-words">
+                            {t("users.bulk.deleteBody")} {targets.slice(0, 8).map((u) => u.displayName || u.username).join(", ")}{targets.length > 8 ? "…" : ""}
+                        </p>
+                    ) : (
+                        <p className="text-gray-600 leading-relaxed break-words">
+                            {t("users.delete.body").replace("{name}", name).replace("{login}", user.username)}
+                        </p>
+                    )}
                     {entries === null ? (
                         <p className="text-sm text-gray-400">{t("loading")}</p>
                     ) : entries > 0 ? (

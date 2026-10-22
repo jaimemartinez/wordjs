@@ -32,7 +32,7 @@ function installerDbTls(dbConn: any): { ssl: boolean; sslCa?: string; sslRejectU
 function requireInstallToken(req: Request, res: Response): boolean {
     const provided = req.get('x-install-token') || (req.body && req.body.installToken);
     if (!verifyInstallToken(provided)) {
-        res.status(403).json({ error: 'Invalid or missing install token. Read it from the server terminal or from backend/data/install-token.' });
+        res.status(403).json({ error: 'Invalid or missing install token. It is in backend/data/install-token on the server (or the WORDJS_INSTALL_TOKEN value, if one was set); a server started from a terminal also prints it there.' });
         return false;
     }
     return true;
@@ -376,6 +376,38 @@ async function pgEncodingProblem(client: any): Promise<string | null> {
         + `is not searchable and case rules break. Create the database with: CREATE DATABASE <name> ENCODING 'UTF8' `
         + `TEMPLATE template0; and use that one.`;
 }
+
+/**
+ * @swagger
+ * /setup/check-token:
+ *   post:
+ *     summary: Check the install token before the wizard moves on
+ *     description: >-
+ *       The wizard asks this on its first step, so a wrong token is reported there instead of on the
+ *       database step. Same token rules and limiter as /setup/test-db; only before installation.
+ *     tags: [Setup]
+ *     security: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               installToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ ok: true } — the token is the right one"
+ *       400:
+ *         description: Already installed
+ *       403:
+ *         description: Invalid or missing install token
+ */
+router.post('/check-token', (req: Request, res: Response) => {
+    if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });
+    if (!requireInstallToken(req, res)) return;
+    res.json({ ok: true });
+});
 
 router.post('/test-db', async (req: Request, res: Response) => {
     if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });

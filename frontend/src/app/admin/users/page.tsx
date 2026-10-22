@@ -9,6 +9,7 @@ import { PageHeader, Button, EmptyState, StatusBadge, DataTable, Pagination } fr
 import { useAuth } from "@/contexts/AuthContext";
 import UserFormModal from "./UserFormModal";
 import DeleteUserDialog from "./DeleteUserDialog";
+import { runEach } from "@/lib/bulkRun";
 import { useRolesMap } from "@/lib/useRoleOptions";
 import { avatarInitial } from "@/lib/avatarInitial";
 import { roleDisplayName, roleNameFrom } from "@/lib/roleOptions";
@@ -24,7 +25,32 @@ export default function UsersPage() {
     const [loading, setLoading] = useState(true);
     const [selectedUser, setSelectedUser] = useState<User | "new" | null>(null);
     const [deleting, setDeleting] = useState<User | null>(null);
-    const { user: me } = useAuth();
+    const { user: me, can } = useAuth();
+    // BULK ACTIONS: select rows (never your own account), then change their role or delete them.
+    const [selected, setSelected] = useState<Set<number>>(new Set());
+    const [bulkRole, setBulkRole] = useState("");
+    const [bulkBusy, setBulkBusy] = useState(false);
+    const [bulkMessage, setBulkMessage] = useState("");
+    const [bulkDeleting, setBulkDeleting] = useState<User[] | null>(null);
+    const selectable = (u: User) => !(me && me.id === u.id);
+    const toggleRow = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    const toggleAllRows = () => setSelected((s) => {
+        const ids = users.filter(selectable).map((u) => u.id);
+        return ids.every((id) => s.has(id)) ? new Set<number>() : new Set(ids);
+    });
+    const selectedUsers = users.filter((u) => selected.has(u.id));
+    const applyBulkRole = async () => {
+        if (!bulkRole || selectedUsers.length === 0) return;
+        setBulkBusy(true);
+        setBulkMessage("");
+        const result = await runEach(selectedUsers.map((u) => u.id), (id) => usersApi.update(id, { role: bulkRole }));
+        setBulkBusy(false);
+        setBulkMessage(result.failed.length
+            ? `${t("users.bulk.roleFailed").replace("{n}", String(result.failed.length))} ${result.failed[0].reason}`
+            : t("users.bulk.roleDone").replace("{n}", String(result.done.length)));
+        setSelected(new Set());
+        loadUsers();
+    };
     // PAGED, SEARCHED AND FILTERED ON THE SERVER. The list used to be usersApi.list() — the server's
     // first page of 10 — filtered in the browser, so every account past the tenth was unreachable and
     // the count said "10" on a site with hundreds of subscribers.
@@ -55,6 +81,7 @@ export default function UsersPage() {
 
     const loadUsers = async () => {
         setLoading(true);
+        setSelected(new Set());
         try {
             const res = await usersApi.listPaged(type === "subscribers"
                 ? { page, perPage: PER_PAGE, search: search || undefined, role: "subscriber" }
@@ -113,6 +140,35 @@ export default function UsersPage() {
                     )}
                     <span className="ml-auto text-[11px] font-black text-gray-500 uppercase tracking-widest" aria-live="polite">{total} {t('table.total')}</span>
                 </div>
+                {selected.size > 0 && can('edit_users') && (
+                    <div className="px-4 sm:px-8 py-3 bg-blue-50/60 border-b border-blue-100 flex flex-wrap items-center gap-3" data-testid="users-bulk-bar">
+                        <span className="text-xs font-bold text-blue-700">{selected.size} {t('table.selected')}</span>
+                        {roles && (
+                            <>
+                                <label htmlFor="users-bulk-role" className="sr-only">{t("users.bulk.changeRole")}</label>
+                                <select id="users-bulk-role" value={bulkRole} onChange={(e) => setBulkRole(e.target.value)}
+                                    className="min-h-11 px-3 rounded-lg border border-gray-200 bg-white text-xs font-bold text-gray-700">
+                                    <option value="">{t("users.bulk.changeRole")}</option>
+                                    {Object.keys(roles).map((slug) => (
+                                        <option key={slug} value={slug}>{roleDisplayName({ role: slug, roleName: roleNameFrom(roles, slug) }, t)}</option>
+                                    ))}
+                                </select>
+                                <button type="button" onClick={applyBulkRole} disabled={!bulkRole || bulkBusy}
+                                    className="min-h-11 px-4 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50">
+                                    {t("users.bulk.apply")}
+                                </button>
+                            </>
+                        )}
+                        {can('delete_users') && (
+                            <button type="button" onClick={() => setBulkDeleting(selectedUsers)} disabled={bulkBusy}
+                                className="min-h-11 px-4 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50">
+                                <i className="fa-solid fa-trash mr-1.5" aria-hidden="true"></i>{t("delete")}
+                            </button>
+                        )}
+                        <button type="button" onClick={() => setSelected(new Set())} className="min-h-11 px-3 text-xs font-bold text-gray-500 hover:text-gray-700">{t('table.clear')}</button>
+                    </div>
+                )}
+                {bulkMessage && <p role="status" className="px-4 sm:px-8 py-2 text-xs text-gray-600 border-b border-gray-100">{bulkMessage}</p>}
                 {loading ? (
                     <div className="p-20 text-center" role="status">
                         <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" aria-hidden="true"></div>
@@ -135,6 +191,7 @@ export default function UsersPage() {
                     <DataTable
                         rows={users}
                         rowKey={(u) => u.id}
+                        selection={can('edit_users') || can('delete_users') ? { selected, onToggle: (id: number) => { const row = users.find((u) => u.id === id); if (row && selectable(row)) toggleRow(id); }, onToggleAll: toggleAllRows, allLabel: t('table.selectAll') } : undefined}
                         caption={type === "subscribers" ? t('users.subscribers') : t('users.team.members')}
                         rowLabel={(u) => u.displayName || u.username}
                         actionsLabel={t('actions')}
@@ -188,6 +245,15 @@ export default function UsersPage() {
                 )}
                 {!loading && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
             </div>
+
+            {bulkDeleting && (
+                <DeleteUserDialog
+                    users={bulkDeleting}
+                    currentUserId={me?.id}
+                    onClose={() => setBulkDeleting(null)}
+                    onDeleted={loadUsers}
+                />
+            )}
 
             {deleting && (
                 <DeleteUserDialog

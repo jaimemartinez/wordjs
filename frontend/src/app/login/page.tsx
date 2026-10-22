@@ -12,6 +12,8 @@ function LoginForm() {
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
+    // «Remember me»: unticked, the session ends when the browser closes.
+    const [remember, setRemember] = useState(true);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
     // "Forgot password?" is only offered when self-service reset can actually deliver mail (probe below).
@@ -51,7 +53,7 @@ function LoginForm() {
         setError("");
         setLoading(true);
 
-        const result = await login(username, password);
+        const result = await login(username, password, remember);
 
         if (result.mfaRequired && result.mfaToken) {
             setMfaToken(result.mfaToken); // password OK → ask for the second factor
@@ -168,6 +170,16 @@ function LoginForm() {
                             </button>
                         </div>
                     </div>
+
+                    <label className="flex items-center gap-2 text-sm text-gray-600 select-none min-h-11">
+                        <input
+                            type="checkbox"
+                            checked={remember}
+                            onChange={(e) => setRemember(e.target.checked)}
+                            className="h-4 w-4 rounded border-gray-300"
+                        />
+                        <span>{t('login.rememberMe')}</span>
+                    </label>
 
                     {error && (
                         <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">

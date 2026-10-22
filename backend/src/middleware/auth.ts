@@ -125,6 +125,16 @@ const SESSION_HANDOFF = new WeakMap<object, { uid: number; by: string; from: str
  * token refreshed FROM it keeps the same id and a logout of that browser ends exactly that session.
  */
 const SESSION_ID = new WeakMap<object, string>();
+/**
+ * «Remember me»: a session signed in WITHOUT it carries `rem: false` and lives in a browser-session
+ * cookie (no Max-Age), so closing the browser ends it; every refresh of it keeps that choice.
+ */
+const SESSION_NOT_REMEMBERED = new WeakSet<object>();
+
+/** Did the session on `req` sign in with «Remember me» (the default for sessions minted before it existed)? */
+function sessionRemembered(req?: Request): boolean {
+    return !(req && SESSION_NOT_REMEMBERED.has(req));
+}
 
 /** The handoff the presenting session belongs to, or null for any other session. */
 function sessionHandoff(req: Request): { uid: number; by: string; from: string; exp: number } | null {
@@ -429,9 +439,9 @@ function isMfaEnforceExempt(req: Request): boolean {
 }
 
 // The ONLY state-changing endpoints that legitimately predate any origin, session or user: the wizard's
-// pre-install doors. `isInstalled()` closes both of them once the site exists, so this set is empty of
+// pre-install doors. `isInstalled()` closes all three once the site exists, so this set is empty of
 // authority on a live site. Deliberately NOT the whole '/setup/' subtree — see csrfProtection below.
-const CSRF_EXEMPT_PATHS = new Set(['/setup/install', '/setup/test-db']);
+const CSRF_EXEMPT_PATHS = new Set(['/setup/install', '/setup/test-db', '/setup/check-token']);
 
 /**
  * Global gate for the admin-enforced MFA-by-role policy. Mounted at the API prefix, it runs BEFORE the
@@ -644,6 +654,7 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         SESSION_MFA.set(req, Array.isArray(decoded.amr) && decoded.amr.includes(MFA_AMR));
         if (decoded.hof) SESSION_HANDOFF.set(req, decoded.hof);
         if (typeof decoded.ses === 'string' && decoded.ses) SESSION_ID.set(req, decoded.ses);
+        if (decoded.rem === false) SESSION_NOT_REMEMBERED.add(req);
         req.user = user;
         noteAuthenticatedUse(req);
         next();
@@ -874,14 +885,17 @@ function csrfCookie(req: Request): string | null {
  * for (see sessionCookieSecure). Without a request it answers the site-wide rule, which is also what
  * the path used by clearSessionCookies needs.
  */
-function sessionCookieOptions(req?: Request): CookieOptions {
-    return {
+function sessionCookieOptions(req?: Request, remember = true): CookieOptions {
+    const options: CookieOptions = {
         httpOnly: true,
         secure: sessionCookieSecure(req),
         sameSite: 'lax', // Protect against CSRF while allowing normal navigation
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
         path: '/'
     };
+    // Without «Remember me» the cookie ends with the browser session (no Max-Age / Expires).
+    if (!remember) delete options.maxAge;
+    return options;
 }
 
 /**
@@ -1506,12 +1520,15 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
  * (POST /auth/mfa); a session minted FROM an authenticated one (POST /auth/refresh) inherits the marker of
  * the session presented, so refreshing never upgrades — nor silently drops — that assurance.
  */
-function generateToken(user: any, req?: Request, opts?: { mfa?: boolean; handoff?: { uid: number; by: string; from: string; exp: number } }) {
+function generateToken(user: any, req?: Request, opts?: { mfa?: boolean; remember?: boolean; handoff?: { uid: number; by: string; from: string; exp: number } }) {
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
     // One id per signed-in session, inherited by every refresh of it (core/session-revocation).
     // Only a token minted FOR the user who holds that session inherits its id.
     const inherited = req && req.user && Number(req.user.id) === Number(user.id) ? SESSION_ID.get(req) : undefined;
     claims.ses = inherited || require('../core/session-revocation').newSessionId();
+    // «Remember me» is chosen at sign-in and inherited by every refresh of the same session.
+    const remember = opts && typeof opts.remember === 'boolean' ? opts.remember : (inherited ? sessionRemembered(req) : true);
+    if (!remember) claims.rem = false;
     if ((opts && opts.mfa === true) || (req && sessionMfaVerified(req))) claims.amr = [MFA_AMR];
     const address = sessionAddressClaims(req);
     if (address) claims.mh = address.mh;
@@ -1876,6 +1893,7 @@ module.exports = {
     CSRF_HEADER,
     csrfCookie,
     sessionCookieOptions,
+    sessionRemembered,
     csrfCookieOptions,
     clearSessionCookies,
     // Request-value boundary — cookies and query params are not necessarily strings.
