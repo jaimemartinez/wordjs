@@ -8,8 +8,12 @@
  * main showed a red CI. The ceiling went to 45; on 2026-10-15 the suite was split across four
  * `backend-coverage-shard` legs that upload raw V8 profiles, and `backend-coverage` merges them and
  * applies the floor with `c8 report`. That split is only sound while (a) the report applies exactly the
- * options of `test:coverage:check`, (b) the coverage shards cover the same quarters as the unit-suite
- * shards, and (c) each shard still has a ceiling above its share of the measured worst case.
+ * options of `test:coverage:check`, (b) the coverage shards together cover the whole suite, and (c) each
+ * shard still has a ceiling above its share of the measured worst case.
+ *
+ * 2026-10-22 (owner: a pull request's CI must fit in ~10 minutes): the instrumented pass no longer runs
+ * on pull requests, only on main and on the daily schedule, and the plain unit suite runs in eight
+ * shards. The two matrices are independent now; each must list 1..N matching its own /N.
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -45,12 +49,20 @@ test('each coverage shard timeout covers its share of the measured instrumented 
     assert.ok(minutes <= 60, `backend-coverage-shard timeout-minutes is ${minutes}; a hang must still turn red within the hour`);
 });
 
-test('the coverage shards run the same quarters as the unit-suite shards', () => {
-    assert.strictEqual(shardsOf('backend-coverage-shard'), shardsOf('backend-test'));
+test('each sharded job runs every shard of the whole suite exactly once', () => {
     for (const id of ['backend-test', 'backend-coverage-shard']) {
-        assert.match(job(id), /run: npm test -- --test-shard=\$\{\{ matrix\.shard \}\}\/4\n/, `${id} does not run its shard of npm test`);
+        const denominator = Number((/run: npm test -- --test-shard=\$\{\{ matrix\.shard \}\}\/(\d+)\n/.exec(job(id)) || [])[1]);
+        assert.ok(denominator > 0, `${id} does not run its shard of npm test`);
+        const expected = `[${Array.from({ length: denominator }, (_, i) => i + 1).join(', ')}]`;
+        assert.strictEqual(shardsOf(id), expected, `${id}: the shard matrix must list 1..${denominator} to match the /${denominator} denominator`);
     }
-    assert.match(shardsOf('backend-test'), /^\[1, 2, 3, 4\]$/, 'the shard matrix must list 1..4 to match the /4 denominator');
+});
+
+test('the instrumented pass stays off pull requests, and still runs on main and daily', () => {
+    assert.match(job('backend-coverage-shard'), /\n {4}if: github\.event_name != 'pull_request'\n/, 'the coverage shards must not run on pull requests (PR CI budget ~10 min)');
+    const ci = fs.readFileSync(CI, 'utf8').replace(/\r\n/g, '\n');
+    assert.match(ci, /\n {2}push:\n {4}branches: \[main\]/, 'the ratchet must still run on every push to main');
+    assert.match(ci, /\n {2}schedule:\n {4}- cron: /, 'the ratchet must still run on a daily schedule');
 });
 
 test('the merged report applies exactly the ratchet of test:coverage:check', () => {
@@ -68,9 +80,10 @@ test('the merged report applies exactly the ratchet of test:coverage:check', () 
 
 test('the aggregate jobs cannot be skipped into a pass', () => {
     for (const id of ['backend', 'backend-coverage']) {
-        assert.match(job(id), /\n {4}if: always\(\)\n/, `${id} must run even when a dependency failed — a skipped required check counts as passing`);
+        assert.match(job(id), /\n {4}if: always\(\)( && github\.event_name != 'pull_request')?\n/, `${id} must run even when a dependency failed — a skipped required check counts as passing`);
         assert.match(job(id), /!= "success"/, `${id} must fail unless every job it needs succeeded`);
     }
+    assert.match(job('backend'), /\n {4}if: always\(\)\n/, 'the required aggregate must run on every event, pull requests included');
     assert.match(job('backend'), /\n {4}name: Backend \(typecheck \+ test\)\n/, 'branch protection requires this exact check name');
     assert.match(job('backend-coverage'), /\n {4}name: Backend coverage \(c8 ratchet\)\n/);
 });
