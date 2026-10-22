@@ -67,6 +67,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   video-gallery and youtube-videos are in English, Spanish and Portuguese (they were Spanish, some partly English), with
   dates in the admin's locale. Content the plugins store or show to visitors (banner texts, default labels) is unchanged.
   Each of them has a patch release.
+- **Admin → Plugins shows that an action is running.** Activating a plugin starts its sandboxed process and can take several seconds, but the button gave no sign of it and stayed clickable, so the click looked lost and invited a second activation. While Activate, Deactivate or Delete waits for the server, its button now shows a spinner and "Activating…", "Deactivating…" or "Deleting…" (in the admin's language), and that plugin's lifecycle buttons stay disabled until the server answers.
 
 ## [2.8.0] - 2026-10-22
 
