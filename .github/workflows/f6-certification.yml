@@ -39,10 +39,8 @@ name: F6 certification
 # processes, ~4s each); install + the phase suites dominate the rest.
 
 on:
-  # Pushes to main only: a pushed PR branch is already covered by `pull_request`, and running both
-  # doubled these jobs on every push (2026-10-22).
-  push:
-    branches: [main]
+  # No push trigger (2026-10-22, owner): a PR branch is covered by `pull_request`, and branch protection
+  # requires a PR to be up to date with main before it merges, so a post-merge run on main would repeat it.
   pull_request:
   workflow_dispatch:
 

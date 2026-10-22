@@ -6,8 +6,9 @@ on:
   # runners at the same time, each at 29-30 min against a 32-min timeout. The pair raced and the loser was
   # cancelled at the deadline with 37/38 checks green (PR #349, 2026-09-16; PR #347 before it). Branch
   # pushes are covered by `pull_request`; `push` keeps main (post-merge) and the release tags.
+  # No post-merge run on main (2026-10-22, owner): branch protection requires a PR to be up to date with main
+  # before it merges, so the PR's own run already validated the exact tree main receives. Release tags still run.
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   # Daily run on main: the coverage ratchet runs only here and on manual dispatch (see backend-coverage).
@@ -1043,22 +1044,30 @@ jobs:
         # installs concurrently: wall time becomes the LONGEST single install, not their sum, which
         # fits cold and lets the run complete and warm the cache. See scripts/ci-install.mjs.
         run: npm run ci:all
+      # The browser is cached per Playwright version, so a warm run downloads nothing.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
       - name: Install Playwright chromium (with system deps)
-        working-directory: frontend
-        # `--with-deps` shells out to apt-get, and both that and the browser download have stalled
-        # here for 40+ minutes. `timeout` kills a stuck attempt at five minutes so a real hang fails in
-        # minutes rather than in six hours. The install itself takes under a minute.
+        # NO APT ON THE HAPPY PATH (2026-10-22). `--with-deps` shells out to apt-get, and the runner's
+        # Ubuntu mirror (azure.archive.ubuntu.com) keeps stalling: on #570 this step sat for 6+ minutes
+        # and the old retry path could take ~15. The GitHub ubuntu image already ships Google Chrome and
+        # every library Chromium needs, so the browser alone is installed, then launched once to prove
+        # it runs. Only if that launch fails does the step fall back to the apt path below.
         #
-        # THE RETRY USED TO BE DEAD ON ARRIVAL. `timeout` kills `npx`, not the root `apt-get` that
-        # Playwright started through sudo: the orphan keeps /var/lib/apt/lists/lock, so the second
-        # attempt failed at once with "Could not get lock … held by process … (apt-get)" — seen twice
-        # on 2026-10-07 while azure.archive.ubuntu.com stalled and apt waited out its default timeout
-        # on every index before falling back to archive.ubuntu.com. Two changes:
-        #   - short per-connection timeouts and retries, so a stalled mirror fails over in seconds
-        #     instead of eating the five minutes (the fallback mirror was answering the whole time);
-        #   - before retrying, wait (bounded) for apt-get/dpkg to exit, so the retry really starts clean.
+        # THE APT FALLBACK MUST STILL BE ABLE TO RETRY. `timeout` kills `npx`, not the root `apt-get`
+        # Playwright started through sudo: the orphan keeps /var/lib/apt/lists/lock, so a bare second
+        # attempt failed at once with "Could not get lock … held by process … (apt-get)" (twice on
+        # 2026-10-07). apt therefore fails over in seconds, and nothing retries while apt holds the lock.
+        working-directory: frontend
         run: |
           set -u
+          launches() { node -e "require('@playwright/test').chromium.launch().then(b => b.close())"; }
+          timeout 3m npx playwright install chromium || timeout 3m npx playwright install chromium || true
+          launches && exit 0
+          echo "::warning::Chromium does not launch with the image's libraries; installing system deps through apt"
           printf '%s\n' 'Acquire::http::Timeout "20";' 'Acquire::https::Timeout "20";' 'Acquire::Retries "3";' \
             | sudo tee /etc/apt/apt.conf.d/90-ci-mirror-failover > /dev/null
           apt_idle() {
@@ -1068,7 +1077,7 @@ jobs:
             done
             return 1
           }
-          timeout 5m npx playwright install --with-deps chromium && exit 0
+          timeout 5m npx playwright install --with-deps chromium && launches && exit 0
           echo "::warning::Playwright install failed or timed out; waiting for apt to release its lock before the retry"
           apt_idle || { echo "::error::apt-get/dpkg still running five minutes after the first attempt"; exit 1; }
           timeout 5m npx playwright install --with-deps chromium
