@@ -969,6 +969,15 @@ the boot error links there too.
 
 ### Fixed
 
+- **"Also delete this plugin's data" leaves nothing of the plugin behind.** Beyond its tables it now deletes the
+  options the plugin created (recorded when the plugin first writes them; a site setting it merely changed is
+  never touched), revokes the account capabilities it declared from every account, and removes its private
+  storage folders — a reinstall no longer inherits the configuration the administrator asked to erase.
+- **No more "tried to READ outside safe zones" for plugins every few seconds.** While serving a plugin's call
+  (for example resolving which accounts hold its capabilities) the server listed the installed plugins under
+  that plugin's sandbox rules; the read was refused, logged on every pass and came back empty. It now runs as
+  the server's own read.
+
 - **A second monolith on other ports keeps them after install.** Started with `PORT` and `WORDJS_LOOPBACK_PORT`
   (another install beside one already running), the wizard recorded the default ports 3000 and 4000, so after a
   restart its pages could read the data of the install listening on :4000. It now records the ports it runs on.

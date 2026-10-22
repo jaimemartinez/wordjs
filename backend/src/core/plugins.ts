@@ -2068,7 +2068,17 @@ function ensurePluginsDir() {
  * Scan for installed plugins
  * Plugins must have a main.js or index.js file with metadata export
  */
-function scanPlugins() {
+/**
+ * Every installed plugin, read from the install tree. Host bookkeeping: it is reached while the host
+ * serves a plugin's bridged call (account capabilities resolve the user a plugin asks about, menus, portal
+ * pages), and under that plugin's context io-guard judged the readdir of plugins/ as the PLUGIN reading
+ * outside its zones — refused, logged on every queue pass (X4-15), and the caller got an empty install.
+ * Never hands plugin-controlled paths to the guard bypass: the directory is the host's constant.
+ */
+function scanPlugins(): Plugin[] {
+    return require('./plugin-context').runAsHost(() => scanPluginsImpl());
+}
+function scanPluginsImpl(): Plugin[] {
     ensurePluginsDir();
     const plugins: Plugin[] = [];
 
@@ -3234,8 +3244,59 @@ async function dropTablesInDependencyOrder(names: string[], drop: (name: string)
     return { dropped, kept: [], lastError };
 }
 
-async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false, networkWide = false }: { dropTables?: boolean; keepGrants?: boolean; networkWide?: boolean } = {}) {
-    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; tablesKept?: string[]; appContainerRetired: boolean; appContainerRetiredSites: number[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false, appContainerRetiredSites: [] };
+/**
+ * "Delete this plugin's data" covers everything the plugin left in the SITE, not only its tables (S4-21): the
+ * options it created (core/plugin-owned-options), the per-account capabilities it declared (an account still
+ * carrying `mail_server_mailbox` after the mail server is gone is a grant nobody can see or revoke), and its
+ * private storage directories under data/, logs/ and os-tmp/ on every site. `accountCapabilities` are the
+ * capability slugs its manifest declared, read by the caller BEFORE the plugin's files were removed.
+ */
+async function purgePluginSiteData(slug: string, accountCapabilities: string[], networkWide: boolean) {
+    const out: { optionsRemoved: string[]; accountCapabilitiesRevoked: number; storageRemoved: string[] } = { optionsRemoved: [], accountCapabilitiesRevoked: 0, storageRemoved: [] };
+    try { out.optionsRemoved = await require('./plugin-owned-options').purgePluginOptions(slug); }
+    catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] could not remove the plugin's options`); }
+
+    const CAP_RE = /^[a-z0-9][a-z0-9_]{0,63}$/;
+    for (const cap of accountCapabilities.filter((c) => CAP_RE.test(String(c)))) {
+        try {
+            const { dbAsync } = require('../config/database');
+            const { metaKeyFor } = require('./account-capabilities');
+            const key = metaKeyFor(cap);
+            const rows = await dbAsync.all('SELECT user_id FROM user_meta WHERE meta_key = ?', [key]);
+            if (!rows || !rows.length) continue;
+            await dbAsync.run('DELETE FROM user_meta WHERE meta_key = ?', [key]);
+            const cache = require('./cache');
+            for (const r of rows) {
+                await cache.del(`user:${r.user_id}`);
+                // A node still on the previous release reads the legacy flag: answer it "not granted" too.
+                try { await require('./legacy-account-flags').mirrorLegacyWrite(Number(r.user_id), cap, '0'); } catch { /* no legacy key for this capability */ }
+            }
+            out.accountCapabilitiesRevoked += rows.length;
+        } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] could not revoke account capability '${logSafe(cap)}'`); }
+    }
+    try { require('./account-capabilities').invalidateDeclarations(); } catch { /* cache only */ }
+
+    const appRoot = path.resolve(__dirname, '..', '..');
+    const { privateStorageDirs } = require('./sandbox-paths');
+    let siteIds = [siteContext.PRIMARY_SITE_ID];
+    if (networkWide) {
+        try { siteIds = siteIds.concat(require('./network').listSites().map((s: any) => Number(s.id)).filter((id: number) => id !== siteContext.PRIMARY_SITE_ID)); }
+        catch { /* single site */ }
+    }
+    for (const siteId of siteIds) {
+        for (const dir of privateStorageDirs(appRoot, slug, siteId)) {
+            try {
+                if (!fs.existsSync(dir)) continue;
+                require('./plugin-context').runAsHost(() => fs.rmSync(dir, { recursive: true, force: true }));
+                out.storageRemoved.push(path.relative(appRoot, dir));
+            } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] could not remove its storage directory`); }
+        }
+    }
+    return out;
+}
+
+async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false, networkWide = false, accountCapabilities = [] }: { dropTables?: boolean; keepGrants?: boolean; networkWide?: boolean; accountCapabilities?: string[] } = {}) {
+    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; tablesKept?: string[]; appContainerRetired: boolean; appContainerRetiredSites: number[]; optionsRemoved?: string[]; accountCapabilitiesRevoked?: number; storageRemoved?: string[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false, appContainerRetiredSites: [] };
     if (!keepGrants) {
         try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
         catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] removeGrants failed`); }
@@ -3264,6 +3325,7 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
             }
         } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] table drop failed`); }
     }
+    if (dropTables) Object.assign(result, await purgePluginSiteData(slug, accountCapabilities, networkWide));
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
     catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] db role drop failed`); }
@@ -3282,6 +3344,7 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
 
 module.exports = {
     dropTablesInDependencyOrder,
+    purgePluginSiteData,
     selectPrunableDependencies,
     isLoadedByHost,
     loadSitePlugins, deactivatePluginOnSecondarySites, retireOnSecondarySites, offerPluginToSites, withdrawPluginFromSites, respawnOnSecondarySites, onSecondarySite,

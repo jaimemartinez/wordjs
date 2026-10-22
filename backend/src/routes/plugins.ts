@@ -3167,6 +3167,14 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         return res.status(404).json({ message: 'Plugin not found' });
     }
 
+    // The account capabilities the plugin declares, read now: its manifest goes with the directory below,
+    // and "delete its data" revokes them from every account (uninstallPluginData).
+    let declaredCapabilities: string[] = [];
+    try {
+        const m = JSON.parse(fs.readFileSync(path.join(pluginPath, 'manifest.json'), 'utf8'));
+        if (Array.isArray(m && m.accountCapabilities)) declaredCapabilities = m.accountCapabilities.map((c: any) => String(c && c.slug || '')).filter(Boolean);
+    } catch { /* no readable manifest: nothing declared */ }
+
     // 3. Delete directory recursively — but PRESERVE the plugin's runtime data/ subdir by default,
     // the same WordPress-parity rule the tables follow below: e.g. mail-server's data/.mailenc AES
     // root key must survive an uninstall→reinstall cycle or every stored mail secret becomes
@@ -3182,7 +3190,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         // Purge the plugin's persisted footprint. ALWAYS clear grants (else a re-uploaded slug inherits
         // old, possibly-revoked grants) + crash strikes; only DROP the plugin's data tables when the
         // admin explicitly asked (dropData) — WordPress-parity: keep data by default on delete.
-        const cleanup = await uninstallPluginData(slug, { dropTables: !!dropData, networkWide: true });
+        const cleanup = await uninstallPluginData(slug, { dropTables: !!dropData, networkWide: true, accountCapabilities: declaredCapabilities });
 
         // The roles this plugin declared go with it: removed when nobody holds them, otherwise kept as
         // ORPHANED (their holders keep only read/access_admin_panel). Deliberately here and not in
