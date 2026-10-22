@@ -16,7 +16,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **The monolith's port and HTTPS switch from the panel.** In a monolith, Admin → Security used to show the
   public port and HTTPS as read-only (set by environment variables or `gateway-config.json`, then a restart by
   hand). Both are now saved there: the port to `gatewayPort`, the switch to `gateway-config.json`, and WordJS
-  restarts itself to listen with them; the main address follows when it named the old port or scheme. A value
+  restarts itself to listen with them. Turning HTTPS on moves a main address that names this listener to
+  https at once; a new port is offered as the main address in Settings → Site address. A value
   the service's environment sets (`PORT`, `WORDJS_HTTP=1`) is shown locked, because the next start takes it again.
   Installing a certificate in a monolith keeps the HTTPS switch as it was.
 - **Change a network site's address from the panel.** Admin → Network → *Change address* moves a site to
