@@ -115,10 +115,8 @@ jobs:
         timeout-minutes: 10
         run: npx tsc --noEmit
 
-      - name: Backend tests
-        working-directory: backend
-        timeout-minutes: 20
-        run: npm test
+      # The backend suite runs in `verify-backend-tests` below, split in four like ci.yml: run whole in
+      # this job it outgrew its 20 minutes (15 on v2.7.0, timed out on the v2.8.0 tag).
 
       # THE GATE TESTED ONE WORKSPACE OUT OF FOUR.
       #
@@ -185,9 +183,54 @@ jobs:
             exit 1
           }
 
+  verify-backend-tests:
+    name: Verify before publishing (backend tests ${{ matrix.shard }}/4)
+    if: inputs.publish_tag == ''
+    runs-on: ubuntu-24.04 # same pin as `verify`
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    # Same budget as ci.yml's shards: install plus a quarter of the files, split by count, not time.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            setup/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci || npm install
+
+      # setup/index.js (the cluster installer, required by the suite's installer tests) has its own
+      # dependencies.
+      - name: Install setup/ dependencies
+        working-directory: setup
+        run: npm ci || npm install
+
+      - name: Build (the suite's dist/ checks see the same tree as in ci.yml)
+        working-directory: backend
+        run: npm run build
+
+      # The wrapper hoists `--test-shard` in front of the file glob (after it, node would read the flag
+      # as one more file pattern and every shard would run the whole suite).
+      - name: Backend tests
+        working-directory: backend
+        run: npm test -- --test-shard=${{ matrix.shard }}/4
+
   build-release:
     name: Build & publish compiled bundle
-    needs: verify # nothing is built, and nothing is published, unless the gate above is green
+    needs: [verify, verify-backend-tests] # nothing is built, and nothing is published, unless every gate above is green
     if: inputs.publish_tag == ''
     runs-on: ubuntu-24.04 # pinned: see the verify job
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
