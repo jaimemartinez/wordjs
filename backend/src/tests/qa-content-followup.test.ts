@@ -380,3 +380,62 @@ test('an image is rotated, cropped and scaled into a new file; the earlier files
     assert.ok(!fs.existsSync(path.join(privateRoot, res.body.mediaDetails.file)), 'every version goes with the item');
     assert.ok(!fs.existsSync(path.join(privateRoot, up.body.mediaDetails.file)));
 });
+
+// ── Redis server from the panel (M2-09) ─────────────────────────────────────────────────────────────
+
+test('the Redis server is set from the panel: tested, saved without echoing the password, then a restart', async () => {
+    const restart = require('../core/restart');
+    const exits: number[] = [];
+    // Run as under the service supervisor, which restarts the backend when it exits with 75.
+    const supervised = process.env.WORDJS_SUPERVISED;
+    process.env.WORDJS_SUPERVISED = "1";
+    restart.resetForTests();
+    restart.setExitHandlerForTests((code: number) => { exits.push(code); });
+    try {
+        const get = await request(app).get(`${B}/system/redis`).set(bearer('admin'));
+        assert.strictEqual(get.status, 200, JSON.stringify(get.body));
+        assert.strictEqual(get.body.inForce.configured, false, 'no Redis in this process');
+        assert.strictEqual(get.body.inForce.connected, false, '«connected» only when a server answers');
+        assert.strictEqual((await request(app).get(`${B}/system/redis`).set(bearer('editor1'))).status, 403);
+
+        const bad = await request(app).put(`${B}/system/redis`).set(bearer('admin')).send({ enabled: true, host: 'not a host!', currentPassword: PASSWORD });
+        assert.strictEqual(bad.status, 400);
+        assert.deepStrictEqual(bad.body.data.params, ['host']);
+        assert.strictEqual((await request(app).put(`${B}/system/redis`).set(bearer('admin')).send({ enabled: true, host: 'redis.internal', port: 70000, currentPassword: PASSWORD })).status, 400);
+        assert.strictEqual((await request(app).put(`${B}/system/redis`).set(bearer('admin')).send({ enabled: true, host: 'redis.internal', currentPassword: 'wrong' })).status, 403);
+
+        // A port nothing listens on: refused, in a word — never the server's own error text.
+        const net = require('net');
+        const srv = net.createServer();
+        await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+        const closedPort = srv.address().port;
+        await new Promise<void>((r) => srv.close(() => r()));
+        const probe = await request(app).post(`${B}/system/redis/test`).set(bearer('admin')).send({ host: '127.0.0.1', port: closedPort });
+        assert.strictEqual(probe.status, 200, JSON.stringify(probe.body));
+        assert.deepStrictEqual(probe.body, { ok: false, reason: 'refused' });
+
+        const save = await request(app).put(`${B}/system/redis`).set(bearer('admin'))
+            .send({ enabled: true, host: 'redis.internal', port: 6380, db: 2, password: 's3cret-redis', currentPassword: PASSWORD });
+        assert.strictEqual(save.status, 200, JSON.stringify(save.body));
+        assert.strictEqual(save.body.restart, 'supervisor');
+        assert.strictEqual(save.body.passwordSet, true);
+        assert.ok(!JSON.stringify(save.body).includes('s3cret-redis'), 'the password is never sent back');
+        const file = JSON.parse(fs.readFileSync(path.join(TMP_ROOT, 'wordjs-config.json'), 'utf8'));
+        assert.deepStrictEqual(file.redis, { enabled: true, host: 'redis.internal', port: 6380, db: 2, password: 's3cret-redis' });
+        for (let i = 0; i < 60 && !exits.length; i++) await new Promise((r) => setTimeout(r, 50));
+        assert.strictEqual(exits[0], restart.RESTART_EXIT_CODE, 'the backend restarts itself to connect');
+        restart.resetForTests();
+        exits.length = 0;
+
+        // Saving the same again (password left empty = kept) changes nothing and restarts nothing.
+        const again = await request(app).put(`${B}/system/redis`).set(bearer('admin'))
+            .send({ enabled: true, host: 'redis.internal', port: 6380, db: 2, currentPassword: PASSWORD });
+        assert.strictEqual(again.status, 200);
+        assert.strictEqual(again.body.restart, null);
+        assert.strictEqual(JSON.parse(fs.readFileSync(path.join(TMP_ROOT, 'wordjs-config.json'), 'utf8')).redis.password, 's3cret-redis');
+    } finally {
+        restart.setExitHandlerForTests(null);
+        restart.resetForTests();
+        if (supervised === undefined) delete process.env.WORDJS_SUPERVISED; else process.env.WORDJS_SUPERVISED = supervised;
+    }
+});

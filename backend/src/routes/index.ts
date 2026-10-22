@@ -69,6 +69,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     fonts: '/fonts',
     certificates: '/system/certs',
     serverSettings: '/system/server',
+    redisSettings: '/system/redis',
     cluster: '/system/cluster',
     update: '/system/update',
     health: '/health',
@@ -145,6 +146,8 @@ router.use('/setup', multisiteGuards.mainSiteWrites);
 router.use('/system/certs', multisiteGuards.mainSiteOnly);
 // The reverse-proxy trust and the log level are the process's, so the whole network's.
 router.use('/system/server', multisiteGuards.mainSiteOnly);
+// The Redis server is the process's (its cache, its cluster bus), so the whole network's.
+router.use('/system/redis', multisiteGuards.mainSiteOnly);
 // The cluster (the gateway's nodes and join tokens) is the whole network's.
 router.use('/system/cluster', multisiteGuards.mainSiteOnly);
 // Updating WordJS replaces the code every site runs.
@@ -154,7 +157,7 @@ router.use('/health/site', multisiteGuards.mainSiteOnly);
 router.use('/hooks', multisiteGuards.mainSiteOnly);
 // On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
 // administrator of the main site (the plugin and theme guards above apply the same rule to code changes).
-for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/cluster', '/system/update', '/hooks']) {
+for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/redis', '/system/cluster', '/system/update', '/hooks']) {
     router.use(subtree, multisiteGuards.networkAdminOnMainSite);
 }
 // The network itself: its sites and administrators (main site, network administrators only).
@@ -200,6 +203,8 @@ router.use('/fonts', require('./fonts'));
 router.use('/system/certs', certsRoutes);
 // Security → Server: reverse-proxy trust and log level from the panel (zero config).
 router.use('/system/server', require('./server-settings'));
+// Settings → Performance: the Redis server of the cache and the cluster bus (zero config).
+router.use('/system/redis', require('./redis-settings'));
 // Admin → Servers: join tokens, the nodes and their health, removal (zero config for multi-node).
 router.use('/system/cluster', require('./cluster'));
 // Admin → Updates: newer releases, their notes, and the one-click update (core/updater).

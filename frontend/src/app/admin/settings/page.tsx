@@ -17,6 +17,7 @@ import { withServerReason } from "@/lib/errorText";
 import { isSignupSafeRole } from "@/lib/signupRoles";
 import { PageHeader } from "@/components/ui";
 import { DateTimeFormats, ImageSizes, ReadingExtras, SITE_BEHAVIOUR_DEFAULTS, WritingDiscussion, siteBehaviourFrom, type SiteBehaviourValues } from "./SiteBehaviourSettings";
+import RedisServerPanel from "./RedisServerPanel";
 
 
 /**
@@ -837,14 +838,9 @@ export default function SettingsPage() {
                                 </button>
                             </div>
 
-                            {settings.redis_cache_enabled === "1" && (
-                                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
-                                    <i className="fa-solid fa-circle-info text-emerald-500 mt-0.5"></i>
-                                    <p className="text-xs text-emerald-700 leading-relaxed">
-                                        <strong>{t('settings.redis.protip.label')}</strong> {t('settings.redis.protip')}
-                                    </p>
-                                </div>
-                            )}
+                            {/* The real state of the connection and the server to use (QA M2-09): the old tip
+                                said «Redis is active» whenever the switch was on, server or no server. */}
+                            {networkToolsOffered && <RedisServerPanel cacheOn={settings.redis_cache_enabled === "1"} />}
                         </div>
                     </div>
 
