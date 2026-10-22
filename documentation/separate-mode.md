@@ -373,7 +373,8 @@ network, administrators of a single site):
   (`gateway/cluster-removed.json`) until a new join token is minted for its address. Password and code.
 - **Revoke them all** — burns every unused join token (password).
 
-Every one of these is audited (`cluster.token.create`, `cluster.node.remove`, `cluster.tokens.revoke`;
+Every one of these is audited (`cluster.token.create`, `cluster.node.remove`, `cluster.tokens.revoke`, and
+`cluster.forwards.set` for the forwarded ports;
 the token itself never reaches the log) and goes from the backend to the gateway over the cluster's mTLS
 control channel. Creating the cluster itself (`cluster.js init`) stays on the gateway machine: it mints the
 CA and decides the addresses the gateway listens on.

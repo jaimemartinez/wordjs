@@ -32,7 +32,11 @@ describe('the real gateway: a TCP port forwarded to the backend node', () => {
     const received = [];
     before(async () => {
         up = await harness.startEchoUpstream('backend');
-        tcp = net.createServer((s) => s.on('data', (d) => { received.push(String(d)); s.write('220 hello\r\n'); }));
+        // One greeting per connection: the PROXY line and the client's bytes may arrive as one chunk or two.
+        tcp = net.createServer((s) => {
+            s.on('data', (d) => received.push(String(d)));
+            s.once('data', () => s.write('220 hello\r\n'));
+        });
         await new Promise((r) => tcp.listen(0, '127.0.0.1', r));
         ca = harness.makeCa();
         backendId = harness.makeLeaf(ca, 'backend');

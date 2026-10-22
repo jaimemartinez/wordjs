@@ -16,7 +16,7 @@
  * Who: administrators of a single site, network administrators of a network, the main site only
  * (routes/index.ts), with an interactive session at the main address — a join token admits a machine
  * into the cluster's trust, so it is never minted for an API token or a bound session, and every write is
- * audited (cluster.token.create, cluster.tokens.revoke, cluster.node.remove).
+ * audited (cluster.token.create, cluster.tokens.revoke, cluster.node.remove, cluster.forwards.set).
  */
 import type { Request, Response } from 'express';
 
