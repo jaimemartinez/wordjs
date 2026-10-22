@@ -791,3 +791,76 @@ test('mysql (real): a same-slug tag race leaves one term (S3-12)', async (t: any
         await mysqlDrop(ctx);
     }
 });
+
+// ── ALTER TABLE … ADD COLUMN gets the CREATE TABLE column rule (FALLOS 129) ─────────────────────────────
+// A plugin that adds a column to a table it already has (conference-manager's fee payments: `ALTER TABLE
+// … ADD COLUMN created_at DATETIME`) failed on Postgres with `type "datetime" does not exist` — only CREATE
+// TABLE was translated — and on MySQL 8 a `TEXT DEFAULT '{}'` column was refused the same way.
+
+test('postgres DDL: ALTER TABLE … ADD [COLUMN] [IF NOT EXISTS] translates DATETIME and BLOB, and nothing else', () => {
+    const { translateSql } = require('../drivers/postgres');
+    assert.strictEqual(translateSql('ALTER TABLE wjp_cm_payments ADD COLUMN created_at DATETIME'), 'ALTER TABLE wjp_cm_payments ADD COLUMN created_at TIMESTAMP');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD photo BLOB NOT NULL'), 'ALTER TABLE t ADD photo BYTEA NOT NULL');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD COLUMN IF NOT EXISTS seen DATETIME;'), 'ALTER TABLE t ADD COLUMN IF NOT EXISTS seen TIMESTAMP;');
+    assert.strictEqual(
+        translateSql('ALTER TABLE t ADD COLUMN a DATETIME, ADD COLUMN b BLOB'),
+        'ALTER TABLE t ADD COLUMN a TIMESTAMP, ADD COLUMN b BYTEA'
+    );
+    // A column NAMED datetime keeps its name; a constraint and any other ALTER are left as written.
+    assert.strictEqual(translateSql('ALTER TABLE t ADD COLUMN datetime DATETIME'), 'ALTER TABLE t ADD COLUMN datetime TIMESTAMP');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)'), 'ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD PRIMARY KEY (id)'), 'ALTER TABLE t ADD PRIMARY KEY (id)');
+    assert.strictEqual(translateSql('ALTER TABLE t RENAME COLUMN a TO b'), 'ALTER TABLE t RENAME COLUMN a TO b');
+    assert.strictEqual(translateSql("ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'DATETIME'"), "ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'DATETIME'");
+});
+
+test('mysql DDL: ALTER TABLE … ADD COLUMN gives TEXT the CREATE TABLE rule (expression default on MySQL 8)', () => {
+    const { translateSql } = require('../drivers/mysql');
+    const out = translateSql("ALTER TABLE wjp_cm_rules ADD COLUMN params TEXT DEFAULT '{}'");
+    assert.match(out, /^ALTER TABLE wjp_cm_rules ADD COLUMN params LONGTEXT DEFAULT \('\{\}'\)$/, out);
+    assert.strictEqual(translateSql('ALTER TABLE t ADD COLUMN created_at DATETIME'), 'ALTER TABLE t ADD COLUMN created_at DATETIME');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)'), 'ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)');
+    assert.strictEqual(translateSql('ALTER TABLE t DROP COLUMN a'), 'ALTER TABLE t DROP COLUMN a');
+    // An index or key added by ALTER is not a column — core migration 0010 runs exactly this on MySQL.
+    const fulltext = 'ALTER TABLE posts ADD FULLTEXT INDEX ftidx_posts_search (post_title, post_content, post_excerpt)';
+    assert.strictEqual(translateSql(fulltext), fulltext);
+    assert.strictEqual(translateSql('ALTER TABLE t ADD UNIQUE KEY uq_t (a)'), 'ALTER TABLE t ADD UNIQUE KEY uq_t (a)');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD INDEX idx_t (a)'), 'ALTER TABLE t ADD INDEX idx_t (a)');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD PRIMARY KEY (id)'), 'ALTER TABLE t ADD PRIMARY KEY (id)');
+    // With the COLUMN keyword, a column named like a keyword is still a column.
+    assert.match(translateSql('ALTER TABLE t ADD COLUMN key TEXT'), /ADD COLUMN "key" LONGTEXT$/);
+});
+
+test('postgres (real): a plugin adds DATETIME and BLOB columns to a table it already has, and writes them', async (t: any) => {
+    const ctx = await pgScratch(t);
+    if (!ctx) return;
+    try {
+        await ctx.driver.exec('CREATE TABLE wjp_b129_payments (id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER)');
+        // The way a plugin's addColumnIfMissing sends it: through run(), as plain SQLite DDL.
+        await ctx.driver.run('ALTER TABLE wjp_b129_payments ADD COLUMN created_at DATETIME');
+        await ctx.driver.run('ALTER TABLE wjp_b129_payments ADD COLUMN receipt BLOB');
+        await ctx.driver.exec('ALTER TABLE wjp_b129_payments ADD COLUMN IF NOT EXISTS reviewed_at DATETIME');
+        await ctx.driver.run('INSERT INTO wjp_b129_payments (amount, created_at, receipt, reviewed_at) VALUES (?, ?, ?, ?)',
+            [500, '2026-10-22 10:00:00', Buffer.from([1, 2, 3]), null]);
+        const row = await ctx.driver.get('SELECT amount, created_at, receipt FROM wjp_b129_payments');
+        assert.strictEqual(Number(row.amount), 500);
+        assert.ok(row.created_at, 'the DATETIME value is stored');
+        assert.deepStrictEqual([...row.receipt], [1, 2, 3]);
+        const types = await ctx.driver.all("SELECT column_name AS c, data_type AS d FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'wjp_b129_payments' AND column_name IN ('created_at', 'receipt')");
+        const byName = Object.fromEntries(types.map((r: any) => [r.c, r.d]));
+        assert.deepStrictEqual(byName, { created_at: 'timestamp without time zone', receipt: 'bytea' });
+    } finally { await pgDrop(ctx); }
+});
+
+test('mysql (real): a plugin adds a TEXT column with a literal default to a table it already has', async (t: any) => {
+    const ctx = await mysqlScratch(t);
+    if (!ctx) return;
+    try {
+        await ctx.driver.exec('CREATE TABLE wjp_b129_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)');
+        await ctx.driver.run("ALTER TABLE wjp_b129_rules ADD COLUMN params TEXT DEFAULT '{}'");
+        await ctx.driver.run('ALTER TABLE wjp_b129_rules ADD COLUMN created_at DATETIME');
+        await ctx.driver.run('INSERT INTO wjp_b129_rules (name) VALUES (?)', ['r']);
+        const row = await ctx.driver.get('SELECT params FROM wjp_b129_rules');
+        assert.strictEqual(row.params, '{}');
+    } finally { await mysqlDrop(ctx); }
+});

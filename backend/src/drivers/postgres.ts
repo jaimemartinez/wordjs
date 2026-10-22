@@ -32,7 +32,8 @@ const log = require('../core/module-logger').moduleLogger('drivers/postgres');
  *
  * Placeholders and quoting are already Postgres-compatible (WordJS single-quotes literals and
  * double-quotes identifiers), and Postgres natively supports `CREATE [UNIQUE] INDEX IF NOT EXISTS`,
- * functional (`LOWER(x)`) and partial (`WHERE …`) indexes — so ONLY `CREATE TABLE` is rewritten;
+ * functional (`LOWER(x)`) and partial (`WHERE …`) indexes — so only `CREATE TABLE` and the columns an
+ * `ALTER TABLE … ADD` adds are rewritten;
  * every other statement passes through unchanged.
  */
 
@@ -92,8 +93,26 @@ function translateColumnDef(def: string): string {
     // is itself called `blob` or `datetime` keeps its name.
     const named = /^(\s*(?:"[^"]*"|`[^`]*`|\S+))([\s\S]*)$/.exec(d);
     const head = named ? named[1] : '';
-    const rest = (named ? named[2] : d).replace(/\bDATETIME\b/gi, 'TIMESTAMP').replace(/\bBLOB\b/gi, 'BYTEA');
+    // Outside string literals only: `DEFAULT 'DATETIME'` is a value, not a type.
+    const rest = outsideLiterals(named ? named[2] : d, (code) => code.replace(/\bDATETIME\b/gi, 'TIMESTAMP').replace(/\bBLOB\b/gi, 'BYTEA'));
     return head + rest;
+}
+
+/** Apply `fn` to the parts of `sql` that are not inside a single-quoted literal (`''` is an escaped quote). */
+function outsideLiterals(sql: string, fn: (code: string) => string): string {
+    let out = '', code = '', i = 0;
+    while (i < sql.length) {
+        if (sql[i] !== "'") { code += sql[i++]; continue; }
+        out += fn(code); code = '';
+        let lit = sql[i++];
+        while (i < sql.length) {
+            lit += sql[i];
+            if (sql[i] === "'") { if (sql[i + 1] === "'") { lit += sql[i + 1]; i += 2; continue; } i++; break; }
+            i++;
+        }
+        out += lit;
+    }
+    return out + fn(code);
 }
 
 function translateCreateTable(sql: string): string {
@@ -107,11 +126,36 @@ function translateCreateTable(sql: string): string {
     return `${m[1]}(\n  ${cols.join(',\n  ')}\n)${m[3] || ''}`;
 }
 
-/** Rewrite one SQLite-dialect statement to Postgres. Only CREATE TABLE needs it; all else is already
- *  Postgres-compatible and passes through untouched. */
+/**
+ * `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] <column definition>` (one or several, comma-separated): the
+ * same column-type translation as a CREATE TABLE column. A plugin that adds a `DATETIME` or `BLOB` column
+ * to a table it already has used to fail here (`type "datetime" does not exist`), while the same column in
+ * its CREATE TABLE worked. Any other ALTER is left as written.
+ */
+function translateAlterAddColumn(sql: string): string {
+    const clean = stripSqlComments(sql);
+    const m = clean.match(/^(\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:"[^"]*"|`[^`]*`|[A-Za-z0-9_.]+)\s+)([\s\S]*?)(\s*;?\s*)$/i);
+    if (!m) return sql;
+    const clauses = splitTopLevel(m[2]);
+    const out: string[] = [];
+    for (const clause of clauses) {
+        const add = /^(\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?)([\s\S]+)$/i.exec(clause);
+        // A table constraint or index (`ADD CONSTRAINT …`, `ADD PRIMARY KEY …`) is not a column: unchanged.
+        // With an explicit COLUMN keyword the clause is a column whatever its name.
+        const notColumn = !/\bCOLUMN\b/i.test(add ? add[1] : '')
+            && /^\s*(?:FULLTEXT|SPATIAL|INDEX|KEY|UNIQUE|PRIMARY|CONSTRAINT|FOREIGN|CHECK)\b/i.test(add ? add[2] : '');
+        if (!add || notColumn) { out.push(clause); continue; }
+        out.push(add[1] + translateColumnDef(add[2]));
+    }
+    return m[1] + out.join(',') + m[3];
+}
+
+/** Rewrite one SQLite-dialect statement to Postgres: CREATE TABLE, and the columns an ALTER TABLE adds.
+ *  Everything else is already Postgres-compatible and passes through untouched. */
 function translateSql(sql: string): string {
     if (typeof sql !== 'string') return sql;
     if (/^\s*CREATE\s+TABLE\b/i.test(sql)) return translateCreateTable(sql);
+    if (/^\s*ALTER\s+TABLE\b/i.test(sql) && /\bADD\b/i.test(sql)) return translateAlterAddColumn(sql);
     return sql;
 }
 
@@ -368,7 +412,8 @@ class PostgresDriver extends DatabaseDriverInterface {
         // Translate SQLite-dialect DDL (CREATE TABLE) to Postgres at the boundary — so a raw SQLite
         // CREATE from the cross-driver migration, or source-dialect DDL from initializeSchema(), runs
         // with full PK/autoincrement fidelity (INTEGER PRIMARY KEY AUTOINCREMENT → SERIAL PRIMARY KEY,
-        // DATETIME → TIMESTAMP, BLOB → BYTEA). Every non-CREATE-TABLE statement passes through unchanged.
+        // DATETIME → TIMESTAMP, BLOB → BYTEA). The columns an ALTER TABLE … ADD adds are translated the
+        // same way; any other statement passes through unchanged.
         try {
             await this.pool.query(translateSql(sql));
         } catch (err) {

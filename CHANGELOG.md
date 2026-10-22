@@ -8,6 +8,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Plugins can add columns to their tables on PostgreSQL and MySQL.** A plugin's
+  `ALTER TABLE … ADD COLUMN x DATETIME` (or `BLOB`) failed on PostgreSQL with `type "datetime" does not
+  exist`, because only `CREATE TABLE` statements had their SQLite column types translated; on MySQL 8 a
+  `TEXT DEFAULT '…'` column added the same way was refused. Columns added by `ALTER TABLE … ADD [COLUMN]
+  [IF NOT EXISTS]` now get exactly the translation a `CREATE TABLE` column gets. In conference-manager this
+  brings back fee payments ("fee payments migration did not complete") and the lodging dates on PostgreSQL.
+  A type keyword inside a quoted default (`DEFAULT 'DATETIME'`) is no longer rewritten either.
 - **A second menu with the same name can be created again.** Since term slugs became unique in the database,
   creating a menu whose name another menu already had answered an error; menus now take their slug the way
   terms do, so the second one gets `-2`, and a slug never starts or ends with a stray dash.
