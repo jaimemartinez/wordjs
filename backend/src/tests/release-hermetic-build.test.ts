@@ -245,6 +245,30 @@ describe('release hermetic-build guard — every trace of a live backend trips i
         assert.match(v[0], /no prerendered HTML/);
     });
 
+    test('a page whose outage prerender the postbuild step dropped is expected to have no HTML', () => {
+        // FALLOS 120: with no backend, the homepage rendered "Service Temporarily Unavailable" and the
+        // release shipped it. frontend/scripts/drop-outage-prerenders.js deletes it and lists the route.
+        const dir = tempFrontend();
+        const build = cleanBuild();
+        delete build.routes['/'].title;
+        writeBuild(dir, build);
+        fs.writeFileSync(path.join(dir, '.next', 'wjs-dropped-prerenders.json'), JSON.stringify({ routes: ['/'] }));
+        assert.deepStrictEqual(findHermeticBuildViolations(dir, { trackedFiles: TRACKED }), []);
+    });
+
+    test('a prerendered page that IS the outage page is reported', () => {
+        const dir = tempFrontend();
+        writeBuild(dir, cleanBuild());
+        fs.writeFileSync(
+            path.join(dir, '.next', 'server', 'app', 'index.html'),
+            `<!DOCTYPE html><html lang="en"><head><title>${DEFAULT_SITE_NAME}</title></head><body><h1>Service Temporarily Unavailable</h1></body></html>`,
+        );
+        const v = findHermeticBuildViolations(dir, { trackedFiles: TRACKED });
+        assert.strictEqual(v.length, 1, v.join('\n'));
+        assert.match(v[0], /Service Temporarily Unavailable/);
+        assert.match(v[0], /- \/$/m);
+    });
+
     test('a plugin module git does not track, compiled in through a registry, is reported', () => {
         const build = cleanBuild();
         build.registries['src/lib/versoPluginRegistry.ts']

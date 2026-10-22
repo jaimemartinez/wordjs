@@ -40,6 +40,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { DEFAULT_PROXY_TARGET, rewriteSources } = require('../frontend/backend-proxy-target.js');
+const { DROPPED_FILE, OUTAGE_TEXT } = require('../frontend/scripts/drop-outage-prerenders.js');
 
 /**
  * The site name the root layout falls back to when settings are unavailable — `settings?.blogname ||
@@ -131,9 +132,13 @@ function prerenderFindings(nextDir) {
         return ['.next/prerender-manifest.json is missing or unreadable — cannot prove the prerender is clean'];
     }
     const dynamicRoutes = new Set(Object.keys(manifest.dynamicRoutes || {}));
+    // Pages that rendered the outage page with no backend at build time: the postbuild step deleted
+    // their prerender (frontend/scripts/drop-outage-prerenders.js), so no HTML is expected for them.
+    const dropped = new Set((readJson(path.join(nextDir, DROPPED_FILE)) || {}).routes || []);
     const fromData = [];
     const titled = [];
     const unread = [];
+    const outage = [];
     for (const [route, info] of Object.entries(manifest.routes)) {
         const src = info && info.srcRoute;
         if (src && src !== route && dynamicRoutes.has(src)) fromData.push(`${route}  (from ${src})`);
@@ -146,9 +151,10 @@ function prerenderFindings(nextDir) {
         try {
             html = fs.readFileSync(htmlPath, 'utf8');
         } catch {
-            if (info && info.dataRoute) unread.push(`${route}  (expected ${path.relative(nextDir, htmlPath).replace(/\\/g, '/')})`);
+            if (info && info.dataRoute && !dropped.has(route)) unread.push(`${route}  (expected ${path.relative(nextDir, htmlPath).replace(/\\/g, '/')})`);
             continue;
         }
+        if (html.includes(OUTAGE_TEXT)) outage.push(route);
         // Next's own error shell (`__next_error__`) is rendered without the app's layout and never
         // reads settings.
         if (html.includes('id="__next_error__"')) continue;
@@ -156,6 +162,9 @@ function prerenderFindings(nextDir) {
         if (title !== null && !isDefaultTitle(title)) titled.push(`${route}  <title>${title}</title>`);
     }
     const out = [];
+    if (outage.length) {
+        out.push(`${outage.length} prerendered page(s) are the "${OUTAGE_TEXT}" page — an install would serve it from the route cache:\n${examples(outage)}`);
+    }
     if (unread.length) {
         out.push(`${unread.length} prerendered page(s) have no prerendered HTML where the title check reads it — cannot prove their titles are the default:\n${examples(unread)}`);
     }

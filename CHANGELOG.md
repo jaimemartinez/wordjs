@@ -36,6 +36,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   every start, although nothing was wrong. It now asks whether the store exists first; a store that exists
   but cannot be read is still logged.
 
+- **A fresh install or upgrade no longer shows "Service Temporarily Unavailable" on the homepage for
+  minutes.** The release is built with no backend running, so the homepage was prerendered as the
+  outage page and shipped that way; after an install or upgrade, the site served that cached page until
+  it revalidated (about five minutes in split mode). A build now drops any page that rendered the
+  outage page, so the first request renders it for real, and it fails if one is left. At runtime, a
+  page that cannot reach the backend is no longer cached either: the last good version keeps being
+  served.
 - **Plugins can add columns to their tables on PostgreSQL and MySQL.** A plugin's
   `ALTER TABLE … ADD COLUMN x DATETIME` (or `BLOB`) failed on PostgreSQL with `type "datetime" does not
   exist`, because only `CREATE TABLE` statements had their SQLite column types translated; on MySQL 8 a

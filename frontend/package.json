@@ -11,6 +11,7 @@
     "prebuild": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js && node scripts/generate-portal-plugin-registry.js && node ../scripts/generate-asset-version.js",
     "dev": "node scripts/start-frontend.js dev",
     "build": "next build",
+    "postbuild": "node scripts/drop-outage-prerenders.js",
     "start": "node scripts/start-frontend.js prod",
     "lint": "eslint .",
     "test": "vitest run",
