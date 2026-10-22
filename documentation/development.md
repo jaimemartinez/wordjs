@@ -67,7 +67,7 @@ npm start          # node server.js (supervisor)
 - **`dist/` exists** → spawns `node dist/index.js` (compiled — the production path).
 - **no `dist/`** → falls back to `node -r ts-node/register src/index.ts` (dev convenience).
 
-So **always run `npm run build` for production**; otherwise you silently get the slower `ts-node` path. The supervisor restarts the child on crashes (with a fast-crash circuit breaker), pairing with the in-process CrashGuard for a self-healing backend.
+So **always run `npm run build` for production**; otherwise you silently get the slower `ts-node` path. The supervisor restarts the child on crashes, pairing with the in-process CrashGuard for a self-healing backend. Crashes in a row are restarted after a delay that doubles each time (1 s, 2 s, 4 s … up to 30 s) and returns to 1 s once the app has stayed up for a minute; it never gives up, so a database that drops connections for a while costs that while, not the node.
 
 ### Develop (watch + ts-node)
 

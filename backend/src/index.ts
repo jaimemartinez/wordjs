@@ -1352,6 +1352,8 @@ async function initializeMainSite() {
         const http = require('http');
         server = http.createServer(app);
     }
+    // A browser that cancels a request must not end the process (core/client-abort).
+    require('./core/client-abort').installClientAbortGuard(server);
 
     // Bind IPv4 loopback when host is a loopback NAME: Node resolves 'localhost' to ::1 (IPv6) on a
     // dual-stack box, but in split mode the backend advertises 127.0.0.1 (IPv4) to the gateway (below), so
@@ -2019,6 +2021,11 @@ async function initializeMainSite() {
 // exits — as the host, so a plugin context still active on this path cannot veto the exit (FALLOS 113).
 process.on('uncaughtException', (error) => {
     if (CrashGuard.pluginScopedUncaught()) return;
+    // A client that walked away (core/client-abort) is not a fault of this process: keep serving.
+    if (require('./core/client-abort').isClientAbort(error)) {
+        log.warn({ err: error }, 'A client closed its connection mid-request (ignored)');
+        return;
+    }
     log.error({ err: error }, 'Uncaught Exception');
     CrashGuard.exitAsHost(1);
 });

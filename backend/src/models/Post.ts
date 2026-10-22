@@ -122,6 +122,16 @@ function scalarString(value: unknown, field: string, fallback: string): string {
  * NOTHING ELSE FROM THE ROW. `users` also holds the e-mail and the password hash; an author byline is
  * not an account listing, and `/users` is authenticated precisely so a public post cannot become one.
  */
+/**
+ * Did the database refuse an INSERT/UPDATE because the slug is taken? (the unique index on
+ * posts(post_name, post_type): SQLite/Postgres `idx_posts_name_type`, MySQL `uq_posts_slug`).
+ */
+function isSlugUniqueViolation(e: any): boolean {
+    if (!require('../core/db-errors').isUniqueViolation(e)) return false;
+    const where = String((e && (e.message || e.sqlMessage)) || '') + ' ' + String((e && e.constraint) || '');
+    return /idx_posts_name_type|uq_posts_slug|posts\.post_name/i.test(where);
+}
+
 /** Which entries a new slug must not collide with — see Post.generateUniqueSlug. */
 type SlugScope = 'public' | 'type';
 
@@ -178,7 +188,7 @@ class Post {
     // "resolved, no featured image" (also when `_thumbnail_id` names a row that is not an attachment);
     // `parent` is the row the attachment hangs off (null when unattached or dangling). WHO may see the
     // attachment is decided per caller in toJSON, never here: this cache is viewer-independent.
-    _featuredImageCache?: { post: any; attachedFile: any; parent: any } | undefined;
+    _featuredImageCache?: { post: any; attachedFile: any; parent: any; remoteUrl?: string } | undefined;
     // Optional pre-loaded terms (set by hydrateRelations to avoid the per-post taxonomy query in
     // toJSON()). Same contract as _featuredImageCache: `undefined` means "not resolved yet" and
     // toJSON falls back to ONE per-post query; a post with no terms gets an empty-but-DEFINED bucket
@@ -427,7 +437,7 @@ class Post {
      * hydrateRelations() left on the instance; otherwise a few per-post queries, memoized the same way.
      * Viewer-independent on purpose — see toJSON for who may see it.
      */
-    async loadFeaturedImage(): Promise<{ post: any; attachedFile: any; parent: any }> {
+    async loadFeaturedImage(): Promise<{ post: any; attachedFile: any; parent: any; remoteUrl?: string }> {
         if (this._featuredImageCache !== undefined) return this._featuredImageCache;
         const none = { post: null, attachedFile: null, parent: null };
         // Prefer pre-loaded meta (hydrateRelations) to avoid an extra per-post query.
@@ -439,10 +449,15 @@ class Post {
         if (!row || row.postType !== 'attachment') return (this._featuredImageCache = none);
         const attachedFile = await Post.getMeta(row.id, '_wp_attached_file');
         const parent = row.postParent ? await Post.findById(row.postParent) : null;
+        // A `link`-mode WordPress import keeps the file on the old site (server-owned `_wxr_remote_url`,
+        // the same key models/Media.formatAttachment prefers): the featured image is THAT url, not the
+        // local /uploads path of a file never fetched (a 404, and a broken og:image).
+        const remote = await Post.getMeta(row.id, '_wxr_remote_url');
         return (this._featuredImageCache = {
             post: row,
             attachedFile: attachedFile != null ? attachedFile : null,
             parent: parent || null,
+            remoteUrl: typeof remote === 'string' && /^https?:\/\//i.test(remote) ? remote : undefined,
         });
     }
 
@@ -530,7 +545,7 @@ class Post {
         };
 
         if (includeContent) {
-            json.content = await doShortcodeAsync(bodySource);
+            json.content = await doShortcodeAsync(bodySource, { postId: Number(this.id) });
         }
         // Present only on a gated entry: `level` it requires, whether THIS viewer reads it in full.
         if (access.gated) json.access = { level: access.level, gated: true, granted: access.granted };
@@ -551,6 +566,8 @@ class Post {
             if (featuredImage.postStatus === privateMedia.PRIVATE_ATTACHMENT_STATUS) {
                 sitePath = privateMedia.privateFileUrl(featuredImage.id);
                 dynamicUrl = `${network.currentSiteUrl()}${sitePath}`;
+            } else if (featured.remoteUrl) {
+                dynamicUrl = featured.remoteUrl;
             } else if (attachedFile) {
                 const safePath = attachedFile.replace(/\\/g, '/');
                 dynamicUrl = `${network.currentSiteUrl()}/uploads/${safePath}`;
@@ -642,6 +659,7 @@ class Post {
         // asked to keep a source site's permalinks unique per type (`slugScope: 'type'`). Only the two
         // importers' own literal call sites set it; no route forwards a request body to this function.
         const slugScope: SlugScope = data.slugScope === 'type' ? 'type' : 'public';
+        const base = boundSlug(postName);
         postName = await Post.generateUniqueSlug(postName, postType, null, slugScope);
 
         // Sanitize content
@@ -671,8 +689,11 @@ class Post {
         // Generate GUID
         const guid = `${network.currentSiteUrl()}/?p=${Date.now()}`;
 
-        // Postgres requires RETURNING id to get the inserted ID
-        const result = await dbAsync.run(`
+        // Postgres requires RETURNING id to get the inserted ID. generateUniqueSlug is a check-then-insert:
+        // two requests creating the same title at once both see the slug free, and the database's unique
+        // index (posts.post_name + post_type) refuses the second INSERT. That is the index doing its job —
+        // the answer is the next free slug, not a 500 (or, where the index was missing, a duplicate URL).
+        const insertPost = async () => dbAsync.run(`
       INSERT INTO posts (
         author_id, post_date, post_date_gmt, post_content, post_title, post_excerpt,
         post_status, comment_status, ping_status, post_password, post_name,
@@ -702,6 +723,28 @@ class Post {
             postLanguage,
             postTranslationGroup
         ]);
+        // Inside a Postgres transaction (every create from the API runs in one) a failed statement aborts
+        // the whole transaction, so each attempt runs under a savepoint the retry can roll back to. MySQL
+        // and SQLite roll back only the failed statement.
+        const database = require('../config/database');
+        const savepoint = database.getDbType().driver === 'postgres' && database.hasActiveTransaction();
+        let result: any;
+        for (let attempt = 1; ; attempt++) {
+            try {
+                if (savepoint) await dbAsync.exec('SAVEPOINT wjs_post_slug');
+                result = await insertPost();
+                if (savepoint) await dbAsync.exec('RELEASE SAVEPOINT wjs_post_slug');
+                break;
+            } catch (e: any) {
+                if (savepoint) { try { await dbAsync.exec('ROLLBACK TO SAVEPOINT wjs_post_slug'); } catch { /* the error below says why */ } }
+                if (!postName || attempt >= 25 || !isSlugUniqueViolation(e)) throw e;
+                // The next number after the one that was taken. Not a fresh lookup alone: under MySQL's
+                // REPEATABLE READ this transaction keeps reading its first snapshot, in which the slug the
+                // other request just committed is still free. The lookup still skips one taken elsewhere.
+                const own = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(\\d+)$`).exec(postName);
+                postName = await Post.generateUniqueSlug(`${base}-${own ? Number(own[1]) + 1 : 2}`, postType, null, slugScope);
+            }
+        }
 
         const postId = result.lastID;
 
@@ -1134,6 +1177,17 @@ class Post {
         //
         // Callers that really want EVERY row, trash included, ask explicitly: pass
         // `includeStatuses: [...]` with the exact list, or `status: null` for no status filter at all.
+        // An explicit id set (GET /posts?sticky=…): `includeIds` keeps only those rows (an EMPTY set keeps
+        // none), `excludeIds` drops them. Ids are integers by construction (core/sticky-posts).
+        if (Array.isArray(options.includeIds)) {
+            const ids = options.includeIds.filter((n: any) => Number.isSafeInteger(n));
+            if (ids.length) { conditions.push(`${col}id IN (${ids.map(() => '?').join(',')})`); params.push(...ids); }
+            else conditions.push('1 = 0');
+        }
+        if (Array.isArray(options.excludeIds)) {
+            const ids = options.excludeIds.filter((n: any) => Number.isSafeInteger(n));
+            if (ids.length) { conditions.push(`${col}id NOT IN (${ids.map(() => '?').join(',')})`); params.push(...ids); }
+        }
         if (includeStatuses) {
             conditions.push(`${col}post_status IN (${includeStatuses.map(() => '?').join(',')})`);
             params.push(...includeStatuses);
@@ -1232,8 +1286,9 @@ class Post {
             } else {
                 // Best-effort fallback: no usable FTS engine (sqlite-legacy, FTS5 compiled out, a term
                 // too short for MySQL's min token size, or nothing indexable survived sanitisation).
-                conditions.push(`(${col}post_title LIKE ? OR ${col}post_content LIKE ?)`);
-                const searchTerm = `%${search}%`;
+                const { containsSql, containsPattern } = require('../core/sql-like');
+                conditions.push(`(${containsSql(`${col}post_title`)} OR ${containsSql(`${col}post_content`)})`);
+                const searchTerm = containsPattern(search);
                 params.push(searchTerm, searchTerm);
             }
         }
@@ -1269,6 +1324,34 @@ class Post {
      * below only ever answers for SQLite and is the default for direct buildWhere callers.
      */
     static _searchEngineCache: string | null | undefined = undefined;
+    static _pgUnaccentCache: boolean | undefined = undefined;
+
+    /** The case- (and accent-) insensitive sort key for a title column on THIS engine. */
+    static async _titleSortKey(column: string): Promise<string> {
+        const { getDbType } = require('../config/database');
+        const driver = String(getDbType().driver || '');
+        if (driver === 'sqlite-native') return `wjs_fold(${column})`;
+        if (driver.startsWith('sqlite')) return `LOWER(${column})`;
+        if (driver === 'postgres') {
+            if (Post._pgUnaccentCache === undefined) {
+                try {
+                    const row = await dbAsync.get(`SELECT n.nspname AS s FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'unaccent'`);
+                    Post._pgUnaccentCache = !!(row && /^[a-z_][a-z0-9_]*$/.test(String(row.s)));
+                    Post._pgUnaccentSchema = row ? String(row.s) : '';
+                } catch { Post._pgUnaccentCache = false; }
+            }
+            return Post._pgUnaccentCache ? `LOWER("${Post._pgUnaccentSchema}".unaccent(${column}))` : `LOWER(${column})`;
+        }
+        return column; // MySQL: the column's collation already sorts as people read
+    }
+    static _pgUnaccentSchema = '';
+    /** The Postgres text search configuration posts.search_vector is built with. */
+    static _pgSearchConfig = 'english';
+
+    static _pgConfigFromExpression(expr: any): string {
+        const m = /to_tsvector\('([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?)'/i.exec(String(expr || ''));
+        return m ? m[1] : 'english';
+    }
 
     static _syncSearchEngine(): string | null {
         // Synchronous best-effort: only SQLite exposes a sync handle here. Anything else stays null
@@ -1286,9 +1369,12 @@ class Post {
             }
             if (driver === 'postgres') {
                 const row = await dbAsync.get(
-                    `SELECT 1 AS ok FROM information_schema.columns ` +
+                    `SELECT generation_expression AS g FROM information_schema.columns ` +
                     `WHERE table_schema = current_schema() AND table_name = 'posts' AND column_name = 'search_vector' LIMIT 1`
                 );
+                // The query must parse the search box with the SAME text search configuration the column
+                // was built with (migration 0021: wordjs_search or simple; before it, 0010: english).
+                Post._pgSearchConfig = Post._pgConfigFromExpression(row && row.g);
                 return (Post._searchEngineCache = row ? 'pg' : null);
             }
             if (driver === 'mysql' || driver === 'mariadb') {
@@ -1348,10 +1434,14 @@ class Post {
             const q = String(search).trim();
             if (!q) return null;
             const cols = `${col}search_vector`;
+            // plainto_tsquery parses the box as plain text (never a syntax error); its LAST lexeme then
+            // becomes a prefix match (`'word':*`), so type-ahead finds "wordjs" from "word", as the FTS5
+            // query does on SQLite. The configuration is a validated identifier, never request input.
+            const tsq = `(regexp_replace(plainto_tsquery('${Post._pgSearchConfig}', ?)::text, '''$', ''':*'))::tsquery`;
             return {
-                filterSql: `${cols} @@ plainto_tsquery('english', ?)`,
+                filterSql: `${cols} @@ ${tsq}`,
                 filterParams: [q],
-                orderSql: `ts_rank(${cols}, plainto_tsquery('english', ?)) DESC`,
+                orderSql: `ts_rank(${cols}, ${tsq}) DESC`,
                 orderParams: [q]
             };
         }
@@ -1470,8 +1560,16 @@ class Post {
         // Order
         // Safe check for order by column
         const allowedOrderBy = ['id', 'post_date', 'post_title', 'post_modified', 'menu_order', 'comment_count'];
-        const safeOrderBy = allowedOrderBy.includes(orderBy) ? `p.${orderBy}` : 'p.post_date';
         const safeOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+        // TITLE ORDER IS A READER'S ORDER on every engine. SQLite and Postgres (C/C.UTF-8 collation) sorted
+        // titles by their bytes — "Zebra" before "apple", accented words after everything — while MySQL's
+        // collation sorts them as people do. The sort key now ignores case (and, where the engine can,
+        // accents: SQLite through wjs_fold, Postgres through unaccent when the extension is there), with
+        // the stored title as the tie-break so the order stays total and stable.
+        const titleKey = await Post._titleSortKey('p.post_title');
+        const safeOrderBy = allowedOrderBy.includes(orderBy)
+            ? (orderBy === 'post_title' ? `${titleKey} ${safeOrder}, p.post_title` : `p.${orderBy}`)
+            : 'p.post_date';
 
         // RELEVANCE FIRST for a search: every engine returns the more-relevant document ahead of the
         // less-relevant one, with the requested column (date by default) only breaking ties. The order
@@ -1586,6 +1684,7 @@ class Post {
         if (data.status !== undefined) scalarString(data.status, 'status', 'draft');
         if (data.slug !== undefined) scalarString(data.slug, 'slug', '');
         if (data.commentStatus !== undefined) scalarString(data.commentStatus, 'commentStatus', 'open');
+        if (data.password !== undefined && data.password !== null) scalarString(data.password, 'password', '');
         if (data.language !== undefined && data.language !== null) scalarString(data.language, 'language', '');
 
         const updates: string[] = [];
@@ -1720,6 +1819,11 @@ class Post {
         if (data.commentStatus !== undefined) {
             updates.push('comment_status = ?');
             values.push(data.commentStatus);
+        }
+        // Password protection (WordPress "password protected" visibility): '' or null clears it.
+        if (data.password !== undefined) {
+            updates.push('post_password = ?');
+            values.push(data.password === null ? '' : String(data.password).slice(0, 255));
         }
 
         if (data.authorId !== undefined) {

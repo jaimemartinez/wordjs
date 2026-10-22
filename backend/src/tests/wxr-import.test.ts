@@ -172,7 +172,10 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(hello.post_status, 'publish');
             assert.strictEqual(hello.author_id, jdoe.id, 'post attributed to imported author, not admin');
             assert.strictEqual(hello.post_content, HELLO_CONTENT, 'CDATA body stored byte-for-byte');
-            assert.strictEqual(hello.post_date, '2025-01-06 09:30:00', 'original publish date preserved');
+            // The moment is the export's post_date_gmt; post_date is that moment on this server's clock, the
+            // clock Post.create stamps native posts with (QA M3-16: the two used to be mixed in listings).
+            assert.strictEqual(hello.post_date_gmt, '2025-01-06 09:30:00', 'original publish moment preserved');
+            assert.strictEqual(hello.post_date, require('../core/formatting').formatDate(new Date(Date.UTC(2025, 0, 6, 9, 30, 0))));
 
             // ---- post meta: skip-list honoured, CDATA value verbatim, _puck_data sanitized -----
             const editLast = await dbAsync.get(
@@ -281,6 +284,8 @@ describe('WXR importer (fast-xml-parser v5)', () => {
         // one the first is about to be disambiguated to.
         const chainAPath = '/wp-content/uploads/2025/05/chain.jpg';
         const chainBPath = '/wp-content/uploads/2025/05/chain-1.jpg';
+        // One run, post listed BEFORE its image (how WordPress exports): QA X3-03.
+        const sameRunPath = '/wp-content/uploads/2025/06/same-run.jpg';
 
         before(async () => {
             const sharp = require('sharp');
@@ -311,6 +316,7 @@ describe('WXR importer (fast-xml-parser v5)', () => {
                 [legitPath]: otherJpeg,
                 [chainAPath]: chainABytes,
                 [chainBPath]: chainBBytes,
+                [sameRunPath]: jpeg,
             };
             requests = [];
             server = http.createServer((req: any, res: any) => {
@@ -386,7 +392,7 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(att.post_excerpt, 'The photo caption.', 'excerpt:encoded -> caption');
             assert.strictEqual(att.post_content, 'The photo description.', 'content:encoded -> description');
             assert.strictEqual(att.guid, '/uploads/2025/01/photo.jpg', 'guid is the portable relative path');
-            assert.strictEqual(att.post_date, '2025-01-12 11:22:33', 'original upload date preserved');
+            assert.strictEqual(att.post_date, require('../core/formatting').formatDate(new Date(Date.UTC(2025, 0, 12, 11, 22, 33))), "original upload moment preserved (on this server clock)");
             const parentPost = await dbAsync.get(`SELECT id FROM posts WHERE post_name = 'media-post'`);
             assert.strictEqual(att.post_parent, parentPost.id, 'wp:post_parent mapped to the imported post');
 
@@ -414,9 +420,11 @@ describe('WXR importer (fast-xml-parser v5)', () => {
         it('rewrites in-content upload URLs onto this install /uploads path', async () => {
             const post = await dbAsync.get(
                 `SELECT post_content, post_excerpt FROM posts WHERE post_name = 'media-post'`);
-            assert.ok(post.post_content.includes('/uploads/2025/01/photo.jpg'), 'img src rewritten');
-            assert.ok(post.post_content.includes('/uploads/2025/01/missing.png'), 'href rewritten too');
-            assert.ok(!post.post_content.includes(origin), 'no reference to the old host survives');
+            assert.ok(post.post_content.includes('"/uploads/2025/01/photo.jpg"'), 'img src of the stored file rewritten');
+            assert.ok(!post.post_content.includes(`${origin}/wp-content/uploads/2025/01/photo.jpg`), 'no old URL for a file that is here');
+            // missing.png failed to download (404): the body keeps the old site's URL instead of a
+            // /uploads link to a file this install does not have (QA X3-03: 146 broken images).
+            assert.ok(post.post_content.includes(`${origin}/wp-content/uploads/2025/01/missing.png`), 'a failed download keeps its source URL');
             assert.strictEqual(post.post_excerpt, 'See /uploads/2025/01/photo.jpg', 'excerpt rewritten');
         });
 
@@ -648,6 +656,23 @@ describe('WXR importer (fast-xml-parser v5)', () => {
                 'and the meta sanitizer still runs first (javascript: URL neutralised)');
         });
 
+        it('in ONE run, a body listed before its images points at /uploads only for the files that were stored', async () => {
+            const item = (fields: string) => `<item>${fields}<dc:creator><![CDATA[admin]]></dc:creator><excerpt:encoded><![CDATA[]]></excerpt:encoded><wp:status>publish</wp:status><wp:post_parent>0</wp:post_parent></item>`;
+            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:wp="http://wordpress.org/export/1.2/">
+  <channel><title>Same run</title><wp:wxr_version>1.2</wp:wxr_version>
+  ${item(`<title>Same run post</title><content:encoded><![CDATA[<img src="${origin}${sameRunPath}"><img src="${origin}/wp-content/uploads/2025/06/same-run-300x200.jpg"><img src="${origin}/wp-content/uploads/2025/06/gone.jpg">]]></content:encoded><wp:post_id>900</wp:post_id><wp:post_name>same-run-post</wp:post_name><wp:post_type>post</wp:post_type>`)}
+  ${item(`<title>Same run image</title><content:encoded><![CDATA[]]></content:encoded><wp:post_id>901</wp:post_id><wp:post_name>same-run-image</wp:post_name><wp:post_type>attachment</wp:post_type><wp:attachment_url>${origin}${sameRunPath}</wp:attachment_url><wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type><wp:postmeta><wp:meta_key>_wp_attached_file</wp:meta_key><wp:meta_value><![CDATA[2025/06/same-run.jpg]]></wp:meta_value></wp:postmeta>`)}
+  ${item(`<title>Gone image</title><content:encoded><![CDATA[]]></content:encoded><wp:post_id>902</wp:post_id><wp:post_name>gone-image</wp:post_name><wp:post_type>attachment</wp:post_type><wp:attachment_url>${origin}/wp-content/uploads/2025/06/gone.jpg</wp:attachment_url><wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type>`)}
+  </channel></rss>`;
+            const summary = await importWxr(xml, { defaultAuthorId: adminId, media: 'download', allowHttp: true });
+            assert.strictEqual(summary.media.downloaded, 1, JSON.stringify(summary.media.failures));
+            const post = await dbAsync.get(`SELECT post_content FROM posts WHERE post_name = 'same-run-post'`);
+            assert.ok(post.post_content.includes('src="/uploads/2025/06/same-run.jpg"'), post.post_content);
+            assert.ok(post.post_content.includes('src="/uploads/2025/06/same-run-300x200.jpg"'), 'a WordPress size of a stored original follows it');
+            assert.ok(post.post_content.includes(`src="${origin}/wp-content/uploads/2025/06/gone.jpg"`), 'the failed download keeps its working source URL');
+        });
+
         it('link mode keeps the REMOTE url as the attachment sourceUrl', async () => {
             const remote = 'https://old.example/wp-content/uploads/2024/09/linked.jpg';
             const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -876,8 +901,9 @@ describe('WXR importer (fast-xml-parser v5)', () => {
         it('keeps the comment dates the export carries', async () => {
             const post = await byName('remap-pour-over', 'post');
             const leo = await dbAsync.get(`SELECT comment_date, comment_date_gmt FROM comments WHERE comment_post_id = ? AND comment_author = 'Leo'`, [post.id]);
-            assert.strictEqual(leo.comment_date, '2024-03-03 08:00:00');
             assert.strictEqual(leo.comment_date_gmt, '2024-03-03 07:00:00');
+            // On this server's clock, like a comment written here (QA M3-16).
+            assert.strictEqual(leo.comment_date, require('../core/formatting').formatDate(new Date(Date.UTC(2024, 2, 3, 7, 0, 0))));
             const ana = await dbAsync.get(`SELECT comment_date FROM comments WHERE comment_post_id = ? AND comment_author = 'Ana'`, [post.id]);
             assert.ok(ana, 'a comment with an unreadable date is still imported');
             assert.notStrictEqual(ana.comment_date, 'not a date', 'an unreadable date is never written into the column');

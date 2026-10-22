@@ -171,6 +171,7 @@ function backendBaseCandidates(): string[] {
  * be. Only the three functions that decide WHERE a request goes are shared; nothing about how the
  * request is made or cached is.
  */
+
 export function resolveServerBase(): string {
     for (const candidate of backendBaseCandidates()) {
         const base = sanitizeBackendBase(candidate);
@@ -927,6 +928,18 @@ export const getLatestPostsPage = siteCache(async (page: number): Promise<{ post
         const body = await res.json();
         posts = Array.isArray(body) ? (body as Post[]) : [];
     } catch { /* an unreadable page renders as empty */ }
+    // Page 1 opens with the sticky posts (WordPress "Stick to the top of the blog"): those already on the
+    // page move up, the others are added in front; later pages keep their chronological order.
+    if (current === 1) {
+        const stuck = await serverFetch<Post[]>(
+            `/posts?type=post&status=publish&sticky=true&per_page=${API_MAX_PER_PAGE}`,
+            { revalidate: 30, tags: ['posts', 'posts:post'] },
+        );
+        if (Array.isArray(stuck) && stuck.length) {
+            const ids = new Set(stuck.map((p) => p.id));
+            posts = [...stuck, ...posts.filter((p) => !ids.has(p.id))];
+        }
+    }
     return { posts, total, totalPages: Math.max(1, Math.ceil(total / perPage)), page: current };
 });
 
@@ -1223,7 +1236,8 @@ export function isoPostDate(gmt?: string | null, local?: string | null): string 
         const s = typeof value === 'string' ? value.trim() : '';
         if (!s || s.startsWith('0000-00-00')) return undefined;
         const iso = s.replace(' ', 'T');
-        const d = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso) || !utc ? iso : `${iso}Z`);
+        // A trailing offset may be `+00` alone: Postgres prints `…575536+00` for a timestamptz.
+        const d = new Date(/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(iso) || !utc ? iso.replace(/([+-]\d{2})$/, '$1:00') : `${iso}Z`);
         return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
     };
     return pick(gmt, true) ?? pick(local, false);

@@ -262,7 +262,7 @@ function doShortcode(content: string) {
  * @param {string} content
  * @returns {Promise<string>}
  */
-async function doShortcodeAsync(content: string) {
+async function doShortcodeAsync(content: string, context: { postId?: number } = {}) {
     if (!content || tagsHere().length === 0) return content;
 
     // Collect matches first, then resolve callbacks concurrently, then splice them back in one pass.
@@ -276,7 +276,10 @@ async function doShortcodeAsync(content: string) {
         if (!callback) return full;
         const parsedAttrs = parseAttrs((mm.attrs || '').trim());
         try {
-            const out = await callback(parsedAttrs, mm.inner || '', mm.tag);
+            // The core [gallery] (not one a plugin registered in its place) renders its images here.
+            const out = callback === coreGallerySync
+                ? await renderGallery(parsedAttrs, context)
+                : await callback(parsedAttrs, mm.inner || '', mm.tag, context);
             return out == null ? '' : String(out);
         } catch {
             return full; // leave the tag untouched if its handler errors
@@ -308,14 +311,54 @@ function stripShortcodes(content: string) {
 
 // Register default shortcodes
 
-// [gallery ids="1,2,3"]
-addShortcode('gallery', (attrs: any) => {
+// [gallery ids="1,2,3"] — the synchronous form keeps its placeholder <div> (its output is pinned for
+// every sync caller); the rendered gallery is the ASYNC form below, which is what the public body uses.
+const coreGallerySync = (attrs: any) => {
     const ids = attrs.ids ? attrs.ids.split(',') : [];
     const columns = Number(attrs.columns) || 3;
     const size = attrs.size || 'thumbnail';
 
     return `<div class="gallery gallery-columns-${columns}" data-ids="${escAttr(ids.join(','))}" data-size="${escAttr(size)}"></div>`;
-});
+};
+addShortcode('gallery', coreGallerySync);
+
+// [gallery ids="1,2,3" columns="3"] — or bare [gallery]: the images attached to the post, as WordPress
+// does. It rendered an empty <div> before, so every gallery a WordPress import carried showed nothing.
+// Only PUBLIC image attachments are listed (a private upload's URL never reaches a public page), at most
+// 100, in the order given (ids) or the attachments' menu order.
+async function renderGallery(attrs: any, context: any): Promise<string> {
+    const columns = Math.min(9, Math.max(1, Number(attrs.columns) || 3));
+    const size = String(attrs.size || 'thumbnail');
+    const { dbAsync } = require('../config/database');
+    const { PUBLIC_ATTACHMENT_STATUS } = require('./private-media');
+    const listed = String(attrs.ids || attrs.include || '').split(',').map((s: string) => parseInt(s, 10)).filter((n: number) => Number.isSafeInteger(n) && n > 0).slice(0, 100);
+    let rows: any[] = [];
+    if (listed.length) {
+        const found = await dbAsync.all(
+            `SELECT id, guid, post_title, post_excerpt FROM posts WHERE post_type = 'attachment' AND post_status = ? AND post_mime_type LIKE 'image/%' AND id IN (${listed.map(() => '?').join(',')})`,
+            [PUBLIC_ATTACHMENT_STATUS, ...listed]
+        );
+        const byId = new Map(found.map((r: any) => [Number(r.id), r]));
+        rows = listed.map((id: number) => byId.get(id)).filter(Boolean);
+    } else if (context && Number.isSafeInteger(context.postId)) {
+        rows = await dbAsync.all(
+            `SELECT id, guid, post_title, post_excerpt FROM posts WHERE post_type = 'attachment' AND post_status = ? AND post_mime_type LIKE 'image/%' AND post_parent = ? ORDER BY menu_order, id LIMIT 100`,
+            [PUBLIC_ATTACHMENT_STATUS, context.postId]
+        );
+    }
+    if (!rows.length) return '';
+    const Media = require('../models/Media');
+    const items: string[] = [];
+    for (const row of rows) {
+        let src = String(row.guid || '');
+        try { const m = await Media.findById(Number(row.id)); if (m && m.sourceUrl) src = m.sourceUrl; } catch { /* keep the guid */ }
+        if (!/^(\/uploads\/|https?:\/\/)/.test(src)) continue;
+        const caption = String(row.post_excerpt || '').trim();
+        items.push(`<figure class="gallery-item"><img src="${escAttr(src)}" alt="${escAttr(row.post_title || '')}" loading="lazy" style="width:100%;height:auto;display:block" />${caption ? `<figcaption class="gallery-caption">${escAttr(caption)}</figcaption>` : ''}</figure>`);
+    }
+    if (!items.length) return '';
+    return `<div class="gallery gallery-columns-${columns} gallery-size-${escAttr(size)}" style="display:grid;grid-template-columns:repeat(${columns},minmax(0,1fr));gap:0.75rem">${items.join('')}</div>`;
+}
 
 // [caption]content[/caption]
 addShortcode('caption', (attrs: any, content: string) => {

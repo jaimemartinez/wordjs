@@ -228,3 +228,25 @@ describe('F0 legacy content-type compatibility', () => {
         }
     });
 });
+
+describe('F0 baseline on a multisite install', () => {
+    it('takes the snapshot with multisite enabled (it used to throw site_context_missing)', () => {
+        const { spawnSync } = require('child_process');
+        // A fresh process: swagger reads the content-type registry while it LOADS, so the flag has to be
+        // on before anything requires it. It exits once the answer is written: loading the backend opens
+        // whatever the environment configures (a live Redis in CI), and that handle alone would keep the
+        // child running until the timeout.
+        const script = [
+            "require('./src/config/app').multisite = { enabled: true };",
+            "const s = require('./scripts/verify-f0-baseline').collectSnapshot();",
+            'process.stdout.write(String(s.openapi.paths), () => process.exit(0));',
+        ].join(' ');
+        const out = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', '-e', script], {
+            cwd: path.join(__dirname, '..', '..'),
+            encoding: 'utf8',
+            timeout: 120_000,
+        });
+        assert.strictEqual(out.status, 0, out.stderr);
+        assert.ok(Number(out.stdout.trim().split('\n').pop()) > 0, out.stdout);
+    });
+});

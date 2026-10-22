@@ -371,6 +371,8 @@ describe("withRecordRootFields — composición sobre los campos del registro", 
             "excerpt",
             "category",
             "allowComments",
+            "visibilityPassword",
+            "sticky",
             "_wjs_template",
             "seo_title",
             "seo_description",
@@ -391,6 +393,8 @@ describe("withRecordRootFields — composición sobre los campos del registro", 
             "category",
             "tags",
             "allowComments",
+            "visibilityPassword",
+            "sticky",
             "_wjs_template",
             "seo_title",
             "seo_description",
@@ -409,7 +413,7 @@ describe("withRecordRootFields — composición sobre los campos del registro", 
 
     it("PÁGINAS: los mismos dos campos, y NINGUNA categoría — la asimetría del CMS se respeta", () => {
         const fields = withRecordRootFields(rootFieldsPage);
-        expect(Object.keys(fields)).toEqual(["title", "slug", "featuredImage", "excerpt", "_wjs_template"]);
+        expect(Object.keys(fields)).toEqual(["title", "slug", "featuredImage", "excerpt", "visibilityPassword", "_wjs_template"]);
         expect(fields.category).toBeUndefined();
     });
 
@@ -464,17 +468,30 @@ describe("seedRootPropsFromPost — reabrir enseña lo que hay en la BD", () => 
         expect(seedRootPropsFromPost(post)).toEqual({
             featuredImage: { id: 8, url: "/uploads/x.jpg", title: "X" },
             excerpt: "Resumen guardado",
+            visibilityPassword: "",
+            sticky: "0",
         });
     });
 
     it("devuelve las claves SIEMPRE, para pisar un _puck_data viejo que enseñaba otra portada", () => {
         const seed = seedRootPropsFromPost({ id: 1 } as unknown as Post);
-        expect(Object.keys(seed).sort()).toEqual(["excerpt", "featuredImage"]);
+        expect(Object.keys(seed).sort()).toEqual(["excerpt", "featuredImage", "sticky", "visibilityPassword"]);
         expect(seed.featuredImage).toBeUndefined();
         expect(seed.excerpt).toBe("");
         // El spread debe BORRAR la imagen fantasma del _puck_data, no conservarla.
         const merged = { ...{ featuredImage: { id: 99 }, title: "T" }, ...seed };
         expect(merged.featuredImage).toBeUndefined();
         expect(merged.title).toBe("T");
+    });
+});
+
+describe("visibilityForSave — contraseña y fijar arriba solo si cambian (M3-09)", () => {
+    it("no envía nada si el autor no los tocó, y envía exactamente lo que cambió", async () => {
+        const { visibilityForSave } = await import("../editorRootFields");
+        const seeded = { visibilityPassword: "", sticky: "0" as const };
+        expect(visibilityForSave({}, seeded)).toEqual({});
+        expect(visibilityForSave({ visibilityPassword: "", sticky: "0" }, seeded)).toEqual({});
+        expect(visibilityForSave({ visibilityPassword: "secreto", sticky: "1" }, seeded)).toEqual({ password: "secreto", sticky: true });
+        expect(visibilityForSave({ visibilityPassword: "" }, { visibilityPassword: "x", sticky: "1" })).toEqual({ password: "" });
     });
 });

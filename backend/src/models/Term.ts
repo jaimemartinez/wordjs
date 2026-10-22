@@ -88,19 +88,45 @@ class Term {
         let termSlug = slug || sanitizeTitle(name);
         termSlug = await Term.generateUniqueSlug(termSlug);
 
-        // Check if term exists
+        // Check if term exists: the same name under the same parent (WordPress allows "Foo A" at the root
+        // AND under "Foo Parent" — an import lost one of them). Names compare exactly on every engine:
+        // MySQL's default collation called "Café"/"cafe"/"CAFÉ" and even 😀/😁 the same term.
+        const { getDbType } = require('../config/database');
+        const exactName = getDbType().driver === 'mysql' ? 't.name = ? COLLATE utf8mb4_bin' : 't.name = ?';
         const existing = await dbAsync.get(`
-      SELECT t.term_id FROM terms t
+      SELECT t.term_id, t.slug FROM terms t
       JOIN term_taxonomy tt ON t.term_id = tt.term_id
-      WHERE t.name = ? AND tt.taxonomy = ?
-    `, [name, taxonomy]);
+      WHERE ${exactName} AND tt.taxonomy = ? AND tt.parent = ?
+    `, [name, taxonomy, parent || 0]);
 
-        if (existing) {
+        // As in WordPress, a caller that names its OWN, different slug (an importer carrying the source
+        // site's terms) gets a second term with that name; only a same-name term without one is a duplicate.
+        if (existing && !(slug && existing.slug !== slug)) {
             throw new Error('Term already exists');
         }
 
-        // Insert term
-        const termResult = await dbAsync.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0) RETURNING term_id', [name, termSlug]);
+        // Insert term. The slug is unique in the database too (migration 0023): when another request took
+        // it between the check above and this insert — the same tag created twice at once — the loser
+        // answers what a sequential second request answers ("already exists") if that request created
+        // this very term, and otherwise takes the next free slug.
+        let termResult: any;
+        for (let attempt = 1; ; attempt++) {
+            try {
+                termResult = await dbAsync.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0) RETURNING term_id', [name, termSlug]);
+                break;
+            } catch (e: any) {
+                if (attempt >= 10 || !require('../core/db-errors').isUniqueViolation(e)) throw e;
+                const raced = await dbAsync.get(`
+      SELECT t.term_id FROM terms t
+      JOIN term_taxonomy tt ON t.term_id = tt.term_id
+      WHERE ${exactName} AND tt.taxonomy = ? AND tt.parent = ?
+    `, [name, taxonomy, parent || 0]);
+                if (raced && !slug) throw new Error('Term already exists', { cause: e });
+                // The winner may not have written its taxonomy row yet: give it a moment before deciding.
+                if (!raced && attempt <= 2) { await new Promise((r) => setTimeout(r, 50)); continue; }
+                termSlug = await Term.generateUniqueSlug(termSlug);
+            }
+        }
         const termId = termResult.lastID;
 
         // Insert term taxonomy

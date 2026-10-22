@@ -28,16 +28,27 @@ const DIST_ENTRY = path.join(__dirname, 'dist', 'index.js');
 const TS_ENTRY = path.join(__dirname, 'src', 'index.ts');
 const RUN_COMPILED = fs.existsSync(DIST_ENTRY);
 const APP_ARGS = RUN_COMPILED ? [DIST_ENTRY] : ['-r', 'ts-node/register', TS_ENTRY];
-const MAX_RESTARTS_FAST = 5;
+// A crash is restarted after a delay that doubles with each crash in a row (1 s, 2 s, 4 s … capped at
+// MAX_BACKOFF_MS) and goes back to 1 s once the app has stayed up for STABLE_AFTER_MS. The supervisor
+// used to give up for good after 5 crashes within 10 s and exit — and under a service unit without
+// Restart= (or past systemd's own start limit) the node then stayed down until someone logged in.
+// A database that drops connections for a minute must cost a minute, never the site.
+const MAX_BACKOFF_MS = 30000;
+const STABLE_AFTER_MS = 60000;
 // The app asks for a restart (a setting it reads at boot changed from the admin panel) by exiting with
 // this code: started again at once, and never counted as a crash. Same value as core/restart.ts.
 const RESTART_EXIT_CODE = 75;
-const FAST_RESET_TIME = 10000; // 10 seconds
 
-let restartCount = 0;
-let lastRestart = Date.now();
+let consecutiveCrashes = 0;
+let startedAt = Date.now();
+
+/** Delay before the next start after `crashes` crashes in a row. */
+function backoffMs(crashes) {
+    return Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.max(0, crashes - 1));
+}
 
 function startApp() {
+    startedAt = Date.now();
     console.log(`🚀 Supervisor: Launching WordJS Core (${RUN_COMPILED ? 'compiled dist/' : 'ts-node'})...`);
 
     // Spawn the actual server
@@ -58,24 +69,14 @@ function startApp() {
             console.log('🛑 Supervisor: App stopped gracefully. Exiting.');
             process.exit(0);
         } else {
-            const now = Date.now();
-            if (now - lastRestart > FAST_RESET_TIME) {
-                // Reset counter if it's been a while
-                restartCount = 0;
-            }
-
-            lastRestart = now;
-            restartCount++;
+            if (Date.now() - startedAt > STABLE_AFTER_MS) consecutiveCrashes = 0;
+            consecutiveCrashes++;
+            const delay = backoffMs(consecutiveCrashes);
 
             console.error(`💥 Supervisor: App crashed with exit code ${code}.`);
-
-            if (restartCount > MAX_RESTARTS_FAST) {
-                console.error('🔥 Supervisor: Too many crashes in short time. Giving up.');
-                process.exit(1);
-            }
-
-            console.log('🔄 Supervisor: Restarting in 1 second...');
-            setTimeout(startApp, 1000);
+            console.log(`🔄 Supervisor: Restarting in ${Math.round(delay / 1000)} second(s)` +
+                (consecutiveCrashes > 1 ? ` (crash ${consecutiveCrashes} in a row)...` : '...'));
+            setTimeout(startApp, delay);
         }
     });
 
@@ -84,5 +85,7 @@ function startApp() {
     });
 }
 
-// Start the loop
-startApp();
+module.exports = { backoffMs, MAX_BACKOFF_MS, STABLE_AFTER_MS };
+
+// Start the loop (not when a test requires the file for backoffMs).
+if (require.main === module) startApp();

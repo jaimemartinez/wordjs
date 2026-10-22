@@ -116,8 +116,12 @@ WordJS includes a **Zero Data Loss** migration tool for switching drivers withou
 3. The system will:
     - **Stream** data per table to the new driver (preventing RAM spikes).
     - **Reconcile** each table's row count against the source immediately after copying it. A mismatch **throws on the first offending table** and aborts the migration — the original database is left untouched. (This is a fail-closed check *after* each copy, not a pre-flight scan; it used to be a mere warning that still switched the live DB.)
-    - **Swap** the data file into place and update the configuration.
+    - **Build the target's own indexes**: the search index of that engine (FTS5, a tsvector, or a FULLTEXT index) and the unique keys of [§2.10](#210-full-text-search) / migration `0020`, by running the engine-specific schema migrations again on the target. The source's SQLite FTS5 tables are an index, not data, and are not copied; generated columns (Postgres `search_vector`, the MySQL key columns) are recomputed by the target.
+    - **Move every Postgres sequence** past the highest id copied, so the first post created afterwards gets a new id.
+    - **Swap** the data file into place and update the configuration. For Postgres/MySQL the connection is written where the next boot reads it (the nested `db` block **and** the flat `dbPassword`, which outranks it), and WordJS **opens that exact connection before restarting**: settings that would not connect are put back as they were and the site keeps running on its current database, with the reason on screen.
     - **Restart** the backend automatically to apply changes.
+
+> **Postgres target, ordinary role.** The copy runs as the WordJS role, not a superuser. Switching off foreign-key triggers (`session_replication_role`) is attempted inside a savepoint and simply skipped when the role may not do it; tables are copied after the tables they reference instead.
 
 > **Note:** For a file-based SQLite target (e.g. Legacy -> Native) the copy goes to a temporary file which is then moved onto the real filename (`fs.renameSync`) — so a half-written database never becomes the live one. If that move fails because the target file is locked, the migration does **not** fail: it keeps the temporary file as the new active database and points the config at it, so no data is lost even though the filename ends up non-standard.
 
@@ -166,6 +170,18 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
 > its tables needs `GRANT OPTION`, which managed databases usually withhold (`GRANT ALL PRIVILEGES` alone does
 > not include it). When a grant is refused the plugin falls back to the text-guard straight away — at boot
 > or the moment it creates a table — and keeps working.
+
+> **The database must be UTF8.** Create it with `CREATE DATABASE wordjs OWNER wordjs ENCODING 'UTF8'
+> TEMPLATE template0;`. A `SQL_ASCII` database (what a server initialised under the `C` locale gives by
+> default) stores bytes, not text: search drops every non-ASCII word and `lower()`/`upper()` work byte by
+> byte. The installer's *Test connection* and the install itself refuse such a database with that
+> instruction, the engine switch refuses it as a target, and Site Health warns about an existing one.
+
+> **A dropped connection is not a crash.** When the server closes a pooled connection — a restart or
+> failover of the database, pgbouncer or a firewall recycling idle connections, `pg_terminate_backend`,
+> `idle_session_timeout` — the pool discards it and opens a new one on the next query; a read that lost
+> its connection is retried once on a fresh one. (Before, the unhandled `'error'` event of the pool ended
+> the whole process.)
 
 **TLS to the database (`dbSsl`).** With `"dbSsl": true` the Postgres and MySQL connections use TLS and
 **verify the server certificate** (chain and host name) — the same as any HTTPS client. A server whose
@@ -475,6 +491,8 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 
 > **Migration `0019`.** `0019_account_capabilities_from_mailbox_flag` moves the per-account mailbox grant out of the core: every `user_meta.professional_mailbox` value is copied unchanged to `account_capability:mail_server_mailbox` (the mail plugin's declared account capability — `core/account-capabilities.ts`). The legacy rows are kept and every later write of the capability is mirrored onto them, and a legacy row that says "not granted" vetoes the copy, so a node still running the previous release (or a rollback) reads the same answer and the two can only disagree in the deny direction (`core/legacy-account-flags.ts`). Idempotent; a failure aborts boot like any other migration.
 
+> **Migrations `0020`–`0022`.** `0020_mysql_unique_email_slug` gives MySQL/MariaDB the two uniqueness rules `0001` expresses with an expression index and a partial index elsewhere (neither exists there): STORED generated columns `users.user_email_key` (`LOWER(user_email)`) and `posts.post_slug_key` (`post_type/post_name`, NULL for an empty slug), each with a UNIQUE index (`uq_users_email`, `uq_posts_slug`), binary collation. Rows that already break a rule are listed in the log and that index waits until they are resolved; never fatal. `0021_pg_search_unaccent_simple` rebuilds the Postgres search vector with the language-neutral, accent-folding configuration of [§2.10](#210-full-text-search). `0022_pg_text_timestamp_format` (Postgres) sets the TEXT date columns that default to `CURRENT_TIMESTAMP` to a UTC `YYYY-MM-DD HH:MM:SS` default and rewrites the rows stored in Postgres's own text form (`2026-10-21 11:19:18.683525+00`), so every row reads in the same format as on the other engines. The three are engine-specific: an engine switch runs them again on the target (with `0001`, `0008` and `0010`).
+
 ### Batched Meta Loading (N+1 avoidance)
 
 Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the whole result set in a single query rather than issuing one query per post, eliminating the previous N+1 pattern on listing pages.
@@ -496,8 +514,9 @@ Post search used to be `post_title LIKE '%q%' OR post_content LIKE '%q%'` — a 
 
 Both index the same `post_title` + `post_content` that FTS5 covers, **plus `post_excerpt`**, and both are idempotent on a fresh or an existing database.
 
-*   **Postgres** gets a `STORED` generated column `posts.search_vector` (`to_tsvector('english', title || content || excerpt)`, with the regconfig as a literal so the expression is `IMMUTABLE`) and a **GIN** index `idx_posts_search_vector`. Postgres recomputes the vector on every write, so there is no trigger to maintain. Queries filter on `search_vector @@ plainto_tsquery('english', ?)` and order by `ts_rank(...)` — `plainto_tsquery` parses the input as plain text, so a stray operator is text rather than a syntax error thrown at the visitor.
+*   **Postgres** gets a `STORED` generated column `posts.search_vector` and a **GIN** index `idx_posts_search_vector`. Postgres recomputes the vector on every write, so there is no trigger to maintain. Since migration `0021_pg_search_unaccent_simple` the vector uses the text search configuration `wordjs_search`: `simple` (no stemming and no stopword list, whatever the site's language) plus the `unaccent` dictionary, so "cancion" finds "canción" — the behaviour of SQLite's FTS5. `unaccent` is a trusted extension the database owner can enable; without it the configuration is plain `simple`, and without the right to create a configuration the column uses the built-in `simple` (the migration says which in the log). Queries parse the search box with the same configuration — `plainto_tsquery`, which reads it as plain text so a stray operator is never a syntax error — turn its last word into a prefix (`'word':*`, type-ahead as in FTS5), and order by `ts_rank(...)`.
 *   **MySQL/InnoDB** gets a `FULLTEXT` index `ftidx_posts_search` over the same three columns. There is no `ADD FULLTEXT … IF NOT EXISTS`, so the migration probes `information_schema.statistics` first and skips when the index is already there. Queries use `MATCH(…) AGAINST(? IN NATURAL LANGUAGE MODE)` for both the filter and the order.
+*   **The `LIKE` scan means the same everywhere.** `%` and `_` in the search box are literal characters (they used to match everything on MySQL and `sqlite-legacy`), and both sides are lower-cased, so the user list's search ignores case on Postgres too (`core/sql-like.ts`). On sqlite-native both sides also go through `wjs_fold()` (full Unicode case folding without accents, registered on every better-sqlite3 connection by `core/sqlite-functions.ts`); sqlite-legacy keeps SQLite's ASCII-only folding — one more reason to move it to sqlite-native, which Site Health and the Network screen offer in one step.
 *   **The `LIKE` scan is still the floor**, and it is reached for: `sqlite-legacy` (sql.js has no FTS5), a SQLite build without FTS5, an install whose migration has not run, and — on MySQL only — a query with no token as long as `innodb_ft_min_token_size` (default 3), which `NATURAL LANGUAGE MODE` would match nothing for.
 
 ---

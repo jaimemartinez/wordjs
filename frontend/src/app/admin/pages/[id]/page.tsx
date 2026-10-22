@@ -20,6 +20,7 @@ import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput } from "@/li
 import {
     withRecordRootFields,
     seedRootPropsFromPost, seedRecordIdentity, slugFollowsTitle,
+    visibilityForSave,
     featuredImageMetaValue,
     resolveExcerptForSave,
     seedSeoRootProps,
@@ -77,6 +78,10 @@ export default function PageEditorPage() {
     // Extracto CONFIRMADO por el servidor: solo viaja cuando el autor lo cambia (la API devuelve un
     // extracto DERIVADO del cuerpo cuando la página no tiene uno propio — ver resolveExcerptForSave).
     const seededExcerptRef = useRef("");
+    // El `modified` de la versión que este editor tiene delante (control de concurrencia, ver guardado).
+    const baseModifiedRef = useRef<string>("");
+    // Contraseña / «fijar arriba» tal como los sembró la carga (ver visibilityForSave).
+    const seededVisibilityRef = useRef<{ visibilityPassword: string; sticky: "1" | "0" }>({ visibilityPassword: "", sticky: "0" });
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
     // Data-safety hydration tracking: `loaded` is true only once the EXISTING page's content has loaded;
@@ -151,6 +156,7 @@ export default function PageEditorPage() {
         try {
             const page = await postsApi.get(pageId!);
             setTitle(page.title);
+            baseModifiedRef.current = typeof (page as any).modified === "string" ? (page as any).modified : "";
             setSlug(page.slug);
             // The loaded title is already in sync with the loaded slug: the auto-slug effect must not
             // rewrite it on open, and a published entry keeps its URL when its title changes.
@@ -173,6 +179,7 @@ export default function PageEditorPage() {
             // borraría lo que puso la API o una importación (ver seedSeoRootProps).
             const seedRoot = { ...seedRootPropsFromPost(page), ...seedSeoRootProps(page) };
             seededExcerptRef.current = seedRoot.excerpt;
+            seededVisibilityRef.current = { visibilityPassword: seedRoot.visibilityPassword, sticky: seedRoot.sticky };
 
             // Load Puck data from meta if available
             if (page.meta && page.meta[EDITOR_DATA_META_KEY]) {
@@ -220,7 +227,7 @@ export default function PageEditorPage() {
         }
     };
 
-    const { alert } = useModal();
+    const { alert, confirm } = useModal();
 
     // Once a NEW page is first saved, remember its id — before this, every save created ANOTHER
     // page (params.id stays "new"). Also lets autosave create the draft once and then update it.
@@ -294,6 +301,8 @@ export default function PageEditorPage() {
                 seeded: seededExcerptRef.current,
             });
 
+            const visibilityPatch = visibilityForSave(rootProps, seededVisibilityRef.current);
+
             const pageData = {
                 title: finalTitle,
                 slug: finalSlug,
@@ -301,6 +310,7 @@ export default function PageEditorPage() {
                 ...statusPatch,
                 type: "page",
                 ...(excerptPatch !== undefined ? { excerpt: excerptPatch } : {}),
+                ...visibilityPatch,
                 meta: {
                     // Clave histórica CONGELADA a propósito — ver EDITOR_DATA_META_KEY.
                     [EDITOR_DATA_META_KEY]: liveData,
@@ -324,7 +334,17 @@ export default function PageEditorPage() {
             const effectiveId = pageId ?? createdIdRef.current;
             let saved;
             if (effectiveId) {
-                saved = await postsApi.update(effectiveId, finalPageData as any);
+                // Sin sesión en vivo (sin documento guardado) se manda el `modified` cargado: el servidor
+                // rechaza (409) guardar encima de una versión más nueva en vez de pisarla en silencio.
+                const conflictGuard = !hasStoredDocument && baseModifiedRef.current ? { expectedModified: baseModifiedRef.current } : {};
+                try {
+                    saved = await postsApi.update(effectiveId, { ...finalPageData, ...conflictGuard } as any);
+                } catch (err: any) {
+                    if (err?.code !== "rest_post_conflict" || isAutosave) throw err;
+                    const overwrite = await confirm(t('post.edit.conflict'), t('post.edit.conflictTitle'), true);
+                    if (!overwrite) { window.location.reload(); return false; }
+                    saved = await postsApi.update(effectiveId, finalPageData as any);
+                }
             } else {
                 saved = await postsApi.create(finalPageData as any);
                 if (saved?.id) {
@@ -335,6 +355,7 @@ export default function PageEditorPage() {
             }
             // El backend es la autoridad del estado final (resuelve publish→future o future→publish
             // según la fecha): reflejarlo para que el selector nunca mienta tras guardar.
+            if (saved && typeof (saved as any).modified === "string") baseModifiedRef.current = (saved as any).modified;
             if (saved?.status) {
                 lastServerStatusRef.current = saved.status;
                 setStatus(saved.status);
@@ -342,6 +363,8 @@ export default function PageEditorPage() {
             }
             // Lo que ya viajó pasa a ser la base (si no, cada autosave reenviaría el mismo extracto).
             if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
+            if (visibilityPatch.password !== undefined) seededVisibilityRef.current = { ...seededVisibilityRef.current, visibilityPassword: visibilityPatch.password };
+            if (visibilityPatch.sticky !== undefined) seededVisibilityRef.current = { ...seededVisibilityRef.current, sticky: visibilityPatch.sticky ? "1" : "0" };
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
             return true;

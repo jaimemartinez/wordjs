@@ -11,12 +11,13 @@ import type React from "react";
 import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import { publicUiStrings, membersGateStrings, notFoundStrings, postTermsStrings } from "@/lib/public/uiStrings";
+import { publicUiStrings, membersGateStrings, notFoundStrings, postTermsStrings, protectedEntryStrings } from "@/lib/public/uiStrings";
 import PostTerms from "@/components/public/PostTerms";
 import { featuredImageSrc } from "@/lib/mediaUsage";
 import { mediaBaseFromSettings } from "@/lib/mediaDelivery";
 import MembersOnlyGate from "./MembersOnlyGate";
-import { siteDateLanguage } from "@/lib/public/siteDate";
+import ProtectedEntryUnlock from "./ProtectedEntryUnlock";
+import { siteDateLanguage, siteTimeZone } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
 import CommentsSection from "@/components/CommentsSection";
 import { optionEnabled } from "@/lib/optionFlags";
@@ -55,13 +56,20 @@ export default function PostContent({ post, settings, category, showComments }: 
     // PASSWORD-PROTECTED ENTRIES (WordPress "password protected" visibility, carried over by the WXR
     // importer). The API withholds the body, excerpt and `_puck_data` of such an entry from anyone
     // who cannot edit it and flags it `protected: true`; render WordPress's notice in place of the
-    // empty body instead of a blank page. Entering the password to unlock the entry is not
-    // implemented — the notice is the whole public rendering for now.
+    // empty body instead of a blank page, with the password form: the reader's password unlocks the
+    // body in the browser (ProtectedEntryUnlock), so the cached page never holds it.
     const isLocked = post.protected === true && !post.content && !versoData;
     const protectedNotice = (
-        <div className="wjs-post-body wjs-post-protected max-w-3xl mx-auto px-4 py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">
-            <p>This content is password protected.</p>
-        </div>
+        <ProtectedEntryUnlock
+            postId={post.id}
+            strings={protectedEntryStrings(settings)}
+            htmlClassName={isFramedPost
+                ? "wjs-post-body wjs-content prose prose-lg mx-auto p-[var(--wjs-card-pad,2rem)]"
+                : "wjs-content prose prose-lg max-w-none mx-auto"}
+            ixPresets={settings?.wjs_ix_presets}
+            motion={settings?.wjs_motion}
+            ui={publicUiStrings(settings)}
+        />
     );
 
     const commentsOpen =
@@ -168,7 +176,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                                     <span>•</span>
                                 </>
                             )}
-                            <span className="wjs-post-meta-date"><LocalizedDate date={post.date} lang={siteDateLanguage(settings)} /></span>
+                            <span className="wjs-post-meta-date"><LocalizedDate date={post.date} gmt={post.dateGmt} timeZone={siteTimeZone(settings)} lang={siteDateLanguage(settings)} /></span>
                             <span>•</span>
                             <span className="wjs-post-meta-author">{post.author?.displayName || "Admin"}</span>
                         </div>
@@ -212,7 +220,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 </article>
             )}
 
-            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} requireLogin={commentsRequireLogin} />}
+            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} requireLogin={commentsRequireLogin} timeZone={siteTimeZone(settings)} />}
 
             <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)] flex justify-between items-center px-4">
                 <Link href="/" className="text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] font-medium flex items-center gap-2">

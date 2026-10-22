@@ -5,6 +5,6 @@
  */
 import { formatSiteDate } from "@/lib/public/siteDate";
 
-export default function LocalizedDate({ date, lang }: { date?: string | null; lang?: string | null }) {
-    return <>{formatSiteDate(date, lang)}</>;
+export default function LocalizedDate({ date, lang, gmt, timeZone }: { date?: string | null; lang?: string | null; gmt?: string | null; timeZone?: string | null }) {
+    return <>{formatSiteDate(date, lang, { gmt, timeZone })}</>;
 }

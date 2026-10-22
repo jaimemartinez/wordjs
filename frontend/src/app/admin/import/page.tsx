@@ -57,7 +57,9 @@ registerTranslations({
         "wpImport.media.skip.label": "Omitir adjuntos",
         "wpImport.media.skip.hint": "No importa ningún medio. Elige esto si vas a copiar wp-content/uploads a mano.",
         "wpImport.allowHttp.label": "Permitir orígenes http://",
-        "wpImport.allowHttp.hint": "Solo si el sitio antiguo no tiene HTTPS. Las direcciones privadas y de loopback se siguen rechazando en cualquier caso.",
+        "wpImport.allowHttp.hint": "Solo si el sitio antiguo no tiene HTTPS.",
+        "wpImport.allowPrivate.label": "Permitir descargas desde la dirección privada de este sitio",
+        "wpImport.allowPrivate.hint": "Para un WordPress en tu red local, una intranet o un servidor de pruebas. Solo el sitio del que se exportó este archivo; cualquier otra dirección privada, de loopback o de metadatos de la nube se sigue rechazando.",
         "wpImport.authorFallback": "Las entradas cuyo autor de WordPress no se encuentre se asignan a {user}.",
         "wpImport.you": "ti",
         "wpImport.importing": "Importando…",
@@ -124,7 +126,9 @@ registerTranslations({
         "wpImport.media.skip.label": "Skip attachments",
         "wpImport.media.skip.hint": "Import no media at all. Choose this if you are copying wp-content/uploads across by hand.",
         "wpImport.allowHttp.label": "Allow http:// sources",
-        "wpImport.allowHttp.hint": "Only if the old site has no HTTPS. Private and loopback addresses stay refused either way.",
+        "wpImport.allowHttp.hint": "Only if the old site has no HTTPS.",
+        "wpImport.allowPrivate.label": "Allow downloads from this site's private address",
+        "wpImport.allowPrivate.hint": "For a WordPress on your local network, an intranet or a staging server. Only the site this file was exported from; every other private, loopback or cloud-metadata address stays refused.",
         "wpImport.authorFallback": "Posts whose WordPress author isn't found are assigned to {user}.",
         "wpImport.you": "you",
         "wpImport.importing": "Importing…",
@@ -191,7 +195,9 @@ registerTranslations({
         "wpImport.media.skip.label": "Ignorar anexos",
         "wpImport.media.skip.hint": "Não importa nenhuma mídia. Escolha isto se você vai copiar wp-content/uploads manualmente.",
         "wpImport.allowHttp.label": "Permitir origens http://",
-        "wpImport.allowHttp.hint": "Só se o site antigo não tiver HTTPS. Endereços privados e de loopback continuam recusados de qualquer forma.",
+        "wpImport.allowHttp.hint": "Apenas se o site antigo não tiver HTTPS.",
+        "wpImport.allowPrivate.label": "Permitir downloads do endereço privado deste site",
+        "wpImport.allowPrivate.hint": "Para um WordPress na sua rede local, numa intranet ou num servidor de testes. Apenas o site de onde este ficheiro foi exportado; qualquer outro endereço privado, de loopback ou de metadados da nuvem continua recusado.",
         "wpImport.authorFallback": "Posts cujo autor do WordPress não for encontrado são atribuídos a {user}.",
         "wpImport.you": "você",
         "wpImport.importing": "Importando…",
@@ -248,6 +254,7 @@ export default function ImportPage() {
     const [importComments, setImportComments] = useState(true);
     const [media, setMedia] = useState<ImportMediaMode>("download");
     const [allowHttp, setAllowHttp] = useState(false);
+    const [allowPrivateSource, setAllowPrivateSource] = useState(false);
 
     const reset = () => {
         setFile(null); setAnalysis(null); setSummary(null); setError(""); setPhase("idle");
@@ -276,6 +283,7 @@ export default function ImportPage() {
                 importComments,
                 media,
                 allowHttp: media === "download" ? allowHttp : false,
+                allowPrivateSource: media === "download" ? allowPrivateSource : false,
             });
             setSummary(res.summary);
             setPhase("done");
@@ -412,6 +420,11 @@ export default function ImportPage() {
                             <Toggle checked={allowHttp} onChange={setAllowHttp}
                                 label={t("wpImport.allowHttp.label")}
                                 hint={t("wpImport.allowHttp.hint")} />
+                        )}
+                        {media === "download" && (
+                            <Toggle checked={allowPrivateSource} onChange={setAllowPrivateSource}
+                                label={t("wpImport.allowPrivate.label")}
+                                hint={t("wpImport.allowPrivate.hint")} />
                         )}
 
                         <div className="text-sm text-gray-500 bg-gray-50 rounded-lg px-4 py-3">

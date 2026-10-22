@@ -18,6 +18,7 @@
 
 const { spawn } = require('child_process');
 const fs = require('fs');
+const log = require('./module-logger').moduleLogger('core/db-dump');
 
 export type DbDumpConfig = {
     host?: string;
@@ -90,7 +91,10 @@ function runTool(spawnFn: any, tool: string, args: string[], opts: any = {}): Pr
         child.on('error', reject);
         child.on('close', (code: number) => {
             if (code === 0) return resolve();
-            reject(new Error(`${tool} exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ''}`));
+            const err: any = new Error(`${tool} exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ''}`);
+            err.exitCode = code;
+            err.stderr = stderr;
+            reject(err);
         });
     });
 }
@@ -188,6 +192,28 @@ async function captureDump(driver: string, destPath: string, cfg: DbDumpConfig, 
 }
 
 /**
+ * A pg_restore that finished with errors only because a NEWER client set a session parameter the server
+ * does not have (pg_dump/pg_restore 17 emit `SET transaction_timeout = 0;`, unknown to PostgreSQL 16 and
+ * older). pg_restore runs without --single-transaction, so it went on and restored everything else; that
+ * one SET only tuned the restore session. Every reported error must be exactly that, and their count must
+ * match pg_restore's own "errors ignored" total — any other error still fails the restore.
+ */
+function onlyUnknownSessionSettings(stderr: string): string[] | null {
+    const total = /errors ignored on restore: (\d+)/.exec(stderr);
+    const errors = stderr.match(/pg_restore: error: [^\n]*/g) || [];
+    if (!total || errors.length === 0 || errors.length !== Number(total[1])) return null;
+    const names: string[] = [];
+    for (const line of errors) {
+        const m = /could not execute query: ERROR:\s+unrecognized configuration parameter "([a-z_][a-z0-9_.]*)"/.exec(line);
+        if (!m) return null;
+        names.push(m[1]);
+    }
+    const commands = stderr.match(/Command was: [^\n]*/g) || [];
+    if (commands.length !== errors.length || !commands.every((c) => /^Command was: SET [a-z_][a-z0-9_.]* = [^;]*;\s*$/.test(c))) return null;
+    return names;
+}
+
+/**
  * Restore a physical dump previously produced by captureDump. FAILS LOUD if the restore tool is missing
  * (so a "successful" restore can never silently leave the DB untouched).
  * @param deps injectable { isToolAvailable, spawn } for tests.
@@ -203,7 +229,13 @@ async function restoreDump(driver: string, srcPath: string, cfg: DbDumpConfig, d
     }
 
     if (driver === 'postgres') {
-        await runTool(spawnFn, tool, buildPgRestoreArgs(cfg, srcPath), { env: passwordEnv(driver, cfg) });
+        try {
+            await runTool(spawnFn, tool, buildPgRestoreArgs(cfg, srcPath), { env: passwordEnv(driver, cfg) });
+        } catch (e: any) {
+            const unknown = e && e.exitCode === 1 && typeof e.stderr === 'string' ? onlyUnknownSessionSettings(e.stderr) : null;
+            if (!unknown) throw e;
+            log.warn({ settings: unknown }, `pg_restore is newer than the database server: it set ${unknown.join(', ')}, which this server does not know. Everything else was restored.`);
+        }
     } else {
         // mysql client consumes the dump from stdin.
         await runTool(spawnFn, tool, buildMysqlRestoreArgs(cfg), { env: passwordEnv(driver, cfg), stdinFile: srcPath });
@@ -222,4 +254,5 @@ module.exports = {
     buildMysqldumpArgs,
     buildMysqlRestoreArgs,
     passwordEnv,
+    onlyUnknownSessionSettings,
 };

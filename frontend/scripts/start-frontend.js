@@ -5,7 +5,11 @@ const path = require('path');
 // 1. Load Config
 let port = 3001; // Fallback
 try {
-    const configPath = path.resolve(process.cwd(), 'wordjs-config.json');
+    // This tree's frontend config, else the SAME install's backend config (split mode keeps one config,
+    // in backend/): with only the 3001 fallback, a second install on the host served on the first one's
+    // port (QA S3-18).
+    let configPath = path.resolve(process.cwd(), 'wordjs-config.json');
+    if (!fs.existsSync(configPath)) configPath = path.resolve(process.cwd(), '..', 'backend', 'wordjs-config.json');
     if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         if (config.frontendPort) {

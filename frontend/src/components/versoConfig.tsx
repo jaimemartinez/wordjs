@@ -2605,6 +2605,16 @@ export const postConfig: any = {
                     { label: "No", value: "closed" }
                 ]
             },
+            // Password-protected visibility (post_password) and "stick to the top" (sticky_posts).
+            visibilityPassword: { type: "text", label: "Password (empty = public)" },
+            sticky: {
+                type: "radio",
+                label: "Stick to the top of the blog",
+                options: [
+                    { label: "Yes", value: "1" },
+                    { label: "No", value: "0" }
+                ]
+            },
             // Per-page theme template (persisted as the post's `_wjs_template` meta; '' = hierarchy).
             _wjs_template: {
                 type: "custom",
@@ -2660,6 +2670,7 @@ export const pageConfig: any = {
         fields: {
             title: { type: "text", label: "Title" },
             slug: { type: "text", label: "Slug (Permalink)" },
+            visibilityPassword: { type: "text", label: "Password (empty = public)" },
             // Per-page theme template (persisted as the page's `_wjs_template` meta; '' = hierarchy).
             _wjs_template: {
                 type: "custom",

@@ -994,7 +994,153 @@ const MIGRATIONS: Migration[] = [
             const copied = await require('./legacy-account-flags').migrateLegacyFlags(ctx);
             if (copied) log.info(`   ✓ [migration 0019] ${copied} legacy per-account grant(s) moved to account capabilities`);
         }
+    },
+    {
+        // MySQL/MariaDB: the email and slug uniqueness that 0001 could not express there (no expression
+        // or partial indexes) — generated key columns + UNIQUE, see core/mysql-unique-keys.ts. Never throws.
+        id: '0020_mysql_unique_email_slug',
+        up: async (ctx: MigrationCtx) => {
+            if (ctx.driverName !== 'mysql' && ctx.driverName !== 'mariadb') return;
+            const { created, skipped } = await require('./mysql-unique-keys').ensureMysqlUniqueKeys(ctx);
+            if (created.length) log.info(`   ✓ [migration 0020] unique index(es) ${created.join(', ')} created`);
+            if (skipped.length) log.warn(`   ⚠️  [migration 0020] unique index(es) ${skipped.join(', ')} not created (see the lines above)`);
+        }
+    },
+    {
+        // Postgres SEARCH, language-neutral. 0010 indexed posts with the 'english' configuration: English
+        // stemming and stopwords for every site ("About" found nothing, Spanish words were cut by English
+        // rules) and no accent folding ("cancion" never found "canción"), while SQLite's FTS5 (unicode61)
+        // and MySQL fold accents and keep every word. This rebuilds search_vector with an own configuration,
+        // `wordjs_search` = `simple` (no stemming, no stopwords) + `unaccent`, the same behaviour as FTS5.
+        // Each step degrades instead of failing the boot: without the unaccent extension (it needs the
+        // CREATE privilege on the database) the configuration is plain `simple`; without the right to
+        // create a configuration in the schema, search_vector uses the built-in `simple` itself.
+        id: '0021_pg_search_unaccent_simple',
+        up: async (ctx: MigrationCtx) => {
+            if (!ctx.isPostgres) return;
+            const config = await ensurePgSearchConfig(ctx);
+            const col = await ctx.get(
+                `SELECT generation_expression AS g FROM information_schema.columns ` +
+                `WHERE table_schema = current_schema() AND table_name = 'posts' AND column_name = 'search_vector'`
+            );
+            if (col && String(col.g || '').includes(`'${config}'`)) return;
+            await ctx.exec('DROP INDEX IF EXISTS idx_posts_search_vector');
+            await ctx.exec('ALTER TABLE posts DROP COLUMN IF EXISTS search_vector');
+            await ctx.exec(
+                `ALTER TABLE posts ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (` +
+                `to_tsvector('${config}', coalesce(post_title, '') || ' ' || coalesce(post_content, '') || ' ' || coalesce(post_excerpt, ''))` +
+                `) STORED`
+            );
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_posts_search_vector ON posts USING GIN (search_vector)');
+            log.info(`   ✓ [migration 0021] Postgres search rebuilt with the '${config}' text search configuration`);
+        }
+    },
+    {
+        // Postgres: TEXT date columns that default to CURRENT_TIMESTAMP stored Postgres's own text form,
+        // `2026-10-21 11:19:18.683525+00` (the installer's sample content, menu items…), next to the
+        // `YYYY-MM-DD HH:MM:SS` UTC every other row and engine has. New tables get the UTC default from the
+        // driver (drivers/postgres.ts PG_TEXT_NOW); this moves the existing defaults and rewrites the
+        // rows already written in the other form to the same UTC value.
+        id: '0022_pg_text_timestamp_format',
+        up: async (ctx: MigrationCtx) => {
+            if (!ctx.isPostgres) return;
+            const { PG_TEXT_NOW } = require('../drivers/postgres');
+            const cols = (await ctx.all(
+                `SELECT table_name AS t, column_name AS c FROM information_schema.columns ` +
+                `WHERE table_schema = current_schema() AND data_type IN ('text', 'character varying') ` +
+                `AND column_default ILIKE '%current_timestamp%'`
+            )) || [];
+            const ident = /^[a-z_][a-z0-9_]*$/;
+            let fixed = 0;
+            for (const { t, c } of cols) {
+                if (!ident.test(String(t)) || !ident.test(String(c))) continue;
+                await ctx.exec(`ALTER TABLE "${t}" ALTER COLUMN "${c}" SET DEFAULT ${PG_TEXT_NOW}`);
+                // No question mark in this SQL: the drivers turn every `?` into a placeholder.
+                const r = await ctx.run(
+                    `UPDATE "${t}" SET "${c}" = to_char(("${c}")::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') ` +
+                    `WHERE "${c}" ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+){0,1}[+-][0-9]{2}(:{0,1}[0-9]{2}){0,1}$'`
+                );
+                fixed += (r && r.changes) || 0;
+            }
+            if (cols.length) log.info(`   ✓ [migration 0022] ${cols.length} Postgres date column default(s) set to UTC 'YYYY-MM-DD HH:MM:SS'; ${fixed} row value(s) rewritten`);
+        }
+    },
+    {
+        // A term's slug is unique site-wide by the application's rule (models/Term.generateUniqueSlug);
+        // the database now holds it too, so two requests creating the same tag at once leave ONE tag on
+        // every engine (QA S3-12: Postgres and MySQL kept all of them). MySQL gets it as a generated key
+        // column (core/mysql-unique-keys). Duplicates already stored are listed and the index waits.
+        id: '0023_terms_unique_slug',
+        up: async (ctx: MigrationCtx) => {
+            if (ctx.driverName === 'mysql' || ctx.driverName === 'mariadb') {
+                await require('./mysql-unique-keys').ensureMysqlUniqueKeys(ctx);
+                return;
+            }
+            const dups = (await ctx.all("SELECT slug AS k, COUNT(*) AS c FROM terms WHERE slug <> '' GROUP BY slug HAVING COUNT(*) > 1")) || [];
+            if (dups.length) {
+                log.warn(`⚠️  [migration 0023] ${dups.length} term slug(s) appear more than once; the unique index waits until they are resolved: ${dups.slice(0, 20).map((d: any) => d.k).join(', ')}`);
+                return;
+            }
+            try {
+                await ctx.exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_terms_slug ON terms (slug) WHERE slug <> ''");
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️  [migration 0023] could not create the unique index on terms.slug');
+            }
+        }
     }
+];
+
+/**
+ * The text search configuration Postgres search uses (migration 0021): `wordjs_search` in this schema —
+ * `simple` plus the `unaccent` dictionary when the extension can be had — or the built-in `simple`.
+ */
+async function ensurePgSearchConfig(ctx: MigrationCtx): Promise<string> {
+    let unaccentSchema: string | null = null;
+    try {
+        // In `public`, never in the schema of the pool running this (a site of a network): deleting that
+        // site drops its schema with CASCADE, which would take the extension — and every other site's
+        // search configuration built on it — along.
+        await ctx.exec('CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public');
+    } catch (e: any) {
+        log.warn(`   ⚠️  [migration 0021] the unaccent extension could not be enabled (${e && e.message}); search will not fold accents`);
+    }
+    try {
+        const ext = await ctx.get(
+            `SELECT n.nspname AS s FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'unaccent'`
+        );
+        if (ext && /^[a-z_][a-z0-9_]*$/.test(String(ext.s))) unaccentSchema = String(ext.s);
+    } catch { /* no catalog access: no unaccent */ }
+    try {
+        const existing = await ctx.get(
+            `SELECT 1 AS ok FROM pg_ts_config WHERE cfgname = 'wordjs_search' AND cfgnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())`
+        );
+        if (!existing) await ctx.exec('CREATE TEXT SEARCH CONFIGURATION wordjs_search (COPY = pg_catalog.simple)');
+        if (unaccentSchema) {
+            await ctx.exec(
+                `ALTER TEXT SEARCH CONFIGURATION wordjs_search ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part ` +
+                `WITH "${unaccentSchema}".unaccent, pg_catalog.simple`
+            );
+        }
+        return 'wordjs_search';
+    } catch (e: any) {
+        log.warn(`   ⚠️  [migration 0021] could not create the wordjs_search configuration (${e && e.message}); using 'simple'`);
+        return 'simple';
+    }
+}
+
+/**
+ * Migrations that build a structure of ONE engine (search index, unique indexes). An engine switch
+ * (core/db-admin/migration) copies the source's `schema_migrations` rows, which only say they ran on the
+ * SOURCE engine, so it clears these ids on the target and runs them again with the target's driver.
+ */
+const ENGINE_SPECIFIC_MIGRATIONS = [
+    '0001_unique_constraints_users_posts',
+    '0008_posts_fts5',
+    '0010_posts_fts_pg_mysql',
+    '0020_mysql_unique_email_slug',
+    '0021_pg_search_unaccent_simple',
+    '0022_pg_text_timestamp_format',
+    '0023_terms_unique_slug',
 ];
 
 async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string, migrations: Migration[] = MIGRATIONS): Promise<void> {
@@ -1042,4 +1188,4 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
 
 // MIGRATIONS is exported so a suite can drive a SINGLE migration against a throwaway database (and so
 // the runner contract test can keep using its own synthetic list). Never mutate it.
-module.exports = { runSchemaMigrations, MIGRATIONS };
+module.exports = { runSchemaMigrations, MIGRATIONS, ENGINE_SPECIFIC_MIGRATIONS };

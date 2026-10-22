@@ -441,6 +441,13 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
         if (!knownLocaleTag(v)) return `WPLANG "${v}" is not a known language.`;
         return null;
     },
+    // The site's time zone (IANA name, e.g. "Europe/Madrid"): the public site prints dates in it.
+    timezone_string: (v: any) => {
+        if (v === '' || v === null || v === undefined) return null; // unset → UTC
+        if (typeof v !== 'string' || v.length > 64) return 'timezone_string must be an IANA time zone like "Europe/Madrid".';
+        try { new Intl.DateTimeFormat('en', { timeZone: v }); } catch { return 'timezone_string must be an IANA time zone like "Europe/Madrid".'; }
+        return null;
+    },
     site_text_direction: (v: any) => {
         const s = v === null || v === undefined ? '' : v;
         if (typeof s !== 'string' || !TEXT_DIRECTIONS.includes(s)) {

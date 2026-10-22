@@ -78,7 +78,9 @@ describe('shortcodes: unchanged output for valid content', () => {
     });
 
     it('doShortcodeAsync matches doShortcode and awaits async handlers', async () => {
-        const body = 'p [gallery ids="1"] q [caption]c[/caption] r [audio src="https://e.x/a.mp3"]';
+        // [gallery] is the one core tag whose ASYNC form differs on purpose: it renders the images
+        // (wxr-import-qa-fidelity.test.ts), while the sync form keeps its placeholder.
+        const body = 'p q [caption]c[/caption] r [audio src="https://e.x/a.mp3"]';
         assert.strictEqual(await doShortcodeAsync(body), doShortcode(body));
         addShortcode('lin_async', async (a: any, c: string) => `<${a.v}:${c}>`);
         try {

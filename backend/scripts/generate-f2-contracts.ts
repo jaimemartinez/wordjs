@@ -90,7 +90,9 @@ function generatedMutationDtos(schemas: Schema[]): string[] {
                 lines.push('    meta?: Record<string, unknown>;');
             }
             lines.push('    categories?: number[];', '    tags?: number[];');
-            if (operation === 'Update') lines.push('    autosave?: boolean;');
+            // Visibility and front-page placement (WordPress post_password / sticky): '' or null clears the password.
+            lines.push('    password?: string | null;', '    sticky?: boolean;');
+            if (operation === 'Update') lines.push('    autosave?: boolean;', '    expectedModified?: string;');
             lines.push('}', '');
         }
     }
@@ -122,7 +124,8 @@ function generatedMutationDtos(schemas: Schema[]): string[] {
             lines.push(`    ${propertyName(wireName)}${required ? '' : '?'}: ${[...info.types].sort().join(' | ')}${nullable};`);
         }
         lines.push('    categories?: number[];', '    tags?: number[];', '    meta?: Record<string, unknown>;');
-        if (operation === 'Update') lines.push('    autosave?: boolean;');
+        lines.push('    password?: string | null;', '    sticky?: boolean;');
+        if (operation === 'Update') lines.push('    autosave?: boolean;', '    expectedModified?: string;');
         lines.push('}', '');
     }
     lines.push(
@@ -191,6 +194,10 @@ function commonPrefix(schemas: Schema[]): string[] {
         // Password protection (WordPress REST content.protected). For a caller who cannot edit the
         // entry, content/excerpt/meta._puck_data arrive empty when this is true.
         '    protected?: boolean;',
+        // The entry's password — only for a caller who manages it.
+        '    password?: string;',
+        // Stuck to the top of the front page (WordPress sticky posts, option `sticky_posts`).
+        '    sticky?: boolean;',
         // Members-only content (core/content-access). Present only on a gated entry: the level it requires
         // and whether THIS caller reads it in full; when not, content/excerpt/meta._puck_data are its teaser.
         '    access?: { level: string; gated: boolean; granted: boolean };',
@@ -218,6 +225,7 @@ function renderBackend(schemas: Schema[]): string {
         '    order?: string;',
         '    categories?: string;',
         '    tags?: string;',
+        '    sticky?: string;',
         '}',
         '',
         'export type Post = ContentRecord;',

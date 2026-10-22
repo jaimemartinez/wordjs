@@ -12,7 +12,8 @@ const { resolveWithin } = require('./safe-path');
 const { exportSite, importSite } = require('./import-export');
 const config = require('../config/app');
 const { getOption } = require('./options');
-const { captureDump, restoreDump, dumpEntryName, usesExternalDump } = require('./db-dump');
+const { captureDump, restoreDump, dumpEntryName, usesExternalDump, isToolAvailable } = require('./db-dump');
+const { PORTABLE_ENTRY, capturePortableDump, restorePortableDump } = require('./portable-dump');
 const { offloadBackup } = require('./s3-offload');
 const { logSafe } = require('./log-safe');
 const log = require('./module-logger').moduleLogger('core/backup');
@@ -288,11 +289,22 @@ async function createBackup() {
         }
     } else if (usesExternalDump(driver)) {
         // Postgres / MySQL: the logical JSON export OMITS analytics / notifications / plugin tables /
-        // schema_migrations, so a backup without a real pg_dump/mysqldump is a SILENT DATA-LOSS TRAP.
-        // captureDump FAILS LOUD when the tool is missing — do NOT swallow it (that would ship an
-        // incomplete archive that looks complete). Any error here aborts the backup.
+        // schema_migrations, so the archive must carry a COMPLETE dump of the database. The vendor tool
+        // (pg_dump / mysqldump) when this host has it; otherwise WordJS's own portable dump of every table
+        // (core/portable-dump.ts), so a host without the client tools still gets working backups, from
+        // the panel and on schedule, instead of a failure only a package install could fix. Any error
+        // here aborts the backup — an archive without the database is never shipped as complete.
         const entry = dumpEntryName(driver);
-        if (entry) {
+        const vendorTool = driver === 'postgres' ? 'pg_dump' : 'mysqldump';
+        if (entry && !(await isToolAvailable(vendorTool))) {
+            await withPrivateTempDir('wordjs-dbdump-', async (tmpDir) => {
+                const tmpDump = path.join(tmpDir, PORTABLE_ENTRY);
+                const db = require('../config/database').getDbAsync();
+                const stats = await capturePortableDump(tmpDump, { driver, db });
+                zip.addLocalFile(tmpDump, 'database', PORTABLE_ENTRY);
+                log.info(`   ✓ Added portable database dump (database/${PORTABLE_ENTRY}: ${stats.tables} tables, ${stats.rows} rows); \`${vendorTool}\` is not installed on this host.`);
+            });
+        } else if (entry) {
             await withPrivateTempDir('wordjs-dbdump-', async (tmpDir) => {
                 const tmpDump = path.join(tmpDir, safeDumpFileName(entry));
                 await captureDump(driver, tmpDump, await dumpConfigForCurrentSite(driver));
@@ -670,7 +682,18 @@ async function restoreBackup(filename: string) {
         //      falls through to the logical path below — backward compatible.
         const entryName = dumpEntryName(dbType.driver);
         const dumpEntry = entryName ? zip.getEntry('database/' + entryName) : null;
-        if (entryName && dumpEntry) {
+        const portableEntry = zip.getEntry('database/' + PORTABLE_ENTRY);
+        if (!dumpEntry && portableEntry) {
+            // WordJS's own dump (made where pg_dump / mysqldump were not installed): every row of every
+            // table back in one transaction, all or nothing. Needs no tool on this host either.
+            await withPrivateTempDir('wordjs-dbrestore-', async (tmpDir) => {
+                const tmp = path.join(tmpDir, PORTABLE_ENTRY);
+                fs.writeFileSync(tmp, portableEntry.getData(), { mode: 0o600 });
+                const stats = await restorePortableDump(tmp, { driver: dbType.driver, db: dbModule.getDbAsync() });
+                physicalRestored = true;
+                log.info(`   ✓ Portable database dump restored (${stats.tables} tables, ${stats.rows} rows).`);
+            });
+        } else if (entryName && dumpEntry) {
             await withPrivateTempDir('wordjs-dbrestore-', async (tmpDir) => {
                 const tmp = path.join(tmpDir, safeDumpFileName(entryName));
                 // mode 0600 as well as the 0700 directory: defence in depth if the platform ever

@@ -65,6 +65,8 @@ const FIELD_STRINGS: Tri[] = [
     { es: "Alinear elementos", en: "Align Items", pt: "Alinhar itens" },
     { es: "Alineación", en: "Alignment", pt: "Alinhamento" },
     { es: "Permitir comentarios", en: "Allow Comments", pt: "Permitir comentários" },
+    { es: "Contraseña (vacía = pública)", en: "Password (empty = public)", pt: "Senha (vazia = pública)" },
+    { es: "Fijar arriba en la portada", en: "Stick to the top of the blog", pt: "Fixar no topo do blog" },
     { es: "Altura", en: "Height", pt: "Altura" },
     { es: "Relación de aspecto", en: "Aspect Ratio", pt: "Proporção" },
     { es: "URL de audio", en: "Audio URL", pt: "URL do áudio" },

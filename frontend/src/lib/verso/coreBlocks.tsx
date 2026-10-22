@@ -2052,6 +2052,17 @@ export const rootFieldsPost: Record<string, VersoField> = {
             { label: "No", value: "closed" },
         ],
     },
+    // Visibilidad «protegida con contraseña» (columna post_password) y «fijar arriba» (opción
+    // sticky_posts). El REGISTRO manda: se siembran al cargar y se guardan solo si cambian.
+    visibilityPassword: { type: "text", label: "Password (empty = public)" },
+    sticky: {
+        type: "radio",
+        label: "Stick to the top of the blog",
+        options: [
+            { label: "Yes", value: "1" },
+            { label: "No", value: "0" },
+        ],
+    },
     // Plantilla de tema por página (meta `_wjs_template`; '' = jerarquía normal).
     _wjs_template: {
         type: "custom",
@@ -2086,6 +2097,7 @@ export const rootFieldsPost: Record<string, VersoField> = {
 export const rootFieldsPage: Record<string, VersoField> = {
     title: { type: "text", label: "Title" },
     slug: { type: "text", label: "Slug (Permalink)" },
+    visibilityPassword: { type: "text", label: "Password (empty = public)" },
     _wjs_template: {
         type: "custom",
         label: "Theme template",

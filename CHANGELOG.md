@@ -1118,6 +1118,85 @@ the boot error links there too.
   links the REST reference and the GraphQL endpoint and has the GraphQL introspection switch; AI agents
   keeps a refused «Create connection» on screen with its reason, and an agent's refused SVG upload says why.
 
+- **PostgreSQL: a dropped database connection no longer stops WordJS.** When the server closed a pooled
+  connection (a restart or failover of the database, pgbouncer or a firewall recycling idle connections,
+  `pg_terminate_backend`), the pool's unhandled `'error'` event ended the whole process. The pool now
+  discards the connection and opens a new one, and a read that lost its connection is retried once. The
+  backend supervisor (`backend/server.js`) no longer gives up after five fast crashes: it backs off (1 s up to
+  30 s) and keeps restarting. A deadlock victim is run again on MySQL (`ER_LOCK_DEADLOCK`) and Postgres
+  (`40P01`) instead of failing the request, so concurrent meta writes on one post are no longer lost.
+- **A cancelled request no longer stops the server.** When a client closed its connection mid-request,
+  Node could report the abort (`Error: aborted`, `ECONNRESET`) as an uncaught exception, and WordJS exited:
+  in development every fresh install of the monolith died right after setup (its own cache purge gave up on
+  a page Next was still compiling), and a reload during a compile did the same. Every listener of the
+  monolith, the backend, the frontend server and the gateway workers now gives each request a permanent
+  handler for that error, and the last-resort crash handlers log a client abort instead of exiting (any other
+  uncaught exception still restarts the process).
+- **`npm run verify:f0` works on a multisite install.** It loaded the OpenAPI document outside any site
+  and stopped with `site_context_missing`; it now loads it as site 1, as the server does at boot.
+- **Switching the database engine from the panel works.** From a SQLite-native site, *Database migration*
+  sent the SQLite search index (`CREATE VIRTUAL TABLE … fts5`) to the target and always failed; to
+  PostgreSQL with an ordinary role it failed on `session_replication_role` ("current transaction is
+  aborted"); and when a copy did finish, the restart read the flat `dbPassword` generated for the SQLite
+  install instead of the new password and the site could not start. The index tables are no longer copied
+  (the target builds its own search index and unique keys), generated columns are recomputed by the target,
+  the foreign-key switch is tried in a savepoint, Postgres sequences are moved past the copied ids, and the
+  new connection is written where the next boot reads it and opened before the restart — settings that would
+  not connect are not written and the site stays on its current database. Between PostgreSQL and MySQL,
+  timestamps and 64-bit values cross over, and the core's own tables are built by the target's migrations
+  with their keys (a bare column copy lost them, and the first post written afterwards failed). A refused
+  target answers `400` and the status reads `failed`; the progress bar no longer stays frozen during the
+  restart, and the screen no longer overflows at 1024 px. A legacy → native move now builds the FTS5 index.
+- **Posts over 64 K characters can be saved.** Creating one answered `500`, and a post that grew past the
+  limit (or was imported that way) could no longer be edited at all ("Could not snapshot the current
+  version"): the revision snapshot bounded the post's content, which it does not even store.
+- **MySQL/MariaDB enforce unique emails and slugs.** The expression and partial indexes the other engines use
+  do not exist there and failed with only a warning, so concurrent sign-ups or posts could create the same
+  email or slug several times. Generated key columns with UNIQUE indexes (migration `0020`) hold both rules
+  now; existing duplicates are listed in the log. Two posts created at once with one title get distinct
+  slugs on every engine (the second used to fail with `500` on Postgres).
+- **Backups of PostgreSQL and MySQL work without `pg_dump` / `mysqldump`.** Every backup failed with
+  "internal error" on a host without the client tools, scheduled ones included. WordJS now writes its own
+  dump of every table when the tool is missing and restores it in one transaction; the panel shows the reason
+  when a backup fails, and Site Health says which kind of dump backups carry.
+- **PostgreSQL search finds words in any language and ignores accents.** It used the English configuration
+  for every site ("About" found nothing, "cancion" did not find "canción"); it now uses `simple` + `unaccent`
+  (migration `0021`), with a prefix match on the last word like SQLite. The installer refuses a database
+  that is not UTF8 (search and case rules break on `SQL_ASCII`), and Site Health warns about one.
+- **Same answers on every database engine.** Dates that took a column default on PostgreSQL read
+  `2026-10-21 11:19:18.683525+00` instead of `YYYY-MM-DD HH:MM:SS` (migration `0022` rewrites them); a search
+  for `%` or `_` returned every post on MySQL and sqlite-legacy; the user search was case-sensitive on
+  PostgreSQL; MySQL treated "Café"/"cafe" and even different emoji as the same term; an invalid post date
+  (`not-a-date`, `2025-02-30`) became "now" or rolled into the next month instead of a `400`. A term with the same
+  name under another parent, or with its own slug from a WordPress import, is no longer dropped as a
+  duplicate. The installer's *Test connection* says which field to check, and SQLite database files are
+  created owner-only.
+
+- **WordPress import: a failed media download no longer breaks the image.** In download mode every
+  `/wp-content/uploads/` URL was rewritten to this install's `/uploads/`, including the files that could
+  not be downloaded, which turned working images into 404s (and a later run that did download them skipped
+  the posts already imported). Attachments are now imported before the posts that embed them, a URL is
+  rewritten only when its file is here (WordPress's `-WxH` sizes follow their original), and a re-run moves
+  the references of posts imported earlier once their files are stored.
+
+- **WordPress import: nothing the export carries is dropped.** A page whose address belongs to unrelated
+  content of this site (the sample "About") is imported under another address instead of being discarded
+  with its children re-hung on the sample page; a re-run still recognises it. Sticky posts stay sticky, and
+  the front page lists them first. `[gallery]` shows the post's images instead of nothing. A
+  password-protected post can be unlocked by its readers with its password, and the post and page editors
+  show and change the password. In link mode the featured image and `og:image` point at the old site's
+  file and an attachment without a MIME type is typed by its extension. A WordPress on a private network
+  (LAN, intranet, staging) can provide its media with an explicit opt-in that covers that site only; the
+  refusal no longer talks about "plugins". Imported dates use the same clock as the site's own posts.
+- **Edits, searches and orderings that depended on the engine.** Two editors saving one post that has no
+  live session no longer overwrite each other silently: the second save asks first. The same tag created
+  twice at once is one tag on every engine, and concurrent saves no longer leave more revisions than the
+  cap. On sqlite-native the LIKE search (users, and posts when the full-text index cannot answer)
+  ignores case and accents in any language; title order ignores case, and accents where the engine can. `og:article:published_time` and JSON-LD
+  `datePublished` are ISO 8601. Settings → General has a Time zone, and the public site prints dates in
+  it. The installer explains what the legacy SQLite engine costs. In split mode, a second install on the
+  same host uses its own ports before it is set up instead of the first install's.
+
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL
   certificates and automatic renewal included) had their copy hard-coded in English or Spanish; it now comes

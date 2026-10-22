@@ -13,6 +13,24 @@ import type {
 
 const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/posts');
+/**
+ * A post date the API cannot take as it is: unparseable ("not-a-date" became "now"), or a calendar day
+ * that does not exist ("2025-02-30" was rolled over to March 2nd). Absent or empty means "now/unchanged".
+ */
+function isInvalidPostDate(value: any): boolean {
+    if (value === undefined || value === null || value === '') return false;
+    if (typeof value !== 'string' && typeof value !== 'number') return true;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return true;
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+    if (m) {
+        const [y, mo, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+        const probe = new Date(Date.UTC(y, mo - 1, day));
+        if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== day) return true;
+    }
+    return false;
+}
+
 const router = express.Router();
 
 interface ContentRouteUser {
@@ -427,6 +445,8 @@ router.param('id', requireRouteId(NOT_FOUND));
 /** Body fields of POST /posts and PUT /posts/:id that are STRINGS (or absent). */
 const POST_BODY_STRING_FIELDS: readonly string[] = Object.freeze([
     'title', 'content', 'excerpt', 'status', 'type', 'slug', 'comment_status', 'date', 'language',
+    // The entry password (null or an empty string clears it) and the version stamp of the edit-conflict check.
+    'password', 'expectedModified',
 ]);
 
 /**
@@ -440,9 +460,10 @@ const POST_BODY_STRING_FIELDS: readonly string[] = Object.freeze([
  *   · translationId       — POST /posts/:id/translations only; parseInt + `!otherId` rejects the rest.
  *   · key / value         — POST /posts/:id/meta; `key` goes through metaKeyProblem, `value` may be
  *                           any JSON shape (sanitizeMetaValue walks it).
+ *   · sticky              — a boolean; applied only when `typeof sticky === 'boolean'`.
  */
 const POST_BODY_NON_STRING_FIELDS: readonly string[] = Object.freeze([
-    'parent', 'menu_order', 'categories', 'tags', 'meta', 'autosave', 'translationId', 'key', 'value',
+    'parent', 'menu_order', 'categories', 'tags', 'meta', 'autosave', 'translationId', 'key', 'value', 'sticky',
 ]);
 
 /**
@@ -456,7 +477,7 @@ const POST_BODY_NON_STRING_FIELDS: readonly string[] = Object.freeze([
  * back is a value whose shape has to be settled first, like every other one here.
  */
 const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
-    'page', 'per_page', 'status', 'type', 'search', 'orderby', 'order', 'author', 'categories', 'tags',
+    'page', 'per_page', 'status', 'type', 'search', 'orderby', 'order', 'author', 'categories', 'tags', 'sticky',
 ]);
 
 /**
@@ -629,6 +650,9 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
         json.translations = await visibleTranslationRefs(json.translations, user);
     }
     json.protected = isPasswordProtected(post);
+    json.sticky = post.postType === 'post' && await require('../core/sticky-posts').isSticky(post.id);
+    // The password itself only to who manages the entry (the editor shows and changes it there).
+    if (canManagePostRecord(user, post)) json.password = post.postPassword || '';
     if (!canManagePostRecord(user, post)) {
         json.meta = publicPostMeta(json.meta);
         if (json.protected) {
@@ -829,8 +853,12 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         orderby = 'date',
         order = 'desc',
         categories,
-        tags
+        tags,
+        sticky
     } = req.query;
+    // WordPress's `sticky` filter: `true` lists only the stuck posts, `false` everything else.
+    const stickyIds = sticky === 'true' || sticky === 'false' ? await require('../core/sticky-posts').getStickyIds() : null;
+    const stickyFilter = stickyIds ? (sticky === 'true' ? { includeIds: stickyIds } : { excludeIds: stickyIds }) : {};
 
     // THE THREE FILTERS THE DOCUMENTATION HAS ALWAYS PROMISED, PARSED ONCE.
     //
@@ -994,6 +1022,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         search,
         searchProtectedVisibleTo,
         attachmentViewer,
+        ...stickyFilter,
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'post_date',
@@ -1012,7 +1041,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         tags: tagsFilter,
         search,
         searchProtectedVisibleTo,
-        attachmentViewer
+        attachmentViewer,
+        ...stickyFilter
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -1187,6 +1217,84 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequ
     res.json(await serializeVisibleContent(post, req.user));
 }));
 
+// Ten tries per address per entry every 15 minutes: enough for a reader who mistypes, too few to guess.
+const unlockLimiter = require('express-rate-limit')({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request<Partial<IdParams>>) => `${require('../core/client-ip').clientIpBucket(req)}:${String(req.params.id || '')}`,
+    message: { code: 'rest_post_unlock_rate_limited', message: 'Too many attempts. Try again later.', data: { status: 429 } },
+});
+
+/**
+ * @swagger
+ * /posts/{id}/unlock:
+ *   post:
+ *     summary: Read a password-protected entry with its password
+ *     description: >-
+ *       WordPress's "password protected" visibility. With the entry's password, answers the entry as its
+ *       readers see it (content, excerpt and page-builder tree included); members-only rules still apply.
+ *       A wrong password is 403 rest_post_incorrect_password; 10 attempts per address and entry per 15 minutes.
+ *     tags: [Posts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [password]
+ *             properties:
+ *               password: { type: string }
+ *     responses:
+ *       200:
+ *         description: The entry, unlocked.
+ *       403:
+ *         description: Wrong password.
+ *       404:
+ *         description: No such readable, password-protected entry.
+ *       429:
+ *         description: Too many attempts.
+ */
+/**
+ * An entry password (WordPress `post_password`) is stored as the author typed it, so the comparison is
+ * the only thing to get right: constant time over the raw bytes. Both are zero-padded to the longer
+ * length for timingSafeEqual, and the lengths must match as well (a padded prefix is not the password).
+ */
+function unlockPasswordMatches(given: string, stored: string): boolean {
+    const a = Buffer.from(given, 'utf8');
+    const b = Buffer.from(stored, 'utf8');
+    const n = Math.max(a.length, b.length, 1);
+    const pa = Buffer.alloc(n);
+    const pb = Buffer.alloc(n);
+    a.copy(pa);
+    b.copy(pb);
+    const same = require('crypto').timingSafeEqual(pa, pb);
+    return same && a.length === b.length;
+}
+
+interface UnlockBody { password?: unknown }
+
+router.post('/:id/unlock', unlockLimiter, optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams, UnlockBody>, res: Response) => {
+    const post = await Post.findById(parseInt(req.params.id, 10));
+    if (!post || isHiddenFromRest(post) || !isPasswordProtected(post) || !(await canReadThroughRest(req.user, post))) {
+        return res.status(404).json(NOT_FOUND);
+    }
+    const given = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!given || !unlockPasswordMatches(given, String(post.postPassword))) {
+        return res.status(403).json({ code: 'rest_post_incorrect_password', message: 'Incorrect password.', data: { status: 403 } });
+    }
+    const json = await post.toJSON(true, req.user);
+    json.protected = true;
+    if (!canManagePostRecord(req.user, post)) json.meta = publicPostMeta(json.meta);
+    res.json(json);
+}));
+
 /**
  * @swagger
  * /posts:
@@ -1244,7 +1352,9 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
         tags,
         meta,
         date,
-        language
+        language,
+        password,
+        sticky
     } = req.body;
 
     if (!title) {
@@ -1348,6 +1458,7 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
     // date is the ONLY thing that schedules: the model resolves a future date into 'future' by itself.
     // A caller who may not publish may not choose WHEN the post goes live either, so the date is
     // dropped rather than forwarded (absent → the model stamps "now", the same as any plain draft).
+    if (isInvalidPostDate(date)) return invalidParamValue(res, 'date', 'Not a valid date (use ISO 8601, e.g. 2026-10-21T10:00:00Z).');
     const requestedDate = mayPublish ? date : undefined;
 
     // Validate/sanitize the complete bag BEFORE Post.create. A rejected `_puck_data` tree must not
@@ -1381,8 +1492,13 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
             commentStatus: comment_status,
             date: requestedDate,
             // MULTILINGUAL (opt-in): the model canonicalizes a BCP-47 tag, or stores NULL. Absent → NULL.
-            language
+            language,
+            password: typeof password === 'string' ? password : undefined
         });
+        // Sticking a post to the front page is a publishing decision (WordPress: publish_posts).
+        if (typeof sticky === 'boolean' && mayPublish && createType === 'post') {
+            await require('../core/sticky-posts').setSticky(created.id, sticky);
+        }
 
         const createCategories = await categoriesToStore(createType, categories, true);
         if (createCategories) {
@@ -1509,8 +1625,24 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
         meta,
         autosave,
         date,
-        language
+        language,
+        password,
+        sticky,
+        expectedModified
     } = req.body;
+
+    // OPTIMISTIC CONCURRENCY for an editor with no live session (an entry without a stored Verso
+    // document — everything imported or created through the API): it sends the `modified` it loaded,
+    // and a save over a newer version is refused instead of silently replacing it (QA S3-08: the last
+    // "Publish" of two tabs won, with no warning). Absent → the write goes through, as before.
+    if (typeof expectedModified === 'string' && expectedModified
+        && String(post.postModified || '').slice(0, 19) !== expectedModified.slice(0, 19)) {
+        return res.status(409).json({
+            code: 'rest_post_conflict',
+            message: 'This entry was changed by someone else after you opened it.',
+            data: { status: 409, modified: post.postModified }
+        });
+    }
 
     // Re-parenting takes the PARENT's edit gate too, exactly as creation does — the twin surface of the
     // same write. Without it, `parent` is a way to graft a post under a record you cannot touch.
@@ -1569,6 +1701,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     // Hence the test is the CAPABILITY, not the shape of the request: no publish cap → no date. Absent
     // is not empty here (Post.update only touches the date columns when the key arrives non-empty), so
     // dropping it leaves the stored date exactly as it was.
+    if (isInvalidPostDate(date)) return invalidParamValue(res, 'date', 'Not a valid date (use ISO 8601, e.g. 2026-10-21T10:00:00Z).');
     const requestedDate = mayPublish ? date : undefined;
 
     // The metadata belongs to this same logical write. Sanitize it before the recovery snapshot and
@@ -1639,8 +1772,12 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
                 menuOrder: menuOrderProvided ? newMenuOrder : undefined,
                 commentStatus: comment_status,
                 date: requestedDate,
-                language
+                language,
+                password: typeof password === 'string' || password === null ? password : undefined
             });
+            if (typeof sticky === 'boolean' && mayPublish && post.postType === 'post') {
+                await require('../core/sticky-posts').setSticky(postId, sticky);
+            }
 
             const updateCategories = await categoriesToStore(post.postType || post.type, categories, false);
             if (updateCategories) {
@@ -2398,3 +2535,4 @@ router.delete('/:id/translations', authenticate, asyncHandler(async (req: Authen
 }));
 
 module.exports = router;
+module.exports.isInvalidPostDate = isInvalidPostDate;

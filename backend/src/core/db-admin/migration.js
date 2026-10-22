@@ -63,7 +63,10 @@ const escLit = (s) => String(s).replace(/'/g, "''"); // escape a value into a si
 // → JSON, boolean → 0/1. Strings pass through unchanged — the migration REFUSES a lossy (non-UTF8)
 // target up-front (see runMigration) rather than silently substituting characters here.
 const sanitizeValue = (val) => {
-    if (val instanceof Date) return val.toISOString();
+    // A Postgres TIMESTAMP comes back from `pg` as a Date (parsed in local time). Written back as
+    // `YYYY-MM-DD HH:MM:SS.mmm` in the same local time — every engine takes that, while MySQL's strict
+    // mode refuses an ISO `…T…Z` string, which made every Postgres → MySQL switch fail.
+    if (val instanceof Date) return require('../portable-dump').localTimestamp(val);
     if (val !== null && typeof val === 'object' && !Buffer.isBuffer(val)) return JSON.stringify(val);
     if (typeof val === 'boolean') return val ? 1 : 0;
     return val;
@@ -79,9 +82,64 @@ async function listSourceTables(readAll, sourceDriverName) {
     } else if (sourceDriverName === 'mysql') {
         rows = await readAll("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'");
     } else {
-        rows = await readAll("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+        rows = await readAll("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+        // A SQLite VIRTUAL table (the FTS5 search index `posts_fts`) and the shadow tables that back it
+        // (`posts_fts_data`, `_idx`, `_content`, `_docsize`, `_config`) are not data: they are an index
+        // the target engine builds its own way (FTS5 on SQLite, a tsvector on Postgres, FULLTEXT on
+        // MySQL — see rebuildEngineSpecificSchema). Copying them sent `CREATE VIRTUAL TABLE … USING fts5`
+        // to Postgres/MySQL, so no SQLite-native site could ever switch engine.
+        const virtualTables = rows.filter((r) => /^\s*CREATE\s+VIRTUAL\s+TABLE\b/i.test(String(r.sql || ''))).map((r) => r.name);
+        const isIndexTable = (name) => virtualTables.some((v) => name === v || SQLITE_SHADOW_SUFFIXES.some((sfx) => name === v + sfx));
+        rows = rows.filter((r) => !isIndexTable(r.name));
     }
     return rows.map((r) => r.name || r.NAME || r.table_name).filter((n) => typeof n === 'string' && n.length > 0);
+}
+const SQLITE_SHADOW_SUFFIXES = ['_data', '_idx', '_content', '_docsize', '_config'];
+
+// Columns the SOURCE engine computes itself (Postgres `GENERATED ALWAYS … STORED` — posts.search_vector —
+// and MySQL generated columns). No engine accepts an INSERT into them (the target computes its own), so
+// the copy leaves them out. { table: Set(column) }. On MySQL only VIRTUAL/STORED GENERATED: MySQL 8 also
+// writes DEFAULT_GENERATED for every column whose default is an expression (`TEXT DEFAULT ('')`), and
+// matching `%GENERATED%` dropped all the text columns from a copy or a portable dump there.
+async function listGeneratedColumns(readAll, sourceDriverName) {
+    let rows = [];
+    try {
+        if (sourceDriverName === 'postgres') {
+            rows = await readAll("SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = current_schema() AND is_generated = 'ALWAYS'");
+        } else if (sourceDriverName === 'mysql') {
+            rows = await readAll("SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = DATABASE() AND (extra LIKE '%VIRTUAL GENERATED%' OR extra LIKE '%STORED GENERATED%')");
+        }
+    } catch (_) { rows = []; }
+    const out = {};
+    for (const r of rows || []) {
+        const t = r.t || r.T || r.table_name || r.TABLE_NAME;
+        const c = r.c || r.C || r.column_name || r.COLUMN_NAME;
+        if (t && c) (out[t] = out[t] || new Set()).add(c);
+    }
+    return out;
+}
+
+// Order the copy so a table comes after every table it references (SQLite source: PRAGMA
+// foreign_key_list). The core schema declares no foreign keys, but a plugin's tables may, and a Postgres
+// target only lets a superuser switch FK checks off: for everyone else the order is what keeps every
+// INSERT valid. Cycles and references to tables outside the copy keep their listed order.
+async function orderByForeignKeys(tables, readAll, sourceIsSqlite) {
+    if (!sourceIsSqlite || typeof readAll !== 'function') return tables;
+    const deps = {};
+    for (const t of tables) {
+        let fks = [];
+        try { fks = await readAll(`PRAGMA foreign_key_list(${quoteIdent(t)})`); } catch (_) { fks = []; }
+        deps[t] = new Set((fks || []).map((f) => f && f.table).filter((r) => r && r !== t && tables.includes(r)));
+    }
+    const out = [], seen = new Set(), visiting = new Set();
+    const visit = (t) => {
+        if (seen.has(t) || visiting.has(t)) return;
+        visiting.add(t);
+        for (const d of deps[t] || []) visit(d);
+        visiting.delete(t); seen.add(t); out.push(t);
+    };
+    for (const t of tables) visit(t);
+    return out;
 }
 
 // Build a target-dialect CREATE TABLE for a non-core table from the source's schema ({sql, columns} —
@@ -193,7 +251,7 @@ async function recreateTableOnTarget(table, ctx) {
 // identifiers are quoted (reserved-word/plugin names), rows cleared with DELETE (never TRUNCATE — it
 // implicit-commits on MySQL and breaks the transaction), and a row-count mismatch THROWS on the FIRST
 // table so the whole unit of work rolls back.
-async function copyTablesInto(tables, { sourceRead, targetTx, onProgress }) {
+async function copyTablesInto(tables, { sourceRead, targetTx, onProgress, generatedColumns }) {
     let totalRows = 0;
     for (let i = 0; i < tables.length; i++) {
         const table = tables[i];
@@ -201,7 +259,9 @@ async function copyTablesInto(tables, { sourceRead, targetTx, onProgress }) {
         if (onProgress) onProgress(table, i, tables.length);
         const rows = await Promise.resolve(sourceRead.all(`SELECT * FROM ${qt}`));
         await targetTx.exec(`DELETE FROM ${qt}`);
+        const skip = (generatedColumns && generatedColumns[table]) || null;
         for (const row of rows) {
+            if (skip) for (const c of skip) delete row[c];
             const keys = Object.keys(row);
             if (!keys.length) continue;
             const qcols = keys.map(quoteIdent).join(',');
@@ -223,7 +283,8 @@ async function copyTablesInto(tables, { sourceRead, targetTx, onProgress }) {
 // Orchestrate: recreate non-core schema (DDL, outside any transaction), then copy ALL data atomically
 // and fail-closed. Returns the total rows copied, or THROWS (the caller must then NOT switch config).
 async function copyAllTables(ctx) {
-    const { tables, nonCore, isAsyncTarget, isMysqlTarget, targetModule, targetWrapper, sourceRead, onProgress } = ctx;
+    const { nonCore, isAsyncTarget, isMysqlTarget, targetModule, targetWrapper, sourceRead, onProgress, generatedColumns } = ctx;
+    const tables = await orderByForeignKeys(ctx.tables, ctx.readAll, ctx.sourceIsSqlite);
 
     // 1. Recreate non-core (plugin / analytics / schema_migrations / notifications) tables on the target.
     for (const t of nonCore) {
@@ -252,11 +313,20 @@ async function copyAllTables(ctx) {
             if (isMysqlTarget) {
                 await tx.exec('SET FOREIGN_KEY_CHECKS = 0');
             } else {
-                // Postgres: disabling FK triggers needs superuser — degrade gracefully on managed
-                // instances (the core schema declares no FK constraints, so insert order is safe).
-                try { await tx.exec("SET session_replication_role = 'replica'"); } catch (_) { /* non-superuser */ }
+                // Postgres: switching FK triggers off needs a superuser. On an ordinary application role
+                // (the documented setup, and every managed database) the SET fails — and in Postgres a
+                // failed statement ABORTS the whole transaction ("current transaction is aborted"), which
+                // a JS try/catch cannot undo. A SAVEPOINT can: roll back to it and carry on; the copy
+                // order (orderByForeignKeys) keeps the inserts valid without the switch.
+                await tx.exec('SAVEPOINT wjs_replication_role');
+                try {
+                    await tx.exec("SET LOCAL session_replication_role = 'replica'");
+                    await tx.exec('RELEASE SAVEPOINT wjs_replication_role');
+                } catch (_) {
+                    await tx.exec('ROLLBACK TO SAVEPOINT wjs_replication_role');
+                }
             }
-            const total = await copyTablesInto(tables, { sourceRead, targetTx: tx, onProgress });
+            const total = await copyTablesInto(tables, { sourceRead, targetTx: tx, onProgress, generatedColumns });
             if (isMysqlTarget) await tx.exec('SET FOREIGN_KEY_CHECKS = 1');
             return total;
         });
@@ -272,7 +342,7 @@ async function copyAllTables(ctx) {
     };
     w.exec('BEGIN');
     try {
-        const total = await copyTablesInto(tables, { sourceRead, targetTx: tx, onProgress });
+        const total = await copyTablesInto(tables, { sourceRead, targetTx: tx, onProgress, generatedColumns });
         w.exec('COMMIT');
         return total;
     } catch (e) {
@@ -281,8 +351,64 @@ async function copyAllTables(ctx) {
     }
 }
 
+/**
+ * Every table the core's schema migrations create (content_outbox, api_tokens, webhooks, audit_log,
+ * collab_*, …), built on the TARGET by its own migrations before the copy — with its real primary key and
+ * auto-increment. Recreated from a Postgres/MySQL source's bare column list instead (the only schema those
+ * engines expose here), they had neither, and the first post written after the switch failed on the
+ * outbox insert. Only tables no migration knows (a plugin's) are recreated from the source afterwards
+ * (CREATE TABLE IF NOT EXISTS skips the rest). On an empty target the data migrations are no-ops.
+ */
+async function buildTargetSchema(target, isAsync, targetDriver) {
+    const { runSchemaMigrations } = require('../schema-migrations');
+    await runSchemaMigrations(target, isAsync, targetDriver);
+}
+exports.buildTargetSchema = buildTargetSchema;
+
+/**
+ * The schema migrations that build an ENGINE-SPECIFIC structure (search index, unique indexes). The
+ * copied `schema_migrations` rows say they ran — on the SOURCE engine. On the target they are cleared
+ * and run again under the target's own driver name, after the data is in (so a full-text index covers
+ * the copied posts). Each of them is idempotent.
+ */
+async function rebuildEngineSpecificSchema(target, isAsync, targetDriver) {
+    const { runSchemaMigrations, MIGRATIONS, ENGINE_SPECIFIC_MIGRATIONS } = require('../schema-migrations');
+    for (const id of ENGINE_SPECIFIC_MIGRATIONS) {
+        // No schema_migrations table yet (a source without one): nothing to clear, the runner creates it.
+        try { await Promise.resolve(target.run('DELETE FROM schema_migrations WHERE id = ?', [id])); } catch (_) { /* */ }
+    }
+    await runSchemaMigrations(target, isAsync, targetDriver, MIGRATIONS.filter((m) => ENGINE_SPECIFIC_MIGRATIONS.includes(m.id)));
+    if (targetDriver === 'postgres') await resetPgSequences(target);
+}
+
+/**
+ * Postgres: move every serial/identity sequence past the highest id now in its table. The copy INSERTs
+ * the source's ids explicitly, which never advances a sequence — so the first post, user or comment
+ * created after a switch to Postgres (or after a restore) was handed id 1 and refused as a duplicate.
+ * MySQL's AUTO_INCREMENT and SQLite's rowid follow explicit ids on their own.
+ */
+async function resetPgSequences(db) {
+    const cols = (await db.all(
+        "SELECT table_name AS t, column_name AS c FROM information_schema.columns " +
+        "WHERE table_schema = current_schema() AND (column_default LIKE 'nextval(%' OR is_identity = 'YES')"
+    )) || [];
+    for (const { t, c } of cols) {
+        const qt = quoteIdent(t), qc = quoteIdent(c);
+        await db.get(
+            `SELECT setval(pg_get_serial_sequence(?, ?), COALESCE((SELECT MAX(${qc}) FROM ${qt}), 0) + 1, false) AS v`,
+            [qt, c]
+        );
+    }
+}
+exports.resetPgSequences = resetPgSequences;
+exports.quoteIdent = quoteIdent;
+exports.sanitizeValue = sanitizeValue;
+
 // Exported for tests of the cross-driver copy (round-trip a seeded DB across engines / drivers).
 exports.copyAllTables = copyAllTables;
+exports.listGeneratedColumns = listGeneratedColumns;
+exports.orderByForeignKeys = orderByForeignKeys;
+exports.rebuildEngineSpecificSchema = rebuildEngineSpecificSchema;
 exports.listSourceTables = listSourceTables;
 exports.recreateTableOnTarget = recreateTableOnTarget;
 exports.CORE_TABLES = CORE_TABLES;
@@ -389,9 +515,12 @@ async function copySiteDatabase(source, currentDriver, target, targetDriver, onP
         }
         schemaByTable[t] = { sql: sqlText || null, columns };
     }
+    const generatedColumns = await listGeneratedColumns(readAll, currentDriver);
     await dbManager.initializeSchema(target.isAsync ? target.module : target.wrapper, target.isAsync);
+    await buildTargetSchema(target.isAsync ? target.module : target.wrapper, target.isAsync, targetDriver);
     const targetKind = targetDriver === 'mysql' ? 'mysql' : (targetDriver === 'postgres' ? 'postgres' : 'sqlite');
-    return copyAllTables({
+    const copied = await copyAllTables({
+        generatedColumns,
         tables,
         nonCore,
         isAsyncTarget: target.isAsync,
@@ -406,6 +535,8 @@ async function copySiteDatabase(source, currentDriver, target, targetDriver, onP
         sourceRead: source,
         onProgress,
     });
+    await rebuildEngineSpecificSchema(target.isAsync ? target.module : target.wrapper, target.isAsync, targetDriver);
+    return copied;
 }
 
 /**
@@ -703,6 +834,7 @@ exports.runMigration = async (req, res) => {
 
         const allTables = await listSourceTables(liveReadAll, currentDriver);
         const nonCore = allTables.filter((t) => !CORE_TABLES.has(t));
+        const generatedColumns = await listGeneratedColumns(liveReadAll, currentDriver);
 
         // Capture non-core schema from the live source now (before the target can alias the connection).
         // For a SQLite source we capture BOTH: the raw CREATE (full-fidelity path for MySQL/SQLite targets)
@@ -786,7 +918,11 @@ exports.runMigration = async (req, res) => {
             await targetDriverModule.init({
                 dbConfig: { host: dbHost, user: dbUser, password: dbPassword, name: dbName, port: dbPort, ...dbTls }
             });
-            await targetDriverModule.connect();
+            try {
+                await targetDriverModule.connect();
+            } catch (connErr) {
+                throw refusal(`Could not connect to the target database: ${connErr.message}`, connErr);
+            }
 
             // 3.1 REFUSE a lossy (non-UTF8) target. The old code silently rewrote every non-Latin1
             //     character to '?' — invisible to the row-COUNT guard — permanently mangling content
@@ -803,7 +939,7 @@ exports.runMigration = async (req, res) => {
                     throw new Error(`Could not verify the target Postgres database encoding (${encErr.message}) — migration refused. Ensure the target database uses ENCODING 'UTF8'.`);
                 }
                 if (targetEncoding !== 'UTF8' && targetEncoding !== 'UTF-8') {
-                    throw new Error(`Target Postgres database encoding is ${targetEncoding}, not UTF8 — migration refused to avoid silently corrupting non-Latin1 content. Recreate the target database with ENCODING 'UTF8' and retry.`);
+                    throw refusal(`Target Postgres database encoding is ${targetEncoding}, not UTF8 — migration refused to avoid silently corrupting non-Latin1 content. Recreate the target database with ENCODING 'UTF8' (CREATE DATABASE <name> ENCODING 'UTF8' TEMPLATE template0) and retry.`);
                 }
             }
         } else {
@@ -831,6 +967,7 @@ exports.runMigration = async (req, res) => {
         //    driver's dialect (module-global driverName) and TRANSLATED at the target driver's boundary
         //    — the MySQL driver rewrites sqlite/postgres DDL to MySQL, so this works for any source.
         await dbManager.initializeSchema(isAsyncTarget ? targetDriverModule : targetWrapper, isAsyncTarget);
+        await buildTargetSchema(isAsyncTarget ? targetDriverModule : targetWrapper, isAsyncTarget, targetDriver);
         log.info('   Schema initialized on target.');
 
         // 5. Copy ALL user data — complete (every table, dynamically enumerated, NOT a hardcoded list),
@@ -848,6 +985,7 @@ exports.runMigration = async (req, res) => {
         const totalRows = await copyAllTables({
             tables: allTables,
             nonCore,
+            generatedColumns,
             isAsyncTarget,
             isMysqlTarget,
             targetKind,
@@ -867,6 +1005,8 @@ exports.runMigration = async (req, res) => {
                 globalStatus.progress = Math.round((i / n) * 100);
             },
         });
+        // The target's own search index and unique indexes (FTS5 / tsvector / FULLTEXT), over the copied rows.
+        await rebuildEngineSpecificSchema(isAsyncTarget ? targetDriverModule : targetWrapper, isAsyncTarget, targetDriver);
 
         // Multisite: every other site and the network store follow (all or nothing — a failure throws
         // before the config is switched, so the network keeps running on the source).
@@ -878,6 +1018,22 @@ exports.runMigration = async (req, res) => {
             onProgress: (table, i, n) => { globalStatus.currentTable = table; globalStatus.progress = Math.round((i / n) * 100); },
         });
         if (networkRows) log.info(`✅ Network copied: ${networkRows} row(s) of the other sites and the network store.`);
+
+        // Open the connection the NEXT BOOT will open — the config this migration is about to write, resolved
+        // by config/app's own rule — while the source is still the live database. If it cannot connect,
+        // nothing is written and the site keeps running on the source instead of restarting into
+        // "Access denied" (a flat dbPassword left by the SQLite install used to shadow the new password).
+        if (isAsyncTarget) {
+            const planned = withTargetDatabase(configManager.getConfig() || {}, {
+                targetDriver, dbPath: null,
+                conn: { host: dbHost, port: dbPort, user: dbUser, name: dbName, password: dbPassword, ...dbTls },
+            });
+            try {
+                await verifyBootConnection(targetDriver, planned);
+            } catch (verifyErr) {
+                throw new Error(`The data was copied, but WordJS could not connect with the settings the restart would use (${verifyErr.message}); nothing was switched and the site stays on its current database.`, { cause: verifyErr });
+            }
+        }
 
         // Close Source DB now that we are done reading.
         try { if (dbManager.closeDatabase) await dbManager.closeDatabase(); } catch (e) { log.warn({ err: e }, 'Could not close source DB'); }
@@ -918,26 +1074,11 @@ exports.runMigration = async (req, res) => {
         }
 
         // 8. Update Configuration
-        const newConfig = { dbDriver: targetDriver };
+        let dbPathValue = null;
         if (!isAsyncTarget) {
-            // Make path relative to backend root (e.g. ./data/wordjs.db)
-            // path.relative might return 'data/wordjs.db', we want './data/...' usually, but 'data/...' works too.
-            // Let's stick to the current convention of ./data
+            // Relative to the backend root, in the ./data convention.
             const rel = path.relative(process.cwd(), finalPath).replace(/\\/g, '/');
-            newConfig.dbPath = rel.startsWith('.') ? rel : `./${rel}`;
-        } else {
-            // pgConfig is not defined in the provided context, assuming it should be dbHost, dbPort, etc.
-            // based on the original code's usage for newConfig.db.
-            newConfig.db = {
-                host: dbHost,
-                port: dbPort,
-                user: dbUser,
-                name: dbName,
-                // Password is usually saved in .env OR config.
-                // We'll pass it to saveConfig to decide.
-                password: dbPassword,
-                ...dbTls
-            };
+            dbPathValue = rel.startsWith('.') ? rel : `./${rel}`;
         }
 
         // Save Backup for Auto-Fallback
@@ -949,11 +1090,16 @@ exports.runMigration = async (req, res) => {
             try { require('fs').chmodSync(backupFile, 0o600); } catch { /* Windows: no POSIX bits */ }
         }
 
-        configManager.saveConfig(newConfig);
+        const written = configManager.updateConfig((current) => withTargetDatabase(current, {
+            targetDriver, dbPath: dbPathValue,
+            conn: isAsyncTarget ? { host: dbHost, port: dbPort, user: dbUser, name: dbName, password: dbPassword, ...dbTls } : null,
+        }));
+        if (!written || !written.ok) throw new Error('The data was copied, but the new database settings could not be saved; the site stays on its current database.');
 
         // Restart so the new database config is picked up (core/restart: the supervisor, node --watch or
         // the service manager starts the process again). The old `process.exit(0)` here STOPPED a supervised
         // install for good (backend/server.js treats exit 0 as "stopped on purpose").
+        globalStatus = { ...globalStatus, step: 'done', progress: 100, currentTable: '' };
         const restart = require('../restart');
         const mode = restart.scheduleRestart(`database moved to ${targetDriver}`, { delayMs: 1000 });
         res.json({
@@ -966,6 +1112,8 @@ exports.runMigration = async (req, res) => {
 
     } catch (e) {
         log.error({ err: e }, 'Migration Failed');
+        // The panel polls the status: leave it on "failed" with the reason, not on the last step reached.
+        globalStatus = { ...globalStatus, step: 'failed', error: e.message };
 
         // Attempt to cleanup driver connection to release locks
         if (targetDriverModule) {
@@ -973,6 +1121,63 @@ exports.runMigration = async (req, res) => {
             try { if (targetDriverModule.close) await targetDriverModule.close(); } catch (err) { }
         }
 
-        res.status(500).json({ error: e.message });
+        // A target the migration refuses (wrong encoding, unreachable, bad credentials) is the caller's
+        // to fix: 400 with the reason. Anything else is a server-side failure.
+        res.status(e && e.statusCode === 400 ? 400 : 500).json({ error: e.message });
     }
 };
+
+/** An error that is the request's to fix (answered 400, not 500). */
+function refusal(message, cause) {
+    const e = new Error(message, cause ? { cause } : undefined);
+    e.statusCode = 400;
+    return e;
+}
+
+const FLAT_DB_KEYS = ['dbHost', 'dbPort', 'dbUser', 'dbPassword', 'dbName', 'dbSsl', 'dbSslCa', 'dbSslRejectUnauthorized'];
+
+/**
+ * The config with its database switched to the migration's target. For a server engine the connection
+ * goes in the nested `db` block AND the password under the flat `dbPassword`, the shape the installer
+ * writes (routes/setup.ts): config/app reads the flat keys FIRST, so a flat `dbPassword` left over from
+ * the SQLite install (generated at its first boot) used to shadow the new password and lock the site
+ * out of its new database at the restart. Every other flat connection key is dropped for the same
+ * reason. Pure, for the tests.
+ */
+function withTargetDatabase(current, { targetDriver, dbPath, conn }) {
+    const next = { ...(current || {}), dbDriver: targetDriver };
+    if (!conn) {
+        next.dbPath = dbPath;
+        return next;
+    }
+    for (const k of FLAT_DB_KEYS) delete next[k];
+    const port = Number(conn.port) || (targetDriver === 'mysql' ? 3306 : 5432);
+    next.db = {
+        ...(current && current.db && typeof current.db === 'object' ? current.db : {}),
+        host: conn.host, port, user: conn.user, name: conn.name, database: conn.name,
+        password: conn.password || '',
+        ssl: conn.ssl === true,
+        sslRejectUnauthorized: conn.sslRejectUnauthorized !== false,
+        ...(conn.sslCa ? { sslCa: conn.sslCa } : {}),
+    };
+    if (!conn.sslCa) delete next.db.sslCa;
+    if (conn.password) next.dbPassword = String(conn.password);
+    return next;
+}
+exports.withTargetDatabase = withTargetDatabase;
+
+/** Connect a throwaway pool with the connection config/app resolves from `fileConfig` (the planned config). */
+async function verifyBootConnection(targetDriver, fileConfig) {
+    const { resolveDbConnection } = require('../../config/app');
+    const conn = resolveDbConnection(fileConfig);
+    const Driver = targetDriver === 'postgres' ? require('../../drivers/postgres').PostgresDriver : require('../../drivers/mysql').MysqlDriver;
+    const d = new Driver();
+    d.config = targetDriver === 'postgres' ? { ...conn, poolMax: 2 } : { ...conn, connectionLimit: 2 };
+    try {
+        await d.connect();
+        await d.get('SELECT 1 AS ok');
+    } finally {
+        try { await d.close(); } catch (_) { /* */ }
+    }
+}
+exports.verifyBootConnection = verifyBootConnection;

@@ -19,6 +19,7 @@ import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput, isFutureInp
 import {
     withRecordRootFields,
     seedRootPropsFromPost, seedRecordIdentity, slugFollowsTitle,
+    visibilityForSave,
     featuredImageMetaValue,
     resolveExcerptForSave,
     resolveCategoriesForSave,
@@ -106,6 +107,10 @@ export default function PostEditorPage() {
     // y `toJSON` devuelve un extracto DERIVADO cuando no hay uno propio — mandarlos siempre
     // reescribiría la taxonomía en cada autosave y congelaría el resumen automático).
     const seededExcerptRef = useRef("");
+    // El `modified` de la versión que este editor tiene delante (control de concurrencia, ver guardado).
+    const baseModifiedRef = useRef<string>("");
+    // Contraseña / «fijar arriba» tal como los sembró la carga (ver visibilityForSave).
+    const seededVisibilityRef = useRef<{ visibilityPassword: string; sticky: "1" | "0" }>({ visibilityPassword: "", sticky: "0" });
     // TODOS los ids de categoría del registro: el select enseña el primero, y los demás se reenvían
     // en vez de perderse (ver resolveCategoriesForSave).
     const seededCategoryIdsRef = useRef<number[]>([]);
@@ -208,6 +213,7 @@ export default function PostEditorPage() {
             setSlugManuallyEdited(!slugFollowsTitle(post));
             const identity = seedRecordIdentity(post);
             contentRef.current = post.content;
+            baseModifiedRef.current = typeof (post as any).modified === "string" ? (post as any).modified : "";
             setStatus(post.status);
             lastServerStatusRef.current = post.status;
             // La fecha del registro, SIEMPRE (no sólo programando) — ver el state de arriba.
@@ -248,6 +254,7 @@ export default function PostEditorPage() {
                 allowComments: post.commentStatus || "open",
             };
             seededExcerptRef.current = seedRoot.excerpt;
+            seededVisibilityRef.current = { visibilityPassword: seedRoot.visibilityPassword, sticky: seedRoot.sticky };
             seededCategoryIdsRef.current = taxonomy.categoryIds;
             seededTagsRef.current = taxonomy.tags;
             setRecordTags(taxonomy.tagRefs);
@@ -361,7 +368,7 @@ export default function PostEditorPage() {
         [recordCategorySource, categories],
     );
 
-    const { alert } = useModal();
+    const { alert, confirm } = useModal();
 
     // Once a NEW post is first saved, remember its id — before this, every save created ANOTHER
     // post (params.id stays "new"). Also lets autosave create the draft once and then update it.
@@ -455,6 +462,8 @@ export default function PostEditorPage() {
                 seeded: seededTagsRef.current,
             });
 
+            const visibilityPatch = visibilityForSave(rootProps, seededVisibilityRef.current);
+
             const postData = {
                 title: finalTitle,
                 slug: finalSlug,
@@ -462,6 +471,7 @@ export default function PostEditorPage() {
                 ...statusPatch,
                 commentStatus,
                 ...(excerptPatch !== undefined ? { excerpt: excerptPatch } : {}),
+                ...visibilityPatch,
                 ...(categoriesPatch !== undefined ? { categories: categoriesPatch } : {}),
                 ...(tagsPatch !== undefined ? { tags: tagsPatch } : {}),
                 meta: {
@@ -492,7 +502,17 @@ export default function PostEditorPage() {
             const effectiveId = postId ?? createdIdRef.current;
             let saved;
             if (effectiveId) {
-                saved = await postsApi.update(effectiveId, finalPostData as any);
+                // Sin sesión en vivo (sin documento guardado) se manda el `modified` cargado: el servidor
+                // rechaza (409) guardar encima de una versión más nueva en vez de pisarla en silencio.
+                const conflictGuard = !hasStoredDocument && baseModifiedRef.current ? { expectedModified: baseModifiedRef.current } : {};
+                try {
+                    saved = await postsApi.update(effectiveId, { ...finalPostData, ...conflictGuard } as any);
+                } catch (err: any) {
+                    if (err?.code !== "rest_post_conflict" || isAutosave) throw err;
+                    const overwrite = await confirm(t('post.edit.conflict'), t('post.edit.conflictTitle'), true);
+                    if (!overwrite) { window.location.reload(); return false; }
+                    saved = await postsApi.update(effectiveId, finalPostData as any);
+                }
             } else {
                 saved = await postsApi.create({ ...finalPostData, type: "post" } as any);
                 if (saved?.id) {
@@ -503,6 +523,7 @@ export default function PostEditorPage() {
             }
             // El backend es la autoridad del estado final (resuelve publish→future o future→publish
             // según la fecha): reflejarlo para que el selector nunca mienta tras guardar.
+            if (saved && typeof (saved as any).modified === "string") baseModifiedRef.current = (saved as any).modified;
             if (saved?.status) {
                 lastServerStatusRef.current = saved.status;
                 setStatus(saved.status);
@@ -519,6 +540,8 @@ export default function PostEditorPage() {
             // Lo que ya viajó pasa a ser la base: sin esto cada autosave posterior reenviaría el
             // mismo extracto y las mismas categorías eternamente. Solo tras un guardado CONFIRMADO.
             if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
+            if (visibilityPatch.password !== undefined) seededVisibilityRef.current = { ...seededVisibilityRef.current, visibilityPassword: visibilityPatch.password };
+            if (visibilityPatch.sticky !== undefined) seededVisibilityRef.current = { ...seededVisibilityRef.current, sticky: visibilityPatch.sticky ? "1" : "0" };
             const accessPatch = finalPostData.meta ? (finalPostData.meta as Record<string, unknown>)[ACCESS_META_KEY] : undefined;
             if (typeof accessPatch === "string") seededAccessRef.current = accessPatch;
             const savedMeta = (finalPostData.meta || {}) as Record<string, unknown>;

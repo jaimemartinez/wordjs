@@ -683,8 +683,9 @@ class User {
             params.push(excludeRole);
         }
         if (search) {
-            where.push('(u.user_login LIKE ? OR u.display_name LIKE ? OR u.user_email LIKE ?)');
-            const s = `%${search}%`;
+            const { containsSql, containsPattern } = require('../core/sql-like');
+            where.push(`(${containsSql('u.user_login')} OR ${containsSql('u.display_name')} OR ${containsSql('u.user_email')})`);
+            const s = containsPattern(search);
             params.push(s, s, s);
         }
         const whereSql = where.length > 0 ? ' WHERE ' + where.join(' AND ') : '';

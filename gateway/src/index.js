@@ -46,6 +46,8 @@ const siteCerts = require('./site-certs');
 // The one reading of gateway-config.json's `ssl` block (primary, workers and control plane alike).
 const tlsMode = require('./tls-mode');
 const upstreamDown = require('./upstream-down');
+// A browser that cancels a request must not end a worker: every listener below is guarded.
+const { installClientAbortGuard, isClientAbort } = require('./client-abort');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
 // gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
@@ -312,6 +314,7 @@ function applyAcmeHttpListener() {
             try { res.writeHead(500); res.end(); } catch (_) { /* ignore */ }
         }
     });
+    installClientAbortGuard(srv);
     srv.on('error', (e) => logger.error(`[Gateway] ACME HTTP-01 listener on :${port} failed: ${e.message}`));
     srv.listen(port, () => logger.info(`[Gateway] ACME HTTP-01 + HTTPS-redirect listener on :${port}`));
     acmeListener.srv = srv;
@@ -1061,7 +1064,7 @@ if (cluster.isPrimary) {
                 // interface. Multi-node deployments may set gatewayInternalBind to a specific
                 // cluster/advertise interface; do NOT default to 0.0.0.0.
                 const gatewayInternalBind = config.gatewayInternalBind || '127.0.0.1';
-                https.createServer(internalOptions, internalApp).listen(gatewayInternalPort, gatewayInternalBind, () => {
+                installClientAbortGuard(https.createServer(internalOptions, internalApp)).listen(gatewayInternalPort, gatewayInternalBind, () => {
                     logger.info(`[Gateway] [Internal] 🛡️ SECURE mTLS Internal Server on ${gatewayInternalBind}:${gatewayInternalPort}`);
                 });
             } catch (e) { logger.error(`[Gateway] [Internal] Error: ${e.message}`); }
@@ -1159,7 +1162,7 @@ if (cluster.isPrimary) {
         // --ca-hash the operator pinned, and then makes the tokened call verified against it
         // (scripts/node-join.js). The CA certificate is public; its key never leaves CERTS_DIR.
         const srvChain = `${fs.readFileSync(SRV_CRT, 'utf8').trim()}\n${caCertPem.trim()}\n`;
-        const srv = https.createServer({ key: fs.readFileSync(SRV_KEY), cert: srvChain }, enrollApp);
+        const srv = installClientAbortGuard(https.createServer({ key: fs.readFileSync(SRV_KEY), cert: srvChain }, enrollApp));
         srv.on('error', (e) => logger.error(`[Gateway] [Enroll] listener error on ${bind}:${enrollPort}: ${e.message}`));
         srv.listen(enrollPort, bind, () => logger.info(`[Gateway] [Enroll] 🎟️  token-enrollment server on ${bind}:${enrollPort}`));
     }
@@ -1170,7 +1173,7 @@ if (cluster.isPrimary) {
     // SAFETY NET: Prevent unhandled errors from crashing the worker
     process.on('uncaughtException', (err) => {
         logger.error(`[Gateway] Worker ${process.pid} Uncaught Exception: ${err.message}`);
-        if (err.code === 'ECONNABORTED' || err.code === 'EPIPE') {
+        if (err.code === 'ECONNABORTED' || err.code === 'EPIPE' || isClientAbort(err)) {
             // These are common network errors, log them but don't exit
             return;
         }
@@ -1325,7 +1328,18 @@ if (cluster.isPrimary) {
      * dedicated separate-mode gateway whose peers live on other machines — an unknown path still 404s
      * as before; this never becomes a blanket "proxy everything to localhost".
      */
-    const BOOTSTRAP_PORT = { backend: config.backendPort || 4000, frontend: config.frontendPort || 3001 };
+    // The ports come from the gateway config, else from THIS install's backend config (split mode: one
+    // tree, one config in backend/), else the defaults. With the defaults alone, a second install on the
+    // same host routed to the FIRST install's services before its own setup (QA S3-18).
+    const siblingConfig = (() => {
+        try { return JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../backend/wordjs-config.json'), 'utf8')) || {}; }
+        catch { return {}; }
+    })();
+    const portOf = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 && Number(v) < 65536 ? Number(v) : null);
+    const BOOTSTRAP_PORT = {
+        backend: config.backendPort || portOf(siblingConfig.port) || 4000,
+        frontend: config.frontendPort || portOf(siblingConfig.frontendPort) || 3001,
+    };
     // Each peer picks HTTPS-with-mTLS or plain HTTP ONCE, at its own startup, from whether its identity
     // is on disk. In split mode all three start together, so the same look taken HERE, at gateway
     // startup, matches what they chose. Deciding per request instead would be wrong for exactly the
@@ -1512,6 +1526,7 @@ if (cluster.isPrimary) {
     } else {
         server = app.listen(FINAL_PORT, () => { logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTP)`); reportTransport(false); });
     }
+    installClientAbortGuard(server);
 
     // Outlive any fronting proxy's idle timeout (nginx default 60s): with Node's 5s default the
     // server races the proxy's socket reuse and drops requests mid-flight.

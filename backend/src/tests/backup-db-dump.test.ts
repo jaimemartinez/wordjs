@@ -38,6 +38,7 @@ function fakeSpawn(records: any[], opts: any = {}) {
         // pipe() target: swallow
         child.stdin.write = () => true;
         process.nextTick(() => {
+            if (opts.stderr) child.stderr.emit('data', Buffer.from(opts.stderr));
             if (opts.error) child.emit('error', new Error('ENOENT'));
             else child.emit('close', opts.code == null ? 0 : opts.code);
         });
@@ -285,5 +286,48 @@ describe('SQLite backup still produces a complete archive', () => {
         const zip = new AdmZip(zipPath);
         assert.ok(zip.getEntry('wordjs-content.json'), 'logical export present');
         assert.ok(zip.getEntry('database/wordjs.db'), 'physical SQLite snapshot present');
+    });
+});
+
+describe('db-dump: a pg_restore newer than the server (QA, CI runner with pg_restore 17+ against PostgreSQL 16)', () => {
+    const PG = { host: 'db.example', port: 5432, user: 'pguser', password: 'pgsecret', name: 'wordjs' };
+    // Verbatim from the failing CI run.
+    const NEWER_CLIENT = [
+        'pg_restore: error: could not execute query: ERROR:  unrecognized configuration parameter "transaction_timeout"',
+        'Command was: SET transaction_timeout = 0;',
+        'pg_restore: warning: errors ignored on restore: 1',
+        '',
+    ].join('\n');
+    const OTHER = [
+        'pg_restore: error: could not execute query: ERROR:  relation "posts" does not exist',
+        'Command was: ALTER TABLE posts OWNER TO x;',
+        '',
+    ].join('\n');
+    const restore = (stderr: string, code = 1) => dbdump.restoreDump('postgres', '/tmp/x.dump', PG, {
+        isToolAvailable: async () => true,
+        spawn: fakeSpawn([], { code, stderr }),
+    });
+
+    test('only an unknown session setting: the restore completes', async () => {
+        await restore(NEWER_CLIENT);
+        assert.deepStrictEqual(dbdump.onlyUnknownSessionSettings(NEWER_CLIENT), ['transaction_timeout']);
+    });
+
+    test('any other error still fails the restore, alone or beside the setting', async () => {
+        await assert.rejects(() => restore(OTHER + 'pg_restore: warning: errors ignored on restore: 1\n'), /pg_restore exited with code 1/);
+        await assert.rejects(
+            () => restore(NEWER_CLIENT.replace('errors ignored on restore: 1', 'errors ignored on restore: 2') + OTHER),
+            /pg_restore exited with code 1/,
+        );
+    });
+
+    test("the error count must match pg_restore's own total (a truncated log is not trusted)", async () => {
+        await assert.rejects(() => restore(NEWER_CLIENT.replace('errors ignored on restore: 1', 'errors ignored on restore: 3')), /pg_restore exited with code 1/);
+    });
+
+    test('an unknown parameter outside a SET command is not excused, nor a fatal exit code', async () => {
+        const viaFunction = NEWER_CLIENT.replace('Command was: SET transaction_timeout = 0;', "Command was: SELECT set_config('transaction_timeout', '0', false);");
+        await assert.rejects(() => restore(viaFunction), /pg_restore exited/);
+        await assert.rejects(() => restore(NEWER_CLIENT, 2), /pg_restore exited with code 2/);
     });
 });
