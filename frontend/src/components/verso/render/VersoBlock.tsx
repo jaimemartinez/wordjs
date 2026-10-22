@@ -26,13 +26,14 @@ import { createInlineMountStore } from "../inline/inlineSession";
 import VersoInline from "../inline/VersoInline";
 import { INLINE_HOST_SENTINEL } from "../inline/VersoTextSurface";
 import {
-  selectInlineEditingId,
   useStoreSlice,
   useVersoNode,
   useVersoRenderContext,
   type VersoSlotRender,
 } from "./context";
 import { NODE_KEY_ATTR } from "./nodeKey";
+import { INLINE_PATH_ATTR, inlineEditRole } from "./inlineDim";
+import type { VersoEditorState } from "@/lib/verso/types";
 import VersoSlot from "./VersoSlot";
 import { useEditorTr } from "@/lib/verso/useEditorTr";
 
@@ -54,8 +55,12 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
   const ctx = useVersoRenderContext();
   const { handle, registry, componentMap, onBlockElement, editorChrome, ixCtx, ixPage } = ctx;
   const node = useVersoNode(handle, nodeId);
-  // Cambia como mucho dos veces por sesión de edición inline (entrar/salir).
-  const inlineEditingId = useStoreSlice(handle, selectInlineEditingId);
+  // Atenuado durante la edición inline de OTRO bloque — salvo si este lo contiene (inlineDim.ts).
+  const selectInlineRole = useCallback(
+    (s: VersoEditorState) => inlineEditRole(s.doc.nodes, nodeId, s.inlineEditingId),
+    [nodeId],
+  );
+  const inlineRole = useStoreSlice(handle, selectInlineRole);
   // Declaración inline del nodo cuando ESTE nodo es el activo (referencia
   // estable del registry; solo notifica al entrar/salir del modo inline).
   const inlineStore = useMemo(
@@ -134,8 +139,12 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
   }
 
   // editorChrome: durante la edición inline se atenúan los DEMÁS bloques para
-  // enfocar el activo. Solo clases tailwind ya existentes; sin CSS nuevo.
-  const dimmed = !!editorChrome && inlineEditingId !== null && inlineEditingId !== node.id;
+  // enfocar el activo — nunca los que lo CONTIENEN: la opacidad de un contenedor
+  // se aplica a todo lo que pinta dentro, también al texto que se está escribiendo.
+  const dimmed = !!editorChrome && inlineRole === "dimmed";
+  // En el camino del texto en edición (el bloque y sus contenedores): sus interacciones y su
+  // animación de entrada se detienen en el estado de reposo mientras dura la sesión (INLINE_PATH_CSS).
+  const onInlinePath = !!editorChrome && inlineRole === "path";
 
   return (
     <div
@@ -145,6 +154,7 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
       {...{ [NODE_KEY_ATTR]: nodeId }}
       ref={registerElement}
       className={dimmed ? "opacity-40 transition-opacity" : undefined}
+      {...(onInlinePath ? { [INLINE_PATH_ATTR]: "" } : {})}
     >
       <SharedBlockShell
         hide={props.hide as Hide | undefined}

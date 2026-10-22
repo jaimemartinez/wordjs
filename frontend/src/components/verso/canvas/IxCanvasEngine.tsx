@@ -59,6 +59,7 @@ import { ANIM_REPLAY_EVENT } from "@/components/blocks/entranceAnimation";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { VersoEditorState } from "@/lib/verso/types";
 import { useStoreSlice } from "../render/context";
+import { INLINE_PATH_CSS } from "../render/inlineDim";
 import { VersoCanvasContext } from "./FrameController";
 
 /** Id del `<style>` de interacciones dentro del `<head>` del iframe (hermano de THEME_LINK_ID). */
@@ -146,7 +147,11 @@ export default function IxCanvasEngine({ handle, ixCtx }: IxCanvasEngineProps) {
   const { css, sig } = React.useMemo(() => {
     const specs = Object.values(nodes).map((node) => node.props.ix);
     const page = compileIxPage(specs, ixCtx);
-    return { css: page.css, sig: JSON.stringify(page.runtime) };
+    // + la regla del camino de edición inline (render/inlineDim.ts): el texto que se escribe se ve
+    // en su opacidad real aunque una interacción de scroll lo tuviera a medio desvanecer.
+    // Siempre presente: también cubre la animación de entrada de una página sin interacciones.
+    const css = page.css === "" ? INLINE_PATH_CSS : `${page.css}\n${INLINE_PATH_CSS}`;
+    return { css, sig: JSON.stringify(page.runtime) };
   }, [nodes, ixCtx]);
 
   /* ── 1. La hoja, dentro del marco ─────────────────────────────────── */
