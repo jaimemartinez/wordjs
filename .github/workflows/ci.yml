@@ -6,8 +6,9 @@ on:
   # runners at the same time, each at 29-30 min against a 32-min timeout. The pair raced and the loser was
   # cancelled at the deadline with 37/38 checks green (PR #349, 2026-09-16; PR #347 before it). Branch
   # pushes are covered by `pull_request`; `push` keeps main (post-merge) and the release tags.
+  # No post-merge run on main (2026-10-22, owner): branch protection requires a PR to be up to date with main
+  # before it merges, so the PR's own run already validated the exact tree main receives. Release tags still run.
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   # Daily run on main: the coverage ratchet runs only here and on manual dispatch (see backend-coverage).
