@@ -372,6 +372,32 @@ function translateCreateTable(sql: string): string {
     return `${hm[1]}${temporary}${hm[3]}(\n  ${cols.join(',\n  ')}\n)`;
 }
 
+/** `ALTER TABLE t ADD [COLUMN] …` (one or several, comma-separated): read off the MASK like CREATE TABLE. */
+const ALTER_ADD_HEAD_RE = new RegExp(`^\\s*ALTER\\s+TABLE\\s+${IDENT}\\s+`, 'i');
+const ALTER_ADD_CLAUSE_RE = /^(\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?)/i;
+
+/**
+ * The columns an ALTER TABLE adds get the CREATE TABLE column rule (TEXT → LONGTEXT, a literal default on
+ * TEXT as an expression, SQLite's AUTOINCREMENT spelling). A plugin adding `TEXT DEFAULT '{}'` to a table it
+ * already had was refused by MySQL 8 (a TEXT column takes only an expression default), while the same
+ * column in its CREATE TABLE worked. Any other ALTER, and any clause that is not ADD of a column, is left
+ * as written.
+ */
+function translateAlterAddColumn(sql: string): string {
+    const body = dropTrailingSemicolon(stripSqlComments(sql));
+    const head = ALTER_ADD_HEAD_RE.exec(codeMask(body)); // MASK-SAFE: the header is matched on the mask
+    if (!head) return sql;
+    const clauses = splitTopLevel(body.slice(head[0].length));
+    const out = clauses.map((clause: string) => {
+        const add = ALTER_ADD_CLAUSE_RE.exec(codeMask(clause)); // MASK-SAFE: the keyword is matched on the mask
+        if (!add) return clause;
+        const def = clause.slice(add[1].length);
+        if (isTableConstraint(def)) return clause;
+        return clause.slice(0, add[1].length) + translateColumnDef(def, new Set());
+    });
+    return body.slice(0, head[0].length) + out.join(',');
+}
+
 /**
  * Rewrite one SQLite-dialect statement to MySQL.
  *
@@ -397,6 +423,7 @@ function translateSql(sql: string): string {
     // not built for every INSERT and SELECT on the hot path.
     if (CREATE_TABLE_MAYBE_RE.test(sql) // MASK-SAFE: anchored superset; the decision below is the mask's
         && CREATE_TABLE_DISPATCH_RE.test(codeMask(sql))) return translateCreateTable(sql); // MASK-SAFE: on the mask
+    if (/^\s*ALTER\b/i.test(sql) && codeHas(sql, /^\s*ALTER\s+TABLE\b[\s\S]*\bADD\b/i)) return translateAlterAddColumn(sql); // MASK-SAFE: decided on the mask
     let s = sql;
     // MySQL has no RETURNING; strip it (like the legacy sql.js driver does) and rely on insertId — which
     // is exactly the AUTO_INCREMENT key these `RETURNING id` / `RETURNING term_id` clauses return.
