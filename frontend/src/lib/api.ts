@@ -1502,6 +1502,8 @@ export interface ImportSummary {
     attachments: { created: number; skipped: number };
     comments: { created: number; skipped: number };
     navItems: { skipped: number };
+    /** WordPress site-editor records (navigation, templates, styles) left out on purpose; absent on older servers. */
+    siteEditor?: { skipped: number };
     /** The media pass: what was fetched, what was not, and exactly why not, per file. */
     media: {
         mode: ImportMediaMode | string;

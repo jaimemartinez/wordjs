@@ -67,6 +67,7 @@ registerTranslations({
         "wpImport.cancel": "Cancelar",
         "wpImport.done.title": "Importación completada",
         "wpImport.done.body": "El contenido de {site} ya está en tu sitio.",
+        "wpImport.done.siteEditorSkipped": "{n} elemento(s) del editor de sitio de WordPress (navegación, plantillas, estilos) no se importan: en WordJS la cabecera, el pie y el tema se diseñan con sus propios editores.",
         "wpImport.theExport": "la exportación",
         "wpImport.media.title": "Medios",
         "wpImport.mode.download": "descargar",
@@ -136,6 +137,7 @@ registerTranslations({
         "wpImport.cancel": "Cancel",
         "wpImport.done.title": "Import complete",
         "wpImport.done.body": "Content from {site} is now in your site.",
+        "wpImport.done.siteEditorSkipped": "{n} WordPress site-editor item(s) (navigation, templates, styles) were left out: in WordJS the header, footer and theme are designed with their own editors.",
         "wpImport.theExport": "the export",
         "wpImport.media.title": "Media",
         "wpImport.mode.download": "download",
@@ -205,6 +207,7 @@ registerTranslations({
         "wpImport.cancel": "Cancelar",
         "wpImport.done.title": "Importação concluída",
         "wpImport.done.body": "O conteúdo de {site} já está no seu site.",
+        "wpImport.done.siteEditorSkipped": "{n} item(ns) do editor de site do WordPress (navegação, modelos, estilos) não foram importados: no WordJS o cabeçalho, o rodapé e o tema são desenhados com os seus próprios editores.",
         "wpImport.theExport": "a exportação",
         "wpImport.media.title": "Mídia",
         "wpImport.mode.download": "baixar",
@@ -473,6 +476,12 @@ export default function ImportPage() {
                             <Stat label={t("wpImport.stat.authors")} value={summary.authors.created} sub={n("wpImport.sub.matched", summary.authors.matched)} icon="fa-user" />
                             <Stat label={t("wpImport.stat.comments")} value={summary.comments.created} sub={n("wpImport.sub.skipped", summary.comments.skipped)} icon="fa-comments" />
                         </div>
+                        {(summary.siteEditor?.skipped ?? 0) > 0 && (
+                            <p className="text-sm text-gray-500 mt-4">
+                                <i className="fa-solid fa-circle-info text-blue-400 mr-2"></i>
+                                {n("wpImport.done.siteEditorSkipped", summary.siteEditor?.skipped ?? 0)}
+                            </p>
+                        )}
                     </div>
 
                     {/* The media pass. Per-file download failures are the ONLY place an operator learns

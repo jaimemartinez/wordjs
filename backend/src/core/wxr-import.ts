@@ -71,6 +71,17 @@ const { isCanonicalPostTypeName, canonicalImportedPostStatus } = require('./post
  */
 const ALWAYS_INTERNAL_POST_TYPES: Set<string> = new Set(['nav_menu_item', 'revision']);
 
+/**
+ * WordPress's own site-editor and housekeeping records: block-theme navigation, templates, global styles,
+ * fonts, the Customizer's CSS and change sets, oEmbed caches, privacy requests. They are not content and
+ * have no page here (WordJS builds header, footer and theme with its own editors), so an import leaves
+ * them out and says how many — one `wp_navigation` used to arrive as a 60th "post" whose link was a 404.
+ */
+const WORDPRESS_SITE_EDITOR_TYPES: Set<string> = new Set([
+    'wp_navigation', 'wp_template', 'wp_template_part', 'wp_global_styles', 'wp_font_family', 'wp_font_face',
+    'custom_css', 'customize_changeset', 'oembed_cache', 'user_request',
+]);
+
 /** The WXR item a post came from (`<site>#<wp:post_id>`), server-owned (core/protected-meta). */
 const SOURCE_ITEM_META_KEY = '_wxr_source_item';
 
@@ -419,6 +430,8 @@ interface ImportSummary {
     comments: { created: number; skipped: number };
     /** Nav items NOT imported (no menu to attach them to, already present, or a per-item failure). */
     navItems: { skipped: number };
+    /** WordPress site-editor records left out on purpose (WORDPRESS_SITE_EDITOR_TYPES). */
+    siteEditor: { skipped: number };
     /** The media pass: what was fetched, what was not, and exactly why not, per file. */
     media: {
         mode: string;
@@ -550,6 +563,7 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
         attachments: { created: 0, skipped: 0 },
         comments: { created: 0, skipped: 0 },
         navItems: { skipped: 0 },
+        siteEditor: { skipped: 0 },
         media: media.stats,
         menus: {
             created: 0, matched: 0,
@@ -819,6 +833,7 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
         // still import (that is most of what a migration IS), exactly as routes/posts.ts distinguishes
         // the two for existing content.
         if (isInternalPostType(type)) { bumpSkip(summary, type); continue; }
+        if (WORDPRESS_SITE_EDITOR_TYPES.has(type)) { summary.siteEditor.skipped++; continue; }
         if (status === 'trash') { bumpSkip(summary, type); continue; }
 
         const slug = (text(item['wp:post_name']).trim() || sanitizeFallbackSlug(text(item.title))).slice(0, 200);

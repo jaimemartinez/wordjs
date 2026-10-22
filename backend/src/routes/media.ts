@@ -159,8 +159,8 @@ const storage = multer.diskStorage({
         const resolvedExt = Media.getExtensionForMime(file.mimetype);
         const ext = resolvedExt ? `.${resolvedExt}` : '';
         const name = path.basename(file.originalname, path.extname(file.originalname));
-        // Accents fold to their base letter first (ñandú → nandu) instead of each becoming a dash.
-        const safeName = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
+        // ASCII stem for the stored name (core/upload-names); the original name stays the title.
+        const safeName = require('../core/upload-names').uploadStem(name);
         const uniqueName = `${safeName}-${uuidv4().substring(0, 8)}${ext}`;
         cb(null, uniqueName);
     }
