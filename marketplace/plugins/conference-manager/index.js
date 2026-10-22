@@ -34,7 +34,7 @@ const pack = require('./server/lodging-pack');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.31.0',
+    version: '2.31.1',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
