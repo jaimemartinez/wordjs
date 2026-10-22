@@ -69,6 +69,24 @@ describe("form controls have a visible border at rest", () => {
         expect(contrast(dark, darkSurface)).toBeGreaterThanOrEqual(3);
     });
 
+    it("a focused field with no focus border of its own does not fall back to its faint grey", () => {
+        // The Verso inspector's fields declare no focus:border-*: once the resting rule stepped aside at
+        // :focus, their edge went from 4.3:1 to 1.4:1 — lighter on focus than at rest.
+        const focusRule = /\):focus:not\(([^{]*)\)\s*\{\s*border-color:\s*([^;]+);/;
+        const admin = stripComments(read(resolve(SRC, "app/admin/admin-globals.css")));
+        const [, excluded, value] = admin.match(focusRule)!;
+        expect(excluded).toContain('[class*="focus:border-"]');
+        expect(excluded).toContain('[aria-invalid="true"]');
+        expect(value.trim()).toBe("var(--wjs-admin-control-focus-border)");
+        const token = admin.match(/--wjs-admin-control-focus-border:\s*(#[0-9a-f]{6})/i)![1];
+        expect(contrast(hex(token), WHITE)).toBeGreaterThanOrEqual(3);
+        expect(admin).toMatch(/:where\(\.verso-editor-ui, \.verso-container, \.verso-shell\)\s*\{\s*--wjs-admin-control-focus-border:\s*var\(--ed-primary/);
+        const primaries = [...read(resolve(SRC, "components/editor-theme.css")).matchAll(/--ed-primary:\s*(#[0-9a-f]{6})/gi)].map((m) => hex(m[1]));
+        expect(contrast(primaries[0], WHITE)).toBeGreaterThanOrEqual(3);
+        const system = stripComments(read(resolve(SRC, "app/globals.css"))).match(focusRule)!;
+        expect(system[1]).toContain('[class*="focus:border-"]');
+    });
+
     it("system screens (sign-in, register, reset, verify, install, migration) get the same rule", () => {
         expectRestingControlRule(read(resolve(SRC, "app/globals.css")), "#7c8594");
         for (const file of ["app/_root/AuthScreen.tsx", "app/install/layout.tsx", "app/migration/layout.tsx"]) {

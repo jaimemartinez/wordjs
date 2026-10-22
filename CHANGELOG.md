@@ -52,6 +52,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Verso:** the editor's own outline colour, in both light and dark mode.
   - **Public site and plugin UI kit:** the field's own text colour at 60%, so it also reads inside dark
     sections. A theme can still set `--wjs-form-input-border-color`; Circuito's own search field border (1.3:1 on its dark field) is now 3.5:1.
+  - **Focus:** a field keeps its own focus border and ring. One with no focus border of its own, such as
+    the Verso inspector's fields, now takes the focus colour instead of dropping back to its faint grey.
 
   A focused field keeps its own colour and ring, and an invalid or deliberately coloured one keeps its colour.
 - **A second menu with the same name can be created again.** Since term slugs became unique in the database,

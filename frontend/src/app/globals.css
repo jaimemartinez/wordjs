@@ -212,3 +212,11 @@ body {
   ):not(:focus, [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
   border-color: #7c8594;
 }
+/* …and a focused field with no focus border of its own takes the focus blue instead of dropping back to grey. */
+:where([data-wjs-system-screen]) :is(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="submit"], [type="button"], [type="reset"], [type="image"]),
+    select,
+    textarea
+  ):focus:not([class*="focus:border-"], [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
+  border-color: #2563eb;
+}

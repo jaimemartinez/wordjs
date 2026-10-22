@@ -95,3 +95,20 @@ iframe {
   ):not(:focus, [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
   border-color: var(--wjs-admin-control-border);
 }
+/* A focused field that declares no focus border of its own (no `focus:border-*`, e.g. the Verso inspector's
+ * fields) would otherwise fall back to its faint grey: the edge got LIGHTER on focus. It takes the focus
+ * colour instead. A field with its own focus border (or focus:border-transparent + ring) keeps it. */
+:root {
+  --wjs-admin-control-focus-border: #2563eb; /* blue-600, the admin's focus blue: 5.2:1 on white */
+}
+:where(.verso-editor-ui, .verso-container, .verso-shell) {
+  --wjs-admin-control-focus-border: var(--ed-primary, #5146d8);
+}
+:is(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="submit"], [type="button"], [type="reset"], [type="image"]),
+    select,
+    textarea,
+    button[data-modern-select]
+  ):focus:not([class*="focus:border-"], [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
+  border-color: var(--wjs-admin-control-focus-border);
+}
