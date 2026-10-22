@@ -344,6 +344,8 @@ export interface User {
     role: string;
     capabilities: string[];
     personalEmail?: string | null;
+    /** The uploaded profile picture (a site-relative /uploads/avatars/… path), or null. */
+    avatarUrl?: string | null;
     /**
      * The plugin-declared account capabilities an administrator granted this account (slugs). Written as
      * a map `{slug: on/off}` through POST /users and PUT /users/:id, and only by a caller holding
@@ -804,6 +806,17 @@ export const usersApi = {
      */
     revokeSessions: (currentPassword: string) =>
         apiPost<{ signedOut: boolean }>("/users/me/sessions/revoke", { currentPassword }),
+    /** Profile picture: re-encoded server-side to a 256×256 WebP. Answers the updated user. */
+    uploadAvatar: (file: File) => {
+        const form = new FormData();
+        form.append("avatar", file);
+        return api<User>("/users/me/avatar", { method: "PUT", body: form });
+    },
+    removeAvatar: () => apiDelete<User>("/users/me/avatar"),
+    /** Your data as a JSON file (profile, entries, comments, media). */
+    exportMe: () => api<Blob>("/users/me/export", { responseType: "blob" }),
+    /** Delete your own account (asks for the current password); the session ends with it. */
+    deleteMe: (currentPassword: string) => api<{ deleted: boolean }>("/users/me", { method: "DELETE", body: { currentPassword } }),
     /** `reassign`: attribute the account's entries to this other user first (DELETE /users/:id?reassign=). */
     delete: (id: number, reassign?: number) => apiDelete<{ deleted: boolean; reassigned?: number }>(reassign ? `/users/${id}?reassign=${reassign}` : `/users/${id}`),
 };

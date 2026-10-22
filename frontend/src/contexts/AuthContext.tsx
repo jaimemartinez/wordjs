@@ -26,6 +26,8 @@ interface User {
     roleName?: string | null;
     capabilities: string[];
     personalEmail?: string | null;
+    /** The uploaded profile picture (a site-relative /uploads/avatars/… path), or null. */
+    avatarUrl?: string | null;
     mfa?: MfaStatus;
     /** Multisite only (GET /auth/me): is this the network's main site, and is the user a network administrator. */
     network?: { mainSite: boolean; networkAdmin: boolean };

@@ -202,9 +202,14 @@ export default function UsersPage() {
                                 primary: true,
                                 cell: (user) => (
                                     <div className="flex items-center gap-4">
-                                        <div className="w-11 h-11 md:w-12 md:h-12 shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-200" aria-hidden="true">
-                                            {avatarInitial(user.displayName, user.username)}
-                                        </div>
+                                        {user.avatarUrl ? (
+                                            // eslint-disable-next-line @next/next/no-img-element -- the user's 256px WebP
+                                            <img src={user.avatarUrl} alt="" aria-hidden="true" className="w-11 h-11 md:w-12 md:h-12 shrink-0 rounded-2xl object-cover shadow-lg shadow-indigo-200" />
+                                        ) : (
+                                            <div className="w-11 h-11 md:w-12 md:h-12 shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-200" aria-hidden="true">
+                                                {avatarInitial(user.displayName, user.username)}
+                                            </div>
+                                        )}
                                         <div className="min-w-0">
                                             <button type="button" onClick={() => setSelectedUser(user)} className="text-left pointer-coarse:min-h-11">
                                                 <span className="text-base md:text-lg font-bold text-gray-700 hover:text-blue-600 transition-colors italic tracking-tight break-words">

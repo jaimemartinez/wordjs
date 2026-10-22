@@ -1669,6 +1669,173 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
     res.json({ reset: true, id: userId });
 }));
 
+// ─── Account self-service: profile picture, data export, deleting your own account ───────────────
+// My Account had no avatar (the admin painted the first letter of the name), no way to take your data
+// with you and no way to leave: an account opened through public sign-up could only be closed by asking
+// an administrator. All three are the signed-in user's own and need no capability; the delete asks for
+// the current password, like every other irreversible change to the account.
+
+const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+const AVATAR_SIZE = 256;
+const avatarUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: AVATAR_MAX_BYTES, files: 1 } });
+
+/** The folder avatars live in (public uploads, `avatars/`), created on first use. */
+function avatarDir(): string {
+    const dir = require('path').join(require('../core/private-media').uploadsRootFor(false), 'avatars');
+    require('fs').mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+/** Remove the file a stored avatar_url names, if it is one of ours. Best-effort. */
+function removeAvatarFile(url: unknown): void {
+    if (typeof url !== 'string' || !/^\/uploads\/avatars\/[A-Za-z0-9_-]+\.webp$/.test(url)) return;
+    try { require('fs').unlinkSync(require('path').join(avatarDir(), require('path').basename(url))); } catch { /* already gone */ }
+}
+
+/**
+ * @swagger
+ * /users/me/avatar:
+ *   put:
+ *     summary: Upload your profile picture
+ *     description: >-
+ *       multipart/form-data with one image under `avatar` (JPEG, PNG, WebP, GIF or AVIF, at most 5 MB). It is
+ *       re-encoded server-side to a 256×256 WebP (metadata dropped) and shown instead of the initial.
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: The updated user (avatarUrl set)
+ *       400:
+ *         description: rest_avatar_invalid — no file, or not an image
+ *       413:
+ *         description: rest_upload_too_large
+ *   delete:
+ *     summary: Remove your profile picture
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: The updated user (avatarUrl null)
+ */
+router.put('/me/avatar', (req: Request, res: Response, next: any) => {
+    avatarUpload.single('avatar')(req, res, (err: any) => {
+        if (err && err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({ code: 'rest_upload_too_large', message: 'The picture is larger than 5 MB.', data: { status: 413, maxBytes: AVATAR_MAX_BYTES } });
+        }
+        if (err) return next(err);
+        next();
+    });
+}, asyncHandler(async (req: Request, res: Response) => {
+    const file = (req as Request & { file?: { buffer: Buffer } }).file;
+    const invalid = () => res.status(400).json({ code: 'rest_avatar_invalid', message: 'Choose an image file (JPEG, PNG, WebP, GIF or AVIF).', data: { status: 400 } });
+    if (!file || !file.buffer || !file.buffer.length) return invalid();
+    const sharp = require('sharp');
+    let webp: Buffer;
+    try {
+        // Decoding IS the check: anything sharp cannot read as an image is refused. The output is a fresh
+        // encode (no EXIF/GPS; SVG, which could carry scripts, is not an accepted input).
+        const meta = await sharp(file.buffer, { limitInputPixels: 40_000_000 }).metadata();
+        if (!meta || !['jpeg', 'png', 'webp', 'gif', 'avif', 'heif'].includes(String(meta.format))) return invalid();
+        webp = await sharp(file.buffer, { limitInputPixels: 40_000_000, animated: false })
+            .rotate().resize(AVATAR_SIZE, AVATAR_SIZE, { fit: 'cover' }).webp({ quality: 82 }).toBuffer();
+    } catch {
+        return invalid();
+    }
+    const name = `${Number(req.user.id)}-${require('crypto').randomBytes(6).toString('hex')}.webp`;
+    require('fs').writeFileSync(require('path').join(avatarDir(), name), webp);
+    const previous = req.user.meta && req.user.meta.avatar_url;
+    await User.updateMeta(req.user.id, 'avatar_url', `/uploads/avatars/${name}`);
+    removeAvatarFile(previous);
+    await recordAudit(req.user.id, 'user.avatar.update', 'user', req.user.id, {});
+    const fresh = await User.findById(req.user.id);
+    res.json(fresh.toJSON());
+}));
+
+router.delete('/me/avatar', asyncHandler(async (req: Request, res: Response) => {
+    const previous = req.user.meta && req.user.meta.avatar_url;
+    await User.deleteMeta(req.user.id, 'avatar_url');
+    removeAvatarFile(previous);
+    const fresh = await User.findById(req.user.id);
+    res.json(fresh.toJSON());
+}));
+
+/**
+ * @swagger
+ * /users/me/export:
+ *   get:
+ *     summary: Download your data
+ *     description: >-
+ *       A JSON file with your profile (no password hash, no security material), the entries you wrote,
+ *       the comments you posted while signed in and the media you uploaded. An interactive session only.
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: application/json attachment
+ */
+router.get('/me/export', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
+    const { dbAsync } = require('../config/database');
+    const uid = Number(req.user.id);
+    const entries = await dbAsync.all(
+        "SELECT id, post_type, post_status, post_title, post_name, post_date, post_modified FROM posts " +
+        "WHERE author_id = ? AND post_type NOT IN ('revision', 'attachment') ORDER BY post_date DESC LIMIT 5000", [uid]);
+    const media = await dbAsync.all(
+        "SELECT id, post_title, post_mime_type, post_date FROM posts WHERE author_id = ? AND post_type = 'attachment' ORDER BY post_date DESC LIMIT 5000", [uid]);
+    const comments = await dbAsync.all(
+        'SELECT comment_id, comment_post_id, comment_date, comment_content, comment_approved FROM comments WHERE user_id = ? ORDER BY comment_date DESC LIMIT 5000', [uid]);
+    const profile = req.user.toJSON();
+    const body = {
+        exportedAt: new Date().toISOString(),
+        profile: { id: profile.id, username: profile.username, email: profile.email, displayName: profile.displayName, role: profile.role, personalEmail: profile.personalEmail, avatarUrl: profile.avatarUrl, meta: profile.meta },
+        entries: entries.map((r: any) => ({ id: r.id, type: r.post_type, status: r.post_status, title: r.post_title, slug: r.post_name, date: r.post_date, modified: r.post_modified })),
+        comments: comments.map((r: any) => ({ id: r.comment_id, postId: r.comment_post_id, date: r.comment_date, status: r.comment_approved, content: r.comment_content })),
+        media: media.map((r: any) => ({ id: r.id, title: r.post_title, mimeType: r.post_mime_type, date: r.post_date })),
+    };
+    await recordAudit(uid, 'user.export', 'user', uid, {});
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Disposition', `attachment; filename="account-${uid}.json"`);
+    res.json(body);
+}));
+
+/**
+ * @swagger
+ * /users/me:
+ *   delete:
+ *     summary: Delete your own account
+ *     description: >-
+ *       Asks for the current password (`currentPassword`). Your entries stay on the site, unattributed (only an
+ *       administrator can reassign them, from the Users screen). The last administrator cannot delete their
+ *       account. The session ends with it.
+ *     tags: [Users]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ deleted: true }"
+ *       403:
+ *         description: rest_bad_current_password, or rest_last_administrator
+ */
+router.delete('/me', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const uid = Number(req.user.id);
+    if (protectsNetworkAdmin(req, uid)) return refuseNetworkAdminTarget(res);
+    if (isPrivilegedTarget(req.user)) {
+        const admins = await User.count({ role: 'administrator' });
+        if (Number(admins) <= 1) {
+            return res.status(403).json({ code: 'rest_last_administrator', message: 'You are the only administrator: make someone else an administrator before deleting your account.', data: { status: 403 } });
+        }
+    }
+    removeAvatarFile(req.user.meta && req.user.meta.avatar_url);
+    const login = req.user.userLogin;
+    await User.delete(uid);
+    await recordAudit(uid, 'user.delete', 'user', uid, { username: login, self: true });
+    require('../middleware/auth').clearSessionCookies(res);
+    res.json({ deleted: true });
+}));
+
 /**
  * @swagger
  * /users/{id}:

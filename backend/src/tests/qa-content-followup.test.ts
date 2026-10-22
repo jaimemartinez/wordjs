@@ -141,3 +141,65 @@ test('«Remember me» off survives the two-factor step', async () => {
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.doesNotMatch(sessionCookieLine(ok), /Max-Age|Expires/i);
 });
+
+// ── account self-service ──────────────────────────────────────────────────────────────────────────
+
+test('a user uploads a profile picture (re-encoded to WebP), and removes it', async () => {
+    await seedUser('pic', 'subscriber');
+    const png = await require('sharp')({ create: { width: 600, height: 400, channels: 3, background: { r: 200, g: 30, b: 30 } } }).png().toBuffer();
+    const up = await request(app).put(`${B}/users/me/avatar`).set(bearer('pic')).attach('avatar', png, { filename: 'me.png', contentType: 'image/png' });
+    assert.strictEqual(up.status, 200, JSON.stringify(up.body));
+    assert.match(up.body.avatarUrl, /^\/uploads\/avatars\/\d+-[0-9a-f]{12}\.webp$/);
+    const stored = require('path').join(require('../core/private-media').uploadsRootFor(false), 'avatars', require('path').basename(up.body.avatarUrl));
+    const meta = await require('sharp')(require('fs').readFileSync(stored)).metadata();
+    assert.strictEqual(meta.format, 'webp');
+    assert.strictEqual(meta.width, 256);
+
+    const notImage = await request(app).put(`${B}/users/me/avatar`).set(bearer('pic')).attach('avatar', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'), { filename: 'x.svg', contentType: 'image/svg+xml' });
+    assert.strictEqual(notImage.status, 400);
+    assert.strictEqual(notImage.body.code, 'rest_avatar_invalid');
+
+    // A profile save cannot point avatar_url anywhere else.
+    await request(app).put(`${B}/users/me`).set(bearer('pic')).send({ meta: { avatar_url: 'https://tracker.example/p.gif' } });
+    assert.strictEqual((await request(app).get(`${B}/users/me`).set(bearer('pic'))).body.avatarUrl, up.body.avatarUrl);
+
+    const removed = await request(app).delete(`${B}/users/me/avatar`).set(bearer('pic'));
+    assert.strictEqual(removed.status, 200);
+    assert.strictEqual(removed.body.avatarUrl, null);
+    assert.strictEqual(require('fs').existsSync(stored), false, 'the file goes too');
+});
+
+test('a user downloads their data: profile, entries, comments, media — never the password hash', async () => {
+    const post = await request(app).post(`${B}/posts`).set(bearer('author1')).send({ title: 'Mine', status: 'draft' });
+    assert.strictEqual(post.status, 201, JSON.stringify(post.body));
+    const login = await request(app).post(`${B}/auth/login`).set(SAME_ORIGIN).send({ username: 'author1', password: PASSWORD });
+    const session = setCookieValue(login, SESSION_COOKIE);
+    const res = await request(app).get(`${B}/users/me/export`).set(SAME_ORIGIN).set('Cookie', `${SESSION_COOKIE}=${session}`);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.match(String(res.headers['content-disposition']), /attachment; filename="account-\d+\.json"/);
+    assert.strictEqual(res.body.profile.username, 'author1');
+    assert.ok(res.body.entries.some((e: any) => e.title === 'Mine'));
+    assert.ok(Array.isArray(res.body.comments) && Array.isArray(res.body.media));
+    assert.doesNotMatch(JSON.stringify(res.body), /\$2[aby]\$/, 'no bcrypt hash');
+});
+
+test('a user deletes their own account with the password; the last administrator cannot', async () => {
+    await seedUser('leaver', 'subscriber');
+    const login = await request(app).post(`${B}/auth/login`).set(SAME_ORIGIN).send({ username: 'leaver', password: PASSWORD });
+    const s = { session: setCookieValue(login, SESSION_COOKIE) as string, csrf: setCookieValue(login, CSRF_COOKIE) as string };
+    const del = (body: any) => request(app).delete(`${B}/users/me`).set(SAME_ORIGIN)
+        .set('Cookie', `${SESSION_COOKIE}=${s.session}; ${CSRF_COOKIE}=${s.csrf}`).set(CSRF_HEADER, s.csrf).send(body);
+    const wrong = await del({ currentPassword: 'not-it' });
+    assert.strictEqual(wrong.status, 403, JSON.stringify(wrong.body));
+    const ok = await del({ currentPassword: PASSWORD });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(await require('../models/User').findById(ids.leaver), null);
+
+    // admin is the only administrator here.
+    const a = await request(app).post(`${B}/auth/login`).set(SAME_ORIGIN).send({ username: 'admin', password: PASSWORD });
+    const as = { session: setCookieValue(a, SESSION_COOKIE) as string, csrf: setCookieValue(a, CSRF_COOKIE) as string };
+    const last = await request(app).delete(`${B}/users/me`).set(SAME_ORIGIN)
+        .set('Cookie', `${SESSION_COOKIE}=${as.session}; ${CSRF_COOKIE}=${as.csrf}`).set(CSRF_HEADER, as.csrf).send({ currentPassword: PASSWORD });
+    assert.strictEqual(last.status, 403);
+    assert.strictEqual(last.body.code, 'rest_last_administrator');
+});
