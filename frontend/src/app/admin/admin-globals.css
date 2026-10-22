@@ -71,3 +71,27 @@ iframe {
     inset: -8px -4px;
   }
 }
+
+/* Form controls show their edge at rest (WCAG 1.4.11: 3:1 for a UI component's boundary — FALLOS 130).
+ * The admin styles its fields with the decorative greys (border-gray-100/200/300, slate-200…): 1.1–1.5:1
+ * against a white card, so a field was invisible until it took focus. This sets the RESTING border colour
+ * of every text-like control and of the custom select's trigger; the width stays whatever the field
+ * declares (a borderless field stays borderless). Not touched: a focused field (its ring and blue border),
+ * an invalid one, one the screen colours on purpose (red/rose/amber/green/emerald) or makes transparent.
+ * Unlayered, so it wins over the Tailwind utilities that set the faint colour. Plugin admin screens live in
+ * this document and inherit it. Inside the Verso editor (light and dark) the editor's outline token
+ * applies instead. Opt a control out with data-control-border="none". */
+:root {
+  --wjs-admin-control-border: #7c8594; /* 3.8:1 on white, 3.6:1 on gray-50, 3.4:1 on gray-100 */
+}
+:where(.verso-editor-ui, .verso-container, .verso-shell) {
+  --wjs-admin-control-border: var(--ed-outline, #777987);
+}
+:is(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="submit"], [type="button"], [type="reset"], [type="image"]),
+    select,
+    textarea,
+    button[data-modern-select]:not([aria-expanded="true"])
+  ):not(:focus, [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
+  border-color: var(--wjs-admin-control-border);
+}

@@ -16,7 +16,7 @@ export async function AuthScreen({ children }: { children: React.ReactNode }) {
     const lang = await initialAdminLanguage();
     return (
         <I18nProvider initialLanguage={lang}>
-            <div className={inter.className}>{children}</div>
+            <div className={inter.className} data-wjs-system-screen="">{children}</div>
         </I18nProvider>
     );
 }
@@ -28,7 +28,7 @@ export async function authDocument(children: React.ReactNode) {
         uiLanguage: lang,
         children: (
             <I18nProvider initialLanguage={lang}>
-                <div className={inter.className}>{children}</div>
+                <div className={inter.className} data-wjs-system-screen="">{children}</div>
             </I18nProvider>
         ),
     });
