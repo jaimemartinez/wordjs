@@ -1256,15 +1256,19 @@ const unlockLimiter = require('express-rate-limit')({
  */
 /**
  * An entry password (WordPress `post_password`) is stored as the author typed it, so the comparison is
- * the only thing to get right: constant time and independent of either length. Both values go through an
- * HMAC under a key that exists only in this process, which gives two equal-length digests for
- * timingSafeEqual; nothing derived from the password is kept or leaves the process.
+ * the only thing to get right: constant time over the raw bytes. Both are zero-padded to the longer
+ * length for timingSafeEqual, and the lengths must match as well (a padded prefix is not the password).
  */
-const UNLOCK_COMPARE_KEY = require('crypto').randomBytes(32);
 function unlockPasswordMatches(given: string, stored: string): boolean {
-    const crypto = require('crypto');
-    const mac = (s: string) => crypto.createHmac('sha256', UNLOCK_COMPARE_KEY).update(s, 'utf8').digest();
-    return crypto.timingSafeEqual(mac(given), mac(stored));
+    const a = Buffer.from(given, 'utf8');
+    const b = Buffer.from(stored, 'utf8');
+    const n = Math.max(a.length, b.length, 1);
+    const pa = Buffer.alloc(n);
+    const pb = Buffer.alloc(n);
+    a.copy(pa);
+    b.copy(pb);
+    const same = require('crypto').timingSafeEqual(pa, pb);
+    return same && a.length === b.length;
 }
 
 router.post('/:id/unlock', unlockLimiter, optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
