@@ -5,6 +5,8 @@
 
 const { db, dbAsync } = require('../config/database');
 const { getOption, updateOption } = require('../core/options');
+const { sanitizeTitle } = require('../core/formatting');
+const Term = require('./Term');
 
 /**
  * Navigation menu item structure
@@ -119,10 +121,21 @@ class Menu {
             throw new Error('Menu name is required');
         }
 
-        const menuSlug = slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-
-        // Create term for the menu
-        const termResult = await dbAsync.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0) RETURNING term_id', [name, menuSlug]);
+        // A menu is a term, so its slug follows the term rules (QA M3-17): accents fold, other characters
+        // never leave stray dashes, and a second menu of the same name gets "-2" — term slugs are unique in
+        // the database (migration 0023), so a repeated slug would not even insert.
+        let menuSlug = await Term.generateUniqueSlug(sanitizeTitle(String(slug || name)) || 'menu');
+        let termResult: any;
+        for (let attempt = 1; ; attempt++) {
+            try {
+                termResult = await dbAsync.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0) RETURNING term_id', [name, menuSlug]);
+                break;
+            } catch (e: any) {
+                // Another request took the slug between the check and the insert: the next free one.
+                if (attempt >= 10 || !require('../core/db-errors').isUniqueViolation(e)) throw e;
+                menuSlug = await Term.generateUniqueSlug(menuSlug);
+            }
+        }
         const termId = termResult.lastID;
 
         // Create term_taxonomy for nav_menu
@@ -199,7 +212,8 @@ class Menu {
             await dbAsync.run('UPDATE terms SET name = ? WHERE term_id = ?', [data.name, id]);
         }
         if (data.slug) {
-            await dbAsync.run('UPDATE terms SET slug = ? WHERE term_id = ?', [data.slug, id]);
+            const newSlug = await Term.generateUniqueSlug(sanitizeTitle(String(data.slug)) || 'menu', id);
+            await dbAsync.run('UPDATE terms SET slug = ? WHERE term_id = ?', [newSlug, id]);
         }
         if (data.description !== undefined) {
             await dbAsync.run(`

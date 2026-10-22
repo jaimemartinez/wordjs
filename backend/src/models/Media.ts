@@ -594,6 +594,8 @@ class Media {
             'mp4': 'video/mp4',
             'webm': 'video/webm',
             'ogv': 'video/ogg',
+            // QuickTime, as WordPress allows (phone cameras record it; imports carry it).
+            'mov': 'video/quicktime',
 
             // Archives
             'zip': 'application/zip',

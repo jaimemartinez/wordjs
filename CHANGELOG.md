@@ -6,6 +6,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second menu with the same name can be created again.** Since term slugs became unique in the database,
+  creating a menu whose name another menu already had answered an error; menus now take their slug the way
+  terms do, so the second one gets `-2`, and a slug never starts or ends with a stray dash.
+- **File names from non-Latin text.** An upload named `ñandú 漢字 😀 שלום.png` was stored as
+  `--and--------…-<id>.png`; accents now fold, every other run of characters becomes one dash, and a name with
+  nothing Latin left is stored as `file-<id>` (the original name stays the media title; stored names stay ASCII
+  so they remain valid S3 keys).
+- **WordPress import: `.mov` videos, and site-editor records.** QuickTime videos (`video/quicktime`) are
+  accepted, as WordPress accepts them — from an import and from an upload. WordPress's own site-editor records
+  (`wp_navigation`, templates, global styles, fonts, Customizer CSS) are no longer imported as posts whose
+  link is a 404; the import leaves them out and the summary says how many.
+
 ## [2.8.0] - 2026-10-22
 
 ### Added

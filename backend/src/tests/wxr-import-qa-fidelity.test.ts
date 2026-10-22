@@ -202,3 +202,25 @@ test('S3-08: a save over a newer version is refused (409) when the editor sends 
     const forced = await request(app).put(`/api/v1/posts/${created.id}`).set('Authorization', `Bearer ${token}`).send({ title: 'Two tabs B' });
     assert.strictEqual(forced.status, 200);
 });
+
+test('M3-18 / X3-24: a .mov attachment is accepted (WordPress allows video/quicktime)', async () => {
+    const xml = wxr(item({ id: '70', title: 'Slider video', slug: 'slider-video-mov', type: 'attachment', status: 'inherit', url: `${SITE}/wp-content/uploads/2014/01/slider.mov`, mime: 'video/quicktime' }, { _wp_attached_file: '2014/01/slider.mov' }));
+    const s = await importWxr(xml, { defaultAuthorId: adminId, media: 'link' });
+    assert.strictEqual(s.media.linked, 1, JSON.stringify(s.media));
+    assert.ok(!s.media.failures.some((f: any) => /\.mov is not an allowed/.test(f.reason)), JSON.stringify(s.media.failures));
+    const Media = require('../models/Media');
+    assert.strictEqual(Media.getExtensionForMime('video/quicktime'), 'mov');
+});
+
+test('M3-18: WordPress site-editor records (wp_navigation, templates, styles) are left out and counted apart', async () => {
+    const xml = wxr(
+        item({ id: '80', title: 'Navigation', slug: 'navigation', type: 'wp_navigation', content: '<!-- wp:navigation-link /-->' })
+        + item({ id: '81', title: 'Single', slug: 'single', type: 'wp_template' })
+        + item({ id: '82', title: 'A real post', slug: 'a-real-post-m318' })
+    );
+    const s = await importWxr(xml, { defaultAuthorId: adminId, media: 'skip' });
+    assert.strictEqual(s.posts.created, 1, 'only the real post is a post');
+    assert.strictEqual(s.siteEditor.skipped, 2);
+    const stray = await dbAsync.get("SELECT COUNT(*) AS c FROM posts WHERE post_type IN ('wp_navigation', 'wp_template')");
+    assert.strictEqual(Number(stray.c), 0);
+});
