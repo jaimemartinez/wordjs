@@ -113,3 +113,15 @@ describe("the core admin draws no native date picker", () => {
         expect(build).toContain("'components/ui/DatePicker'");
     });
 });
+
+describe("the site's first weekday", () => {
+    it("is unknown (null) until the settings arrive, so a calendar opened first does not flash Monday", async () => {
+        const { useWeekStart } = await import("@/lib/useWeekStart");
+        const Probe = ({ override }: { override?: number }) => <i>{String(useWeekStart(override))}</i>;
+        // settingsApi.get never resolves in this suite.
+        expect(renderToStaticMarkup(<Probe />)).toBe("<i>null</i>");
+        expect(renderToStaticMarkup(<Probe override={0} />)).toBe("<i>0</i>");
+        const src = readFileSync(resolve(SRC, "components/ui/DatePicker.tsx"), "utf8");
+        expect(src).toMatch(/!weekReady \? \(/);
+    });
+});

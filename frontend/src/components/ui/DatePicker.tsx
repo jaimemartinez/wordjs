@@ -171,7 +171,9 @@ function PickerField({ withTime, ...props }: DatePickerProps & { withTime: boole
         value, onChange, min, max, id, label, ariaLabel, placeholder, disabled, clearable = true, className = "", title,
     } = props;
     const { t, lang } = useTranslate();
-    const weekStart = useWeekStart(props.weekStart);
+    const knownWeekStart = useWeekStart(props.weekStart);
+    const weekReady = knownWeekStart !== null;
+    const weekStart = knownWeekStart ?? 1;
     const autoId = useId();
     const fieldId = id ?? `dp-${autoId}`;
     const dialogId = `${fieldId}-dialog`;
@@ -214,7 +216,7 @@ function PickerField({ withTime, ...props }: DatePickerProps & { withTime: boole
         if (!open) return;
         const cell = gridRef.current?.querySelector<HTMLButtonElement>(`[${CELL_ATTR}="${formatDay(focusDay)}"]`);
         cell?.focus({ preventScroll: true });
-    }, [open, focusDay, view]);
+    }, [open, focusDay, view, weekReady]);
 
     // A click outside closes (the trigger toggles on its own).
     useEffect(() => {
@@ -345,6 +347,10 @@ function PickerField({ withTime, ...props }: DatePickerProps & { withTime: boole
                 {navButton("datePicker.nextYear", "fa-angles-right", () => moveFocus(addMonths(focusDay, 12)))}
             </div>
 
+            {!weekReady ? (
+                // The site's first weekday is still loading: hold the grid's space rather than draw Monday first.
+                <div aria-hidden="true" className="h-[320px] sm:h-[272px]" />
+            ) : (
             <CalendarGrid
                 gridRef={gridRef}
                 titleId={titleId}
@@ -360,6 +366,7 @@ function PickerField({ withTime, ...props }: DatePickerProps & { withTime: boole
                 onKeyDown={onGridKey}
                 onPick={(day) => { setFocusDay(day); commitDay(day); }}
             />
+            )}
 
             {withTime && (
                 <div className="mt-3 flex items-center gap-2 text-sm">

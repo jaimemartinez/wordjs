@@ -2,8 +2,8 @@
 
 /**
  * The site's first day of the week (the `start_of_week` option, Settings → General), for every calendar
- * the admin draws. Read once per page load from the public settings and shared by all pickers; Monday
- * until it arrives, or if it cannot be read.
+ * the admin draws. Read once per page load from the public settings and shared by all pickers; null until
+ * it arrives (a calendar waits for it rather than flashing Monday first), Monday if it cannot be read.
  */
 import { useEffect, useState } from "react";
 import { settingsApi } from "./api";
@@ -26,8 +26,8 @@ export function resetWeekStart(value?: unknown): void {
     pending = null;
 }
 
-export function useWeekStart(override?: number): number {
-    const [weekStart, setWeekStart] = useState<number>(override ?? cached ?? 1);
+export function useWeekStart(override?: number): number | null {
+    const [weekStart, setWeekStart] = useState<number | null>(override ?? cached);
     useEffect(() => {
         if (override !== undefined) return;
         let active = true;
