@@ -132,7 +132,7 @@ export default function SecurityPage() {
 import { apiGet, apiPost } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useRouter } from "next/navigation";
-import { afterGatewayConfigSave } from "@/lib/siteAddress";
+import { afterGatewayConfigSave, edgeKey, type EdgeKind } from "@/lib/siteAddress";
 import { gatewayServingNotice, gatewayNeedsCertificate } from "@/lib/gatewayServing";
 
 // The certificate box's note, by the code the backend sends with it; an unknown code (or none, from an older
@@ -196,14 +196,17 @@ function GatewayConfigForm() {
         }
     };
 
+    // What answers on the public port. A monolith has no gateway: its dialogs and notices say "the server".
+    const edge: EdgeKind = config?.source === 'monolith' ? 'server' : 'gateway';
+
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
         // Changing the protocol the gateway speaks can cut off whatever sits in front of it (a proxy or a
         // tunnel speaking the other one), so it is never a silent side effect of "Save".
         if (savedSsl !== null && !!config.sslEnabled !== savedSsl) {
             const ok = await confirm(
-                t(config.sslEnabled ? 'security.gateway.confirmTransportOn' : 'security.gateway.confirmTransportOff'),
-                t('security.gateway.confirmTitle'),
+                t(edgeKey(config.sslEnabled ? 'security.gateway.confirmTransportOn' : 'security.gateway.confirmTransportOff', edge)),
+                t(edgeKey('security.gateway.confirmTitle', edge)),
                 true,
             );
             if (!ok) return;
@@ -222,7 +225,7 @@ function GatewayConfigForm() {
             // The answer also says what the change did to the site's main address: followed at once
             // (same host, http → https) or only suggested — then the admin decides on the
             // site-address screen, which opens the change dialog prefilled (SPEC §6, REDTEAM R1).
-            await afterGatewayConfigSave(saved, { alert, navigate: (href) => router.push(href) });
+            await afterGatewayConfigSave(saved, { alert, navigate: (href) => router.push(href), t, edge });
         } catch (e: any) {
             await alert(t('security.gateway.saveFailed').replace('{error}', () => e.message));
         } finally {

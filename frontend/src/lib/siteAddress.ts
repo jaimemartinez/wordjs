@@ -862,32 +862,52 @@ export function gatewayAddressOutcome(res: unknown): GatewayAddressOutcome | nul
     return null;
 }
 
+/** What answers on the public port: the gateway (split and separate mode) or this server itself (monolith). */
+export type EdgeKind = "gateway" | "server";
+
+/** A catalogue key for this edge: the gateway's wording is the base key, the monolith's adds `.server`. */
+export function edgeKey(key: string, edge: EdgeKind): string {
+    return edge === "server" ? `${key}.server` : key;
+}
+
+const fill = (text: string, vars: Record<string, string>) =>
+    Object.entries(vars).reduce((out, [k, v]) => out.split(`{${k}}`).join(v), text);
+
 /**
- * Tell the admin what the gateway change did to the main address, after the save. The security page
- * passes its modal and router; the messages are English like the rest of that page. On a suggestion
- * the admin is taken to the site-address screen, which opens the change dialog prefilled.
+ * Tell the admin what the protocol or port change did to the main address, after the save, in the
+ * admin's language (`t`) and naming what actually answers: "the gateway", or "the server" on a
+ * monolith, where there is no gateway. On a suggestion the admin is taken to the site-address screen,
+ * which opens the change dialog prefilled. The backend's own `siteAddressWarnings` are passed through
+ * as it wrote them.
  */
 export async function afterGatewayConfigSave(
     res: unknown,
-    io: { alert: (message: string) => unknown; navigate: (href: string) => void },
+    io: {
+        alert: (message: string) => unknown;
+        navigate: (href: string) => void;
+        t: (key: string) => string;
+        edge: EdgeKind;
+    },
 ): Promise<GatewayAddressOutcome | null> {
+    const { t } = io;
     // The gateway reloads its workers by itself (gateway/src/index.js, POST /config-update); a monolith
-    // restarts its one process (core/cert-manager updateMonolithConfig).
+    // restarts its one process (core/cert-manager updateMonolithConfig). The answer says which it was
+    // (`monolith: true`), which wins over what the page assumed.
     const monolith = !!(res && typeof res === "object" && (res as { monolith?: unknown }).monolith === true);
-    const restart = monolith ? "WordJS restarts by itself in a few seconds to apply it." : "The gateway reloads itself in a few seconds.";
-    const server = monolith ? "WordJS" : "The gateway";
+    const edge: EdgeKind = monolith ? "server" : io.edge;
+    const restart = t(edgeKey("security.saved.restart", edge));
     const outcome = gatewayAddressOutcome(res);
+    const notes = (warnings: string[]) =>
+        warnings.length ? fill(t("security.saved.note"), { warnings: warnings.join(" ") }) : "";
     if (outcome?.kind === "upgraded") {
-        const notes = outcome.warnings.length ? ` Note: ${outcome.warnings.join(" ")}` : "";
-        await io.alert(`Settings saved. The main address is now ${outcome.address}: emails, feeds and the sitemap link to it from now on.${notes} ${restart}`);
+        await io.alert(fill(t("security.saved.upgraded"), { address: outcome.address, notes: notes(outcome.warnings), restart }));
     } else if (outcome?.kind === "downgraded") {
-        const notes = outcome.warnings.length ? ` Note: ${outcome.warnings.join(" ")}` : "";
-        await io.alert(`Settings saved. ${server} now serves plain HTTP and the main address is ${outcome.address}: open the panel there to keep working.${notes} ${restart}`);
+        await io.alert(fill(t(edgeKey("security.saved.downgraded", edge)), { address: outcome.address, notes: notes(outcome.warnings), restart }));
     } else if (outcome?.kind === "suggest") {
-        await io.alert(`Settings saved. ${server} now serves the site at ${outcome.address}, which is not the main address. Review it in Settings → Site address. ${restart}`);
+        await io.alert(fill(t(edgeKey("security.saved.suggest", edge)), { address: outcome.address, restart }));
         io.navigate(outcome.href);
     } else {
-        await io.alert(`Settings saved. ${restart}`);
+        await io.alert(fill(t("security.saved.plain"), { restart }));
     }
     return outcome;
 }

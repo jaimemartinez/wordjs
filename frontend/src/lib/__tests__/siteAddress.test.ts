@@ -12,7 +12,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import * as hostPolicy from "../../../../backend/src/core/host-policy.js";
+import { t as translate, type Language } from "../i18n";
 import {
+    type EdgeKind,
+    edgeKey,
     ADMIN_LANGUAGE_STORAGE_KEY,
     TUNNEL_DEFAULT_TTL_MS,
     TUNNEL_SUFFIXES,
@@ -675,7 +678,7 @@ describe("after an SSL or port change: the main address is followed or suggested
         const run = async (res: unknown) => {
             const alerts: string[] = [];
             const went: string[] = [];
-            await afterGatewayConfigSave(res, { alert: async (m) => { alerts.push(m); }, navigate: (href) => went.push(href) });
+            await afterGatewayConfigSave(res, { alert: async (m) => { alerts.push(m); }, navigate: (href) => went.push(href), t: (k) => translate(k, "en"), edge: "gateway" });
             return { alerts, went };
         };
         const suggested = await run({ suggestCanonical: "http://example.com:3000" });
@@ -703,6 +706,38 @@ describe("after an SSL or port change: the main address is followed or suggested
         expect(downgraded.went).toEqual([]);
     });
 
+    it('the notices are in the admin\'s language, and a monolith says "the server", never "the gateway"', async () => {
+        const run = async (res: unknown, lang: Language, edge: EdgeKind) => {
+            const alerts: string[] = [];
+            await afterGatewayConfigSave(res, { alert: async (m) => { alerts.push(m); }, navigate: () => undefined, t: (k) => translate(k, lang), edge });
+            return alerts[0];
+        };
+        expect(await run({}, "es", "gateway")).toBe("Configuración guardada. El gateway se recarga solo en unos segundos.");
+        expect(await run({ canonicalDowngraded: "http://example.com:3000" }, "pt", "gateway")).toMatch(/^Configurações salvas\. O gateway agora serve HTTP/);
+        expect(await run({}, "en", "server")).toBe("Settings saved. WordJS restarts by itself in a few seconds to apply it.");
+        // The answer itself says it came from a monolith: that wins over what the page assumed.
+        expect(await run({ monolith: true }, "es", "gateway")).toBe("Configuración guardada. WordJS se reinicia solo en unos segundos para aplicarlo.");
+        const answers = [{}, { canonicalDowngraded: "http://example.com:3000" }, { suggestCanonical: "http://example.com:3000" }, { canonicalUpgraded: "https://example.com" }];
+        for (const lang of ["es", "en", "pt"] as Language[]) {
+            for (const res of answers) {
+                const text = await run(res, lang, "server");
+                expect(text, `${lang} ${JSON.stringify(res)}`).not.toMatch(/gateway/i);
+                expect(text, `${lang} ${JSON.stringify(res)}`).not.toMatch(/security\.saved|\{\w+\}/); // every key and placeholder resolved
+            }
+        }
+    });
+
+    it("the protocol confirmation has a monolith wording in every language", () => {
+        for (const lang of ["es", "en", "pt"] as Language[]) {
+            for (const key of ["security.gateway.confirmTitle", "security.gateway.confirmTransportOn", "security.gateway.confirmTransportOff"]) {
+                const server = translate(edgeKey(key, "server"), lang);
+                expect(server, `${lang} ${key}`).not.toBe(edgeKey(key, "server"));
+                expect(server, `${lang} ${key}`).not.toMatch(/gateway/i);
+                expect(translate(edgeKey(key, "gateway"), lang), `${lang} ${key}`).toMatch(/gateway/i);
+            }
+        }
+    });
+
     it("?suggest= is a hint: honoured only for the address the backend itself reports as the gateway's", () => {
         const drift = emptyState({ canonical: site("https://example.com"), gatewayDrift: { gateway: "http://example.com:3000", config: "https://example.com" } });
         // The href the security page builds comes back through the query string intact.
@@ -722,7 +757,10 @@ describe("after an SSL or port change: the main address is followed or suggested
 
     it("the security page routes the save answer through it, and the site-address screen opens the change dialog from ?suggest=", () => {
         const security = screenSource("app/admin/security/page.tsx");
-        expect(security).toMatch(/const (\w+) = await apiPost<unknown>\('\/system\/certs\/config'[\s\S]*?afterGatewayConfigSave\(\1, \{ alert, navigate: \(href\) => router\.push\(href\) \}\)/);
+        expect(security).toMatch(/const (\w+) = await apiPost<unknown>\('\/system\/certs\/config'[\s\S]*?afterGatewayConfigSave\(\1, \{ alert, navigate: \(href\) => router\.push\(href\), t, edge \}\)/);
+        // The confirmation and the notices name what answers: a monolith has no gateway.
+        expect(security).toMatch(/const edge: EdgeKind = config\?\.source === 'monolith' \? 'server' : 'gateway'/);
+        expect(security).toMatch(/t\(edgeKey\('security\.gateway\.confirmTitle', edge\)\)/);
         const screen = screenSource("app/admin/settings/site-address/page.tsx");
         expect(screen).toMatch(/const suggestParam = useSearchParams\(\)\.get\("suggest"\)/);
         expect(screen).toMatch(/suggestedCanonical\(suggestParam, next\)[\s\S]{0,200}setDialog\(\{ kind: "canonical", prefillUrl: suggestion \}\)/);
