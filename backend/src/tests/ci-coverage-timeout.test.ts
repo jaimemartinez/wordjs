@@ -90,3 +90,13 @@ test('the aggregate jobs cannot be skipped into a pass', () => {
     assert.match(job('backend'), /\n {4}name: Backend \(typecheck \+ test\)\n/, 'branch protection requires this exact check name');
     assert.match(job('backend-coverage'), /\n {4}name: Backend coverage \(c8 ratchet\)\n/);
 });
+
+test('a failed daily run cannot pass unnoticed: it opens or updates an issue', () => {
+    const report = job('daily-failure-issue');
+    assert.match(report, /\n {4}if: failure\(\) && github\.event_name == 'schedule'\n/, 'the report must run only when the daily schedule failed');
+    assert.match(report, /\n {4}needs: \[[^\]]*\bbackend-coverage\b[^\]]*\]\n/, 'the coverage ratchet runs only daily, so its failure must be reported');
+    assert.match(report, /\n {4}needs: \[[^\]]*\bbackend\b[^\]]*\]\n/, 'a red backend suite on main must be reported');
+    assert.match(report, /\n {6}issues: write\n/, 'the job needs permission to open the issue');
+    assert.match(report, /gh issue create/, 'nothing opens an issue');
+    assert.match(report, /gh issue comment/, 'a second failure must comment on the open issue instead of opening a new one');
+});

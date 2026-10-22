@@ -759,6 +759,45 @@ jobs:
           path: backend/coverage/lcov.info
           retention-days: 7
           if-no-files-found: warn
+
+  daily-failure-issue:
+    # THE DAILY RUN MUST NOT FAIL SILENTLY (2026-10-22, owner). The coverage ratchet runs only on the daily
+    # schedule, and main has no post-merge run, so a red daily run is the only place a coverage drop or a
+    # time-dependent breakage shows up. When it fails, open an issue (or comment on the open one) with the
+    # link to the run, so GitHub notifies the maintainers.
+    name: Report a failed daily run
+    needs: [backend, backend-coverage, frontend, verso-e2e, gateway, multinode, bundle-boot]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the daily-run issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: >-
+            backend=${{ needs.backend.result }}, coverage=${{ needs.backend-coverage.result }},
+            frontend=${{ needs.frontend.result }}, verso-e2e=${{ needs.verso-e2e.result }},
+            gateway=${{ needs.gateway.result }}, multinode=${{ needs.multinode.result }},
+            bundle-boot=${{ needs.bundle-boot.result }}
+        run: |
+          set -eu
+          gh label create ci-daily --color B60205 --description "The daily CI run on main failed" --force >/dev/null
+          body="The daily CI run on \`main\` failed: $RUN_URL
+
+          Job results: $RESULTS
+
+          The coverage ratchet runs only in this daily run, and main has no post-merge CI, so this is where a coverage drop or a time-dependent breakage first shows up."
+          open=$(gh issue list --label ci-daily --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+          else
+            gh issue create --title "Daily CI run failed on main" --label ci-daily --body "$body"
+          fi
+
   multinode:
     # Multi-node coherence leg. Boots TWO backend cores as SEPARATE OS PROCESSES against ONE shared
     # Postgres 16 + Redis 7 and asserts the property that only holds across nodes: an option/role change
