@@ -20,6 +20,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Editing your own user from the Users list asks for your current password when it is needed.** Turning on a grant that sets your email (such as *Professional email account*), changing your email or setting a new password on your own row was refused with «current password incorrect» and no field to type it in; the dialog now asks for it, as the full-page editor does.
 - **A crashed frontend no longer takes the whole service down.** In split mode, the Next server killed by a signal made `start-frontend.js` exit 0 and `concurrently` stopped the gateway and the backend with it (about a minute of total outage). The frontend is now started again after a crash, with the backend supervisor's back-off.
 - **Fewer API requests per public visit:** the active plugins and the font faces come with the page (a font upload or delete now refreshes the cached pages), and comments are requested only when the reader gets near them.
 - **Installer:** a wrong install token is reported on the first step instead of after the database form.

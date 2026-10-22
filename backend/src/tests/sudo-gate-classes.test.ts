@@ -1052,6 +1052,36 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
     }
 });
 
+// FALLOS 125 — an administrator turning on a plugin grant that binds the email («Professional email account»)
+// on THEIR OWN record: the mail plugin rewrites the address to <username>@<mail domain> in the form, and the
+// whole form is PUT to /users/:ownId. That is a primary-address change of a self-edit, so it is sudo-gated
+// exactly like typing a new address — and the users-list dialog never asked for the password, so the save
+// failed with no field to type it in. The rule stays one rule: a real change of your own primary address
+// needs the proof, an unchanged resend does not, and an administrator editing SOMEONE ELSE never does.
+test('CLASS 2 — your own primary address moved by a plugin grant asks for the password; someone else’s does not', async () => {
+    await seedUser('selfMailAdmin', 'administrator');
+    await seedUser('selfMailOther', 'author');
+    const me = U.selfMailAdmin;
+    const form = (email: string, extra: Record<string, unknown> = {}) => ({
+        email, displayName: 'selfMailAdmin', personalEmail: '', accountCapabilities: {}, ...extra,
+    });
+    const put = (id: number, body: any) => request(app).put(`${B}/users/${id}`).set('Authorization', asUser('selfMailAdmin')).send(body);
+
+    const unchanged = await put(me, form('selfMailAdmin@example.com'));
+    assert.strictEqual(unchanged.status, 200, `an unchanged resend needs no proof — ${JSON.stringify(unchanged.body)}`);
+
+    const moved = await put(me, form('selfmailadmin@mail.example.test'));
+    assert.strictEqual(moved.status, 403, JSON.stringify(moved.body));
+    assert.strictEqual(moved.body.code, 'rest_bad_current_password');
+
+    const proved = await put(me, form('selfmailadmin@mail.example.test', { currentPassword: PASSWORD }));
+    assert.strictEqual(proved.status, 200, JSON.stringify(proved.body));
+    assert.strictEqual(proved.body.email, 'selfmailadmin@mail.example.test');
+
+    const other = await put(U.selfMailOther, { email: 'selfmailother@mail.example.test', displayName: 'selfMailOther', accountCapabilities: {} });
+    assert.strictEqual(other.status, 200, `editing another user never asks for your password — ${JSON.stringify(other.body)}`);
+});
+
 // ─── CLASS 3 · the sessionOnly doctrine covers the whole router, not two routes ───────────────────
 
 test('CLASS 3 — an administrator API token cannot drive ANY account-security write in /users', async () => {

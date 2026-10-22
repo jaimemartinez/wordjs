@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { usersApi, User } from "@/lib/api";
+import { usersApi, User, withSudoProof } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural } from "@/lib/i18n";
@@ -43,7 +43,9 @@ export default function UsersPage() {
         if (!bulkRole || selectedUsers.length === 0) return;
         setBulkBusy(true);
         setBulkMessage("");
-        const result = await runEach(selectedUsers.map((u) => u.id), (id) => usersApi.update(id, { role: bulkRole }));
+        // A role is not a sudo-gated field (and your own role cannot be changed at all), so the proof is never
+        // added — withSudoProof states that instead of every screen deciding it for itself.
+        const result = await runEach(selectedUsers.map((u) => u.id), (id) => usersApi.update(id, withSudoProof({}, { role: bulkRole, email: undefined }, null)));
         setBulkBusy(false);
         setBulkMessage(result.failed.length
             ? `${t("users.bulk.roleFailed").replace("{n}", String(result.failed.length))} ${result.failed[0].reason}`

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useId, useRef } from "react";
 import { useDialogFocus } from "@/components/useDialogFocus";
-import { usersApi, User, userSaveErrorText } from "@/lib/api";
+import { usersApi, User, userSaveErrorText, selfEditNeedsCurrentPassword, withSudoProof } from "@/lib/api";
+import { useOptionalAuth } from "@/contexts/AuthContext";
 import ModernSelect from "@/components/ModernSelect";
 import DialogLayer from "@/components/DialogLayer";
 import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
@@ -32,6 +33,16 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
     // A modal dialog: focus moves in, Tab stays in, Escape closes, focus returns to "New user".
     useDialogFocus(panelRef, { open: !!user, onClose });
     const userId = isNew ? null : (user as User).id;
+    // Your OWN record is a self-edit: the backend asks for your current password when the save changes your
+    // password or a recovery address — including the primary email a plugin rewrites from a grant (the mail
+    // plugin sets it to <username>@<mail domain> when «Professional email account» is turned on). The same
+    // rule as the full-page editor and My Account (selfEditNeedsCurrentPassword in lib/api); this dialog
+    // used to send the bare form, so the save failed with «current password incorrect» and no field to type
+    // it in (FALLOS 125). Editing someone else never asks.
+    const currentUser = useOptionalAuth()?.user;
+    const isOwn = !isNew && currentUser != null && Number(currentUser.id) === Number(userId);
+    const [loaded, setLoaded] = useState<{ email: string; personalEmail: string }>({ email: "", personalEmail: "" });
+    const [currentPassword, setCurrentPassword] = useState("");
 
     const [formData, setFormData] = useState<{
         username: string; email: string; displayName: string; role: string;
@@ -67,10 +78,17 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                 personalEmail: user.personalEmail || "",
                 accountCapabilities: grantedMap(user.accountCapabilities),
             });
+            setLoaded({ email: user.email || "", personalEmail: user.personalEmail || "" });
         }
         // Listen for plugin hook changes
         return pluginHooks.subscribe(() => setHookTick(t => t + 1));
     }, [user]);
+
+    const needsCurrentPassword = isOwn && selfEditNeedsCurrentPassword(loaded, {
+        email: formData.email,
+        personalEmail: formData.personalEmail,
+        password: formData.password,
+    });
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -83,7 +101,8 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
 
         try {
             if (userId && user !== "new") {
-                await usersApi.update(userId, formData);
+                await usersApi.update(userId, isOwn ? withSudoProof(loaded, formData, currentPassword) : formData);
+                setCurrentPassword("");
             } else {
                 await usersApi.create(formData);
             }
@@ -205,6 +224,21 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                                 required={isNew}
                             />
                         </div>
+                        {/* Only for your OWN record, and only once a sudo-gated field actually changed —
+                            the backend asks for the password exactly then. */}
+                        {needsCurrentPassword && (
+                            <div data-testid="self-current-password">
+                                <label htmlFor="user-form-field-6" className={FIELD_LABEL}>{t('account.currentPassword')}</label>
+                                <input id="user-form-field-6"
+                                    type="password"
+                                    value={currentPassword}
+                                    onChange={(e) => setCurrentPassword(e.target.value)}
+                                    autoComplete="current-password"
+                                    required
+                                    className="w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium"
+                                />
+                            </div>
+                        )}
                     </form>
 
                     {/* Outside the <form>: this acts on the SAVED account immediately, it is not part of
