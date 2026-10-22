@@ -20,7 +20,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   that embedded browsers suppress, answering «no» without showing it, so the template never applied there. It
   now asks through the admin's in-app dialog, like every other confirmation of the plugin. A test sweeps the
   plugin's whole interface (admin and portal) so no `alert()`, `confirm()` or `prompt()` of the browser
-  comes back.
+  comes back. Nor the browser's validation bubble («Completa este campo»): every form of the plugin now checks
+  its fields itself and shows what is missing or out of range under the field, in the admin's language
+  (Spanish, English or Portuguese; the coordinator portal's screens, Spanish only, in Spanish), and moves the
+  focus to the first field to fix. The same test pins that every form is `noValidate` and every required
+  field has an in-app message.
 
 ## [2.9.0] - 2026-10-23
 

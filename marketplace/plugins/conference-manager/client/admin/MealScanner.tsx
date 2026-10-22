@@ -2052,7 +2052,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                                 ))
                         )}
                         {sheet === 'code' && (
-                            <form onSubmit={(e) => { e.preventDefault(); const raw = typed; if (!normalizeCode(raw)) return; setSheet(null); scanBody({ code: raw }, true); }} className="space-y-3">
+                            <form noValidate onSubmit={(e) => { e.preventDefault(); const raw = typed; if (!normalizeCode(raw)) return; setSheet(null); scanBody({ code: raw }, true); }} className="space-y-3">
                                 <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoCapitalize="characters" autoComplete="off" spellCheck={false} inputMode="text"
                                     className="w-full rounded-2xl px-4 py-4 bg-white/10 border-2 border-white/20 text-white text-2xl font-mono font-black tracking-widest outline-none focus:border-white"
                                     aria-label={tx('meals.code', 'Código')} placeholder="ABCD234XYZ" />

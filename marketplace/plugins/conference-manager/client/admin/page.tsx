@@ -39,6 +39,7 @@ import type { Perms } from "./perms";
 import StaffPage from "./StaffPage";
 import BadgesPage from "./BadgesPage";
 import { BadgeActions } from "./BadgeActions";
+import { useFieldErrors, FieldError } from "../lib/useFieldErrors";
 import { useTx } from "./MealScanner";
 // Form fields (2.16.0): templates for the base fields, what a deletion switches off, rules on deleted fields.
 import { fieldDependents, isOrphanFeeRule, isSwitchOn, LODGING_FIELD, missingRuleFields, moveItem, publishRefusal, SWITCH_OFF, SWITCH_ON, templateStates, TEMPLATE_OPEN_CLASS, TEMPLATE_DONE_CLASS, TEMPLATE_DESC_CLASS } from "../lib/fields";
@@ -341,7 +342,8 @@ function PermsGate() {
 // Conference List Component
 function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference) => void; onOpenStaff?: () => void }) {
     const { conferences, refreshConferences, loading: confLoading } = useConference();
-    const { t } = useI18n();
+    const { t, language } = useI18n();
+    const fe = useFieldErrors(language);
     const tx = useTx();
     const { addToast } = useToast();
     // Creating / deleting a conference is Configuración › gestionar; the per-card counts are read only
@@ -616,12 +618,13 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                 <i className="fa-solid fa-xmark text-xl"></i>
                             </button>
                         </div>
-                        <form onSubmit={handleCreateConference} className="p-6 sm:p-10 space-y-4 sm:space-y-6">
+                        <form {...fe.form(handleCreateConference)} className="p-6 sm:p-10 space-y-4 sm:space-y-6">
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">
                                     {t('conference.name')} *
                                 </label>
                                 <input
+                                    data-field="conference_name" aria-invalid={fe.invalid('conference_name')} aria-describedby={fe.describedBy('conference_name')}
                                     required
                                     type="text"
                                     className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-300"
@@ -637,11 +640,13 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     placeholder="e.g. Conferencia Anual 2024"
                                     autoFocus={canAutoFocus()}
                                 />
+                                <FieldError message={fe.error('conference_name')} id={fe.errorId('conference_name')} />
                             </div>
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('conference.slug')} *</label>
                                 <div className="relative">
                                     <input
+                                        data-field="conference_slug" aria-invalid={fe.invalid('conference_slug')} aria-describedby={fe.describedBy('conference_slug')}
                                         required
                                         type="text"
                                         className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-mono text-base sm:text-sm pl-4"
@@ -652,6 +657,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     <i className="fa-solid fa-link absolute right-4 top-1/2 -translate-y-1/2 text-gray-300"></i>
                                 </div>
                                 <p className="text-[10px] text-gray-400 italic ml-1">{t('slug.help')}</p>
+                                <FieldError message={fe.error('conference_slug')} id={fe.errorId('conference_slug')} />
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="space-y-2">
@@ -682,6 +688,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                 <div className="relative">
                                     <span className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400 font-black text-lg">$</span>
                                     <input
+                                        data-field="conference_fee" aria-invalid={fe.invalid('conference_fee')} aria-describedby={fe.describedBy('conference_fee')}
                                         type="number"
                                         step="0.01"
                                         className="w-full border-2 border-gray-100 rounded-2xl px-12 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-black text-lg"
@@ -690,6 +697,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                         placeholder="0.00"
                                     />
                                 </div>
+                                <FieldError message={fe.error('conference_fee')} id={fe.errorId('conference_fee')} />
                             </div>
                             <div className="pt-6 flex gap-4 border-t border-gray-50" data-cm-sheet-foot="">
                                 <button
@@ -1171,7 +1179,8 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
  * person (or their family group) and opens each of their payments (layer 2 above the sheet).
  */
 export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }: { conferenceId: number; onSeePayments?: (person: Inscription) => void; initial?: { rows: Inscription[]; fields: ConferenceField[]; locations: Location[] } | null }) {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
+    const fe = useFieldErrors(language);
     const tx = useTx();
     const { addToast } = useToast();
     // Inscripciones › gestionar = new / edit / cancel / delete; Pagos › ver = the person's payments, › gestionar
@@ -1556,7 +1565,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                 <i className="fa-solid fa-xmark text-lg"></i>
                             </button>
                         </div>
-                        <form onSubmit={handleSubmit} className="p-8 space-y-6">
+                        <form {...fe.form(handleSubmit)} className="p-8 space-y-6">
                             {/* Location — the admin picks it explicitly (the portal auto-sets it). */}
                             {confLocations.length > 0 ? (
                                 <div>
@@ -1564,6 +1573,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                         {t('location') || 'Localidad'} <span className="text-rose-500">*</span>
                                     </label>
                                     <select
+                                        data-field="location_id" aria-invalid={fe.invalid('location_id')} aria-describedby={fe.describedBy('location_id')}
                                         required
                                         className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
                                         value={formData.location_id ?? ''}
@@ -1591,6 +1601,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                             ? <p key={n.kind} className="mt-2 text-[11px] font-medium text-blue-900 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2" data-move-adjust="hint" data-move-dir={n.kind}><i className="fa-solid fa-pen-to-square mr-1.5" aria-hidden="true"></i>{adjustText(tx, n.hint[0], n.hint[1], n.loc)}</p>
                                             : <p key={n.kind} className="mt-2 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2" data-move-adjust="denied" data-move-dir={n.kind}><i className="fa-solid fa-lock mr-1.5" aria-hidden="true"></i>{adjustText(tx, n.denied[0], n.denied[1], n.loc)}</p>);
                                     })()}
+                                    <FieldError message={fe.error('location_id')} id={fe.errorId('location_id')} />
                                 </div>
                             ) : (
                                 <p className="text-[10px] text-gray-500 italic px-1">Sin localidades configuradas. Créalas en la pestaña «Localidades» para poder asignarlas aquí.</p>
@@ -1626,6 +1637,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                 </button>
                                             ) : field.type === 'select' ? (
                                                 <select
+                                                    data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
                                                     value={formData[field.name] ?? ''}
@@ -1638,6 +1650,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                 </select>
                                             ) : field.type === 'date' ? (
                                                 <input
+                                                    data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                     type="date"
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
@@ -1646,6 +1659,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                 />
                                             ) : field.type === 'textarea' || field.type === 'notes' ? (
                                                 <textarea
+                                                    data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                     rows={3}
                                                     placeholder={field.label}
                                                     required={!!field.is_required}
@@ -1655,6 +1669,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                 />
                                             ) : (
                                                 <input
+                                                    data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                     type={field.type === 'number' ? 'number' : 'text'}
                                                     placeholder={field.label}
                                                     required={!!field.is_required}
@@ -1663,6 +1678,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                     onChange={e => handleFormChange(field.name, e.target.value)}
                                                 />
                                             )}
+                                            <FieldError message={fe.error(field.name)} id={fe.errorId(field.name)} />
                                         </div>
                                     ))}
                                 </div>
@@ -2097,7 +2113,8 @@ function RoomBedsSheet({ room, locations, onClose, onSaved }: { room: Room; loca
 }
 
 function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; onOpenExplorer?: (focus: { hotelId: number; roomId?: number | null }) => void }) {
-    const { t } = useI18n(); // Get t() function
+    const { t, language } = useI18n(); // Get t() function
+    const fe = useFieldErrors(language);
     const tx = useTx();
     const { addToast } = useToast();
     const { currentConference: lodgingConf } = useConference();
@@ -2591,7 +2608,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                 </div>
                                 <form
                                     className="flex flex-wrap items-center gap-2 lg:ml-auto"
-                                    onSubmit={e => { e.preventDefault(); giveBeds(hotel); }}
+                                    {...fe.form(e => { e.preventDefault(); giveBeds(hotel); })}
                                 >
                                     <select
                                         value={bedsTarget[hotel.id] || ''}
@@ -2603,6 +2620,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                         {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
                                     </select>
                                     <input
+                                        data-field="beds_count" aria-invalid={fe.invalid('beds_count')} aria-describedby={fe.describedBy('beds_count')}
                                         type="number"
                                         inputMode="numeric"
                                         min={1}
@@ -2620,6 +2638,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     >
                                         <i className={`fa-solid ${givingBeds === hotel.id ? 'fa-spinner animate-spin' : 'fa-bed'} text-[8px]`}></i> {tx('beds.give.apply', 'Dar camas')}
                                     </button>
+                                    <FieldError message={fe.error('beds_count')} id={fe.errorId('beds_count')} className="basis-full w-full" />
                                 </form>
                             </div>
                         )}
@@ -2717,10 +2736,11 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                 <i className="fa-solid fa-xmark text-xl"></i>
                             </button>
                         </div>
-                        <form onSubmit={handleHotelSubmit} className="p-10 space-y-6">
+                        <form {...fe.form(handleHotelSubmit)} className="p-10 space-y-6">
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('hotel.name')}</label>
                                 <input
+                                    data-field="hotel_name" aria-invalid={fe.invalid('hotel_name')} aria-describedby={fe.describedBy('hotel_name')}
                                     required
                                     placeholder="Ej. Hotel Central"
                                     className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
@@ -2728,6 +2748,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     onChange={e => setHotelForm({ ...hotelForm, name: e.target.value })}
                                     autoFocus={canAutoFocus()}
                                 />
+                                <FieldError message={fe.error('hotel_name')} id={fe.errorId('hotel_name')} />
                             </div>
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('hotel.address')}</label>
@@ -2748,12 +2769,14 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('capacity') || 'Capacidad'}</label>
                                 <input
+                                    data-field="hotel_capacity" aria-invalid={fe.invalid('hotel_capacity')} aria-describedby={fe.describedBy('hotel_capacity')}
                                     type="number" min="0"
                                     placeholder="0"
                                     className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
                                     value={hotelForm.capacity ?? ''}
                                     onChange={e => setHotelForm({ ...hotelForm, capacity: (e.target.value === '' ? '' : Number(e.target.value)) as any })}
                                 />
+                                <FieldError message={fe.error('hotel_capacity')} id={fe.errorId('hotel_capacity')} />
                             </div>
                             <div className="flex gap-4 pt-6" data-cm-sheet-foot="">
                                 <button
@@ -2813,7 +2836,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                             </div>
                         </div>
 
-                        <form onSubmit={handleRoomSubmit} className="p-10 space-y-6">
+                        <form {...fe.form(handleRoomSubmit)} className="p-10 space-y-6">
                             {isBulk ? (
                                 <div className="space-y-6">
                                     <div className="grid grid-cols-3 gap-4">
@@ -2829,22 +2852,26 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                         <div className="space-y-2">
                                             <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('room.range.start')}</label>
                                             <input
+                                                data-field="rooms_from" aria-invalid={fe.invalid('rooms_from')} aria-describedby={fe.describedBy('rooms_from')}
                                                 type="number"
                                                 required
                                                 className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-center"
                                                 value={bulkConfig.start ?? ''}
                                                 onChange={e => setBulkConfig({ ...bulkConfig, start: (e.target.value === '' ? '' : Number(e.target.value)) as any })}
                                             />
+                                            <FieldError message={fe.error('rooms_from')} id={fe.errorId('rooms_from')} />
                                         </div>
                                         <div className="space-y-2">
                                             <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('room.range.end')}</label>
                                             <input
+                                                data-field="rooms_to" aria-invalid={fe.invalid('rooms_to')} aria-describedby={fe.describedBy('rooms_to')}
                                                 type="number"
                                                 required
                                                 className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-center"
                                                 value={bulkConfig.end ?? ''}
                                                 onChange={e => setBulkConfig({ ...bulkConfig, end: (e.target.value === '' ? '' : Number(e.target.value)) as any })}
                                             />
+                                            <FieldError message={fe.error('rooms_to')} id={fe.errorId('rooms_to')} />
                                         </div>
                                     </div>
                                     <div className="space-y-2">
@@ -2852,6 +2879,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                         <div className="relative">
                                             <i className="fa-solid fa-users absolute left-5 top-1/2 -translate-y-1/2 text-gray-300"></i>
                                             <input
+                                                data-field="rooms_capacity" aria-invalid={fe.invalid('rooms_capacity')} aria-describedby={fe.describedBy('rooms_capacity')}
                                                 type="number"
                                                 placeholder={t('room.capacity')}
                                                 className="w-full border-2 border-gray-100 rounded-2xl pl-12 pr-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
@@ -2860,6 +2888,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                                 onChange={e => setRoomForm({ ...roomForm, capacity: (e.target.value === '' ? '' : Number(e.target.value)) as any })}
                                             />
                                         </div>
+                                        <FieldError message={fe.error('rooms_capacity')} id={fe.errorId('rooms_capacity')} />
                                     </div>
                                 </div>
                             ) : (
@@ -2869,6 +2898,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                         <div className="relative">
                                             <i className="fa-solid fa-tag absolute left-5 top-1/2 -translate-y-1/2 text-gray-300"></i>
                                             <input
+                                                data-field="room_number" aria-invalid={fe.invalid('room_number')} aria-describedby={fe.describedBy('room_number')}
                                                 required
                                                 placeholder="Ej. 101"
                                                 className="w-full border-2 border-gray-100 rounded-2xl pl-12 pr-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
@@ -2877,12 +2907,14 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                                 autoFocus={canAutoFocus()}
                                             />
                                         </div>
+                                        <FieldError message={fe.error('room_number')} id={fe.errorId('room_number')} />
                                     </div>
                                     <div className="space-y-2">
                                         <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('room.capacity')}</label>
                                         <div className="relative">
                                             <i className="fa-solid fa-users absolute left-5 top-1/2 -translate-y-1/2 text-gray-300"></i>
                                             <input
+                                                data-field="room_capacity" aria-invalid={fe.invalid('room_capacity')} aria-describedby={fe.describedBy('room_capacity')}
                                                 type="number"
                                                 placeholder="2"
                                                 className="w-full border-2 border-gray-100 rounded-2xl pl-12 pr-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
@@ -2891,6 +2923,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                                 onChange={e => setRoomForm({ ...roomForm, capacity: (e.target.value === '' ? '' : Number(e.target.value)) as any })}
                                             />
                                         </div>
+                                        <FieldError message={fe.error('room_capacity')} id={fe.errorId('room_capacity')} />
                                     </div>
                                 </div>
                             )}
@@ -2950,6 +2983,8 @@ const FEE_OPERATORS = [
 
 function PricingPage({ conferenceId }: { conferenceId: number }) {
     const tx = useTx();
+    const { language } = useI18n();
+    const fe = useFieldErrors(language);
     const { addToast } = useToast();
     const { confirm } = useModal();
     // Configuración › gestionar = base fee, rules and the re-pricing; «ver» only reads them.
@@ -3107,7 +3142,7 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                             <h3 className="font-bold text-xl text-gray-900 italic">{form.id ? 'Editar regla' : 'Nueva regla de precio'}</h3>
                             <button onClick={() => { setShowModal(false); setForm(null); }} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-lg"><i className="fa-solid fa-xmark text-lg"></i></button>
                         </div>
-                        <form onSubmit={saveRule} className="p-8 space-y-5">
+                        <form {...fe.form(saveRule)} className="p-8 space-y-5">
                             <div>
                                 <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Nombre de la regla</label>
                                 <input value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="Ej. Estudiantes" className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
@@ -3143,13 +3178,15 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                                     <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Monto</label>
                                     <div className="relative">
                                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-sm">$</span>
-                                        <input type="number" step="any" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0" className="w-full border-2 border-gray-100 rounded-xl pl-7 pr-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-bold" />
+                                        <input data-field="price_amount" aria-invalid={fe.invalid('price_amount')} aria-describedby={fe.describedBy('price_amount')} type="number" step="any" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0" className="w-full border-2 border-gray-100 rounded-xl pl-7 pr-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-bold" />
                                     </div>
+                                    <FieldError message={fe.error('price_amount')} id={fe.errorId('price_amount')} />
                                 </div>
                             </div>
                             <div>
                                 <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Prioridad (menor = primero)</label>
-                                <input type="number" step="1" placeholder="0" value={form.priority ?? ''} onChange={e => setForm({ ...form, priority: e.target.value === '' ? '' : Number(e.target.value) })} className="w-32 border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
+                                <input data-field="price_priority" aria-invalid={fe.invalid('price_priority')} aria-describedby={fe.describedBy('price_priority')} type="number" step="1" placeholder="0" value={form.priority ?? ''} onChange={e => setForm({ ...form, priority: e.target.value === '' ? '' : Number(e.target.value) })} className="w-32 border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
+                                <FieldError message={fe.error('price_priority')} id={fe.errorId('price_priority')} />
                             </div>
                             <div className="flex justify-end gap-3 pt-4 border-t border-gray-50" data-cm-sheet-foot="">
                                 <button type="button" onClick={() => { setShowModal(false); setForm(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">Cancelar</button>
@@ -3364,7 +3401,8 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
 // inline two-step confirm (the shared useModal dialog is z-50, under this page's z-[100] modal).
 const EMPTY_FIELD: Partial<ConferenceField> = { name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100, is_group: 0, is_unique: 0 };
 function FieldsPage({ conferenceId }: { conferenceId: number }) {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
+    const fe = useFieldErrors(language);
     const tx = useTx();
     const { addToast } = useToast();
     // Configuración › gestionar = add / edit / delete / reorder fields and publish the form.
@@ -3847,11 +3885,12 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     </div>
                                 );
                             })()}
-                            <form onSubmit={handleSubmit} className="p-8 space-y-5 overflow-visible pb-20">
+                            <form {...fe.form(handleSubmit)} className="p-8 space-y-5 overflow-visible pb-20">
                                 <div className="space-y-1.5">
                                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{t('field.label')}</label>
                                     <div className="relative group">
                                         <input
+                                            data-field="field_label" aria-invalid={fe.invalid('field_label')} aria-describedby={fe.describedBy('field_label')}
                                             required
                                             className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-gray-900 placeholder:text-gray-500 font-medium"
                                             value={formData.label}
@@ -3859,6 +3898,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             placeholder="Ej: ¿Cuál es su talle de camisa?"
                                         />
                                     </div>
+                                    <FieldError message={fe.error('field_label')} id={fe.errorId('field_label')} />
                                 </div>
 
                                 {formData.id && (
@@ -4111,7 +4151,8 @@ function PredicateEditor({ fields, value, onChange, label }: any) {
 // `focus` / `onFocusConsumed`: «Ver ocupación» in «Hoteles y habitaciones» opens the explorer at a
 // hotel (and room) once — see ConferenceManagerContent.openLodgingExplorer.
 function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId: number; focus?: { hotelId?: number | null; roomId?: number | null; locationId?: number | null } | null; onFocusConsumed?: () => void }) {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
+    const fe = useFieldErrors(language);
     const tx = useTx();
     const { addToast } = useToast();
     // Hospedaje › gestionar = run / reset the engine, edit its rules, and move people in the explorer
@@ -4623,16 +4664,18 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                                 <i className="fa-solid fa-xmark text-lg"></i>
                             </button>
                         </div>
-                        <form onSubmit={handleSaveRule} className="p-8 space-y-6">
+                        <form {...fe.form(handleSaveRule)} className="p-8 space-y-6">
                             <div className="space-y-1.5">
                                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.name')}</label>
                                 <input
+                                    data-field="rule_name" aria-invalid={fe.invalid('rule_name')} aria-describedby={fe.describedBy('rule_name')}
                                     required
                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm placeholder:text-gray-300"
                                     value={ruleForm.name}
                                     onChange={e => setRuleForm({ ...ruleForm, name: e.target.value })}
                                     placeholder="Ej: Familias juntas"
                                 />
+                                <FieldError message={fe.error('rule_name')} id={fe.errorId('rule_name')} />
                             </div>
 
                             <div className="space-y-1.5">
@@ -4653,9 +4696,10 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                                     {fieldSelect}
                                     <div className="space-y-1.5">
                                         <label htmlFor="rule-min-size" className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Tamaño mínimo del grupo</label>
-                                        <input id="rule-min-size" type="number" min="1" step="1" placeholder="1" className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                        <input data-field="rule_min_size" aria-invalid={fe.invalid('rule_min_size')} aria-describedby={fe.describedBy('rule_min_size')} id="rule-min-size" type="number" min="1" step="1" placeholder="1" className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
                                             value={rParams.min_size ?? ''} onChange={e => setRParam({ min_size: numOrEmpty(e.target.value) })} />
                                         <p className="text-[10px] text-gray-400 italic px-1">Solo se mantienen juntos los grupos de este tamaño o más (p. ej. 3 → una pareja de 2 puede separarse). Vacío = 1 (todos los grupos).</p>
+                                        <FieldError message={fe.error('rule_min_size')} id={fe.errorId('rule_min_size')} />
                                     </div>
                                     <PredicateEditor fields={fields} label="Solo aplica si (opcional)" value={rParams.when} onChange={(v: any) => setRParam({ when: v })} />
                                 </>
@@ -4668,8 +4712,9 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                                     <PredicateEditor fields={fields} label="Si en la habitación hay alguien que cumple" value={rParams.subject} onChange={(v: any) => setRParam({ subject: v })} />
                                     <div className="space-y-1.5">
                                         <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Debe haber al menos</label>
-                                        <input type="number" min="1" step="1" placeholder="1" aria-label="Debe haber al menos" className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                        <input data-field="rule_companions" aria-invalid={fe.invalid('rule_companions')} aria-describedby={fe.describedBy('rule_companions')} type="number" min="1" step="1" placeholder="1" aria-label="Debe haber al menos" className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
                                             value={rParams.min ?? ''} onChange={e => setRParam({ min: numOrEmpty(e.target.value) })} />
+                                        <FieldError message={fe.error('rule_companions')} id={fe.errorId('rule_companions')} />
                                     </div>
                                     <PredicateEditor fields={fields} label="…que cumplan" value={rParams.needs} onChange={(v: any) => setRParam({ needs: v })} />
                                 </>
@@ -4678,10 +4723,11 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1.5">
                                     <label htmlFor="rule-priority" className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.priority') || 'Prioridad (1 a 100)'}</label>
-                                    <input id="rule-priority" type="number" min="1" max="100" step="1" className={`w-full border-2 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white transition-all outline-none text-gray-900 font-medium text-sm ${priorityClash ? 'border-rose-300 focus:border-rose-500' : 'border-gray-100 focus:border-indigo-500'}`}
-                                        aria-invalid={!!priorityClash} aria-describedby="rule-priority-help"
+                                    <input id="rule-priority" data-field="rule_priority" type="number" min="1" max="100" step="1" className={`w-full border-2 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white transition-all outline-none text-gray-900 font-medium text-sm ${priorityClash ? 'border-rose-300 focus:border-rose-500' : 'border-gray-100 focus:border-indigo-500'}`}
+                                        aria-invalid={!!priorityClash || fe.invalid('rule_priority')} aria-describedby={['rule-priority-help', fe.describedBy('rule_priority')].filter(Boolean).join(' ')}
                                         value={(ruleForm.priority as any) ?? ''} onChange={e => setRuleForm({ ...ruleForm, priority: numOrEmpty(e.target.value) as any })} />
                                     {priorityClash && <p className="text-[11px] font-bold text-rose-600 px-1" role="alert" data-priority-clash="">{tx('rules.priority.taken', 'Ya la usa la regla «{name}»: elige otro número.', { name: priorityClash.name })}</p>}
+                                    <FieldError message={fe.error('rule_priority')} id={fe.errorId('rule_priority')} />
                                 </div>
                                 <div className="space-y-1.5">
                                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Cumplimiento</label>
@@ -5660,7 +5706,7 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                                 onChange={e => setReturnNote(e.target.value)}
                                                                 rows={3}
                                                                 maxLength={2000}
-                                                                required
+                                                                aria-required="true"
                                                                 placeholder={t('lodging.return.note.placeholder') || 'Explica qué debe corregir el encargado…'}
                                                                 className="w-full border-2 border-amber-200 rounded-xl px-4 py-3 bg-white focus:border-amber-500 transition-all outline-none text-gray-900 font-medium text-sm"
                                                                 autoFocus

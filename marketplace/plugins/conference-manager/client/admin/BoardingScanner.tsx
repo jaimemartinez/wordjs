@@ -221,7 +221,7 @@ export function BoardingScanner({ buses, busId: initialBus, onClose }: any) {
                 )}
             </div>
 
-            <form onSubmit={(e) => { e.preventDefault(); const v = typed.trim(); if (v) { lastCode.current = { code: '', at: 0 }; check(v); setTyped(''); } }}
+            <form noValidate onSubmit={(e) => { e.preventDefault(); const v = typed.trim(); if (v) { lastCode.current = { code: '', at: 0 }; check(v); setTyped(''); } }}
                 style={{ ...SCANNER_BAR_STYLE, display: 'flex', gap: 8, padding: `10px ${SAFE_RIGHT} 10px ${SAFE_LEFT}`, paddingBottom: 'max(10px, env(safe-area-inset-bottom))' }}>
                 <input ref={inputRef} value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={tx('transport.board.type', 'Lector o código escrito')} autoComplete="off" autoCapitalize="characters" spellCheck={false}
                     aria-label={tx('transport.board.type', 'Lector o código escrito')} data-boarding-input=""

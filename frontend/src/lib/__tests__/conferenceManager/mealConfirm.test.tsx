@@ -1262,7 +1262,7 @@ describe('wiring (source): both screens run the tested pieces', () => {
         // Enter is read on keydown (repeat + the previous key), the form submit is only a fallback.
         expect(tab).toMatch(/onKeyDown=\{onScanKey\}/);
         expect(tab).toMatch(/const prev = lastKeyAt\.current;\s+lastKeyAt\.current = at;\s+if \(e\.key !== 'Enter'\) return;\s+e\.preventDefault\(\);\s+submit\(\{ now: at, lastKeyAt: prev, repeat: e\.repeat \}\);/);
-        expect(tab).toMatch(/<form onSubmit=\{\(e\) => \{ e\.preventDefault\(\); submit\(\); \}\}/);
+        expect(tab).toMatch(/<form noValidate onSubmit=\{\(e\) => \{ e\.preventDefault\(\); submit\(\); \}\}/);
         expect(tab).toMatch(/const a = cardKeyAction\('Enter', keyTarget\(st\), raw, \{ now: key\?\.now \?\? Date\.now\(\), lastKeyAt: key \? key\.lastKeyAt : lastKeyAt\.current, repeat: !!key\?\.repeat, shownAt: st\.card \? st\.card\.shownAt : st\.heldAt \}\);\s+if \(a === 'deliver'\) \{ flow\.deliver\(\); return; \}\s+if \(a === 'close'\) \{ ack\(\); return; \}/);
         expect(tab).toMatch(/const keyTarget = \(st: any\) => \(st\.card \? st\.card\.result : st\.held \? 'held' : null\);/);
         expect(tab).toMatch(/const a = cardKeyAction\('Escape', keyTarget\(f\.state\(\)\), '', \{ now: Date\.now\(\), repeat: e\.repeat \}\);\s+if \(a === 'cancel'\) \{ e\.preventDefault\(\); f\.cancel\(\); \}\s+else if \(a === 'close'\) \{ e\.preventDefault\(\); ackRef\.current\(\); \}/);

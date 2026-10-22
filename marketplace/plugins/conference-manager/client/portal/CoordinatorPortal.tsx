@@ -20,6 +20,7 @@ import { hasBadges } from "./badges";
 import { PortalBadgeBulk } from "./PortalBadges";
 // Version skew: the old bulk-payment dialog, only for a plugin without «Pagos de cuotas».
 import LegacyBulkPayment from "./LegacyBulkPayment";
+import { useFieldErrors } from "../lib/useFieldErrors";
 // Visual primitives shared with the conference-manager admin design language (see ui.tsx).
 import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Notice, Spinner, captionCls, captionWideCls, cx, headingCls, inputBoldCls, inputCls, selectCls } from "./ui";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
@@ -62,7 +63,7 @@ type Inscription = PortalPerson;
 
 // Combobox for the GROUPING field: search/pick an existing group (with member preview) or create a
 // new one. Module-level (never define a component inside a component — it steals input focus).
-function GroupPicker({ field, value, onChange, groups, id }: any) {
+function GroupPicker({ field, value, onChange, groups, id, invalid, describedBy }: any) {
     const [open, setOpen] = useState(false);
     const val = value == null ? '' : String(value);
     const lower = val.trim().toLowerCase();
@@ -75,6 +76,7 @@ function GroupPicker({ field, value, onChange, groups, id }: any) {
                 id={id}
                 type="text"
                 required={!!field.is_required}
+                data-field={field.name} aria-invalid={invalid} aria-describedby={describedBy}
                 className={inputCls}
                 placeholder="Buscar grupo existente o escribir uno nuevo…"
                 value={val}
@@ -143,6 +145,9 @@ function LocationPortalContent() {
     });
     const [myLocation, setMyLocation] = useState<Location | null>(null);
     const [step, setStep] = useState<'login' | 'dashboard'>('login');
+    // The portal's screens are Spanish only, so its field messages are too (not the site's <html lang>).
+    const feLogin = useFieldErrors('es');
+    const fe = useFieldErrors('es');
     const [loading, setLoading] = useState(false);
 
     // Login State
@@ -519,8 +524,8 @@ function LocationPortalContent() {
                         </div>
                     </div>
 
-                    <form onSubmit={handleLogin} className="space-y-5">
-                        <Field label={<>
+                    <form {...feLogin.form(handleLogin)} className="space-y-5">
+                        <Field error={feLogin.error('conference')} errorId={feLogin.errorId('conference')} label={<>
                             Conferencia
                             {isConferenceLocked && <i className="fa-solid fa-lock text-[9px] text-gray-400 ml-2" title="Conferencia pre-seleccionada"></i>}
                         </>}>
@@ -532,6 +537,7 @@ function LocationPortalContent() {
                                     onChange={e => setSelectedConference(e.target.value)}
                                     disabled={isConferenceLocked}
                                     required
+                                    data-field="conference" aria-invalid={feLogin.invalid('conference')} aria-describedby={feLogin.describedBy('conference')}
                                 >
                                     <option value="">Seleccione una conferencia</option>
                                     {conferences.map(c => (
@@ -541,7 +547,7 @@ function LocationPortalContent() {
                             )}
                         </Field>
 
-                        <Field label="Localidad">
+                        <Field label="Localidad" error={feLogin.error('location')} errorId={feLogin.errorId('location')}>
                             {(id) => (
                                 <select
                                     id={id}
@@ -550,6 +556,7 @@ function LocationPortalContent() {
                                     onChange={e => setSelectedLocation(e.target.value)}
                                     disabled={!selectedConference}
                                     required
+                                    data-field="location" aria-invalid={feLogin.invalid('location')} aria-describedby={feLogin.describedBy('location')}
                                 >
                                     <option value="">Seleccione su localidad</option>
                                     {locations.map(l => (
@@ -559,7 +566,7 @@ function LocationPortalContent() {
                             )}
                         </Field>
 
-                        <Field label="Código de Acceso">
+                        <Field label="Código de Acceso" error={feLogin.error('code')} errorId={feLogin.errorId('code')}>
                             {(id) => (
                                 <div className="relative">
                                     <input
@@ -571,6 +578,7 @@ function LocationPortalContent() {
                                         value={code}
                                         onChange={e => setCode(e.target.value)}
                                         required
+                                        data-field="code" aria-invalid={feLogin.invalid('code')} aria-describedby={feLogin.describedBy('code')}
                                     />
                                     <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
                                 </div>
@@ -763,7 +771,7 @@ function LocationPortalContent() {
                                     <span>La localidad ha alcanzado su cupo máximo ({seatsLabel(myLocation)}). No es posible registrar más participantes; contacta al administrador si necesitas ampliar el cupo.</span>
                                 </Notice>
                             )}
-                            <form onSubmit={handleCreateInscription} className="max-w-2xl mx-auto space-y-6">
+                            <form {...fe.form(handleCreateInscription)} className="max-w-2xl mx-auto space-y-6">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                     {fields.length === 0 ? (
                                         <EmptyState
@@ -775,6 +783,8 @@ function LocationPortalContent() {
                                         fields.map((field) => (
                                             <Field
                                                 key={field.name}
+                                                error={fe.error(field.name)}
+                                                errorId={fe.errorId(field.name)}
                                                 className={field.width === 50 ? 'col-span-1' : 'md:col-span-2'}
                                                 label={<>{field.label} {field.is_required ? <span className="text-rose-500">*</span> : ''}</>}
                                             >
@@ -785,6 +795,8 @@ function LocationPortalContent() {
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(v: string) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })}
                                                         groups={groups}
+                                                        invalid={fe.invalid(field.name)}
+                                                        describedBy={fe.describedBy(field.name)}
                                                     />
                                                 ) : field.type === 'switch' ? (
                                                     // A Sí / No switch (2.31.0 — «Requiere hospedaje»).
@@ -806,6 +818,7 @@ function LocationPortalContent() {
                                                     <select
                                                         id={id}
                                                         required={!!field.is_required}
+                                                        data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                         className={selectCls}
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
@@ -818,6 +831,7 @@ function LocationPortalContent() {
                                                     <textarea
                                                         id={id}
                                                         required={!!field.is_required}
+                                                        data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                         className={cx(inputCls, "resize-none")}
                                                         rows={3}
                                                         value={formData[field.name] ?? ''}
@@ -828,6 +842,7 @@ function LocationPortalContent() {
                                                         id={id}
                                                         type={field.type}
                                                         required={!!field.is_required}
+                                                        data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                         className={inputCls}
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
