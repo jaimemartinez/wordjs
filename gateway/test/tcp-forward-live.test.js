@@ -33,13 +33,19 @@ describe('the real gateway: a TCP port forwarded to the backend node', () => {
     let upstreamConnections = 0;
     before(async () => {
         up = await harness.startEchoUpstream('backend');
-        // One greeting per connection, like an SMTP server: the PROXY line and the client's bytes arrive as
-        // one chunk or two (the gateway writes them separately), and answering each chunk would make two
-        // replies that the client may read as one.
+        // The PROXY line and the client's bytes arrive as one chunk or two (the gateway writes them
+        // separately). Answer once, and only when the client's whole line is here: answering each chunk makes
+        // two replies the client may read as one, and answering the first chunk lets the test check what was
+        // received before the client's bytes have landed.
         tcp = net.createServer((s) => {
             upstreamConnections++;
-            s.on('data', (d) => received.push(String(d)));
-            s.once('data', () => s.write('220 hello\r\n'));
+            let seen = '';
+            let answered = false;
+            s.on('data', (d) => {
+                received.push(String(d));
+                seen += String(d);
+                if (!answered && seen.includes('EHLO x\r\n')) { answered = true; s.write('220 hello\r\n'); }
+            });
         });
         await new Promise((r) => tcp.listen(0, '127.0.0.1', r));
         ca = harness.makeCa();
