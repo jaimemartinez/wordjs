@@ -809,6 +809,7 @@ test('postgres DDL: ALTER TABLE … ADD [COLUMN] [IF NOT EXISTS] translates DATE
     // A column NAMED datetime keeps its name; a constraint and any other ALTER are left as written.
     assert.strictEqual(translateSql('ALTER TABLE t ADD COLUMN datetime DATETIME'), 'ALTER TABLE t ADD COLUMN datetime TIMESTAMP');
     assert.strictEqual(translateSql('ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)'), 'ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD PRIMARY KEY (id)'), 'ALTER TABLE t ADD PRIMARY KEY (id)');
     assert.strictEqual(translateSql('ALTER TABLE t RENAME COLUMN a TO b'), 'ALTER TABLE t RENAME COLUMN a TO b');
     assert.strictEqual(translateSql("ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'DATETIME'"), "ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'DATETIME'");
 });
@@ -820,6 +821,14 @@ test('mysql DDL: ALTER TABLE … ADD COLUMN gives TEXT the CREATE TABLE rule (ex
     assert.strictEqual(translateSql('ALTER TABLE t ADD COLUMN created_at DATETIME'), 'ALTER TABLE t ADD COLUMN created_at DATETIME');
     assert.strictEqual(translateSql('ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)'), 'ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)');
     assert.strictEqual(translateSql('ALTER TABLE t DROP COLUMN a'), 'ALTER TABLE t DROP COLUMN a');
+    // An index or key added by ALTER is not a column — core migration 0010 runs exactly this on MySQL.
+    const fulltext = 'ALTER TABLE posts ADD FULLTEXT INDEX ftidx_posts_search (post_title, post_content, post_excerpt)';
+    assert.strictEqual(translateSql(fulltext), fulltext);
+    assert.strictEqual(translateSql('ALTER TABLE t ADD UNIQUE KEY uq_t (a)'), 'ALTER TABLE t ADD UNIQUE KEY uq_t (a)');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD INDEX idx_t (a)'), 'ALTER TABLE t ADD INDEX idx_t (a)');
+    assert.strictEqual(translateSql('ALTER TABLE t ADD PRIMARY KEY (id)'), 'ALTER TABLE t ADD PRIMARY KEY (id)');
+    // With the COLUMN keyword, a column named like a keyword is still a column.
+    assert.match(translateSql('ALTER TABLE t ADD COLUMN key TEXT'), /ADD COLUMN "key" LONGTEXT$/);
 });
 
 test('postgres (real): a plugin adds DATETIME and BLOB columns to a table it already has, and writes them', async (t: any) => {

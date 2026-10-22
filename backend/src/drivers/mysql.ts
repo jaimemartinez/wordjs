@@ -375,6 +375,7 @@ function translateCreateTable(sql: string): string {
 /** `ALTER TABLE t ADD [COLUMN] …` (one or several, comma-separated): read off the MASK like CREATE TABLE. */
 const ALTER_ADD_HEAD_RE = new RegExp(`^\\s*ALTER\\s+TABLE\\s+${IDENT}\\s+`, 'i');
 const ALTER_ADD_CLAUSE_RE = /^(\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?)/i;
+const ALTER_ADD_NOT_COLUMN_RE = /^\s*(?:FULLTEXT|SPATIAL|INDEX|KEY|UNIQUE|PRIMARY|CONSTRAINT|FOREIGN|CHECK)\b/i;
 
 /**
  * The columns an ALTER TABLE adds get the CREATE TABLE column rule (TEXT → LONGTEXT, a literal default on
@@ -392,6 +393,9 @@ function translateAlterAddColumn(sql: string): string {
         const add = ALTER_ADD_CLAUSE_RE.exec(codeMask(clause)); // MASK-SAFE: the keyword is matched on the mask
         if (!add) return clause;
         const def = clause.slice(add[1].length);
+        // An index or key (`ADD FULLTEXT INDEX …` — core migration 0010 — `ADD UNIQUE KEY …`) is not a
+        // column; with an explicit COLUMN keyword the clause is a column whatever its name.
+        if (!/\bCOLUMN\b/i.test(add[1]) && ALTER_ADD_NOT_COLUMN_RE.test(codeMask(def))) return clause; // MASK-SAFE: on the mask
         if (isTableConstraint(def)) return clause;
         return clause.slice(0, add[1].length) + translateColumnDef(def, new Set());
     });

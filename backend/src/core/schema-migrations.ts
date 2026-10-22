@@ -489,9 +489,9 @@ const MIGRATIONS: Migration[] = [
         // Fresh installs get these in initializeSchema; this brings EXISTING databases to the same shape.
         // Every existing row keeps NULL/NULL — a monolingual site is byte-for-byte unchanged.
         //
-        // CROSS-DRIVER NOTES. ALTER TABLE ADD COLUMN is NOT rewritten by the MySQL driver's translateSql
-        // (only CREATE TABLE is), so the column TYPE is chosen per-engine here: VARCHAR(255) on MySQL
-        // (raw TEXT cannot be indexed without a key length), TEXT elsewhere. `ADD COLUMN IF NOT EXISTS`
+        // CROSS-DRIVER NOTES. The MySQL driver gives an ALTER TABLE ADD COLUMN the CREATE TABLE column rule,
+        // which turns a bare TEXT into LONGTEXT — and LONGTEXT cannot be indexed without a key length, so
+        // the column TYPE is chosen per-engine here: VARCHAR(255) on MySQL, TEXT elsewhere. `ADD COLUMN IF NOT EXISTS`
         // is Postgres-only, so idempotency comes from an explicit column-existence probe (+ a swallow of
         // the duplicate-column error as a belt-and-braces fallback). The index uses CREATE INDEX IF NOT
         // EXISTS, which every driver honours (the MySQL driver strips it and swallows the re-run dup).

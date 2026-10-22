@@ -140,8 +140,11 @@ function translateAlterAddColumn(sql: string): string {
     const out: string[] = [];
     for (const clause of clauses) {
         const add = /^(\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?)([\s\S]+)$/i.exec(clause);
-        // A table constraint (`ADD CONSTRAINT …`, `ADD PRIMARY KEY …`) is not a column: unchanged.
-        if (!add || /^\s*(CONSTRAINT|PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK)\b/i.test(add[2])) { out.push(clause); continue; }
+        // A table constraint or index (`ADD CONSTRAINT …`, `ADD PRIMARY KEY …`) is not a column: unchanged.
+        // With an explicit COLUMN keyword the clause is a column whatever its name.
+        const notColumn = !/\bCOLUMN\b/i.test(add ? add[1] : '')
+            && /^\s*(?:FULLTEXT|SPATIAL|INDEX|KEY|UNIQUE|PRIMARY|CONSTRAINT|FOREIGN|CHECK)\b/i.test(add ? add[2] : '');
+        if (!add || notColumn) { out.push(clause); continue; }
         out.push(add[1] + translateColumnDef(add[2]));
     }
     return m[1] + out.join(',') + m[3];
