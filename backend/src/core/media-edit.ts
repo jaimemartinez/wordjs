@@ -89,14 +89,15 @@ export async function writeEditedImage(srcAbs: string, mimeType: string, ops: Im
 
     // 2. Crop (fractions of what step 1 produced) and scale down.
     let out = sharp(data, input);
-    let w = info.width, h = info.height;
+    const h = info.height;
+    let w = info.width;
     if (ops.crop) {
         const left = Math.min(w - 1, Math.round(ops.crop.x * w));
         const top = Math.min(h - 1, Math.round(ops.crop.y * h));
         const cw = Math.max(1, Math.min(w - left, Math.round(ops.crop.width * w)));
         const ch = Math.max(1, Math.min(h - top, Math.round(ops.crop.height * h)));
         out = out.extract({ left, top, width: cw, height: ch });
-        w = cw; h = ch;
+        w = cw;
     }
     if (ops.width && ops.width < w) out = out.resize({ width: ops.width, withoutEnlargement: true });
 

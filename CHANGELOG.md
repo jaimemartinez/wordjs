@@ -6,8 +6,29 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Image editing in the media library.** Rotate, flip, crop (free or a fixed ratio, by mouse, touch or keyboard) and scale down an image, then *Restore original* at any time. The edit is saved as a new file with its own sizes; the earlier files stay, so pages that already show them keep working (`POST /api/v1/media/:id/edit`, `POST /api/v1/media/:id/restore-original`).
+- **The Redis server from the panel.** Settings → Performance sets the host, port, database and password, tries the connection before saving, and says whether Redis is connected, configured but not answering, or not configured; saving restarts the backend by itself. The cache switch no longer says «Redis is active» when no server answers.
+- **My Account:** a profile picture, your own primary email, *Download my data* (JSON) and *Delete my account* (with your password; the only administrator cannot).
+- **«Remember me»** on the sign-in page: unticked, the session ends when the browser closes.
+- **Bulk actions on Users:** change the role of, or delete, several users at once.
+- **Settings with a control for every key:** Reading (posts page with a static front page, feed length, *Discourage search engines*), Writing (default category), Discussion (moderation rules, name and email required, default comment status, link limit), date and time formats, and the image sizes. Each is validated, and the public site follows it (robots.txt and `noindex`, comment moderation, the formats in dates).
+- **Menus:** add posts, categories and tags as well as pages; nest items as submenus (indent and outdent, or pick the parent) and open an item in a new tab.
+- **Threaded public comments** with a *Reply* button; a comment published at once (no moderation) appears without reloading.
+- **Tags you can create from the editor's tag field.**
+
 ### Fixed
 
+- **A crashed frontend no longer takes the whole service down.** In split mode, the Next server killed by a signal made `start-frontend.js` exit 0 and `concurrently` stopped the gateway and the backend with it (about a minute of total outage). The frontend is now started again after a crash, with the backend supervisor's back-off.
+- **Fewer API requests per public visit:** the active plugins and the font faces come with the page (a font upload or delete now refreshes the cached pages), and comments are requested only when the reader gets near them.
+- **Installer:** a wrong install token is reported on the first step instead of after the database form.
+- **Menu and header/footer changes reach the public site at once** instead of serving the old version on the first visit; deleting a featured image refreshes the pages that used it.
+- A fitted image size is named by its real dimensions (`300x200`, not `300x300`).
+- The theme customizer warns before leaving with unsaved changes; the restore-revision dialog lists everyday field names; the collaboration notice reads naturally; the media library shows a type icon for files that are not images; the motion usage scan reads every entry.
+- Ctrl+K: once you type, Enter inserts the best matching block instead of running the first action («Publish»).
+- The public logo link has an accessible name even when the logo image has no alt text.
+- A category's parent sent as a numeric string is accepted.
 - **No error line on every start for a site without a network (PostgreSQL, MySQL).** At boot WordJS checks
   whether the network was switched on another node, and read the network store to find out; on a site that
   never had a network the store does not exist, and the database driver logged that read as an error on
