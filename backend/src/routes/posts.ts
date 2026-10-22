@@ -1254,15 +1254,26 @@ const unlockLimiter = require('express-rate-limit')({
  *       404: { description: No such readable, password-protected entry. }
  *       429: { description: Too many attempts. }
  */
+/**
+ * An entry password (WordPress `post_password`) is stored as the author typed it, so the comparison is
+ * the only thing to get right: constant time and independent of either length. Both values go through an
+ * HMAC under a key that exists only in this process, which gives two equal-length digests for
+ * timingSafeEqual; nothing derived from the password is kept or leaves the process.
+ */
+const UNLOCK_COMPARE_KEY = require('crypto').randomBytes(32);
+function unlockPasswordMatches(given: string, stored: string): boolean {
+    const crypto = require('crypto');
+    const mac = (s: string) => crypto.createHmac('sha256', UNLOCK_COMPARE_KEY).update(s, 'utf8').digest();
+    return crypto.timingSafeEqual(mac(given), mac(stored));
+}
+
 router.post('/:id/unlock', unlockLimiter, optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
     const post = await Post.findById(parseInt(req.params.id, 10));
     if (!post || isHiddenFromRest(post) || !isPasswordProtected(post) || !(await canReadThroughRest(req.user, post))) {
         return res.status(404).json(NOT_FOUND);
     }
     const given = typeof (req.body as any)?.password === 'string' ? (req.body as any).password : '';
-    const crypto = require('crypto');
-    const digest = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest();
-    if (!given || !crypto.timingSafeEqual(digest(given), digest(String(post.postPassword)))) {
+    if (!given || !unlockPasswordMatches(given, String(post.postPassword))) {
         return res.status(403).json({ code: 'rest_post_incorrect_password', message: 'Incorrect password.', data: { status: 403 } });
     }
     const json = await post.toJSON(true, req.user);

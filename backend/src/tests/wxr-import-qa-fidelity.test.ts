@@ -140,6 +140,11 @@ test('M3-09: a password-protected entry unlocks with its password; the editor ca
     assert.strictEqual(anon.body.password, undefined, 'the password never reaches a reader');
     const wrong = await request(app).post(`/api/v1/posts/${row.id}/unlock`).send({ password: 'nope' });
     assert.strictEqual(wrong.status, 403);
+    // Near misses of any length are refused alike (the comparison is a constant-time HMAC match).
+    for (const attempt of ['ente', 'enter ', 'ENTER', 'enterenter', 'éntér']) {
+        const r = await request(app).post(`/api/v1/posts/${row.id}/unlock`).send({ password: attempt });
+        assert.strictEqual(r.status, 403, attempt);
+    }
     const ok = await request(app).post(`/api/v1/posts/${row.id}/unlock`).send({ password: 'enter' });
     assert.strictEqual(ok.status, 200);
     assert.match(ok.body.content, /Hidden body/);
