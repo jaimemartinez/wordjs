@@ -81,7 +81,10 @@ router.use(isAdmin);
  *                 message:
  *                   type: string
  *       400:
- *         description: Domain or email missing.
+ *         description: >-
+ *           Domain or email missing, or the domain is not ONE usable name, refused before any CA work.
+ *           Then `code` says why: cert_one_name (a list - several names go in the automatic-renewal
+ *           settings), cert_invalid_domain, cert_wildcard_needs_dns (HTTP-01 only), cert_domain_required.
  *         content:
  *           application/json:
  *             schema:
@@ -112,6 +115,11 @@ router.post('/auto-provision', async (req: Request, res: Response) => {
         const { domain, domains, email, staging } = req.body;
         const names = Array.isArray(domains) && domains.length ? domains : domain;
         if (!names || !email) return res.status(400).json({ error: 'Domain and Email required' });
+        // One name from the form: refuse a list or a non-name now, with what to do, not a CA error later.
+        if (names === domain) {
+            const problem = certManager.singleCertificateNameProblem(domain);
+            if (problem) return res.status(400).json({ code: problem.code, error: problem.message });
+        }
 
         const result = await certManager.provisionAutoHTTP(names, email, !!staging);
         res.json(result);
@@ -196,7 +204,10 @@ router.post('/auto-provision', async (req: Request, res: Response) => {
  *                 directoryUrl:
  *                   type: string
  *       400:
- *         description: Domain or email missing.
+ *         description: >-
+ *           Domain or email missing, or the domain is not ONE usable name, refused before any CA work.
+ *           Then `code` says why: cert_one_name (a list - several names go in the automatic-renewal
+ *           settings), cert_invalid_domain, cert_wildcard_needs_dns (HTTP-01 only), cert_domain_required.
  *         content:
  *           application/json:
  *             schema:
@@ -226,6 +237,8 @@ router.post('/dns-start', async (req: Request, res: Response) => {
     try {
         const { domain, email, staging } = req.body;
         if (!domain || !email) return res.status(400).json({ error: 'Domain and Email required' });
+        const problem = certManager.singleCertificateNameProblem(domain, { wildcard: true });
+        if (problem) return res.status(400).json({ code: problem.code, error: problem.message });
 
         const data = await certManager.startDNSChallenge(domain, email, !!staging);
         res.json(data);

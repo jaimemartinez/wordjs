@@ -123,14 +123,20 @@ test('the unit runs as a dedicated non-root account and holds NO capabilities', 
 test('a port below 1024 gets the sysctl drop-in, with its trade-off, and no capability', () => {
     const built = cli.buildSystemdFiles({ installDir: '/srv/wordjs', nodePath: '/usr/bin/node', port: 443 });
     assert.ok(built.sysctl, 'port 443 needs the privileged-port floor lowered');
-    assert.strictEqual(built.sysctl.start, 443);
-    assert.match(built.sysctl.content, /^net\.ipv4\.ip_unprivileged_port_start = 443$/m);
+    // HTTPS below 1024 also counts 80: Let's Encrypt HTTP-01 is turned on later from the panel, and must
+    // not then need a root edit of /etc/sysctl.d (production, v2.8.0: the drop-in said 443).
+    assert.strictEqual(built.sysctl.start, 80);
+    assert.deepStrictEqual(built.sysctl.ports, [80, 443]);
+    assert.match(built.sysctl.content, /^net\.ipv4\.ip_unprivileged_port_start = 80$/m);
+    assert.match(built.sysctl.content, /^# {3}80: Let's Encrypt HTTP-01/m, 'the file says what each port is for');
+    assert.match(built.sysctl.content, /^# {3}443: the site/m);
     assert.match(built.sysctl.content, /EVERY unprivileged/, 'the drop-in states that it is not a grant to WordJS alone');
     assert.match(built.sysctl.content, /reverse proxy/);
-    assert.match(built.sysctl.content, /acme\.http01Port: 80/, 'HTTPS on 443 is warned that HTTP-01 needs 80');
+    assert.match(built.sysctl.content, /lowered to 25: re-run with --mail/, 'without --mail it says how to receive mail');
     assert.match(built.unit, /install 60-wordjs-ports\.conf/);
 
     const steps = cli.systemdInstallSteps({ installDir: '/srv/wordjs', built, stageDir: STAGE }).join('\n');
+    assert.match(steps, /Let it bind ports 80, 443 without a capability/);
     assert.match(steps, /sudo install -o root -g root -m 0644 \/tmp\/wordjs-systemd-abc123\/60-wordjs-ports\.conf \/etc\/sysctl\.d\/60-wordjs-ports\.conf && sudo sysctl --system/);
     assert.match(steps, /https:\/\/<your-host>\/install#token=/, 'port 443 is the https default, so the URL omits it');
     assert.doesNotMatch(steps, /setcap|AmbientCapabilities|CAP_NET/);
@@ -155,7 +161,29 @@ test('without --port the unit leaves the port to the site config and reads it fo
 
     const configured = cli.buildSystemdFiles({ installDir: '/srv/wordjs', nodePath: '/usr/bin/node', configuredPort: 443 });
     assert.ok(!directives(configured.unit).some((l) => l.startsWith('Environment=PORT=')));
-    assert.strictEqual(configured.sysctl.start, 443);
+    assert.strictEqual(configured.sysctl.start, 80, 'HTTPS on 443 from the config: 80 too, for HTTP-01');
+});
+
+test('a site that receives mail gets 25 in the floor; plain HTTP on 80 needs no extra port', () => {
+    const mail = cli.buildSystemdFiles({ installDir: '/srv/wordjs', nodePath: '/usr/bin/node', port: 443, mail: true });
+    assert.strictEqual(mail.sysctl.start, 25);
+    assert.deepStrictEqual(mail.sysctl.ports, [25, 80, 443]);
+    assert.match(mail.sysctl.content, /^# {3}25: incoming mail/m);
+    assert.doesNotMatch(mail.sysctl.content, /re-run with --mail/);
+    assert.match(cli.systemdInstallSteps({ installDir: '/srv/wordjs', built: mail, stageDir: STAGE }).join('\n'), /Let it bind ports 25, 80, 443/);
+
+    // A mail server on a site behind a proxy (high public port) still needs 25.
+    const proxied = cli.buildSystemdFiles({ installDir: '/srv/wordjs', nodePath: '/usr/bin/node', port: 3000, mail: true });
+    assert.deepStrictEqual(proxied.sysctl.ports, [25]);
+
+    const http = cli.buildSystemdFiles({ installDir: '/srv/wordjs', nodePath: '/usr/bin/node', port: 80, http: true });
+    assert.deepStrictEqual(http.sysctl.ports, [80]);
+    assert.doesNotMatch(http.sysctl.content, /HTTP-01/, 'HTTP-01 runs only beside HTTPS');
+});
+
+test('--mail is parsed and only with --systemd', () => {
+    assert.strictEqual(cli.parseArgs(['my-site', '--systemd', '--mail']).mail, true);
+    assert.strictEqual(cli.parseArgs(['my-site', '--systemd']).mail, false);
 });
 
 test('the ACME HTTP-01 listener counts toward the floor only when HTTPS is on', () => {

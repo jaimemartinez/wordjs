@@ -31,6 +31,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   the canvas scroll gave it. While a text is edited, the blocks that contain it are no longer dimmed, and its
   own and its containers' interactions and entrance animations show their resting state. The animation comes
   back when editing ends.
+- **`create-wordjs --systemd` lets the site bind every port it will use.** An HTTPS site on 443 got a
+  `60-wordjs-ports.conf` that allowed 443 only. Turning on Let's Encrypt HTTP-01 from Admin → Security
+  then could not bind 80, and the mail server could not receive on 25, until someone edited
+  `/etc/sysctl.d` as root. The drop-in now also covers 80 for an HTTPS site below 1024, and 25 with the
+  new `--mail` option (implied on `upgrade` when the mail-server plugin is installed). The file lists each
+  port and what it is for, and says how to add 25 when it is left out.
+- **The single-name certificate form says what is wrong with the name.** Typing several names
+  (`example.com, www.example.com`) into Admin → Security → SSL failed with a generic "Certificate
+  provisioning failed" after a round-trip to the CA client. The form now catches a list before sending and
+  points to Automatic renewal, which takes several names for one certificate. The server refuses the same
+  cases up front with a `code`, as it does a name that is not a domain, or a wildcard over HTTP-01; the
+  form shows each in the admin's language.
 
 ## [2.8.0] - 2026-10-22
 

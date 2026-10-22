@@ -318,10 +318,10 @@ sudo setcap -r "$(readlink -f "$(command -v node)")"
 ### Ports below 1024, without a capability
 
 1. **A reverse proxy** (nginx, Caddy) on 80/443, forwarding to WordJS on a high port (`3000`, or `WORDJS_HTTP=1` behind a TLS-terminating proxy — see the **LAN / remote access & TLS** note above for the `Host` and `X-CSRF-Token` headers it must pass through). Nothing about WordJS's privileges changes, and nothing else on the host can take the port. This is the choice for a host you share.
-2. **`net.ipv4.ip_unprivileged_port_start`**, the kernel's own setting for unprivileged services — what `--systemd` writes for a port below 1024:
+2. **`net.ipv4.ip_unprivileged_port_start`**, the kernel's own setting for unprivileged services — what `--systemd` writes for a port below 1024. It is set low enough for every port the site will bind, not only the public one: `80` for Let's Encrypt HTTP-01 when the site serves HTTPS, and `25` for incoming mail with `--mail` (implied on `upgrade` when the mail-server plugin is installed). For an HTTPS site on 443 that receives mail:
 
    ```bash
-   echo 'net.ipv4.ip_unprivileged_port_start = 443' | sudo tee /etc/sysctl.d/60-wordjs-ports.conf
+   echo 'net.ipv4.ip_unprivileged_port_start = 25' | sudo tee /etc/sysctl.d/60-wordjs-ports.conf
    sudo sysctl --system
    ```
 
