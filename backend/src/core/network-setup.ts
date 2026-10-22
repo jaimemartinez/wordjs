@@ -225,6 +225,14 @@ async function storedSwitch(): Promise<boolean | null> {
     if (engine === 'sqlite') return null;
     try {
         const db = require('../config/database').getDbAsync();
+        // Ask whether the store exists before reading it. A site that never had a network has no store,
+        // and the read's "relation does not exist" was logged by the driver at error level on every boot
+        // (the catch below only hid it from this function). The probe itself never errors on absence, so
+        // a real failure of the read below is still logged.
+        const exists = engine === 'postgres'
+            ? await db.get('SELECT to_regclass(?) AS t', [`${siteStorage.NETWORK_PG_SCHEMA}.network_meta`])
+            : await db.get("SELECT 1 AS t FROM information_schema.tables WHERE table_schema = ? AND table_name = 'network_meta' LIMIT 1", [siteStorage.networkMysqlDatabase()]);
+        if (!exists || exists.t == null) return null;
         const table = engine === 'postgres'
             ? `${siteStorage.NETWORK_PG_SCHEMA}.network_meta`
             : `\`${siteStorage.networkMysqlDatabase()}\`.network_meta`;

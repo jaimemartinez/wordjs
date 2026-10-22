@@ -8,6 +8,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **No error line on every start for a site without a network (PostgreSQL, MySQL).** At boot WordJS checks
+  whether the network was switched on another node, and read the network store to find out; on a site that
+  never had a network the store does not exist, and the database driver logged that read as an error on
+  every start, although nothing was wrong. It now asks whether the store exists first; a store that exists
+  but cannot be read is still logged.
+
 - **Plugins can add columns to their tables on PostgreSQL and MySQL.** A plugin's
   `ALTER TABLE … ADD COLUMN x DATETIME` (or `BLOB`) failed on PostgreSQL with `type "datetime" does not
   exist`, because only `CREATE TABLE` statements had their SQLite column types translated; on MySQL 8 a

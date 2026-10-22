@@ -864,3 +864,98 @@ test('mysql (real): a plugin adds a TEXT column with a literal default to a tabl
         assert.strictEqual(row.params, '{}');
     } finally { await mysqlDrop(ctx); }
 });
+
+// ── A site with no network store boots without an error line (FALLOS 121) ───────────────────────────
+// network-setup.storedSwitch() runs on every PostgreSQL/MySQL boot. It read `network_meta` directly; on a
+// site that never had a network the table does not exist, and although the function caught that and
+// answered "no switch", the driver had already logged "Query Error … does not exist" at error level.
+
+/** Run `fn` with config + database pointed at `driver` (engine `engine`), capturing error-level lines. */
+async function withEngine(driver: any, engine: string, dbName: string | null, fn: () => Promise<void>): Promise<string[]> {
+    const config = require('../config/app');
+    const database = require('../config/database');
+    const { captureLogLines } = require('./fixtures/log-capture');
+    const saved = { dbDriver: config.dbDriver, db: config.db, getDbAsync: database.getDbAsync };
+    config.dbDriver = engine;
+    if (dbName) config.db = { ...(config.db || {}), name: dbName };
+    database.getDbAsync = () => driver;
+    const capture = captureLogLines('error');
+    try {
+        await fn();
+    } finally {
+        config.dbDriver = saved.dbDriver;
+        config.db = saved.db;
+        database.getDbAsync = saved.getDbAsync;
+    }
+    return capture.stop();
+}
+
+test('postgres (real): boot with no network store logs no error, and a broken store still does', async (t: any) => {
+    const ctx = await pgScratch(t);
+    if (!ctx) return;
+    const { storedSwitch } = require('../core/network-setup');
+    const { NETWORK_PG_SCHEMA } = require('../core/site-storage');
+    const had = await ctx.admin.query('SELECT to_regclass($1) AS t', [`${NETWORK_PG_SCHEMA}.network_meta`]);
+    if (had.rows[0].t) return t.skip(`${NETWORK_PG_SCHEMA}.network_meta exists on this server (a network is set up here)`);
+    let created = false;
+    try {
+        let answer: any = 'unset';
+        const quiet = await withEngine(ctx.driver, 'postgres', null, async () => { answer = await storedSwitch(); });
+        assert.strictEqual(answer, null, 'no store: no switch');
+        assert.deepStrictEqual(quiet.filter((l: string) => /network_meta|does not exist|Query Error/i.test(l)), [], quiet.join('\n'));
+
+        // A store that exists but cannot be read is a real failure: the driver still says so.
+        await ctx.admin.query(`CREATE SCHEMA IF NOT EXISTS ${NETWORK_PG_SCHEMA}`);
+        created = true;
+        await ctx.admin.query(`CREATE TABLE ${NETWORK_PG_SCHEMA}.network_meta (meta_key TEXT)`);
+        const loud = await withEngine(ctx.driver, 'postgres', null, async () => { answer = await storedSwitch(); });
+        assert.strictEqual(answer, null);
+        assert.ok(loud.some((l: string) => /meta_value/.test(l)), `the failed read is logged: ${loud.join(' | ')}`);
+    } finally {
+        if (created) { try { await ctx.admin.query(`DROP SCHEMA IF EXISTS ${NETWORK_PG_SCHEMA} CASCADE`); } catch { /* */ } }
+        await pgDrop(ctx);
+    }
+});
+
+test('mysql (real): boot with no network store logs no error, and a broken store still does', async (t: any) => {
+    const ctx = await mysqlScratch(t);
+    if (!ctx) return;
+    const { storedSwitch } = require('../core/network-setup');
+    const networkDb = `${ctx.name}_network`;
+    try {
+        let answer: any = 'unset';
+        const quiet = await withEngine(ctx.driver, 'mysql', ctx.name, async () => { answer = await storedSwitch(); });
+        assert.strictEqual(answer, null, 'no store: no switch');
+        assert.deepStrictEqual(quiet.filter((l: string) => /network_meta|doesn't exist|Query Error/i.test(l)), [], quiet.join('\n'));
+
+        await ctx.admin.query(`CREATE DATABASE ${networkDb}`);
+        await ctx.admin.query(`CREATE TABLE ${networkDb}.network_meta (meta_key VARCHAR(64))`);
+        const loud = await withEngine(ctx.driver, 'mysql', ctx.name, async () => { answer = await storedSwitch(); });
+        assert.strictEqual(answer, null);
+        assert.ok(loud.some((l: string) => /meta_value/.test(l)), `the failed read is logged: ${loud.join(' | ')}`);
+    } finally {
+        try { await ctx.admin.query(`DROP DATABASE IF EXISTS ${networkDb}`); } catch { /* */ }
+        await mysqlDrop(ctx);
+    }
+});
+
+test('boot switch check: with no network store, the store table is never read (no driver error line)', async () => {
+    const { storedSwitch } = require('../core/network-setup');
+    for (const engine of ['postgres', 'mysql']) {
+        const reads: string[] = [];
+        // Behaves like the real drivers: reading a missing table logs at error level, then throws.
+        const fake = {
+            async get(sql: string) {
+                if (/to_regclass|information_schema\.tables/i.test(sql)) return engine === 'postgres' ? { t: null } : undefined;
+                reads.push(sql);
+                require('../core/module-logger').moduleLogger('drivers/fake').error({ sql }, 'Query Error (get): network_meta does not exist');
+                throw new Error('relation "network_meta" does not exist');
+            },
+        };
+        let answer: any = 'unset';
+        const lines = await withEngine(fake, engine, 'wjs_unit', async () => { answer = await storedSwitch(); });
+        assert.strictEqual(answer, null, engine);
+        assert.deepStrictEqual(reads, [], `${engine}: the missing store is not queried`);
+        assert.deepStrictEqual(lines, [], `${engine}: no error line`);
+    }
+});
