@@ -15,6 +15,7 @@ import * as JSXRuntime from 'react/jsx-runtime';
 import dynamic from 'next/dynamic';
 import { ComponentType } from 'react';
 import PluginScriptNotGranted from '@/components/PluginScriptNotGranted';
+import PluginUnavailable from '@/components/PluginUnavailable';
 // Host modules exposed to plugin bundles. Plugins import these (as `@/…` or via a relative path into
 // frontend/src); build-plugin.js rewrites those specifiers to `window.WordJS.host['<key>']` so the
 // plugin uses the host's OWN module instance — shared session for api(), the host's providers for
@@ -237,6 +238,14 @@ export function remotePluginFailureComponent(err: unknown, fallback: ComponentTy
         const NotGranted = () => React.createElement(PluginScriptNotGranted, { pluginId });
         NotGranted.displayName = 'PluginScriptNotGranted';
         return NotGranted;
+    }
+    // A 5xx or no answer at all (a restart, plugins still starting) says nothing about the plugin: never
+    // "not installed" for that (S4-09) — say the screen is temporarily unavailable, with a retry.
+    if (err instanceof PluginBundleError && err.reason === 'failed' && err.bundleType === 'admin') {
+        const pluginId = err.pluginId || err.slug;
+        const Unavailable = () => React.createElement(PluginUnavailable, { pluginId });
+        Unavailable.displayName = 'PluginUnavailable';
+        return Unavailable;
     }
     return fallback;
 }
@@ -729,7 +738,7 @@ async function pluginFolderForAdminSlug(slug: string): Promise<string | null> {
  * Asks for a FRESH registry: this runs when a page is refused, and the grant may have changed since the
  * session's memo was taken (the permissions screen does not invalidate it).
  */
-async function classifyRefusedBundle(slug: string): Promise<{ reason: 'not-granted' | 'not-found'; pluginId: string | null }> {
+async function classifyRefusedBundle(slug: string): Promise<{ reason: PluginBundleFailure; pluginId: string | null }> {
     try {
         const registry = await fetchPluginRegistry({ fresh: true });
         let entry = registryEntryFor(registry, slug);
@@ -742,7 +751,8 @@ async function classifyRefusedBundle(slug: string): Promise<{ reason: 'not-grant
         const pluginId = typeof entry.id === 'string' && entry.id ? entry.id : folder;
         return { reason: entry.browser === false ? 'not-granted' : 'not-found', pluginId };
     } catch {
-        return { reason: 'not-found', pluginId: null };
+        // The registry could not be read (the backend is restarting): nothing is known about the plugin.
+        return { reason: 'failed', pluginId: null };
     }
 }
 

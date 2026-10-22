@@ -12,7 +12,7 @@
 
 exports.metadata = {
     name: 'Notification Bar',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Site-wide announcement bar with CTA link, dismissal and scheduling',
     author: 'WordJS',
 };
@@ -203,6 +203,8 @@ exports.init = async function (wordjs) {
         await adminMenu.add({
             href: '/admin/plugin/announcement',
             label: 'Barra de Anuncios',
+            // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+            labels: { en: 'Announcement Bar', es: 'Barra de anuncios', pt: 'Barra de avisos' },
             icon: 'fa-bullhorn',
             order: 68,
             cap: 'manage_options',

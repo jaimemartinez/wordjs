@@ -12,7 +12,7 @@
 // list read: two version numbers that disagree name two different builds of the same package.
 exports.metadata = {
     name: 'Video Gallery',
-    version: '1.0.1',
+    version: '1.1.0',
     description: 'A horizontal scrolling video carousel with YouTube integration and multi-gallery support',
     author: 'WordJS'
 };
@@ -320,6 +320,8 @@ exports.init = function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/videos',
         label: 'Video Gallery',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Video Gallery', es: 'Galería de videos', pt: 'Galeria de vídeos' },
         icon: 'fa-video',
         order: 35,
         cap: 'manage_videos'

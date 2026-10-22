@@ -119,16 +119,23 @@ function sanitizeStyle(raw) {
     return out.join(';');
 }
 
+// The input is HTML SOURCE, so its '&' already introduces character references ('&amp;', '&#38;',
+// '&lt;'). Escaping those again turned every '&amp;' of an incoming message into a literal "&amp;" on
+// screen — and into '&amp;amp;' inside an href, which broke every link with a query string (a password
+// reset link lost its token). A bare '&' is still escaped; a well-formed reference is kept as written,
+// and it decodes inside the same text or attribute it came from, so it cannot open a tag or end a value.
+const BARE_AMP = /&(?!(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6});)/g;
+
 function escapeText(s) {
     return String(s)
-        .replace(/&/g, '&amp;')
+        .replace(BARE_AMP, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 }
 
 function escapeAttr(s) {
     return String(s)
-        .replace(/&/g, '&amp;')
+        .replace(BARE_AMP, '&amp;')
         .replace(/"/g, '&quot;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');

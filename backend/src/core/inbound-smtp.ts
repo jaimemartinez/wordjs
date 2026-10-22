@@ -42,6 +42,8 @@ interface ListenOptions {
     maxClients?: number;
     proxyIps?: string[];
     banner?: string;
+    /** The host name the server greets with (220 <name> ESMTP) — the plugin's HELO name. */
+    name?: string;
 }
 
 interface Status {
@@ -51,6 +53,10 @@ interface Status {
     degraded: boolean;
     reason: string | null;
     proxyIps: string[];
+    /** The STARTTLS certificate this listener presents (never the private key). */
+    tls?: { subject: string; validTo: string; selfSigned: boolean } | null;
+    /** This node's IPv4 addresses — where the port is reachable (a sandboxed plugin cannot see them). */
+    addresses?: { public: string[]; private: string[] };
 }
 
 const DEFAULT_PORT = 25;
@@ -146,6 +152,84 @@ function probe(port: number): Promise<{ ok: boolean; code?: string }> {
     });
 }
 
+/** This node's non-loopback IPv4 addresses, split into public and private (RFC 1918, CGNAT, link-local). */
+function nodeAddresses(): { public: string[]; private: string[] } {
+    const out = { public: [] as string[], private: [] as string[] };
+    const isPrivate = (ip: string) => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip);
+    try {
+        for (const list of Object.values(require('os').networkInterfaces() || {}) as any[]) {
+            for (const a of list || []) {
+                if (!a || a.internal || (a.family !== 'IPv4' && a.family !== 4)) continue;
+                const bucket = isPrivate(a.address) ? out.private : out.public;
+                if (!bucket.includes(a.address)) bucket.push(a.address);
+            }
+        }
+    } catch { /* no interface list on this platform */ }
+    return out;
+}
+
+/** A DNS host name, or '' — what the greeting may announce. */
+function hostName(raw: unknown): string {
+    const n = String(raw == null ? '' : raw).trim().toLowerCase().replace(/\.$/, '');
+    return /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(n) ? n : '';
+}
+
+/**
+ * The certificate STARTTLS presents. smtp-server, given none, falls back to its BUILT-IN example
+ * certificate: CN=localhost, long expired, and with a private key published in its own repository — so
+ * the "encryption" protected nothing and verifying senders refused it. Instead every install gets its
+ * own key pair, generated once and kept (0600) next to the other host keys, re-issued when it nears
+ * expiry or the greeting name changes. Self-signed is what opportunistic STARTTLS between MTAs normally
+ * accepts; a sender that demands a CA-signed certificate (MTA-STS) needs one installed for that name.
+ */
+// WORDJS_INBOUND_SMTP_TLS_DIR moves it (tests use a temporary directory).
+const tlsDir = () => process.env.WORDJS_INBOUND_SMTP_TLS_DIR || require('path').resolve(__dirname, '../../data/inbound-smtp');
+async function tlsMaterial(name: string): Promise<{ key: string; cert: string; info: { subject: string; validTo: string; selfSigned: boolean } } | null> {
+    const fs = require('fs');
+    const path = require('path');
+    const crypto = require('crypto');
+    const cn = name || 'localhost';
+    const dir = tlsDir();
+    const keyFile = path.join(dir, 'tls.key');
+    const certFile = path.join(dir, 'tls.crt');
+    const describe = (pem: string) => {
+        const x = new crypto.X509Certificate(pem);
+        return { x, info: { subject: String(x.subject || ''), validTo: String(x.validTo || ''), selfSigned: x.subject === x.issuer } };
+    };
+    // Read without checking for existence first, and replace by rename: no window between a check and the
+    // use of the file (a missing or unreadable pair simply falls through to generating a new one).
+    const readPair = (): { key: string; cert: string } | null => {
+        try { return { key: fs.readFileSync(keyFile, 'utf8'), cert: fs.readFileSync(certFile, 'utf8') }; } catch { return null; }
+    };
+    // A fresh name created exclusively ('wx'), then renamed over the target: the target is never written in place.
+    const writeAtomic = (file: string, data: string, mode: number) => {
+        const tmp = `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+        fs.writeFileSync(tmp, data, { mode, flag: 'wx' });
+        fs.renameSync(tmp, file);
+    };
+    try {
+        const pair = readPair();
+        if (pair) {
+            const { x, info } = describe(pair.cert);
+            const fresh = Date.parse(x.validTo) - Date.now() > 30 * 24 * 60 * 60 * 1000;
+            if (fresh && x.checkHost(cn) !== undefined) return { key: pair.key, cert: pair.cert, info };
+        }
+        const selfsigned = require('selfsigned');
+        const pems = await selfsigned.generate([{ name: 'commonName', value: cn }], {
+            notAfterDate: new Date(Date.now() + 825 * 24 * 60 * 60 * 1000), keySize: 2048, algorithm: 'sha256',
+            extensions: [{ name: 'subjectAltName', altNames: [{ type: 2, value: cn }] }],
+        });
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        writeAtomic(keyFile, pems.private, 0o600);
+        writeAtomic(certFile, pems.cert, 0o644);
+        log.info(`[InboundSMTP] generated this install's STARTTLS certificate for ${cn}`);
+        return { key: pems.private, cert: pems.cert, info: describe(pems.cert).info };
+    } catch (e: any) {
+        log.warn(`[InboundSMTP] could not prepare a STARTTLS certificate (${e && e.message}); STARTTLS is not offered`);
+        return null;
+    }
+}
+
 /**
  * Open (or re-open with new options) the listener for `slug`. The caller (plugin-isolate) has already
  * checked the `smtp:inbound` grant and passes the ports the manifest declares.
@@ -176,11 +260,20 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
         port = fallback;
     }
 
+    const name = hostName(opts && opts.name);
+    const tls = await tlsMaterial(name);
+    status.tls = tls ? tls.info : null;
+    status.addresses = nodeAddresses();
+
     const { SMTPServer } = require('smtp-server');
     server = new SMTPServer({
         ...(proxyIps.length ? { useProxy: proxyIps } : {}),
+        ...(name ? { name } : {}),
+        // With no certificate of our own, STARTTLS is not offered at all rather than with the library's
+        // public example key.
+        ...(tls ? { key: tls.key, cert: tls.cert } : { disabledCommands: ['AUTH', 'STARTTLS'] }),
         authOptional: true,
-        disabledCommands: ['AUTH'],
+        ...(tls ? { disabledCommands: ['AUTH'] } : {}),
         size: maxSize,
         maxClients,
         socketTimeout: 60 * 1000,
@@ -252,7 +345,7 @@ async function stop(slug: string): Promise<void> {
 }
 
 function getStatus(): Status {
-    return { ...status, proxyIps: [...status.proxyIps] };
+    return { ...status, proxyIps: [...status.proxyIps], tls: status.tls ? { ...status.tls } : null, addresses: status.addresses ? { public: [...status.addresses.public], private: [...status.addresses.private] } : undefined };
 }
 
-module.exports = { start, stop, getStatus, _bindReason: bindReason };
+module.exports = { start, stop, getStatus, _bindReason: bindReason, _hostName: hostName, _tlsMaterial: tlsMaterial };

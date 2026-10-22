@@ -131,7 +131,9 @@ export const versoComponentDef = {
     },
 };
 
-export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
+export default function EventTicketsVerso({ eventId, accentColor, elementId, isEditing, puck }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const [data, setData] = useState(null);      // null = loading, {events,...} = loaded, false = failed
     const [qty, setQty] = useState({});          // ticket_type_id -> n
     const [buyer, setBuyer] = useState({ name: "", email: "" });
@@ -348,6 +350,7 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
     } else if (data === null) {
         content = <div className="wjet-empty">Cargando entradas…</div>;
     } else if (!event) {
+        if (!editing) return null;
         content = <div className="wjet-empty">No hay eventos próximos con entradas disponibles — crea uno en Admin → Entradas.</div>;
     } else {
         content = (

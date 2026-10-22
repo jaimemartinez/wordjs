@@ -64,17 +64,21 @@ export const REASON_LABEL_CLASS = 'not-italic font-bold text-slate-600';
  * like every other one, under "By activating this plugin, you are granting it…", while the server left it
  * off. `rolesHeld` words the note under a declared role users already hold (grantState.ts rolesHeldState).
  */
-export function PermissionRow({ token, reason, platformNote = false, roles, rolesHeld, activation = "grants" }: {
+export function PermissionRow({ token, reason, platformNote = false, roles, rolesHeld, activation = "grants", declined = false, onToggleDeclined }: {
     token: string;
     reason?: string;
     platformNote?: boolean;
     roles?: DeclaredPluginRole[];
     rolesHeld: HeldState;
     activation?: ActivationGrant;
+    /** Activation dialog: the administrator switched this request off before activating (S4-17). */
+    declined?: boolean;
+    /** When given (a row activation would grant), the row shows a switch to decline the permission. */
+    onToggleDeclined?: () => void;
 }) {
     const { t } = useI18n();
     const meta = permMeta(token, t);
-    const staysOff = activation === "stays-off";
+    const staysOff = activation === "stays-off" || declined;
     return (
         <div
             className={`flex gap-3 p-4 rounded-2xl border backdrop-blur-sm transition-all duration-300 hover:shadow-sm ${staysOff ? STAYS_OFF_CLASSES : RISK_CLASSES[meta.risk]}`}
@@ -109,10 +113,23 @@ export function PermissionRow({ token, reason, platformNote = false, roles, role
                 )}
                 {staysOff && (
                     <p className="mt-2 text-[11px] font-bold text-slate-700 leading-relaxed" data-activation-stays-off="" role="note">
-                        <i className="fas fa-ban mr-1.5" aria-hidden="true" />{t('plugins.activation.staysOff')}
+                        <i className="fas fa-ban mr-1.5" aria-hidden="true" />{t(declined ? 'plugins.activation.declined' : 'plugins.activation.staysOff')}
                     </p>
                 )}
             </div>
+            {onToggleDeclined && (
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!declined}
+                    aria-label={`${meta.label} (${token})`}
+                    onClick={onToggleDeclined}
+                    data-activation-toggle={token}
+                    className={`ml-auto relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-300 mt-0.5 ${declined ? 'bg-slate-300' : 'bg-blue-600'}`}
+                >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${declined ? 'translate-x-1' : 'translate-x-6'} shadow-sm`} />
+                </button>
+            )}
         </div>
     );
 }

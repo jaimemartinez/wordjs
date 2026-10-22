@@ -18,6 +18,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   show their role, pinned address and expiry; a three-machine cluster is reported as *separate*.
 - **Site Health checks the gateway and the servers behind it**: the protocol the gateway serves against its
   HTTPS switch, and any node that stopped answering.
+- **Comment notifications by email.** Settings → Reading & Discussion has two switches (on by default, as in
+  WordPress): email the administration address when a comment is held for moderation, and email the entry's
+  author when a comment is published on it. They go through the site's mail plugin; spam, the author's own
+  comments and a site without a mail plugin send nothing. The message carries the commenter's name and a
+  plain-text excerpt, never their email or IP.
+- **Turning the system mail service back on.** When a plugin's *Free port 25* disabled the machine's own MTA
+  (Postfix, Exim, Sendmail) and that plugin is later deactivated or deleted, the Plugins screen says nothing is
+  receiving mail on that port and offers to turn the service back on, after a confirmation.
+
 - **Header & footer editor, out of beta.** Admin → *Header & footer* (`/admin/chrome`) now covers
   everything the built-in header and footer did, and more: a mobile hamburger that can collapse on
   phones, phones and tablets, or always; a sticky header and a header that is **transparent over the
@@ -1196,6 +1205,70 @@ the boot error links there too.
   `datePublished` are ISO 8601. Settings → General has a Time zone, and the public site prints dates in
   it. The installer explains what the legacy SQLite engine costs. In split mode, a second install on the
   same host uses its own ports before it is set up instead of the first install's.
+
+- **Mail on MySQL/MariaDB: sending works with the default settings.** mail-server **3.2.0** stores the send time
+  of the undo-send window, scheduled sends, retries and rate-limit deferrals in the one date format every
+  database accepts; MariaDB refused the old one, so every message failed with "Incorrect datetime value". On
+  PostgreSQL the check that lists mail from before per-account ownership no longer fails on every call.
+- **Site mail is never sent from the administrator's personal address.** Notices from the core and other
+  plugins, form notifications and the delivery test are sent as the configured *From email* when it is on the
+  mail domain, otherwise as `noreply@<mail domain>` — no longer as the administrator's account email.
+  Configuration refuses an off-domain *From email* and shows which address site mail uses.
+- **Attachments are no longer dropped.** The file is copied when it is uploaded (the upload's temporary file
+  is deleted as soon as that request ends) and the composer gets a token instead of a server path. A message
+  whose attachment cannot be read is refused with the file's name instead of being sent without it.
+- **A relay on a private address works once allowed.** With *Sandbox access → Allow host:port*, a LAN smarthost
+  that offers STARTTLS stayed blocked: the TLS upgrade did not carry the port the approval names. The relay
+  error now names the address the sandbox refused.
+- **Newsletter double opt-in.** newsletter **1.0.3** asks for *Read site settings*, which it needs to build the
+  confirmation link — without it no confirmation was ever sent and every subscriber stayed pending. The
+  subscribe block no longer says "subscription confirmed" (subscribing never confirms); when the confirmation
+  cannot be sent the visitor is told to try later. Confirming works on PostgreSQL and MySQL, and the link opens
+  the page the visitor subscribed from. Grant the new permission when you update the plugin.
+- **Webmail and server console.** Links in received HTML mail keep their query string (`&amp;` was escaped twice,
+  so a password-reset link lost its token) and `&` shows as `&`. *Reply* goes to a message's Reply-To — a
+  form notification's is the visitor (contact-forms 1.0.2). A mailbox reached directly and through an alias
+  gets one copy. The schedule-send and quota menus are no longer cut off. Search understands quoted phrases
+  and `-word`, and `is:unread` leaves out your own sent mail. Quotas are hard limits. Sent shows a message once
+  the undo window ends. Webmail sends carry the account's display name. GTUBE is filed as spam. A failed
+  delivery test is not retried. Aliases appear in the recipient suggestions. *Professional mail account* is no
+  longer on by default for new users. Inbound SMTP greets with the HELO name and offers STARTTLS with the
+  install's own certificate instead of the library's public example one. The overview shows the address and
+  port this node receives mail on and whether password recovery can use the server; the DNS tab proposes the
+  node's public IPv4 and the PTR name.
+- **Settings → Account email** says when the allowed mail plugin has not yet confirmed outside delivery, which
+  is why password recovery is still off. Deactivating a plugin asks for confirmation. bookings 1.0.3: the
+  confirmation link opens the booking page even when the visitor used another accepted address. memberships
+  1.2.1: the newsletter confirmation names the site, not its host.
+- **Plugins: install, update and permissions.** An update is offered only when the catalog has a *newer* version
+  (an installed build newer than the catalog's was offered a downgrade). The activation dialog has a switch per requested permission, so a permission
+  can be left off before the plugin first starts. A plugin request refused for a missing permission answers
+  `403 plugin_permission_denied` naming the permission and where to grant it, instead of "Isolated plugin
+  error". A plugin screen that could not be fetched while the server restarts says it is temporarily
+  unavailable, with a retry, instead of "Plugin not found".
+- **Plugin blocks on public pages.** Blocks that are not configured yet (contact form, poll, card gallery, photo
+  carousel, video gallery, YouTube videos, digital downloads, event tickets, social share) show their setup hint
+  in the editor only and render nothing for visitors. The store search, store orders and share buttons no longer
+  touch the edge of the screen. In the editor palette plugin blocks are grouped with the core blocks (Media,
+  Marketing, Dynamic…) with their group's icon, instead of all under *More*. video-gallery **1.1.0** offers its
+  block in the editor, with the gallery picked from a list.
+- **Payment and forms plugin screens follow the admin language.** The admin screens of contact-forms, bookings,
+  donations, digital-downloads, memberships, invoices and event-tickets are in English, Spanish and Portuguese
+  (they were Spanish only), with dates and amounts in the admin's locale.
+- **Admin menus follow the admin language.** Plugin menu entries can carry a label per language and every
+  marketplace plugin does (English, Spanish, Portuguese). The core form-submissions screen is *Form submissions* and the contact-forms
+  plugin's is *Contact forms*, instead of two entries called "Forms".
+- **Payments and forms plugins.** memberships: the paywall no longer offers *Create account* when registration is
+  closed, nor *Subscribe* when no payment provider is set up; the settings warn about both. The core members-only
+  notice no longer offers *Create an account* on a site with registration closed either, and plugins can ask
+  `site.registrationOpen()` (with *Read site settings*) instead of reading the protected option. Switching the
+  payment provider after a key was refused no longer re-sends the refused key. bookings: the *New service* window
+  is no longer partly hidden behind the sidebar. contact-forms: a failed *Save form* (no connection) says so next
+  to the button. Updated: analytics-tag 1.0.2, auctions 1.1.2, card-gallery 1.0.2, cookie-consent 1.0.2,
+  digital-downloads 1.1.2, donations 1.0.3, event-tickets 1.1.2, events-calendar 1.0.2, faq 1.0.2, image-lightbox
+  1.0.2, invoices 1.0.2, job-board 1.0.2, notification-bar 1.0.2, online-store 2.0.3, photo-carousel 2.1.1, polls
+  1.0.2, popup-builder 1.0.2, restaurant-menu 2.0.3, social-share 1.0.2, testimonials 1.0.2, vendor-marketplace
+  1.0.4, youtube-videos 1.0.4.
 
 - **Admin screens that ignored the admin language now follow it.** The database migration, interactions
   (including the preset editor), live hooks timeline, plugins, login and Security Center screens (SSL

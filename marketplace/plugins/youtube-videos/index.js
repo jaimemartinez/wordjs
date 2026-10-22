@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'YouTube Videos',
-    version: '1.0.3',
+    version: '1.0.4',
     description: 'Channel video list (links, thumbnails, titles) + Verso carousel block',
     author: 'WordJS',
 };
@@ -308,6 +308,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/youtube',
         label: 'YouTube Videos',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'YouTube Videos', es: 'Videos de YouTube', pt: 'Vídeos do YouTube' },
         icon: 'fa-video',
         order: 56,
         cap: 'manage_options',

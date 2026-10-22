@@ -209,7 +209,9 @@ export const versoComponentDef = {
     },
 };
 
-export default function YoutubeVideosVerso({ layout, titleFilter, maxVideos, autoplay, interval, showTitles, elementId }) {
+export default function YoutubeVideosVerso({ layout, titleFilter, maxVideos, autoplay, interval, showTitles, elementId, isEditing, puck }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const [videos, setVideos] = useState(null); // null = loading, [] = loaded-empty
 
     const query = useMemo(() => {
@@ -227,6 +229,8 @@ export default function YoutubeVideosVerso({ layout, titleFilter, maxVideos, aut
             .catch(() => { if (alive) setVideos([]); });
         return () => { alive = false; };
     }, [query]);
+
+    if (!editing && Array.isArray(videos) && videos.length === 0) return null;
 
     return (
         <div id={elementId || undefined}>

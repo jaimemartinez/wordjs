@@ -141,7 +141,9 @@ export const versoComponentDef = {
     },
 };
 
-export default function PollsVerso({ pollId, accentColor, elementId }) {
+export default function PollsVerso({ pollId, accentColor, elementId, isEditing, puck }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const id = Math.max(0, parseInt(pollId, 10) || 0);
     const accent = String(accentColor || "").trim() || "#3b82f6";
 
@@ -274,6 +276,8 @@ export default function PollsVerso({ pollId, accentColor, elementId }) {
             </div>
         );
     }
+
+    if (!editing && (status === "unconfigured" || status === "missing" || (status !== "loading" && !poll))) return null;
 
     return (
         <div id={elementId || undefined}>

@@ -23,6 +23,9 @@ import type { Request, Response } from 'express';
 // receives an http.IncomingMessage - not the express Response imported above.
 import type { IncomingMessage } from 'http';
 
+/** Is `candidate` a strictly newer semver than `current`? (String inequality offered downgrades as updates.) */
+const isNewerVersion = (candidate: unknown, current: unknown): boolean =>
+    require('../core/updater').compareVersions(String(candidate), String(current)) > 0;
 const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/marketplace');
 const router = express.Router();
@@ -437,7 +440,8 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
         const annotated = merged.map((e: any) => {
             const local = bySlug.get(String(e.id));
             const recorded = origins[String(e.id)] || null;
-            const updateAvailable = !!(local && local.version && e.version && String(local.version) !== String(e.version));
+            // NEWER only: a plugin updated by upload past the catalog's version is not offered a "downgrade update".
+            const updateAvailable = !!(local && local.version && e.version && isNewerVersion(e.version, local.version));
             // `updatable` = an update can actually be applied in one click: installed, a newer version, AND
             // this catalog entry's source MATCHES the source it was installed from. A plugin installed by
             // upload or from another source shows the update but not the button (the UI explains why).
@@ -1027,7 +1031,7 @@ router.get('/themes/catalog', authenticate, isAdmin, asyncHandler(async (req: Re
                 installed,
                 active: installed && String(e.id) === activeSlug,
                 installedVersion,
-                updateAvailable: !!(installed && installedVersion && e.version && String(installedVersion) !== String(e.version)),
+                updateAvailable: !!(installed && installedVersion && e.version && isNewerVersion(e.version, installedVersion)),
             };
         });
         const first = sources[0] || {};
@@ -1156,3 +1160,4 @@ module.exports = router;
 // badge is a statement about is a security decision, and it deserves its own negative controls without
 // booting a database to reach it.
 module.exports.isOfficialSource = isOfficialSource;
+module.exports.isNewerVersion = isNewerVersion;

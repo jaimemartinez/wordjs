@@ -58,7 +58,9 @@ export const versoComponentDef = {
     },
 };
 
-export default function ContactFormsVerso({ formId, title, elementId }) {
+export default function ContactFormsVerso({ formId, title, elementId, isEditing, puck }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const id = Math.max(0, parseInt(formId, 10) || 0);
     // form: null = loading, false = not found / unconfigured, object = ready.
     const [form, setForm] = useState(null);
@@ -183,6 +185,8 @@ export default function ContactFormsVerso({ formId, title, elementId }) {
             </div>
         );
     };
+
+    if (form === false && !editing) return null;
 
     return (
         <div id={elementId || undefined} className="wjcf-wrap">

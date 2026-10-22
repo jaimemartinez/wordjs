@@ -210,7 +210,11 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
             return mailResult ? mailResult(msg) : {};
         },
         options: {
-            get: async (k: string, d: any) => (options.has(k) ? options.get(k) : d),
+            // Protected options throw here as they do on the host (core/plugin-api isProtectedOption).
+            get: async (k: string, d: any) => {
+                if (require('../../core/plugin-api').isProtectedOption(k)) throw new Error(`🛡️ Option '${k}' is not readable by plugins.`);
+                return options.has(k) ? options.get(k) : d;
+            },
             set: async (k: string, v: any) => { options.set(k, v); },
         },
         crypto: {
@@ -244,7 +248,11 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
             findByLogin: async (...a: any[]) => (bootOpts.users && bootOpts.users.findByLogin ? bootOpts.users.findByLogin(...a) : null),
             search: async (...a: any[]) => (bootOpts.users && bootOpts.users.search ? bootOpts.users.search(...a) : []),
         },
-        site: { url: async () => 'http://site.test', domain: async () => 'site.test', adminEmail: async () => 'admin@site.test' },
+        site: {
+            url: async () => 'http://site.test', domain: async () => 'site.test', adminEmail: async () => 'admin@site.test',
+            // The host reads users_can_register; tests set it in the options Map.
+            registrationOpen: async () => { const v = options.get('users_can_register'); return !!v && v !== '0' && v !== 'false'; },
+        },
     };
 
     // Load a FRESH copy of the entry so module-level state (timers, maps) is per boot — except for a plugin

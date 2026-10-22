@@ -11,7 +11,7 @@
 
 exports.metadata = {
     name: 'Social Share',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Botones para compartir la página actual (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, Copiar enlace) vía el bloque "SocialShare"',
     author: 'WordJS',
 };
@@ -22,6 +22,8 @@ exports.init = async function (wordjs) {
     await adminMenu.add({
         href: '/admin/plugin/share',
         label: 'Compartir Social',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Social Share', es: 'Compartir en redes', pt: 'Compartilhar' },
         icon: 'fa-share-nodes',
         order: 61,
         cap: 'manage_options',

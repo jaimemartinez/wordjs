@@ -263,6 +263,25 @@ function verifyPermission(scope: string, access = 'read') {
 }
 
 /**
+ * What an administrator should read when a plugin request failed because a permission is missing.
+ * The bridge's refusal (verifyPermission above) is written for logs; relayed as-is through a plugin route
+ * it reached the admin screen as "Isolated plugin error", with nothing saying which permission, or where
+ * to grant it. Returns null for any other failure.
+ */
+function describePermissionRefusal(message: unknown): null | { plugin: string; permission: string; error: string } {
+    const m = /(?:Plugin|Theme) '([^']+)' tried to access '([a-z_]+)' \(([a-z_]+)\) without permission/i.exec(String(message || ''));
+    if (!m) return null;
+    const [, plugin, scope, access] = m;
+    const permission = `${scope}:${access}`;
+    const where = plugin.startsWith('theme:') ? 'Appearance → Themes' : `Plugins → ${plugin} → Permissions`;
+    return {
+        plugin,
+        permission,
+        error: `This needs the permission "${permission}", which is not granted to ${plugin}. An administrator can grant it in ${where}.`,
+    };
+}
+
+/**
  * Protect sensitive environment variables from plugins
  */
 function getProtectedEnv() {
@@ -402,6 +421,7 @@ module.exports = {
     getEffectivePlugin,
     hasPermission,
     verifyPermission,
+    describePermissionRefusal,
     forgetThemeDeclaration,
     DEFAULT_THEME_PERMISSIONS
 };

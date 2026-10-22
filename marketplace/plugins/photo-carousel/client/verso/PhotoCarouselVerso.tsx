@@ -88,7 +88,9 @@ export const versoComponentDef = {
     render: undefined // Provide render later
 };
 
-export default function PhotoCarouselVerso({ carouselId, autoSlide = true, interval = 5000, elementId }: PhotoCarouselVersoProps) {
+export default function PhotoCarouselVerso({ carouselId, autoSlide = true, interval = 5000, elementId, isEditing = false, puck }: PhotoCarouselVersoProps & { isEditing?: boolean; puck?: any }) {
+    // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
+    const editing = !!(isEditing || (puck && puck.isEditing));
     const [carousel, setCarousel] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [carousels, setCarousels] = useState<any[]>([]);
@@ -124,6 +126,8 @@ export default function PhotoCarouselVerso({ carouselId, autoSlide = true, inter
             interval: interval || carousel.interval
         } : null;
     }, [carousel, autoSlide, interval]);
+
+    if (!editing && (loading || !activeCarousel)) return null;
 
     if (loading) return <div className="p-4 text-center text-gray-500">Loading Carousel...</div>;
 

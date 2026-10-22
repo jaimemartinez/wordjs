@@ -33,7 +33,7 @@
 
 exports.metadata = {
     name: 'Event Tickets',
-    version: '1.1.1',
+    version: '1.1.2',
     description: 'Ticket types with capacity caps, unique ticket codes by email, attendee list and check-in.',
     author: 'WordJS',
 };
@@ -1376,6 +1376,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/tickets',
         label: 'Entradas',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Event Tickets', es: 'Entradas', pt: 'Ingressos' },
         icon: 'fa-ticket',
         order: 77,
         cap: 'manage_options',

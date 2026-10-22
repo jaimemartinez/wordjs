@@ -30,7 +30,7 @@
 
 exports.metadata = {
     name: 'Digital Downloads',
-    version: '1.1.1',
+    version: '1.1.2',
     description: 'Downloadable products (private media files) with token-gated, expiring, limited-use download links.',
     author: 'WordJS',
 };
@@ -728,6 +728,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/downloads',
         label: 'Descargas Digitales',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Digital Downloads', es: 'Descargas digitales', pt: 'Downloads digitais' },
         icon: 'fa-download',
         order: 73,
         cap: 'manage_options',

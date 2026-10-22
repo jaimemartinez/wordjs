@@ -21,7 +21,7 @@
 
 exports.metadata = {
     name: 'Contact Forms',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Form builder with custom fields, Verso embed block, submissions inbox, CSV export and email notifications.',
     author: 'WordJS',
 };
@@ -410,11 +410,18 @@ exports.init = async function (wordjs) {
                     + '</div>';
                 const text = fields.map((f) => f.label + ': ' + asString(clean[f.name])).join('\n')
                     + (pageUrl ? '\n\nEnviado desde: ' + pageUrl : '');
+                // "Reply" answers the VISITOR: the first email field they filled in (already validated
+                // above) becomes the Reply-To. The From stays the site's own address.
+                const visitorEmail = fields
+                    .filter((f) => f.type === 'email')
+                    .map((f) => asString(clean[f.name]).trim())
+                    .find((v) => EMAIL_RE.test(v) && !/[\r\n]/.test(v));
                 await wordjs.mail({
                     to: asString(form.notify_email).trim(),
                     subject: 'Nuevo mensaje: ' + form.name,
                     html,
                     text,
+                    ...(visitorEmail ? { replyTo: visitorEmail } : {}),
                 });
             } catch (e) {
                 console.warn('[contact-forms] notification email failed (submission stored anyway):', e && e.message ? e.message : e);
@@ -427,7 +434,9 @@ exports.init = async function (wordjs) {
     // ---- admin menu -------------------------------------------------------------------------------
     adminMenu.add({
         href: '/admin/plugin/contact-forms',
-        label: 'Formularios',
+        label: 'Formularios de contacto',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Contact forms', es: 'Formularios de contacto', pt: 'Formulários de contato' },
         icon: 'fa-envelope-open-text',
         order: 57,
         cap: 'manage_options',

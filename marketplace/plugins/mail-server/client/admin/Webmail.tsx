@@ -245,18 +245,21 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         setComposerKey(k => k + 1);
     };
     const quoteBlock = (msg: any) => {
-        const who = escapeHtml(msg.from_name ? `${msg.from_name} <${msg.from_address}>` : msg.from_address);
+        const who = msg.from_name ? `${msg.from_name} <${msg.from_address}>` : msg.from_address;
         const body = msg.body_html ? msg.body_html : escapeHtml(msg.body_text || '').replace(/\n/g, '<br/>');
-        return `<br/><br/><div>${escapeHtml(t('comp.wrote', { date: fullDate(msg.date_received, locale), who: '' })).replace(/:$/, '')} ${who}:</div><blockquote>${body}</blockquote>`;
+        // The translation places the name ("On {date}, {who} wrote:"); appending it after the verb read
+        // "On …, wrote Ana <…>:" in English. The whole line is escaped once.
+        return `<br/><br/><div>${escapeHtml(t('comp.wrote', { date: fullDate(msg.date_received, locale), who }))}</div><blockquote>${body}</blockquote>`;
     };
     const lastOf = (email: any) => (email?.thread && email.thread.length ? email.thread[email.thread.length - 1] : email);
     const reply = (email: any, all = false, msg?: any) => {
         const m = msg || lastOf(email);
         const subj = String(m.subject || '');
-        let to = m.is_sent ? m.to_address : m.from_address;
+        // A received message's Reply-To (a form notification carries the visitor's address there) wins.
+        let to = m.is_sent ? m.to_address : (m.reply_to || m.from_address);
         let cc = '';
         if (all) {
-            const people = [m.from_address, ...String(m.to_address || '').split(/[,;]/), ...String(m.cc_address || '').split(/[,;]/)]
+            const people = [(!m.is_sent && m.reply_to) || m.from_address, ...String(m.to_address || '').split(/[,;]/), ...String(m.cc_address || '').split(/[,;]/)]
                 .map(addrOf).filter(a => a && a !== me);
             const uniq = [...new Set(people)];
             to = uniq.slice(0, 1).join(', ') || to;
@@ -279,10 +282,15 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
             toast('error', res.message || t('read.stillFailing'));
         } else if (res && res.queued) {
             const id = res.id;
+            const undoMs = Math.max(1, Number(res.undoSeconds) || 10) * 1000;
             toast('progress', t('comp.sending'), {
-                ttl: Math.max(1, Number(res.undoSeconds) || 10) * 1000,
+                ttl: undoMs,
                 action: { label: t('comp.undo'), onClick: () => undoSend(id) }
             });
+            // The queue delivers it on its next pass after the undo window (it runs every 15 s): refresh
+            // then, so Sent shows the message without the user having to reload.
+            setTimeout(() => { loadList({ silent: true }); loadQuota(); }, undoMs + 1500);
+            setTimeout(() => { loadList({ silent: true }); }, undoMs + 17000);
         } else {
             ok(scheduled ? t('comp.scheduled') : t('comp.sent'));
         }
@@ -766,7 +774,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
             <IconBtn icon="fa-regular fa-envelope-open" label={t('act.markRead')} onClick={() => bulk('read', selection)} />
             <IconBtn icon="fa-regular fa-envelope" label={t('act.markUnread')} onClick={() => bulk('unread', selection)} />
             <Menu align={phone ? 'right' : 'left'} width="w-56" className={phone ? '' : ''} trigger={({ toggle }: any) => <IconBtn icon="fa-solid fa-tag" label={t('act.label')} onClick={toggle} />}>
-                {labels.length === 0 && <p className="px-3.5 py-2 text-xs text-slate-500">{t('folder.newLabel')}…</p>}
+                {labels.length === 0 && <p className="px-3.5 py-2 text-xs leading-relaxed text-slate-500">{t('folder.noLabelsHint')}</p>}
                 {labels.map(l => <MenuItem key={l.id} onClick={() => bulk('label', selection, { labelId: l.id })} icon="fa-solid fa-tag">{l.name}</MenuItem>)}
             </Menu>
             {phone && <IconBtn icon="fa-solid fa-xmark" label={t('common.close')} onClick={() => setSelectedIds(new Set())} />}
@@ -907,7 +915,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                     <span className="mx-1 hidden h-5 w-px bg-slate-200 sm:block"></span>
                     <IconBtn icon="fa-regular fa-envelope" label={t('act.markUnread')} className="hidden sm:inline-flex" onClick={() => { bulk('unread', [email.id]); closeMessage(); }} />
                     <Menu width="w-60" trigger={({ toggle }: any) => <IconBtn icon="fa-solid fa-tag" label={t('act.label')} onClick={toggle} />}>
-                        {labels.length === 0 && <p className="px-3.5 py-2 text-xs text-slate-500">{t('folder.newLabel')}…</p>}
+                        {labels.length === 0 && <p className="px-3.5 py-2 text-xs leading-relaxed text-slate-500">{t('folder.noLabelsHint')}</p>}
                         {labels.map(l => (
                             <MenuItem key={l.id} checked={(email.labels || []).some((x: any) => x.id === l.id)} onClick={() => toggleLabelOn(email, l)}>
                                 <span className="mr-2 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: l.color }}></span>{l.name}

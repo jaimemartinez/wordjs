@@ -2634,6 +2634,70 @@ function getClaimedPorts(slug: string): number[] {
 
 /**
  * @swagger
+ * /plugins/freed-services:
+ *   get:
+ *     summary: System mail services WordJS disabled to free a plugin's port, and whether that plugin is still active
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ services: [{ slug, port, service, label, at, pluginActive }] }"
+ */
+router.get('/freed-services', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
+    const list = await require('../core/port-conflicts').listFreedServices();
+    const services = [];
+    for (const r of list) services.push({ ...r, pluginActive: await isPluginActive(r.slug) });
+    res.json({ services });
+}));
+
+/**
+ * @swagger
+ * /plugins/freed-services/restore:
+ *   post:
+ *     summary: Turn a system mail service WordJS disabled back on (admin-confirmed) once its plugin no longer needs the port
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [service, allowEnable]
+ *             properties:
+ *               service:
+ *                 type: string
+ *               allowEnable:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: The service was enabled and started.
+ *       404:
+ *         description: No service of that name was disabled by WordJS.
+ *       409:
+ *         description: Missing confirmation, or the plugin that needed the port is still active.
+ *       502:
+ *         description: systemctl failed.
+ */
+router.post('/freed-services/restore', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
+    const service = String(req.body?.service || '');
+    const pc = require('../core/port-conflicts');
+    const rec = (await pc.listFreedServices()).find((r: any) => r.service === service);
+    if (rec && await isPluginActive(rec.slug)) {
+        return res.status(409).json({ error: `Plugin '${rec.slug}' is active and listens on port ${rec.port}; deactivate it first.`, code: 'PLUGIN_STILL_ACTIVE' });
+    }
+    try {
+        res.json({ success: true, ...(await pc.restoreFreedService(service, { allowEnable: req.body?.allowEnable === true })) });
+    } catch (e: any) {
+        if (e && e.status) return res.status(e.status).json({ error: publicErrorText(e, 'The service could not be turned back on.'), code: e.code });
+        throw e;
+    }
+}));
+
+/**
+ * @swagger
  * /plugins/{slug}/port-conflicts:
  *   get:
  *     summary: Who is squatting the ports this plugin's manifest claims, and can WordJS free them?
@@ -2833,6 +2897,11 @@ router.post('/:slug/free-port', authenticate, isAdmin, pluginLifecycleLimiter, a
         // the core refuses to disable anything (CONSENT_REQUIRED below) — so a stale client snapshot
         // can never turn into an unconsented systemctl disable (TOCTOU).
         const result = await freeClaimedPort(port, { allowDisable: req.body?.allowDisable === true });
+        // Remembered so the plugins screen can offer to turn it back on once this plugin stops using the port.
+        if (result.freed && result.service) {
+            try { await require('../core/port-conflicts').recordFreedService(slug, port, result.service, result.label || result.service); }
+            catch { /* best effort: the port is freed either way */ }
+        }
         // Reload the (running) plugin so its own bind logic can take the freed port right away.
         let reloaded = false;
         if (isIsolated(slug)) {

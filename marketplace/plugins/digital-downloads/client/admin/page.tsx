@@ -18,6 +18,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
 const BASE = "/plugin/digital-downloads";
 
@@ -74,6 +75,7 @@ const IconReceipt = (props) => (
 );
 
 export default function DigitalDownloadsAdminPage() {
+    const { t, locale } = useT();
     const [tab, setTab] = useState("products");
     const [products, setProducts] = useState([]);
     const [orders, setOrders] = useState([]);
@@ -107,14 +109,14 @@ export default function DigitalDownloadsAdminPage() {
             const item = await api(`/media?visibility=private`, { method: "POST", body: fd });
             await loadPrivateFiles();
             setForm((f) => ({ ...f, media_id: String(item.id) }));
-            flash("Archivo subido como privado.");
-        } catch (err) { flash(`Error: no se pudo subir el archivo (${err?.message || err}).`); }
+            flash(t("msg.uploaded"));
+        } catch (err) { flash(t("msg.uploadFailed", { msg: err?.message || err })); }
         finally { setUploading(false); }
     };
 
     const symbol = config?.currencySymbol || "$";
     const pendingCount = useMemo(() => orders.filter((o) => o.payment_status === "pending").length, [orders]);
-    const isError = /error|inválid|no encontrado|no se pudo|falló/i.test(message);
+    const isError = /erro|inválid|no encontrado|no se pudo|falló|could not|não foi possível|não pôde/i.test(message);
 
     const loadAll = async () => {
         try { setProducts(await api(`${BASE}/products`)); } catch { setProducts([]); }
@@ -141,10 +143,10 @@ export default function DigitalDownloadsAdminPage() {
     const saveProduct = async (e) => {
         e.preventDefault();
         const cents = priceToCents(form.price);
-        if (cents === null) return flash("Error: precio inválido (usa un número, 0 = gratis).");
+        if (cents === null) return flash(t("msg.badPrice"));
         // A legacy product may be saved without re-selecting (its public URL keeps working, with a
         // warning); a NEW product must have a private file.
-        if (!form.media_id && !(editingId && form.legacy_file_url)) return flash("Error: selecciona o sube el archivo como medio privado.");
+        if (!form.media_id && !(editingId && form.legacy_file_url)) return flash(t("msg.needFile"));
         setBusy(true); setMessage("");
         try {
             const body = {
@@ -156,24 +158,24 @@ export default function DigitalDownloadsAdminPage() {
             if (editingId) await apiPut(`${BASE}/products/${editingId}`, body);
             else await apiPost(`${BASE}/products`, body);
             setShowForm(false); setForm(EMPTY_FORM); setEditingId(null);
-            flash(editingId ? "Producto actualizado." : "Producto creado.");
+            flash(editingId ? t("msg.productUpdated") : t("msg.productCreated"));
             loadAll();
-        } catch (err) { flash(`Error: ${err?.message || err}`); }
+        } catch (err) { flash(t("common.error", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
     const deleteProduct = async (p) => {
-        if (!window.confirm(`¿Eliminar "${p.name}"? Se eliminarán también sus pedidos y enlaces de descarga.`)) return;
+        if (!window.confirm(t("confirm.deleteProduct", { name: p.name }))) return;
         setBusy(true);
-        try { await apiDelete(`${BASE}/products/${p.id}`); flash("Producto eliminado."); loadAll(); }
-        catch (err) { flash(`Error: ${err?.message || err}`); }
+        try { await apiDelete(`${BASE}/products/${p.id}`); flash(t("msg.productDeleted")); loadAll(); }
+        catch (err) { flash(t("common.error", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
     const togglePublished = async (p) => {
         setBusy(true);
         try { await apiPut(`${BASE}/products/${p.id}`, { is_published: !p.is_published }); loadAll(); }
-        catch (err) { flash(`Error: ${err?.message || err}`); }
+        catch (err) { flash(t("common.error", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
@@ -182,18 +184,18 @@ export default function DigitalDownloadsAdminPage() {
         setBusy(true); setMessage("");
         try {
             const r = await apiPost(`${BASE}/orders/${o.id}/paid`, {});
-            if (r.already) flash("El pedido ya estaba pagado.");
-            else flash(r.emailSent ? "Pedido marcado como pagado — enlace enviado por correo." : "Pedido marcado como pagado, pero el correo no se pudo enviar (revisa el proveedor de email). El cliente puede usar su código de pedido.");
+            if (r.already) flash(t("msg.alreadyPaid"));
+            else flash(r.emailSent ? t("msg.paidSent") : t("msg.paidNoMail"));
             loadAll();
-        } catch (err) { flash(`Error: ${err?.message || err}`); }
+        } catch (err) { flash(t("common.error", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
     const deleteOrder = async (o) => {
-        if (!window.confirm(`¿Eliminar el pedido #${o.id} de ${o.customer_email}? Su enlace de descarga dejará de funcionar.`)) return;
+        if (!window.confirm(t("confirm.deleteOrder", { id: o.id, email: o.customer_email }))) return;
         setBusy(true);
-        try { await apiDelete(`${BASE}/orders/${o.id}`); flash("Pedido eliminado."); loadAll(); }
-        catch (err) { flash(`Error: ${err?.message || err}`); }
+        try { await apiDelete(`${BASE}/orders/${o.id}`); flash(t("msg.orderDeleted")); loadAll(); }
+        catch (err) { flash(t("common.error", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
@@ -205,11 +207,11 @@ export default function DigitalDownloadsAdminPage() {
             const blob = new Blob([data.csv], { type: "text/csv;charset=utf-8;" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
-            a.href = url; a.download = data.filename || "pedidos.csv";
+            a.href = url; a.download = data.filename || t("csv.filename");
             document.body.appendChild(a); a.click(); a.remove();
             URL.revokeObjectURL(url);
-            flash(`Exportados ${data.count} pedidos.`);
-        } catch (err) { flash(`Error: ${err?.message || err}`); }
+            flash(t("msg.exported", { count: data.count }));
+        } catch (err) { flash(t("common.error", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
@@ -219,8 +221,8 @@ export default function DigitalDownloadsAdminPage() {
             const sep = path.includes("?") ? "&" : "?";
             const link = `${window.location.origin}${path}${sep}dl=${o.token}`;
             await navigator.clipboard.writeText(link);
-            flash("Enlace copiado al portapapeles.");
-        } catch { flash("Error: no se pudo copiar el enlace."); }
+            flash(t("msg.linkCopied"));
+        } catch { flash(t("msg.copyFailed")); }
     };
 
     // ---- config ----
@@ -230,8 +232,8 @@ export default function DigitalDownloadsAdminPage() {
         try {
             const saved = await apiPost(`${BASE}/config`, config);
             setConfig(saved);
-            flash("Configuración guardada.");
-        } catch (err) { flash(`Error: ${err?.message || err}`); }
+            flash(t("msg.configSaved"));
+        } catch (err) { flash(t("common.error", { msg: err?.message || err })); }
         finally { setBusy(false); }
     };
 
@@ -257,9 +259,9 @@ export default function DigitalDownloadsAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconDownload /></div>
                 <div>
-                    <h1 className="cf-title">Descargas Digitales</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Productos descargables con enlaces protegidos por token (caducidad + límite de usos)
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
@@ -267,9 +269,9 @@ export default function DigitalDownloadsAdminPage() {
 
             {/* tabs */}
             <div className="cf-tabs" role="tablist">
-                {tabBtn("products", "Productos", 0)}
-                {tabBtn("orders", "Pedidos", pendingCount)}
-                {tabBtn("config", "Configuración", 0)}
+                {tabBtn("products", t("tab.products"), 0)}
+                {tabBtn("orders", t("tab.orders"), pendingCount)}
+                {tabBtn("config", t("tab.config"), 0)}
             </div>
 
             {message && (
@@ -280,7 +282,7 @@ export default function DigitalDownloadsAdminPage() {
             {tab === "products" && (
                 <div>
                     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                        <button type="button" onClick={openCreate} className="cf-btn"><IconPlus /> Nuevo producto</button>
+                        <button type="button" onClick={openCreate} className="cf-btn"><IconPlus /> {t("prod.new")}</button>
                     </div>
 
                     {showForm && (
@@ -288,39 +290,39 @@ export default function DigitalDownloadsAdminPage() {
                             <div className="cf-editor-body">
                                 <h2 className="cf-editor-title">
                                     <IconPen />
-                                    {editingId ? "Editar producto" : "Nuevo producto"}
+                                    {editingId ? t("prod.edit") : t("prod.new")}
                                 </h2>
                                 <div className="cf-grid">
                                     <div>
-                                        <label className="cf-label" htmlFor="dd-name">Nombre *</label>
+                                        <label className="cf-label" htmlFor="dd-name">{t("prod.name")}</label>
                                         <input id="dd-name" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="cf-input" required />
                                     </div>
                                     <div>
-                                        <label className="cf-label" htmlFor="dd-slug">Slug (opcional — se genera del nombre)</label>
-                                        <input id="dd-slug" type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="mi-ebook" className="cf-input" />
+                                        <label className="cf-label" htmlFor="dd-slug">{t("prod.slug")}</label>
+                                        <input id="dd-slug" type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder={t("prod.slugPh")} className="cf-input" />
                                     </div>
                                     <div className="cf-span-2">
-                                        <label className="cf-label" htmlFor="dd-desc">Descripción</label>
+                                        <label className="cf-label" htmlFor="dd-desc">{t("prod.desc")}</label>
                                         <textarea id="dd-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} className="cf-input" />
                                     </div>
                                     <div>
-                                        <label className="cf-label" htmlFor="dd-price">Precio ({symbol}) — 0 = gratis</label>
+                                        <label className="cf-label" htmlFor="dd-price">{t("prod.price", { symbol })}</label>
                                         <input id="dd-price" type="text" inputMode="decimal" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} placeholder="9.99" className="cf-input" />
                                     </div>
                                     <div>
-                                        <label className="cf-label" htmlFor="dd-flabel">Etiqueta del archivo</label>
+                                        <label className="cf-label" htmlFor="dd-flabel">{t("prod.fileLabel")}</label>
                                         <input id="dd-flabel" type="text" value={form.file_label} onChange={(e) => setForm({ ...form, file_label: e.target.value })} placeholder="PDF — 12 MB" className="cf-input" />
                                     </div>
                                     <div className="cf-span-2">
-                                        <label className="cf-label" htmlFor="dd-file">Archivo privado *</label>
+                                        <label className="cf-label" htmlFor="dd-file">{t("prod.file")}</label>
                                         {form.legacy_file_url && !form.media_id && (
                                             <div role="alert" className="cf-flash is-error" style={{ marginBottom: "0.6rem" }}>
-                                                Este producto usa un archivo PÚBLICO ({form.legacy_file_url}): cualquiera puede descargarlo sin comprar.
-                                                Selecciona o sube el archivo como privado para protegerlo.
+                                                {t("prod.legacyWarn1", { url: form.legacy_file_url })}
+                                                {" "}{t("prod.legacyWarn2")}
                                             </div>
                                         )}
                                         <select id="dd-file" value={form.media_id} onChange={(e) => setForm({ ...form, media_id: e.target.value })} className="cf-input">
-                                            <option value="">— Selecciona un archivo privado —</option>
+                                            <option value="">{t("prod.pickFile")}</option>
                                             {privateFiles.map((m) => (
                                                 <option key={m.id} value={String(m.id)}>
                                                     {m.title || `#${m.id}`} ({m.mimeType}{m.mediaDetails?.filesize ? `, ${fmtSize(m.mediaDetails.filesize)}` : ""})
@@ -329,53 +331,51 @@ export default function DigitalDownloadsAdminPage() {
                                         </select>
                                         <div style={{ marginTop: "0.5rem" }}>
                                             <label className="cf-btn-ghost" style={{ cursor: uploading ? "default" : "pointer" }}>
-                                                {uploading ? "Subiendo…" : "Subir archivo privado"}
+                                                {uploading ? t("prod.uploading") : t("prod.upload")}
                                                 <input type="file" style={{ display: "none" }} disabled={uploading}
                                                     onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; uploadPrivateFile(f); }} />
                                             </label>
                                         </div>
                                         <p className="cf-help">
-                                            El archivo se guarda como <strong>privado</strong> en la biblioteca de medios: no tiene URL pública y no aparece
-                                            en ningún listado. Solo se entrega, en streaming, a quien tenga un token de descarga válido (pagado, sin caducar
-                                            y con usos restantes). Requiere el permiso <code>media:private_read</code> del plugin.
+                                            {t("prod.fileHelp1")}<strong>{t("prod.fileHelpPrivate")}</strong>{t("prod.fileHelp2")}<code>media:private_read</code>{t("prod.fileHelp3")}
                                         </p>
                                     </div>
                                     <div className="cf-span-2">
-                                        <label className="cf-label" htmlFor="dd-img">URL de imagen (opcional)</label>
-                                        <input id="dd-img" type="text" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} placeholder="/uploads/2026/07/portada.jpg" className="cf-input" />
+                                        <label className="cf-label" htmlFor="dd-img">{t("prod.image")}</label>
+                                        <input id="dd-img" type="text" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} placeholder={t("prod.imagePh")} className="cf-input" />
                                     </div>
                                 </div>
                                 <div style={{ marginTop: "0.9rem" }}>
                                     <label className="cf-check">
                                         <input type="checkbox" checked={form.is_published} onChange={(e) => setForm({ ...form, is_published: e.target.checked })} />
-                                        Publicado (visible en el bloque del editor visual)
+                                        {t("prod.published")}
                                     </label>
                                 </div>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.2rem" }}>
-                                    <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }} className="cf-btn-ghost">Cancelar</button>
-                                    <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar producto"}</button>
+                                    <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }} className="cf-btn-ghost">{t("common.cancel")}</button>
+                                    <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("prod.save")}</button>
                                 </div>
                             </div>
                         </form>
                     )}
 
                     <div className="cf-card-item">
-                        <h2 className="cf-card-heading">Productos ({products.length})</h2>
+                        <h2 className="cf-card-heading">{t("prod.list", { count: products.length })}</h2>
                         {products.length === 0 ? (
                             <div className="cf-empty">
                                 <IconBox />
-                                <span>Sin productos todavía — crea el primero y agrégalo con el bloque <strong>DigitalDownloads</strong> en el editor visual.</span>
+                                <span>{t("prod.empty1")}<strong>DigitalDownloads</strong>{t("prod.empty2")}</span>
                             </div>
                         ) : (
                             <div className="cf-table-wrap">
                                 <table className="cf-table is-static">
                                     <thead>
                                         <tr>
-                                            <th>Producto</th>
-                                            <th>Precio</th>
-                                            <th>Ventas</th>
-                                            <th>Descargas</th>
-                                            <th>Estado</th>
+                                            <th>{t("prod.col.product")}</th>
+                                            <th>{t("prod.col.price")}</th>
+                                            <th>{t("prod.col.sales")}</th>
+                                            <th>{t("prod.col.downloads")}</th>
+                                            <th>{t("prod.col.status")}</th>
                                             <th></th>
                                         </tr>
                                     </thead>
@@ -395,30 +395,30 @@ export default function DigitalDownloadsAdminPage() {
                                                             <div className="cf-prod-sub">{p.file_label || p.slug}</div>
                                                             {p.file_status === "public_legacy" && (
                                                                 <div className="cf-prod-sub" style={{ color: "#b91c1c", fontWeight: 700 }}>
-                                                                    ⚠ Archivo público: cualquiera puede descargarlo. Edita el producto y elige un archivo privado.
+                                                                    {t("prod.publicFile")}
                                                                 </div>
                                                             )}
                                                             {p.file_status === "unavailable" && (
                                                                 <div className="cf-prod-sub" style={{ color: "#b91c1c", fontWeight: 700 }}>
-                                                                    ⚠ Archivo no disponible (borrado, ya no es privado, o falta el permiso media:private_read).
+                                                                    {t("prod.unavailable")}
                                                                 </div>
                                                             )}
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="cf-cell-money">{(Number(p.price_cents) || 0) === 0 ? <span className="cf-free">Gratis</span> : fmtMoney(p.price_cents, symbol)}</td>
+                                                <td className="cf-cell-money">{(Number(p.price_cents) || 0) === 0 ? <span className="cf-free">{t("common.free")}</span> : fmtMoney(p.price_cents, symbol)}</td>
                                                 <td className="cf-cell-num">{p.sales_count}</td>
                                                 <td className="cf-cell-num">{p.download_count}</td>
                                                 <td>
                                                     <button type="button" onClick={() => togglePublished(p)} disabled={busy}
                                                         className={`cf-pill-btn ${p.is_published ? "is-on" : "is-off"}`}>
-                                                        {p.is_published ? "Publicado" : "Oculto"}
+                                                        {p.is_published ? t("prod.isPublished") : t("prod.isHidden")}
                                                     </button>
                                                 </td>
                                                 <td>
                                                     <div className="cf-rowactions">
-                                                        <button type="button" onClick={() => openEdit(p)} className="cf-btn-ghost"><IconPen /> Editar</button>
-                                                        <button type="button" onClick={() => deleteProduct(p)} disabled={busy} className="cf-btn-danger">Eliminar</button>
+                                                        <button type="button" onClick={() => openEdit(p)} className="cf-btn-ghost"><IconPen /> {t("common.edit")}</button>
+                                                        <button type="button" onClick={() => deleteProduct(p)} disabled={busy} className="cf-btn-danger">{t("common.delete")}</button>
                                                     </div>
                                                 </td>
                                             </tr>
@@ -435,25 +435,25 @@ export default function DigitalDownloadsAdminPage() {
             {tab === "orders" && (
                 <div className="cf-card-item">
                     <div className="cf-toolbar">
-                        <h2 className="cf-card-heading" style={{ margin: 0 }}>Pedidos ({filteredOrders.length})</h2>
+                        <h2 className="cf-card-heading" style={{ margin: 0 }}>{t("ord.list", { count: filteredOrders.length })}</h2>
                         <div className="cf-toolbar-left">
                             <select
                                 value={orderFilter}
                                 onChange={(e) => setOrderFilter(e.target.value)}
                                 className="cf-select"
-                                aria-label="Filtrar pedidos por estado"
+                                aria-label={t("ord.filterAria")}
                             >
-                                <option value="all">Todos</option>
-                                <option value="pending">Pendientes</option>
-                                <option value="paid">Pagados</option>
+                                <option value="all">{t("ord.all")}</option>
+                                <option value="pending">{t("ord.pendingPl")}</option>
+                                <option value="paid">{t("ord.paidPl")}</option>
                             </select>
-                            <button type="button" onClick={exportCsv} disabled={busy} className="cf-btn-ghost"><IconDownload /> Exportar CSV</button>
+                            <button type="button" onClick={exportCsv} disabled={busy} className="cf-btn-ghost"><IconDownload /> {t("ord.export")}</button>
                         </div>
                     </div>
                     {filteredOrders.length === 0 ? (
                         <div className="cf-empty">
                             <IconReceipt />
-                            <span>No hay pedidos {orderFilter === "pending" ? "pendientes" : orderFilter === "paid" ? "pagados" : ""} todavía.</span>
+                            <span>{orderFilter === "pending" ? t("ord.emptyPending") : orderFilter === "paid" ? t("ord.emptyPaid") : t("ord.empty")}</span>
                         </div>
                     ) : (
                         <div className="cf-table-wrap">
@@ -461,12 +461,12 @@ export default function DigitalDownloadsAdminPage() {
                                 <thead>
                                     <tr>
                                         <th>#</th>
-                                        <th>Producto</th>
-                                        <th>Cliente</th>
-                                        <th>Importe</th>
-                                        <th>Estado</th>
-                                        <th>Usos</th>
-                                        <th>Expira</th>
+                                        <th>{t("ord.col.product")}</th>
+                                        <th>{t("ord.col.customer")}</th>
+                                        <th>{t("ord.col.amount")}</th>
+                                        <th>{t("ord.col.status")}</th>
+                                        <th>{t("ord.col.uses")}</th>
+                                        <th>{t("ord.col.expires")}</th>
                                         <th></th>
                                     </tr>
                                 </thead>
@@ -474,28 +474,28 @@ export default function DigitalDownloadsAdminPage() {
                                     {filteredOrders.map((o) => (
                                         <tr key={o.id}>
                                             <td className="cf-cell-num">{o.id}</td>
-                                            <td><span className="cf-prod-name">{o.product_name || "(eliminado)"}</span></td>
+                                            <td><span className="cf-prod-name">{o.product_name || t("ord.deleted")}</span></td>
                                             <td>
                                                 <div className="cf-prod-name">{o.customer_name || "—"}</div>
                                                 <div className="cf-prod-sub">{o.customer_email}</div>
                                             </td>
-                                            <td className="cf-cell-money">{(Number(o.amount_cents) || 0) === 0 ? <span className="cf-free">Gratis</span> : fmtMoney(o.amount_cents, symbol)}</td>
+                                            <td className="cf-cell-money">{(Number(o.amount_cents) || 0) === 0 ? <span className="cf-free">{t("common.free")}</span> : fmtMoney(o.amount_cents, symbol)}</td>
                                             <td>
                                                 <span className={`cf-pill ${o.payment_status === "paid" ? "is-paid" : "is-pending"}`}>
-                                                    {o.payment_status === "paid" ? "Pagado" : "Pendiente"}
+                                                    {o.payment_status === "paid" ? t("ord.paid") : t("ord.pending")}
                                                 </span>
                                             </td>
                                             <td className="cf-cell-num">{o.use_count}/{o.max_uses}</td>
-                                            <td className="cf-cell-date">{o.expires_at ? new Date(o.expires_at).toLocaleDateString() : "—"}</td>
+                                            <td className="cf-cell-date">{o.expires_at ? new Date(o.expires_at).toLocaleDateString(locale) : "—"}</td>
                                             <td>
                                                 <div className="cf-rowactions">
                                                     {o.payment_status === "pending" && (
-                                                        <button type="button" onClick={() => markPaid(o)} disabled={busy} className="cf-btn">Marcar pagado</button>
+                                                        <button type="button" onClick={() => markPaid(o)} disabled={busy} className="cf-btn">{t("ord.markPaid")}</button>
                                                     )}
                                                     {o.payment_status === "paid" && (
-                                                        <button type="button" onClick={() => copyLink(o)} className="cf-btn-ghost">Copiar enlace</button>
+                                                        <button type="button" onClick={() => copyLink(o)} className="cf-btn-ghost">{t("ord.copyLink")}</button>
                                                     )}
-                                                    <button type="button" onClick={() => deleteOrder(o)} disabled={busy} className="cf-btn-danger">Eliminar</button>
+                                                    <button type="button" onClick={() => deleteOrder(o)} disabled={busy} className="cf-btn-danger">{t("common.delete")}</button>
                                                 </div>
                                             </td>
                                         </tr>
@@ -505,7 +505,7 @@ export default function DigitalDownloadsAdminPage() {
                         </div>
                     )}
                     <p className="cf-footnote">
-                        Al pulsar <strong>Marcar pagado</strong> se reinicia la caducidad del enlace y se envía automáticamente el correo de descarga al cliente.
+                        {t("ord.foot1")}<strong>{t("ord.markPaid")}</strong>{t("ord.foot2")}
                     </p>
                 </div>
             )}
@@ -513,39 +513,38 @@ export default function DigitalDownloadsAdminPage() {
             {/* ============ CONFIGURACIÓN ============ */}
             {tab === "config" && (
                 config === null ? (
-                    <div className="cf-card-item"><p className="cf-meta" style={{ marginTop: 0 }}>Cargando configuración…</p></div>
+                    <div className="cf-card-item"><p className="cf-meta" style={{ marginTop: 0 }}>{t("cfg.loading")}</p></div>
                 ) : (
                     <form onSubmit={saveConfig} className="cf-card-item">
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(11rem, 1fr))", gap: "1.05rem" }}>
                             <div>
-                                <label className="cf-label" htmlFor="dd-cur">Símbolo de moneda</label>
+                                <label className="cf-label" htmlFor="dd-cur">{t("cfg.currency")}</label>
                                 <input id="dd-cur" type="text" value={config.currencySymbol} onChange={(e) => setConfig({ ...config, currencySymbol: e.target.value })} className="cf-input" maxLength={8} />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="dd-days">Días de validez del enlace</label>
+                                <label className="cf-label" htmlFor="dd-days">{t("cfg.linkDays")}</label>
                                 <input id="dd-days" type="number" min={1} max={365} value={config.linkDays} onChange={(e) => setConfig({ ...config, linkDays: e.target.value })} className="cf-input" />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="dd-uses">Máx. descargas por enlace</label>
+                                <label className="cf-label" htmlFor="dd-uses">{t("cfg.maxUses")}</label>
                                 <input id="dd-uses" type="number" min={1} max={100} value={config.maxUses} onChange={(e) => setConfig({ ...config, maxUses: e.target.value })} className="cf-input" />
                             </div>
                         </div>
                         <div style={{ marginTop: "1.05rem" }}>
-                            <label className="cf-label" htmlFor="dd-notify">Correo de notificación (nuevos pedidos)</label>
-                            <input id="dd-notify" type="email" value={config.notifyEmail} onChange={(e) => setConfig({ ...config, notifyEmail: e.target.value })} placeholder="ventas@midominio.com (vacío = correo del administrador)" className="cf-input" />
+                            <label className="cf-label" htmlFor="dd-notify">{t("cfg.notify")}</label>
+                            <input id="dd-notify" type="email" value={config.notifyEmail} onChange={(e) => setConfig({ ...config, notifyEmail: e.target.value })} placeholder={t("cfg.notifyPh")} className="cf-input" />
                         </div>
                         <div style={{ marginTop: "1.05rem" }}>
-                            <label className="cf-label" htmlFor="dd-instr">Instrucciones de pago manual</label>
+                            <label className="cf-label" htmlFor="dd-instr">{t("cfg.instr")}</label>
                             <textarea id="dd-instr" value={config.manualInstructions} onChange={(e) => setConfig({ ...config, manualInstructions: e.target.value })} rows={5}
-                                placeholder={"Ej.: Transfiere el importe a la cuenta XX00 0000 0000 e indica tu código de pedido en el concepto. Confirmaremos tu pago en 24h."}
+                                placeholder={t("cfg.instrPh")}
                                 className="cf-input" />
                             <p className="cf-help">
-                                Se muestran al comprador de productos de pago (y en su correo de "pedido recibido"). El pago con Stripe llegará en una versión futura;
-                                en esta versión los pedidos de pago se confirman manualmente desde la pestaña Pedidos.
+                                {t("cfg.instrHelp")}
                             </p>
                         </div>
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.5rem" }}>
-                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar configuración"}</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("cfg.save")}</button>
                         </div>
                     </form>
                 )

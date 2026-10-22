@@ -943,6 +943,15 @@ function createPluginApi(slug: string) {
             async url() { verifyPermission('settings', 'read'); return require('./site-address').linkBase(); },
             async domain() { verifyPermission('settings', 'read'); try { return await require('./site-address').linkHostname(); } catch { return 'localhost'; } },
             async adminEmail() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('admin_email', ''); },
+            // Whether visitors may create an account (Settings → General). `users_can_register` itself stays a
+            // protected option (writing it opens sign-up); this is the read-only answer a plugin needs to
+            // avoid offering "Create account" on a site whose registration is closed.
+            async registrationOpen() {
+                verifyPermission('settings', 'read');
+                const { getOption } = require('./options');
+                const v = await getOption('users_can_register', 0);
+                return !!v && v !== '0' && v !== 'false';
+            },
         },
 
         // PRIVATE MEDIA (grant: media:private_read — default-deny, never implied by any other grant).

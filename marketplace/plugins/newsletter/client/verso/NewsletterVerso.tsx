@@ -148,14 +148,10 @@ export default function NewsletterVerso({ title, description, buttonLabel, place
                     kind: "err",
                     text: (data && data.error) || "El servicio de suscripción no está disponible en este momento.",
                 });
-            } else if (data.already) {
-                setMsg({ kind: "ok", text: "Ya estabas suscrito." });
-            } else if (data.needsConfirm) {
-                setMsg({ kind: "ok", text: "Revisa tu correo para confirmar la suscripción." });
-                setEmail("");
-                setName("");
             } else {
-                setMsg({ kind: "ok", text: "¡Suscripción confirmada!" });
+                // Subscribing never confirms: the server only ever answers "check your inbox" (double
+                // opt-in), so never claim more than its own message says.
+                setMsg({ kind: "ok", text: data.message || "Revisa tu correo para confirmar la suscripción." });
                 setEmail("");
                 setName("");
             }

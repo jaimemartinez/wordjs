@@ -124,7 +124,7 @@ test('a relay the sandbox refuses is reported as unavailable, and mail is queued
         assert.strictEqual(settings.relay_status.configured, true);
         assert.strictEqual(settings.relay_status.ok, false);
         assert.strictEqual(settings.relay_status.sandboxBlocked, true);
-        assert.match(settings.relay_status.error, /sandbox blocks private addresses .* approve 192\.168\.182\.56:1025/);
+        assert.match(settings.relay_status.error, /sandbox refused the connection to 192\.168\.182\.56 .* approve 192\.168\.182\.56:1025/);
         assert.strictEqual(b.options.mail_delivery_ready, '0', 'password recovery stays off while the relay cannot deliver');
 
         const lookupsBefore = b.mxLookups.length;
@@ -132,7 +132,7 @@ test('a relay the sandbox refuses is reported as unavailable, and mail is queued
         assert.strictEqual(r.body.success, false, JSON.stringify(r.body));
         assert.strictEqual(r.body.failed.length, 1);
         assert.match(r.body.failed[0].error, /^Relay unavailable: /);
-        assert.strictEqual(r.body.failed[0].permanent, false, 'the message waits in the retry queue');
+        assert.strictEqual(r.body.failed[0].permanent, false, 'an unreachable relay is a temporary failure (real mail would wait in the queue)');
         assert.match(r.body.message, /^Relay unavailable: .*not sent direct-to-MX/);
         assert.deepStrictEqual(b.mxLookups.slice(lookupsBefore).filter((l) => l.startsWith('MX')), [], 'no direct-to-MX attempt');
         assert.strictEqual(b.relaySends.length, 0);
@@ -150,6 +150,9 @@ test('a relay given by name is resolved by the plugin; nodemailer gets the addre
         assert.strictEqual(t.host, '192.168.182.56');
         assert.strictEqual(t.servername, 'relay.lan');
         assert.strictEqual(t.tls.servername, 'relay.lan');
+        // The STARTTLS upgrade's tls.connect gets the port from here: the sandbox approves a private relay
+        // as host AND port, and nodemailer passes no port of its own on the upgrade.
+        assert.strictEqual(t.tls.port, 587);
         assert.strictEqual(t.auth, undefined, 'credentials are optional');
         assert.strictEqual(t.requireTLS, true, 'STARTTLS stays required by default');
         const settings = (await b.call('get', '/settings')).body;
@@ -231,4 +234,30 @@ test('with Require STARTTLS off, a relay that refuses STARTTLS with an SMTP repl
         assert.strictEqual(st.ok, false);
         assert.match(st.error, /502 5\.5\.1/);
     } finally { on.plugin.deactivate(); }
+});
+
+test('with Require STARTTLS off, an internal relay whose certificate cannot be verified is used with STARTTLS unverified; with it on, it is reported', async () => {
+    // nodemailer's socket error for a self-signed STARTTLS certificate (another WordJS inbound presents one).
+    const selfSigned = () => Object.assign(new Error('self-signed certificate'), { code: 'ESOCKET' });
+    const verify = async (opts: any) => { if (!(opts.tls && opts.tls.rejectUnauthorized === false)) throw selfSigned(); return true; };
+    const off = await boot({ options: { mail_server: '192.168.182.56', mail_port: '2525', mail_relay_require_tls: '0' }, verify });
+    try {
+        const last = off.transports[off.transports.length - 1];
+        assert.strictEqual(last.tls.rejectUnauthorized, false, 'encrypted, not verified');
+        assert.strictEqual(last.tls.port, 2525, 'the port still rides in the TLS options');
+        assert.notStrictEqual(last.ignoreTLS, true, 'not downgraded to plaintext');
+        assert.strictEqual((await off.call('get', '/settings')).body.relay_status.ok, true);
+    } finally { off.plugin.deactivate(); }
+    const on = await boot({ options: { mail_server: '192.168.182.56', mail_port: '587' }, verify });
+    try {
+        assert.ok(on.transports.every((t: any) => !(t.tls && t.tls.rejectUnauthorized === false)), 'never unverified while STARTTLS is required');
+        const st = (await on.call('get', '/settings')).body.relay_status;
+        assert.strictEqual(st.ok, false);
+        assert.match(st.error, /self-signed certificate/);
+    } finally { on.plugin.deactivate(); }
+    // A non-certificate failure is never retried without verification.
+    const other = await boot({ options: { mail_server: '192.168.182.56', mail_port: '2525', mail_relay_require_tls: '0' }, verify: async () => { throw Object.assign(new Error('connect ECONNREFUSED 192.168.182.56:2525'), { code: 'ESOCKET' }); } });
+    try {
+        assert.ok(other.transports.every((t: any) => !(t.tls && t.tls.rejectUnauthorized === false)));
+    } finally { other.plugin.deactivate(); }
 });

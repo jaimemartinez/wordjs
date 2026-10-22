@@ -28,7 +28,7 @@
 
 exports.metadata = {
     name: 'Auctions',
-    version: '1.1.1',
+    version: '1.1.2',
     description: 'Auction listings with public bidding, minimum increments, anti-snipe extension and winner reporting.',
     author: 'WordJS',
 };
@@ -1061,6 +1061,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/auctions',
         label: 'Subastas',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Auctions', es: 'Subastas', pt: 'Leilões' },
         icon: 'fa-gavel',
         order: 78,
         cap: 'manage_options',

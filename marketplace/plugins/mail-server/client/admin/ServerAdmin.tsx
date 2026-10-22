@@ -91,17 +91,30 @@ function Overview({ t, locale, data, settings, go, reload }: any) {
     const sum = (k: string) => data.series.reduce((a: number, d: any) => a + (d[k] || 0), 0);
     const queueCount = data.totals.retrying + data.totals.failed + data.totals.scheduled;
     const dkim = settings?.mail_security_dkim_enabled === '1';
+    // Where inbound SMTP actually listens: this node's addresses (a multi-machine install runs the plugin
+    // on the backend node, which is NOT the address visitors reach the site on).
+    const addrs = data.inbound?.addresses || {};
+    const listenIps = [...(addrs.public || []), ...(addrs.private || [])];
+    const listenAt = data.inbound?.boundPort && listenIps.length ? t('srv.listenAt', { where: listenIps.map((ip: string) => `${ip}:${data.inbound.boundPort}`).join(', ') }) : null;
+    const tls = data.inbound?.tls;
     const health = [
         data.inbound?.ok
-            ? { ok: true, icon: 'fa-solid fa-inbox', text: t('srv.inboundOk'), detail: data.inbound.mode === 'host' ? t('srv.inboundViaHost') : null }
+            ? { ok: true, icon: 'fa-solid fa-inbox', text: t('srv.inboundOk'), detail: [data.inbound.mode === 'host' ? t('srv.inboundViaHost') : null, listenAt].filter(Boolean).join(' · ') || null }
             : data.inbound?.boundPort
-                ? { ok: false, icon: 'fa-solid fa-inbox', text: t('srv.inboundDegraded', { port: data.inbound.boundPort }), detail: data.inbound.reason, action: () => go('config') }
+                ? { ok: false, icon: 'fa-solid fa-inbox', text: t('srv.inboundDegraded', { port: data.inbound.boundPort }), detail: [listenAt, data.inbound.reason].filter(Boolean).join(' · '), action: () => go('config') }
                 : { ok: false, icon: 'fa-solid fa-inbox', text: t('srv.inboundUnknown'), action: () => go('config') },
         ...(data.mailDomain && data.mailDomainPublic === false ? [{ ok: false, icon: 'fa-solid fa-at', text: t('srv.domainLocal', { domain: data.mailDomain }), detail: t('srv.domainLocalHint', { domain: data.mailDomain }), action: () => go('config') }] : []),
         data.relay && data.relayStatus && !data.relayStatus.ok
             ? { ok: false, icon: 'fa-solid fa-tower-broadcast', text: t('srv.relayDown'), detail: data.relayStatus.error, action: () => go('config') }
             : { ok: true, neutral: true, icon: 'fa-solid fa-tower-broadcast', text: data.relay ? t('srv.relayOn') : t('srv.relayOff'), action: () => go('config') },
+        ...(data.inbound?.mode === 'host' ? [tls
+            ? { ok: true, icon: 'fa-solid fa-lock', text: t('srv.tlsOk'), detail: t('srv.tlsDetail', { subject: tls.subject.replace(/^CN=/, ''), until: new Date(tls.validTo).toLocaleDateString(locale) }) }
+            : { ok: false, icon: 'fa-solid fa-lock-open', text: t('srv.tlsOff') }] : []),
         { ok: dkim, icon: 'fa-solid fa-key', text: dkim ? 'DKIM ✓' : 'DKIM —', action: () => go('dns') },
+        // Password recovery through this server: the host offers it only once delivery is ready.
+        data.deliveryReady
+            ? { ok: true, icon: 'fa-solid fa-key', text: t('srv.accountMailReady'), action: () => { window.location.href = '/admin/settings/email'; } }
+            : { ok: false, icon: 'fa-solid fa-user-lock', text: t('srv.accountMailNotReady'), detail: t('srv.accountMailNotReadyHint'), action: () => { window.location.href = '/admin/settings/email'; } },
         { ok: true, neutral: true, icon: 'fa-solid fa-at', text: t('srv.aliasesCount', { n: data.aliases }), action: () => go('aliases') },
         { ok: true, neutral: true, icon: 'fa-solid fa-hard-drive', text: t('srv.defaultQuota', { q: data.defaultQuotaMb > 0 ? formatBytes(data.defaultQuotaMb * 1048576) : t('common.unlimited') }), action: () => go('policies') },
     ];
@@ -238,7 +251,7 @@ function Mailboxes({ t, locale, toast }: any) {
             </div>
             <p className="flex items-start gap-2 text-xs text-slate-500"><i className="fa-solid fa-circle-info mt-0.5 text-slate-400"></i>{t('srv.mbx.howTo')}</p>
             {!data ? <div className="py-16 text-center"><Spinner className="text-2xl" /></div> : list.length === 0 ? (
-                <Card><EmptyState icon="fa-solid fa-users" title={t('srv.mbx.empty')} /></Card>
+                <Card><EmptyState icon="fa-solid fa-users" title={t('srv.mbx.empty')} hint={t('srv.mbx.howTo')} action={<Button variant="secondary" size="sm" icon="fa-solid fa-user-plus" onClick={() => { window.location.href = '/admin/users'; }}>{t('srv.mbx.goUsers')}</Button>} /></Card>
             ) : (
                 <>
                     {/* Table on wide screens */}
@@ -706,7 +719,7 @@ function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, genera
                     )}
                     <InboundStatus settings={settings} setSettings={setSettings} t={t} confirm={confirm} />
                     <div className="grid gap-4 md:grid-cols-2">
-                        <Field label={t('srv.cfg.fromEmail')}><input type="email" className={inputCls} value={settings.mail_from_email || ''} onChange={(e) => set({ mail_from_email: e.target.value })} placeholder="noreply@example.com" /></Field>
+                        <Field label={t('srv.cfg.fromEmail')} hint={settings.mail_from_effective ? t('srv.cfg.fromEmailHint', { address: settings.mail_from_effective, domain: settings.mail_domain || '' }) : undefined}><input type="email" className={inputCls} value={settings.mail_from_email || ''} onChange={(e) => set({ mail_from_email: e.target.value })} placeholder={settings.mail_domain ? `noreply@${settings.mail_domain}` : 'noreply@example.com'} /></Field>
                         <Field label={t('srv.cfg.fromName')}><input className={inputCls} value={settings.mail_from_name || ''} onChange={(e) => set({ mail_from_name: e.target.value })} placeholder="My Site" /></Field>
                     </div>
                     <Field label={t('srv.cfg.helo')} hint={t('srv.cfg.heloHint')}><input className={inputCls} value={settings.mail_helo_host || ''} onChange={(e) => set({ mail_helo_host: e.target.value })} placeholder="mail.example.com" /></Field>

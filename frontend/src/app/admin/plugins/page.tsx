@@ -18,6 +18,7 @@ import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
 import { t as translate } from "@/lib/i18n";
 import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
+import FreedServicesNotice from "./FreedServicesNotice";
 import MarketplaceTab from "./MarketplaceTab";
 
 // ---------------------------------------------------------------------------
@@ -303,6 +304,8 @@ export default function PluginsPage() {
     const [permsModalPlugin, setPermsModalPlugin] = useState<Plugin | null>(null);
     const [grantDraft, setGrantDraft] = useState<Set<string>>(new Set());
     const [savingPerms, setSavingPerms] = useState(false);
+    // Activation dialog: requested permissions the administrator switched off BEFORE the first start (S4-17).
+    const [activationDeclined, setActivationDeclined] = useState<Set<string>>(new Set());
 
     // The togglable capabilities are EXACTLY what the plugin declares in its manifest (nothing more).
     // A network permission normalizes to the single "network" token (it has no read/write access level).
@@ -461,6 +464,9 @@ export default function PluginsPage() {
     const togglePlugin = async (plugin: Plugin) => {
         try {
             if (plugin.active) {
+                // Deactivating stops everything the plugin runs (its pages, blocks, listeners — a mail
+                // server stops receiving mail), so it is confirmed like the other lifecycle actions.
+                if (!(await confirm(t('plugins.deactivate.confirm').replace('{name}', plugin.name), t('plugins.deactivate.confirmTitle').replace('{name}', plugin.name), true))) return;
                 await pluginsApi.deactivate(plugin.slug);
                 loadPlugins();
                 refreshMenus();
@@ -472,6 +478,7 @@ export default function PluginsPage() {
             } else {
                 // ALWAYS show modal for any activation now
                 setPluginToActivate(plugin);
+                setActivationDeclined(new Set());
                 setPermissionModalOpen(true);
                 return;
             }
@@ -486,6 +493,13 @@ export default function PluginsPage() {
         const plugin = pluginToActivate;
         const name = plugin.name;
         try {
+            // Requests switched off in the dialog: record the administrator's decision first, so activation
+            // starts the plugin with exactly those grants (the server only seeds when nobody has decided).
+            const declined = declaredTokens(plugin).filter((tok) => activationDeclined.has(tok) && activationGrant(plugin, tok) === 'grants');
+            if (declined.length) {
+                const granted = declaredTokens(plugin).filter((tok) => !declined.includes(tok));
+                await pluginsApi.setPermissions(plugin.slug, granted, granted.includes('network'));
+            }
             await pluginsApi.activate(plugin.slug);
             setPermissionModalOpen(false);
             setPluginToActivate(null);
@@ -1140,7 +1154,9 @@ export default function PluginsPage() {
                                     // Each row says what confirming does to it (grantState.ts): a permission revoked
                                     // earlier stays off, and the row says so instead of reading as granted.
                                     declaredTokens(pluginToActivate).map((token) => (
-                                        <PermissionRow key={token} token={token} reason={reasonFor(pluginToActivate, token)} platformNote={isUndeclared(pluginToActivate, token)} roles={pluginToActivate.roles} rolesHeld={rolesHeldState(pluginToActivate, 'activation')} activation={activationGrant(pluginToActivate, token)} />
+                                        <PermissionRow key={token} token={token} reason={reasonFor(pluginToActivate, token)} platformNote={isUndeclared(pluginToActivate, token)} roles={pluginToActivate.roles} rolesHeld={rolesHeldState(pluginToActivate, 'activation')} activation={activationGrant(pluginToActivate, token)}
+                                            declined={activationDeclined.has(token)}
+                                            onToggleDeclined={activationGrant(pluginToActivate, token) === 'grants' ? () => setActivationDeclined((prev) => { const next = new Set(prev); if (next.has(token)) next.delete(token); else next.add(token); return next; }) : undefined} />
                                     ))
                                 ) : (
                                     <div className="flex flex-col items-center justify-center p-8 bg-emerald-50/55 rounded-[24px] border border-emerald-100/60 text-center shadow-sm">
@@ -1155,8 +1171,8 @@ export default function PluginsPage() {
 
                             {/* What confirming grants (grantState.ts): when some requested permission stays off, the
                                 footer no longer says activating grants "these capabilities". slate-600 (was slate-400, 2.2:1). */}
-                            <p className="text-[11px] text-slate-600 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold" data-activation-footer={activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate)) ? 'partial' : 'all'}>
-                                {activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate)) ? t('plugins.activation.footer.partial') : t('plugins.activation.footer')}
+                            <p className="text-[11px] text-slate-600 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold" data-activation-footer={(activationDeclined.size > 0 || activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate))) ? 'partial' : 'all'}>
+                                {(activationDeclined.size > 0 || activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate))) ? t('plugins.activation.footer.partial') : t('plugins.activation.footer')}
                             </p>
                         </div>
 
@@ -1223,6 +1239,9 @@ export default function PluginsPage() {
                                             <button
                                                 onClick={() => { if (!beyondCeiling) toggleGrant(token); }}
                                                 disabled={beyondCeiling}
+                                                role="switch"
+                                                aria-checked={on}
+                                                aria-label={`${meta.label} (${token})`}
                                                 className={PERMISSION_TOGGLE_CLASS}
                                                 data-permission-toggle={token}
                                                 style={beyondCeiling ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
@@ -1287,6 +1306,7 @@ export default function PluginsPage() {
                 {siteScoped && (
                     <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="">{t('plugins.network.siteNote')}</p>
                 )}
+                <FreedServicesNotice refreshKey={plugins} />
                 {!siteScoped && mainSiteNonNetworkAdmin && (
                     <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="main">{t('plugins.network.mainSiteNote')}</p>
                 )}

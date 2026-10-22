@@ -232,7 +232,7 @@ test('the scheduled queue charges what POST /send did not, and never charges twi
         const sent = await call(b, 'post /send', ALICE, { body: { to: BOB.userEmail, subject: 'Queued', body: 'hi' } });
         assert.equal(sent.status, 200);
         assert.ok(sent.body.queued);
-        await b.db.run(`UPDATE ${PREFIX}received_emails SET scheduled_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), sent.body.id]);
+        await b.db.run(`UPDATE ${PREFIX}received_emails SET scheduled_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString().slice(0, 19).replace('T', ' '), sent.body.id]); // the stored DATETIME form (sqlDateTime)
 
         // A scheduled row that reached the queue without that charge.
         const other = await Email.create({
@@ -246,7 +246,7 @@ test('the scheduled queue charges what POST /send did not, and never charges twi
         assert.equal((await row(b, sent.body.id) as any).is_sent, 1, 'the message POST /send charged is delivered');
         const held: any = await row(b, other.id);
         assert.equal(held.is_sent, 0, 'the uncharged one is held back');
-        assert.ok(Date.parse(held.scheduled_at) > Date.now(), 'and postponed, not dropped');
+        assert.ok(Date.parse(String(held.scheduled_at).replace(' ', 'T') + 'Z') > Date.now(), 'and postponed, not dropped');
         assert.equal((await rowsOf(b, BOB.id)).filter((r: any) => r.subject === 'Uncharged').length, 0);
     } finally { b.plugin.deactivate(); }
 });

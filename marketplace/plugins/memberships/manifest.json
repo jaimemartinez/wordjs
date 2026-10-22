@@ -1,7 +1,7 @@
 {
     "id": "memberships",
     "name": "Memberships",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "description": "Members-only content for WordJS: free and paid tiers, a paywall block that ends a post's free teaser, paid subscriptions through Stripe, Mercado Pago or Wompi (sandbox credentials) verified by signed webhooks, tier changes and cancellation by the member, complimentary memberships granted by the admin, and newsletters that email published posts to members by tier with one-click unsubscribe. Members are the site's own user accounts.",
     "author": "WordJS",
     "license": "MIT",
@@ -49,7 +49,7 @@
         {
             "scope": "settings",
             "access": "read",
-            "reason": "Read the non-secret membership configuration and the site address (Stripe return URLs and the webhook URL shown to the admin)."
+            "reason": "Read the non-secret membership configuration, the site address (Stripe return URLs and the webhook URL shown to the admin) and whether visitors may register (the paywall only offers sign-up when they can)."
         },
         {
             "scope": "settings",

@@ -48,10 +48,11 @@ const createEmailStore = require(STORE_PATH);
 
 const T = PREFIX + 'received_emails';
 const MAIL_DOMAIN = 'acme.example';
-// The site's own identity. `admin_email` is a host-protected option the plugin serves from the site
-// bridge, so this is what the fixture's site.adminEmail() answers — deliberately an address that
-// belongs to NO account here, so "the site sent it" is never confusable with "a user sent it".
-const SITE_FROM = `postmaster@${MAIL_DOMAIN}`;
+// The site's own identity: noreply@<mail domain> when no on-domain "From email" is configured — never
+// the administrator's account email (siteSenderAddress). The fixture's site.adminEmail() still answers
+// postmaster@, an address that belongs to NO account here, so "the site sent it" is never confusable
+// with "a user sent it" — and the assertion below also proves admin_email is no longer the sender.
+const SITE_FROM = `noreply@${MAIL_DOMAIN}`;
 
 const ANA = { id: 101, role: 'editor', userEmail: `ana@${MAIL_DOMAIN}`, userLogin: 'ana', displayName: 'Ana', accountCapabilities: ['mail_server_mailbox'] };
 const MARIA = { id: 102, role: 'editor', userEmail: `mariana@${MAIL_DOMAIN}`, userLogin: 'mariana', displayName: 'Mariana', accountCapabilities: ['mail_server_mailbox'] };
@@ -332,7 +333,7 @@ async function boot(extraOptions: Record<string, string> = {}): Promise<Boot> {
         site: {
             async url() { return `https://${MAIL_DOMAIN}`; },
             async domain() { return MAIL_DOMAIN; },
-            async adminEmail() { return SITE_FROM; }
+            async adminEmail() { return `postmaster@${MAIL_DOMAIN}`; }
         },
         users: {
             async findByEmail(email: string) { return find(u => u.userEmail.toLowerCase() === String(email || '').toLowerCase()); },

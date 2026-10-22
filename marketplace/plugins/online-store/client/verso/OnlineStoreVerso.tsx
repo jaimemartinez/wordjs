@@ -31,7 +31,8 @@ const BASE = "/api/v1/plugin/online-store";
 const CART_KEY = "wjstore_cart";
 
 const STYLES = `
-.wjst-wrap { font-family: var(--wjs-font-family-base, inherit); color: var(--wjs-color-text, #111827); }
+/* Inline gutter so the toolbar and the orders list never touch the viewport edge when the block sits outside a padded section. */
+.wjst-wrap { font-family: var(--wjs-font-family-base, inherit); color: var(--wjs-color-text, #111827); padding-inline: 1rem; }
 .wjst-grid { display: grid; gap: 1rem; }
 .wjst-cols-2 { grid-template-columns: repeat(2, 1fr); }
 .wjst-cols-3 { grid-template-columns: repeat(3, 1fr); }

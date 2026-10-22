@@ -19,7 +19,7 @@
 
 exports.metadata = {
     name: 'Polls',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Encuestas con bloque de votación Verso y barras de resultados',
     author: 'WordJS',
 };
@@ -435,6 +435,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/polls',
         label: 'Encuestas',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Polls', es: 'Encuestas', pt: 'Enquetes' },
         icon: 'fa-square-poll-vertical',
         order: 67,
         cap: 'manage_options',

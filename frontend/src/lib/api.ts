@@ -893,6 +893,12 @@ export const pluginsApi = {
      * refuses to disable anything with a 409 CONSENT_REQUIRED). */
     freePort: (slug: string, port: number, allowDisable = false) =>
         apiPost<{ success: boolean; freed: boolean; alreadyFree?: boolean; port: number; service?: string; label?: string; reloaded: boolean }>(`/plugins/${slug}/free-port`, { port, allowDisable }),
+    /** System mail services a "Free port" disabled, and whether the plugin that needed the port is still active. */
+    freedServices: () =>
+        apiGet<{ services: Array<{ slug: string; port: number; service: string; label: string; at: string; pluginActive: boolean }> }>(`/plugins/freed-services`),
+    /** Admin-confirmed: turn such a service back on (refused while its plugin is active). */
+    restoreFreedService: (service: string) =>
+        apiPost<{ success: boolean; restored: boolean; service: string; label: string; port: number }>(`/plugins/freed-services/restore`, { service, allowEnable: true }),
 
     /** Install the companion theme a plugin bundles (its theme/ folder) as themes/<slug>-theme.
      * `activate` = also switch the site to it (one click, plugin-completeness option B). */

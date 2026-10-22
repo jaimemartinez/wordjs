@@ -1798,7 +1798,7 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'crypto.randomToken', 'crypto.randomInt', 'crypto.hmac', 'crypto.hash', 'crypto.timingSafeEqual',
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
-    'site.url', 'site.domain', 'site.adminEmail',
+    'site.url', 'site.domain', 'site.adminEmail', 'site.registrationOpen',
     'posts.get',
     // Private media description (gated host-side on media:private_read). Streaming the BYTES is not a
     // bridge call: it is a route reply (`res.sendPrivateMedia`), so file contents never cross the IPC.
@@ -3187,6 +3187,12 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                             return;
                         }
                         if (res.headersSent) { try { res.destroy(); } catch { /* already closed */ } return; }
+                        // A missing permission is not a crash: say which one and where to grant it (S4-17).
+                        const refusal = require('./plugin-context').describePermissionRefusal(e && e.message);
+                        if (refusal) {
+                            res.status(403).json({ code: 'plugin_permission_denied', permission: refusal.permission, plugin: refusal.plugin, error: refusal.error });
+                            return;
+                        }
                         res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
                     }
                     function applyRouteCookies(cookies: any) {

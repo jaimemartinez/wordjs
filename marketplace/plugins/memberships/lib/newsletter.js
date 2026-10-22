@@ -327,7 +327,11 @@ async function initNewsletter(ctx) {
     /** The confirmation mail: fixed text and the link — nothing in it comes from a visitor. */
     const renderConfirmation = async (userId, email) => {
         const base = await siteBase();
-        const site = base.replace(/^https?:\/\//, '');
+        // The site's NAME (Settings → General), not its host ("m4side.localhost:3340"); the host only
+        // when the site has no title.
+        let siteTitle = '';
+        try { siteTitle = String((await wordjs.options.get('blogname', '')) || '').trim(); } catch (e) { siteTitle = ''; }
+        const site = siteTitle || base.replace(/^https?:\/\//, '');
         const link = await confirmLink(userId, email);
         const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;color:#111827;line-height:1.6">
             <h1 style="font-size:22px;margin:0 0 12px">Confirma tu correo</h1>

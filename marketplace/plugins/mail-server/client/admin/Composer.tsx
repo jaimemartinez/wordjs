@@ -365,8 +365,8 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
                         </div>
                     )}
                 />
-                {showCc && <RecipientField label={t('comp.cc')} value={mail.cc} onChange={(v: string) => update({ cc: v })} onPending={(v: string) => { pending.current.cc = v; }} t={t} />}
-                {showBcc && <RecipientField label={t('comp.bcc')} value={mail.bcc} onChange={(v: string) => update({ bcc: v })} onPending={(v: string) => { pending.current.bcc = v; }} t={t} />}
+                {showCc && <RecipientField label={t('comp.cc')} value={mail.cc} onChange={(v: string) => update({ cc: v })} onPending={(v: string) => { pending.current.cc = v; }} autoFocus={!initial?.cc} t={t} />}
+                {showBcc && <RecipientField label={t('comp.bcc')} value={mail.bcc} onChange={(v: string) => update({ bcc: v })} onPending={(v: string) => { pending.current.bcc = v; }} autoFocus={!initial?.bcc} t={t} />}
                 <div className="flex items-center border-b border-slate-100 px-4">
                     <input
                         value={mail.subject}

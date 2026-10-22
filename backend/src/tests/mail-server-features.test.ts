@@ -261,10 +261,13 @@ test('attachments count against the quota between usage refreshes (no stream of 
             'Content-Disposition: attachment; filename="blob.bin"', '', attachment, '--XX--', ''
         ].join('\r\n');
         assert.equal(await inbound(b, raw(1)), null, 'the first one fits');
-        assert.equal(await inbound(b, raw(2)), null, 'the second one is still accepted (usage was under the quota)');
-        const third = await inbound(b, raw(3));
-        assert.ok(third, 'the mailbox is now over its quota: the third is refused');
-        assert.equal(third.responseCode, 452);
+        // The quota is HARD (3.2.0): the second would take the mailbox past 1 MB, so it is refused even
+        // though usage was still under the quota when it arrived (it used to be accepted, and only the
+        // third was refused — the mailbox ended at 1.4 MB of a 1 MB quota).
+        const second = await inbound(b, raw(2));
+        assert.ok(second, 'a message that does not fit is refused');
+        assert.equal(second.responseCode, 452);
+        assert.equal((await rowsOf(b, BOB.id)).filter((x: any) => /^Big /.test(x.subject)).length, 1);
     } finally { b.plugin.deactivate(); }
 });
 

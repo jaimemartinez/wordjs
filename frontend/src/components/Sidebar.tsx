@@ -6,6 +6,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useMenu } from "@/contexts/MenuContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { menuLabel as pickMenuLabel } from "@/lib/menuLabel";
 import { useEffect, useRef, useState } from "react";
 import NotificationCenter from "./NotificationCenter";
 import { firstAllowedAdminPath, visibleSidebarSections, type AdminMenuItem } from "@/lib/adminAccess";
@@ -27,6 +28,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     const { logout, user } = useAuth();
     const { pluginMenus } = useMenu(); // Use global context
     const { t, language, setLanguage } = useI18n();
+    const menuLabel = (item: any) => pickMenuLabel(item, language, t);
     const [logoUrl, setLogoUrl] = useState<string | null>(null);
     const [siteTitle, setSiteTitle] = useState("WordJS");
     const [hoveredItem, setHoveredItem] = useState<{ label: string; top: number } | null>(null);
@@ -118,9 +120,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                 onMouseEnter={(e) => {
                     if (isCollapsed) {
                         const rect = e.currentTarget.getBoundingClientRect();
-                        const labelText = typeof item.label === 'string' && item.label.startsWith('nav.')
-                            ? t(item.label)
-                            : String(item.label);
+                        const labelText = String(menuLabel(item));
                         setHoveredItem({ label: labelText, top: rect.top + (rect.height / 2) });
                     }
                 }}
@@ -145,11 +145,9 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                     <i className={`fa-solid ${item.icon} transition-all duration-300 group-hover:scale-110 ${isCollapsed ? 'lg:text-lg w-5 text-center text-sm' : 'w-5 text-center text-sm'} ${isActive ? 'text-white' : 'text-gray-500 group-hover:text-white'}`}></i>
 
                     <span className={`text-sm font-medium tracking-wide truncate transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "lg:hidden block" : "block"}`}>
-                        {typeof item.label === 'string' && item.label.startsWith('nav.')
-                            ? t(item.label)
-                            : typeof item.label === 'string' || typeof item.label === 'number'
-                                ? item.label
-                                : <span className="text-red-500 font-mono text-xs">ERR</span>
+                        {typeof item.label === 'string' || typeof item.label === 'number'
+                            ? menuLabel(item)
+                            : <span className="text-red-500 font-mono text-xs">ERR</span>
                         }
                     </span>
 

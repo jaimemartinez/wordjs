@@ -15,14 +15,16 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
-const FIELD_TYPE_OPTIONS = [
-    { value: "text", label: "Texto" },
-    { value: "email", label: "Correo" },
-    { value: "tel", label: "Teléfono" },
-    { value: "number", label: "Número" },
-    { value: "textarea", label: "Área de texto" },
-    { value: "select", label: "Lista desplegable" },
+// Labels are resolved through `t` at render time (hooks only run inside components).
+const FIELD_TYPE_OPTIONS = (t) => [
+    { value: "text", label: t("types.text") },
+    { value: "email", label: t("types.email") },
+    { value: "tel", label: t("types.tel") },
+    { value: "number", label: t("types.number") },
+    { value: "textarea", label: t("types.textarea") },
+    { value: "select", label: t("types.select") },
 ];
 
 const LIMIT = 50;
@@ -34,11 +36,11 @@ const newFieldName = () => "f_" + Math.random().toString(36).slice(2, 8);
 const emptyDraft = () => ({ id: null, name: "", notify_email: "", success_message: "", fields: [] });
 
 // SQLite CURRENT_TIMESTAMP is UTC "YYYY-MM-DD HH:MM:SS" — normalize before Date parsing.
-const fmtDate = (v) => {
+const fmtDate = (v, locale) => {
     if (!v) return "";
     const s = String(v);
     const d = new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
-    return isNaN(d.getTime()) ? s : d.toLocaleString();
+    return isNaN(d.getTime()) ? s : d.toLocaleString(locale);
 };
 
 /* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
@@ -74,11 +76,17 @@ const IconInboxEmpty = (props) => (
 );
 
 export default function ContactFormsAdminPage() {
+    const { t, locale } = useT();
     const [forms, setForms] = useState([]);
     const [tab, setTab] = useState("forms"); // forms | inbox
     const [editing, setEditing] = useState(null); // null | draft object
     const [busy, setBusy] = useState(false);
-    const [message, setMessage] = useState("");
+    // Save failure shown next to the button: the page-top flash is out of sight at the end of a long form (X4-14).
+    const [saveError, setSaveError] = useState("");
+    const [message, setMessageText] = useState("");
+    // Whether the flash is an error is tracked explicitly: the text is translated, so it cannot be sniffed.
+    const [messageIsError, setMessageIsError] = useState(false);
+    const setMessage = (text, isError = false) => { setMessageText(text); setMessageIsError(isError); };
 
     const [filterFormId, setFilterFormId] = useState("");
     const [submissions, setSubmissions] = useState([]);
@@ -101,7 +109,7 @@ export default function ContactFormsAdminPage() {
             const data = await api("/plugin/contact-forms/forms");
             setForms(data.forms || []);
         } catch (err) {
-            setMessage(`Error al cargar los formularios: ${err?.message || err}`);
+            setMessage(t("msg.loadFormsError", { error: err?.message || err }), true);
         }
     };
 
@@ -115,7 +123,7 @@ export default function ContactFormsAdminPage() {
             setSubmissions(data.submissions || []);
             setTotal(data.total || 0);
         } catch (err) {
-            setMessage(`Error al cargar los mensajes: ${err?.message || err}`);
+            setMessage(t("msg.loadSubmissionsError", { error: err?.message || err }), true);
         }
     };
 
@@ -151,15 +159,16 @@ export default function ContactFormsAdminPage() {
         e.preventDefault();
         if (!editing) return;
         if (!editing.name.trim()) {
-            setMessage("El nombre del formulario es obligatorio.");
+            setMessage(t("msg.nameRequired"), true);
             return;
         }
         if (editing.fields.some((f) => !String(f.label || "").trim())) {
-            setMessage("Todos los campos necesitan una etiqueta.");
+            setMessage(t("msg.labelsRequired"), true);
             return;
         }
         setBusy(true);
         setMessage("");
+        setSaveError("");
         try {
             const body = {
                 name: editing.name,
@@ -170,27 +179,32 @@ export default function ContactFormsAdminPage() {
             if (editing.id) body.id = editing.id;
             const data = await apiPost("/plugin/contact-forms/forms", body);
             setEditing(null);
-            setMessage(`Formulario guardado (ID ${data.form.id}).`);
+            setMessage(t("msg.formSaved", { id: data.form.id }));
             loadForms();
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            const raw = String(err?.message || err || "").trim();
+            // A dropped connection surfaces as a bare TypeError ("Failed to fetch") or nothing at all.
+            const offline = !raw || /failed to fetch|networkerror|load failed|network/i.test(raw);
+            setSaveError(offline
+                ? t("msg.saveOffline")
+                : t("msg.saveError", { error: raw }));
         } finally {
             setBusy(false);
         }
     };
 
     const deleteForm = async (f) => {
-        if (!window.confirm(`¿Eliminar el formulario "${f.name}" y todos sus mensajes? Esta acción no se puede deshacer.`)) return;
+        if (!window.confirm(t("msg.confirmDeleteForm", { name: f.name }))) return;
         setBusy(true);
         setMessage("");
         try {
             await apiDelete(`/plugin/contact-forms/forms/${f.id}`);
             if (String(filterFormId) === String(f.id)) setFilterFormId("");
             if (editing && editing.id === f.id) setEditing(null);
-            setMessage(`Formulario "${f.name}" eliminado.`);
+            setMessage(t("msg.formDeleted", { name: f.name }));
             loadForms();
         } catch (err) {
-            setMessage(`Error al eliminar: ${err?.message || err}`);
+            setMessage(t("msg.deleteError", { error: err?.message || err }), true);
         } finally {
             setBusy(false);
         }
@@ -212,7 +226,7 @@ export default function ContactFormsAdminPage() {
     };
 
     const deleteSubmission = async (id) => {
-        if (!window.confirm("¿Eliminar este mensaje? Esta acción no se puede deshacer.")) return;
+        if (!window.confirm(t("msg.confirmDeleteSubmission"))) return;
         setBusy(true);
         try {
             await apiDelete(`/plugin/contact-forms/submissions/${id}`);
@@ -220,7 +234,7 @@ export default function ContactFormsAdminPage() {
             loadSubmissions(filterFormId, offset);
             loadForms();
         } catch (err) {
-            setMessage(`Error al eliminar el mensaje: ${err?.message || err}`);
+            setMessage(t("msg.deleteSubmissionError", { error: err?.message || err }), true);
         } finally {
             setBusy(false);
         }
@@ -228,7 +242,7 @@ export default function ContactFormsAdminPage() {
 
     const exportCsv = async () => {
         if (!filterFormId) {
-            setMessage("Selecciona un formulario para exportar sus mensajes.");
+            setMessage(t("msg.selectFormToExport"), true);
             return;
         }
         setBusy(true);
@@ -239,14 +253,14 @@ export default function ContactFormsAdminPage() {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = data.filename || "envios.csv";
+            a.download = data.filename || t("export.defaultFilename");
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-            setMessage(`Exportados ${data.count} mensajes.`);
+            setMessage(t("msg.exported", { count: data.count }));
         } catch (err) {
-            setMessage(`Error al exportar: ${err?.message || err}`);
+            setMessage(t("msg.exportError", { error: err?.message || err }), true);
         } finally {
             setBusy(false);
         }
@@ -286,7 +300,7 @@ export default function ContactFormsAdminPage() {
 
     const pageCount = Math.max(1, Math.ceil(total / LIMIT));
     const page = Math.floor(offset / LIMIT) + 1;
-    const isErrorMsg = /Error|obligatorio|inválido|Selecciona|necesitan/i.test(message);
+    const isErrorMsg = messageIsError;
 
     return (
         <div className="cf-shell">
@@ -294,8 +308,8 @@ export default function ContactFormsAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconEnvelope /></div>
                 <div>
-                    <h1 className="cf-title">Formularios de contacto</h1>
-                    <p className="cf-subtitle">Crea formularios · insértalos con el bloque «ContactForms» · recibe el correo aquí</p>
+                    <h1 className="cf-title">{t("header.title")}</h1>
+                    <p className="cf-subtitle">{t("header.subtitle")}</p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
@@ -309,7 +323,7 @@ export default function ContactFormsAdminPage() {
                     onClick={() => setTab("forms")}
                     className={`cf-tab ${tab === "forms" ? "is-active" : ""}`}
                 >
-                    Formularios
+                    {t("tabs.forms")}
                 </button>
                 <button
                     type="button"
@@ -318,7 +332,7 @@ export default function ContactFormsAdminPage() {
                     onClick={() => { setTab("inbox"); setOffset(0); }}
                     className={`cf-tab ${tab === "inbox" ? "is-active" : ""}`}
                 >
-                    Bandeja de entrada
+                    {t("tabs.inbox")}
                     {totalUnread > 0 && <span className="cf-badge">{totalUnread}</span>}
                 </button>
             </div>
@@ -334,8 +348,8 @@ export default function ContactFormsAdminPage() {
                 <div>
                     {!editing && (
                         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                            <button type="button" className="cf-btn" onClick={() => { setMessage(""); setEditing(emptyDraft()); }}>
-                                <IconPlus /> Nuevo formulario
+                            <button type="button" className="cf-btn" onClick={() => { setMessage(""); setSaveError(""); setEditing(emptyDraft()); }}>
+                                <IconPlus /> {t("forms.new")}
                             </button>
                         </div>
                     )}
@@ -346,55 +360,55 @@ export default function ContactFormsAdminPage() {
                             <div className="cf-editor-body">
                                 <h2 className="cf-editor-title">
                                     <IconPen />
-                                    {editing.id ? `Editar formulario #${editing.id}` : "Nuevo formulario"}
+                                    {editing.id ? t("editor.editTitle", { id: editing.id }) : t("editor.newTitle")}
                                 </h2>
                                 <div className="cf-grid">
                                     <div className="cf-span-2">
-                                        <label className="cf-label" htmlFor="cf-name">Nombre del formulario</label>
-                                        <input id="cf-name" type="text" value={editing.name} onChange={(e) => setEditing((p) => ({ ...p, name: e.target.value }))} placeholder="Contacto general" className="cf-input" required />
+                                        <label className="cf-label" htmlFor="cf-name">{t("editor.name")}</label>
+                                        <input id="cf-name" type="text" value={editing.name} onChange={(e) => setEditing((p) => ({ ...p, name: e.target.value }))} placeholder={t("editor.namePlaceholder")} className="cf-input" required />
                                     </div>
                                     <div>
-                                        <label className="cf-label" htmlFor="cf-notify">Correo de notificación (opcional)</label>
-                                        <input id="cf-notify" type="email" value={editing.notify_email} onChange={(e) => setEditing((p) => ({ ...p, notify_email: e.target.value }))} placeholder="dueño@midominio.com" className="cf-input" />
-                                        <p className="cf-help">Si lo configuras, cada mensaje nuevo se envía a este correo (requiere proveedor de correo activo).</p>
+                                        <label className="cf-label" htmlFor="cf-notify">{t("editor.notify")}</label>
+                                        <input id="cf-notify" type="email" value={editing.notify_email} onChange={(e) => setEditing((p) => ({ ...p, notify_email: e.target.value }))} placeholder={t("editor.notifyPlaceholder")} className="cf-input" />
+                                        <p className="cf-help">{t("editor.notifyHelp")}</p>
                                     </div>
                                     <div>
-                                        <label className="cf-label" htmlFor="cf-success">Mensaje de éxito (opcional)</label>
-                                        <input id="cf-success" type="text" value={editing.success_message} onChange={(e) => setEditing((p) => ({ ...p, success_message: e.target.value }))} placeholder="¡Mensaje enviado!" className="cf-input" />
+                                        <label className="cf-label" htmlFor="cf-success">{t("editor.success")}</label>
+                                        <input id="cf-success" type="text" value={editing.success_message} onChange={(e) => setEditing((p) => ({ ...p, success_message: e.target.value }))} placeholder={t("editor.successPlaceholder")} className="cf-input" />
                                     </div>
                                 </div>
 
                                 {/* field builder: numbered postal stubs */}
                                 <div style={{ marginTop: "1.5rem" }}>
                                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.9rem" }}>
-                                        <span className="cf-label" style={{ marginBottom: 0 }}>Campos del formulario</span>
-                                        <button type="button" className="cf-btn-ghost" onClick={addField}><IconPlus /> Agregar campo</button>
+                                        <span className="cf-label" style={{ marginBottom: 0 }}>{t("editor.fields")}</span>
+                                        <button type="button" className="cf-btn-ghost" onClick={addField}><IconPlus /> {t("editor.addField")}</button>
                                     </div>
                                     {editing.fields.length === 0 ? (
                                         <div className="cf-empty">
                                             <IconEnvelope />
-                                            <span>Sin campos todavía — agrega al menos uno (por ejemplo: Nombre, Correo, Mensaje).</span>
+                                            <span>{t("editor.noFields")}</span>
                                         </div>
                                     ) : (
                                         <div>
                                             {editing.fields.map((f, idx) => (
                                                 <div key={f.name} className="cf-field-row">
-                                                    <span className="cf-field-num">Campo {String(idx + 1).padStart(2, "0")}</span>
+                                                    <span className="cf-field-num">{t("editor.fieldNum", { num: String(idx + 1).padStart(2, "0") })}</span>
                                                     <div className="cf-field-grid">
                                                         <div>
-                                                            <label className="cf-label" htmlFor={`cf-fl-${f.name}`}>Etiqueta</label>
-                                                            <input id={`cf-fl-${f.name}`} type="text" value={f.label} onChange={(e) => patchField(idx, { label: e.target.value })} placeholder="Nombre completo" className="cf-input" />
+                                                            <label className="cf-label" htmlFor={`cf-fl-${f.name}`}>{t("editor.label")}</label>
+                                                            <input id={`cf-fl-${f.name}`} type="text" value={f.label} onChange={(e) => patchField(idx, { label: e.target.value })} placeholder={t("editor.labelPlaceholder")} className="cf-input" />
                                                         </div>
                                                         <div>
-                                                            <label className="cf-label" htmlFor={`cf-ft-${f.name}`}>Tipo</label>
+                                                            <label className="cf-label" htmlFor={`cf-ft-${f.name}`}>{t("editor.type")}</label>
                                                             <select id={`cf-ft-${f.name}`} value={f.type} onChange={(e) => patchField(idx, { type: e.target.value })} className="cf-select">
-                                                                {FIELD_TYPE_OPTIONS.map((o) => (
+                                                                {FIELD_TYPE_OPTIONS(t).map((o) => (
                                                                     <option key={o.value} value={o.value}>{o.label}</option>
                                                                 ))}
                                                             </select>
                                                         </div>
                                                         <div>
-                                                            <label className="cf-label" htmlFor={`cf-fw-${f.name}`}>Ancho</label>
+                                                            <label className="cf-label" htmlFor={`cf-fw-${f.name}`}>{t("editor.width")}</label>
                                                             <select id={`cf-fw-${f.name}`} value={String(f.width)} onChange={(e) => patchField(idx, { width: Number(e.target.value) })} className="cf-select">
                                                                 <option value="100">100%</option>
                                                                 <option value="50">50%</option>
@@ -403,18 +417,18 @@ export default function ContactFormsAdminPage() {
                                                         <div className="cf-field-actions">
                                                             <label className="cf-check">
                                                                 <input type="checkbox" checked={!!f.required} onChange={(e) => patchField(idx, { required: e.target.checked ? 1 : 0 })} />
-                                                                Obligatorio
+                                                                {t("editor.required")}
                                                             </label>
                                                             <div style={{ display: "flex", gap: "0.35rem" }}>
-                                                                <button type="button" title="Subir" aria-label="Subir campo" disabled={idx === 0} onClick={() => moveField(idx, -1)} className="cf-iconbtn">↑</button>
-                                                                <button type="button" title="Bajar" aria-label="Bajar campo" disabled={idx === editing.fields.length - 1} onClick={() => moveField(idx, 1)} className="cf-iconbtn">↓</button>
-                                                                <button type="button" title="Eliminar campo" aria-label="Eliminar campo" onClick={() => removeField(idx)} className="cf-iconbtn is-danger">×</button>
+                                                                <button type="button" title={t("editor.moveUp")} aria-label={t("editor.moveUpAria")} disabled={idx === 0} onClick={() => moveField(idx, -1)} className="cf-iconbtn">↑</button>
+                                                                <button type="button" title={t("editor.moveDown")} aria-label={t("editor.moveDownAria")} disabled={idx === editing.fields.length - 1} onClick={() => moveField(idx, 1)} className="cf-iconbtn">↓</button>
+                                                                <button type="button" title={t("editor.removeField")} aria-label={t("editor.removeField")} onClick={() => removeField(idx)} className="cf-iconbtn is-danger">×</button>
                                                             </div>
                                                         </div>
                                                         {f.type === "select" && (
                                                             <div className="cf-span-full">
-                                                                <label className="cf-label" htmlFor={`cf-fo-${f.name}`}>Opciones (separadas por coma)</label>
-                                                                <input id={`cf-fo-${f.name}`} type="text" value={f.options} onChange={(e) => patchField(idx, { options: e.target.value })} placeholder="Opción 1, Opción 2, Opción 3" className="cf-input" />
+                                                                <label className="cf-label" htmlFor={`cf-fo-${f.name}`}>{t("editor.options")}</label>
+                                                                <input id={`cf-fo-${f.name}`} type="text" value={f.options} onChange={(e) => patchField(idx, { options: e.target.value })} placeholder={t("editor.optionsPlaceholder")} className="cf-input" />
                                                             </div>
                                                         )}
                                                     </div>
@@ -424,9 +438,12 @@ export default function ContactFormsAdminPage() {
                                     )}
                                 </div>
 
+                                {saveError && (
+                                    <div role="alert" className="cf-flash is-error" data-testid="cf-save-error" style={{ marginTop: "1.25rem", marginBottom: 0 }}>{saveError}</div>
+                                )}
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
-                                    <button type="button" className="cf-btn-ghost" onClick={() => setEditing(null)} disabled={busy}>Cancelar</button>
-                                    <button type="submit" className="cf-btn" disabled={busy}>{busy ? "Guardando…" : "Guardar formulario"}</button>
+                                    <button type="button" className="cf-btn-ghost" onClick={() => { setSaveError(""); setEditing(null); }} disabled={busy}>{t("editor.cancel")}</button>
+                                    <button type="submit" className="cf-btn" disabled={busy}>{busy ? t("editor.saving") : t("editor.save")}</button>
                                 </div>
                             </div>
                         </form>
@@ -436,7 +453,7 @@ export default function ContactFormsAdminPage() {
                     {forms.length === 0 && !editing ? (
                         <div className="cf-empty">
                             <IconEnvelope />
-                            <span>Sin formularios todavía — crea el primero con «Nuevo formulario».</span>
+                            <span>{t("forms.empty")}</span>
                         </div>
                     ) : (
                         forms.map((f) => (
@@ -447,26 +464,26 @@ export default function ContactFormsAdminPage() {
                                             <h3 className="cf-form-name">{f.name}</h3>
                                             <span className="cf-chip">ID {f.id}</span>
                                             {Number(f.unread_count) > 0 && (
-                                                <span className="cf-chip is-unread">{f.unread_count} sin leer</span>
+                                                <span className="cf-chip is-unread">{t("forms.unread", { count: f.unread_count })}</span>
                                             )}
                                         </div>
                                         <p className="cf-meta">
-                                            {(f.fields || []).length} campos · {f.submission_count || 0} mensajes
-                                            {f.notify_email ? ` · notifica a ${f.notify_email}` : ""}
+                                            {t("forms.meta", { fields: (f.fields || []).length, submissions: f.submission_count || 0 })}
+                                            {f.notify_email ? t("forms.notifies", { email: f.notify_email }) : ""}
                                         </p>
                                         <p className="cf-usage">
-                                            Usa el bloque <strong>«ContactForms»</strong> en el editor visual con el ID <strong>{f.id}</strong>
+                                            {t("forms.usageBefore")}<strong>«ContactForms»</strong>{t("forms.usageMiddle")}<strong>{f.id}</strong>
                                         </p>
                                     </div>
                                     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                                        <button type="button" className="cf-btn-ghost" onClick={() => { setMessage(""); setEditing({ id: f.id, name: f.name || "", notify_email: f.notify_email || "", success_message: f.success_message || "", fields: (f.fields || []).map((x) => ({ ...x })) }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-                                            <IconPen /> Editar
+                                        <button type="button" className="cf-btn-ghost" onClick={() => { setMessage(""); setSaveError(""); setEditing({ id: f.id, name: f.name || "", notify_email: f.notify_email || "", success_message: f.success_message || "", fields: (f.fields || []).map((x) => ({ ...x })) }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                                            <IconPen /> {t("forms.edit")}
                                         </button>
                                         <button type="button" className="cf-btn-ghost" onClick={() => { setFilterFormId(String(f.id)); setOffset(0); setTab("inbox"); }}>
-                                            <IconEnvelope /> Mensajes
+                                            <IconEnvelope /> {t("forms.messages")}
                                         </button>
                                         <button type="button" className="cf-btn-danger" onClick={() => deleteForm(f)} disabled={busy}>
-                                            Eliminar
+                                            {t("forms.delete")}
                                         </button>
                                     </div>
                                 </div>
@@ -481,30 +498,30 @@ export default function ContactFormsAdminPage() {
                 <div className="cf-card-item">
                     <div className="cf-toolbar">
                         <div className="cf-toolbar-left">
-                            <label className="cf-label" style={{ marginBottom: 0 }} htmlFor="cf-filter">Formulario</label>
+                            <label className="cf-label" style={{ marginBottom: 0 }} htmlFor="cf-filter">{t("inbox.form")}</label>
                             <select
                                 id="cf-filter"
                                 value={filterFormId}
                                 onChange={(e) => { setFilterFormId(e.target.value); setOffset(0); }}
                                 className="cf-select"
                             >
-                                <option value="">Todos los formularios</option>
+                                <option value="">{t("inbox.allForms")}</option>
                                 {forms.map((f) => (
                                     <option key={f.id} value={String(f.id)}>
-                                        {f.name}{Number(f.unread_count) > 0 ? ` (${f.unread_count} sin leer)` : ""}
+                                        {f.name}{Number(f.unread_count) > 0 ? t("inbox.unreadSuffix", { count: f.unread_count }) : ""}
                                     </option>
                                 ))}
                             </select>
                         </div>
-                        <button type="button" className="cf-btn" onClick={exportCsv} disabled={busy || !filterFormId} title={filterFormId ? "Descargar CSV" : "Selecciona un formulario primero"}>
-                            <IconDownload /> Exportar CSV
+                        <button type="button" className="cf-btn" onClick={exportCsv} disabled={busy || !filterFormId} title={filterFormId ? t("inbox.downloadCsv") : t("inbox.selectFirst")}>
+                            <IconDownload /> {t("inbox.exportCsv")}
                         </button>
                     </div>
 
                     {submissions.length === 0 ? (
                         <div className="cf-empty">
                             <IconInboxEmpty />
-                            <span>Sin mensajes todavía.</span>
+                            <span>{t("inbox.empty")}</span>
                         </div>
                     ) : (
                         <div className="cf-table-wrap">
@@ -512,10 +529,10 @@ export default function ContactFormsAdminPage() {
                                 <thead>
                                     <tr>
                                         <th style={{ width: "1rem" }}></th>
-                                        <th>Fecha</th>
-                                        {!filterFormId && <th>Formulario</th>}
-                                        <th>Vista previa</th>
-                                        <th>Página</th>
+                                        <th>{t("inbox.colDate")}</th>
+                                        {!filterFormId && <th>{t("inbox.colForm")}</th>}
+                                        <th>{t("inbox.colPreview")}</th>
+                                        <th>{t("inbox.colPage")}</th>
                                         <th style={{ width: "2.5rem" }}></th>
                                     </tr>
                                 </thead>
@@ -527,19 +544,19 @@ export default function ContactFormsAdminPage() {
                                             className={s.is_read ? "" : "is-unread"}
                                         >
                                             <td>
-                                                {!s.is_read && <span className="cf-dot" title="Sin leer"></span>}
+                                                {!s.is_read && <span className="cf-dot" title={t("inbox.unread")}></span>}
                                             </td>
-                                            <td className="cf-cell-date">{fmtDate(s.created_at)}</td>
+                                            <td className="cf-cell-date">{fmtDate(s.created_at, locale)}</td>
                                             {!filterFormId && (
                                                 <td style={{ whiteSpace: "nowrap" }}>{formsById[s.form_id]?.name || `#${s.form_id}`}</td>
                                             )}
-                                            <td className="cf-cell-preview">{previewOf(s) || <span className="cf-void">(vacío)</span>}</td>
+                                            <td className="cf-cell-preview">{previewOf(s) || <span className="cf-void">{t("inbox.emptyValue")}</span>}</td>
                                             <td className="cf-cell-url">{s.page_url || ""}</td>
                                             <td style={{ textAlign: "right" }}>
                                                 <button
                                                     type="button"
-                                                    title="Eliminar mensaje"
-                                                    aria-label="Eliminar mensaje"
+                                                    title={t("inbox.deleteMessage")}
+                                                    aria-label={t("inbox.deleteMessage")}
                                                     onClick={(e) => { e.stopPropagation(); deleteSubmission(s.id); }}
                                                     className="cf-iconbtn is-danger"
                                                 >
@@ -556,13 +573,13 @@ export default function ContactFormsAdminPage() {
                     {total > LIMIT && (
                         <div className="cf-pager">
                             <button type="button" className="cf-btn-ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>
-                                ← Anterior
+                                {t("inbox.prev")}
                             </button>
                             <span className="cf-pager-info">
-                                Página {page} de {pageCount} · {total} mensajes
+                                {t("inbox.pageInfo", { page, pages: pageCount, total })}
                             </span>
                             <button type="button" className="cf-btn-ghost" disabled={offset + LIMIT >= total} onClick={() => setOffset(offset + LIMIT)}>
-                                Siguiente →
+                                {t("inbox.next")}
                             </button>
                         </div>
                     )}
@@ -572,16 +589,16 @@ export default function ContactFormsAdminPage() {
             {/* ============================== SUBMISSION MODAL: the opened letter ============================== */}
             {selected && (
                 <div className="cf-overlay" onClick={() => setSelected(null)}>
-                    <div className="cf-letter" role="dialog" aria-modal="true" aria-label={`Mensaje #${selected.id}`} onClick={(e) => e.stopPropagation()}>
+                    <div className="cf-letter" role="dialog" aria-modal="true" aria-label={t("modal.title", { id: selected.id })} onClick={(e) => e.stopPropagation()}>
                         <div className="cf-letter-body">
                             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem" }}>
                                 <div>
-                                    <h3 className="cf-editor-title" style={{ marginBottom: 0 }}><IconEnvelope /> Mensaje #{selected.id}</h3>
+                                    <h3 className="cf-editor-title" style={{ marginBottom: 0 }}><IconEnvelope /> {t("modal.title", { id: selected.id })}</h3>
                                     <p className="cf-postmark">
-                                        {formsById[selected.form_id]?.name || `Formulario #${selected.form_id}`} · {fmtDate(selected.created_at)}
+                                        {formsById[selected.form_id]?.name || t("modal.formFallback", { id: selected.form_id })} · {fmtDate(selected.created_at, locale)}
                                     </p>
                                 </div>
-                                <button type="button" onClick={() => setSelected(null)} aria-label="Cerrar" className="cf-iconbtn">✕</button>
+                                <button type="button" onClick={() => setSelected(null)} aria-label={t("modal.close")} className="cf-iconbtn">✕</button>
                             </div>
 
                             <dl className="cf-letter-rows">
@@ -589,21 +606,21 @@ export default function ContactFormsAdminPage() {
                                     <div key={row.key} className="cf-letter-row">
                                         <dt>{row.label}</dt>
                                         <dd>
-                                            {row.value == null || String(row.value).trim() === "" ? <span className="cf-void">(vacío)</span> : String(row.value)}
+                                            {row.value == null || String(row.value).trim() === "" ? <span className="cf-void">{t("inbox.emptyValue")}</span> : String(row.value)}
                                         </dd>
                                     </div>
                                 ))}
                             </dl>
 
                             {selected.page_url && (
-                                <p className="cf-letter-from">Enviado desde: {selected.page_url}</p>
+                                <p className="cf-letter-from">{t("modal.sentFrom", { url: selected.page_url })}</p>
                             )}
 
                             <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1.4rem" }}>
                                 <button type="button" className="cf-btn-danger" onClick={() => deleteSubmission(selected.id)} disabled={busy}>
-                                    Eliminar mensaje
+                                    {t("modal.delete")}
                                 </button>
-                                <button type="button" className="cf-btn-ghost" onClick={() => setSelected(null)}>Cerrar</button>
+                                <button type="button" className="cf-btn-ghost" onClick={() => setSelected(null)}>{t("modal.close")}</button>
                             </div>
                         </div>
                     </div>

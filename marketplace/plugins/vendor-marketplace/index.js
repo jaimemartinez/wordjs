@@ -23,7 +23,7 @@
 
 exports.metadata = {
     name: 'Marketplace',
-    version: '1.0.3',
+    version: '1.0.4',
     description: 'Multi-vendor directory: vendor applications, code-protected vendor portal, product listings and buyer inquiries (lead generation).',
     author: 'WordJS',
 };
@@ -989,6 +989,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/vendor-marketplace',
         label: 'Marketplace',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Marketplace', es: 'Marketplace', pt: 'Marketplace' },
         icon: 'fa-store',
         order: 70,
         cap: 'manage_options',

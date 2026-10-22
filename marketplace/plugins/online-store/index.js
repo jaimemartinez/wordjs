@@ -50,7 +50,7 @@
 
 exports.metadata = {
     name: 'Online Store',
-    version: '2.0.2',
+    version: '2.0.3',
     description: 'Tienda completa: variantes, galerías, zonas de envío, impuestos, reembolsos, informes, webhooks de Stripe y pedidos por cuenta.',
     author: 'WordJS',
 };
@@ -1926,6 +1926,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/store',
         label: 'Tienda Online',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Online Store', es: 'Tienda online', pt: 'Loja online' },
         icon: 'fa-cart-shopping',
         order: 69,
         cap: 'manage_options',

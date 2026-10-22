@@ -14,7 +14,7 @@
 
 exports.metadata = {
     name: 'Cookie Consent',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'GDPR cookie banner on every public page + anonymous consent stats',
     author: 'WordJS',
 };
@@ -249,6 +249,8 @@ exports.init = async function (wordjs) {
     adminMenu.add({
         href: '/admin/plugin/cookie-consent',
         label: 'Cookie Consent',
+        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+        labels: { en: 'Cookie Consent', es: 'Consentimiento de cookies', pt: 'Consentimento de cookies' },
         icon: 'fa-cookie-bite',
         order: 58,
         cap: 'manage_options',

@@ -496,7 +496,8 @@ const wordjs = {
     site: {
         url: () => callHost('site.url', []),
         domain: () => callHost('site.domain', []),
-        adminEmail: () => callHost('site.adminEmail', [])
+        adminEmail: () => callHost('site.adminEmail', []),
+        registrationOpen: () => callHost('site.registrationOpen', [])
     },
     // PRIVATE MEDIA (gated host-side on media:private_read). getPrivate(id) → a path-free description
     // {id,title,mimeType,filesize,filename} or null. To DELIVER the file, reply from a route with

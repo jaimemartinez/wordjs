@@ -133,6 +133,25 @@ function menuAccountCapability(pluginSlug: string, item: any): string | null {
     return UNHOLDABLE_CAPABILITY;
 }
 
+/**
+ * A plugin menu item's per-language labels, `{ en: "Bookings", es: "Reservas" }`: the sidebar shows the one
+ * for the admin's language and falls back to `label`. Plugin labels are plain strings (only core items use
+ * catalogue keys), so without this every plugin menu stayed in the language it was written in. Bounded and
+ * shape-checked like the other plugin-controlled strings: language-tag keys, non-empty strings, 200 chars.
+ */
+function menuLabels(value: any): Record<string, string> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const out: Record<string, string> = {};
+    let n = 0;
+    for (const [lang, text] of Object.entries(value)) {
+        if (n >= 16) break;
+        if (!/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(lang) || typeof text !== 'string' || !text.trim()) continue;
+        out[lang] = text.slice(0, 200);
+        n++;
+    }
+    return n ? out : undefined;
+}
+
 function registerAdminMenu(pluginSlug: string, item: any) {
     item = item || {};
     // SECURITY: validate the plugin-controlled href BEFORE it can enter the registry. Drop the item on a
@@ -175,6 +194,7 @@ function registerAdminMenu(pluginSlug: string, item: any) {
         existingItems.push({
             href: item.href,
             label: pluginSlug === 'core' ? item.label : clamp(item.label, 200),
+            labels: menuLabels(item.labels),
             icon: (pluginSlug === 'core' ? item.icon : clamp(item.icon, 64)) || 'fa-puzzle-piece',
             order: item.order || 100,
             cap: item.cap || item.capability || null,
