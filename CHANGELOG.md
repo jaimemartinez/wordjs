@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-22
+
 ### Added
 
 - **The gateway can forward a port to the backend node.** Admin → Servers → *Ports the gateway forwards to the
