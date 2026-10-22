@@ -46,7 +46,7 @@ interface Commenter { displayName: string }
  * session gets a sign-in link instead of the form. The server enforces it too; this keeps the page from
  * offering a form whose every submission is refused.
  */
-export default function CommentsSection({ postId, lang, requireLogin = false, timeZone }: { postId: number; lang?: string | null; requireLogin?: boolean; timeZone?: string | null }) {
+export default function CommentsSection({ postId, lang, requireLogin = false, timeZone, dateFormat, timeFormat }: { postId: number; lang?: string | null; requireLogin?: boolean; timeZone?: string | null; dateFormat?: string; timeFormat?: string }) {
     const [comments, setComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
@@ -172,7 +172,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                                     <div className="wjs-comment-head flex justify-between items-start mb-2 gap-2">
                                         <h4 className="wjs-comment-author font-bold text-[var(--wjs-color-heading,#111827)] break-words min-w-0">{comment.author}</h4>
                                         <span className="wjs-comment-date text-xs text-[var(--wjs-color-text-muted,#6b7280)] shrink-0">
-                                            {formatSiteDate(comment.date, lang, { gmt: (comment as { dateGmt?: string }).dateGmt, timeZone })}
+                                            {formatSiteDate(comment.date, lang, { gmt: (comment as { dateGmt?: string }).dateGmt, timeZone, format: dateFormat, timeFormat })}
                                         </span>
                                     </div>
                                     <div className="wjs-comment-content prose prose-sm text-[var(--wjs-color-text-main,#374151)] max-w-none break-words overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />

@@ -57,6 +57,32 @@ const { isValidAddress } = require('../core/email-address');
 const { recordAudit } = require('../core/audit');
 const { publicDisplayName } = require('../core/public-identity');
 
+/**
+ * Settings → Discussion, the moderation rules for a comment from someone who cannot moderate. With
+ * «Hold every comment for moderation» (comment_moderation, on by default — what WordJS always did) nothing
+ * is approved automatically. Off: a comment with comment_max_links links or more is held (0 = no link
+ * limit), and with comment_previously_approved on its author needs an earlier approved comment (same
+ * account, or same email for a guest). Anything else is published at once.
+ */
+async function commentAutoApproved(content: string, email: string, userId: number | null | undefined): Promise<boolean> {
+    if (await getBooleanOption('comment_moderation', true)) return false;
+    const maxLinks = Number(await getOption('comment_max_links', 2));
+    if (Number.isFinite(maxLinks) && maxLinks > 0) {
+        const links = (String(content || '').match(LINK_RE) || []).length;
+        if (links >= maxLinks) return false;
+    }
+    if (await getBooleanOption('comment_previously_approved', true)) {
+        const { dbAsync } = require('../config/database');
+        const row = userId
+            ? await dbAsync.get("SELECT 1 AS ok FROM comments WHERE user_id = ? AND comment_approved = '1' LIMIT 1", [userId])
+            : (email ? await dbAsync.get("SELECT 1 AS ok FROM comments WHERE LOWER(comment_author_email) = LOWER(?) AND comment_approved = '1' LIMIT 1", [email]) : null);
+        if (!row) return false;
+    }
+    return true;
+}
+/** A link in a comment body: an anchor tag or a bare http(s) URL. */
+const LINK_RE = /<a\s|https?:\/\//gi;
+
 const COMMENT_STATUS_ALIASES: Record<string, string> = Object.assign(Object.create(null), {
     all: 'any', approve: '1', approved: '1', hold: '0', pending: '0',
 });
@@ -925,8 +951,10 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
         url = safeAuthorUrl(req.user.userUrl);
         userId = req.user.id;
     } else {
-        // Require name and email for guests
-        if (!author || !email) {
+        // Settings → Discussion «Comment author must fill out name and email» (require_name_email, on by
+        // default as in WordPress). Off, a guest may leave both out; what IS given is still checked.
+        const nameEmailRequired = await getBooleanOption('require_name_email', true);
+        if (nameEmailRequired && (!author || !email)) {
             return res.status(400).json({
                 code: 'rest_missing_param',
                 message: 'Author name and email are required.',
@@ -937,7 +965,8 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
         // SECURITY: guest author fields are persisted and later rendered. Treat the display name as
         // plain text (strip any markup), validate the email shape, and restrict author_url to
         // http(s) so a value like `javascript:...` can never become a clickable comment-author link.
-        author = stripTags(String(author)).trim();
+        author = stripTags(String(author || '')).trim();
+        if (!author && !nameEmailRequired) author = 'Anonymous';
         if (!author) {
             return res.status(400).json({
                 code: 'rest_missing_param',
@@ -945,8 +974,8 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
                 data: { status: 400 }
             });
         }
-        email = String(email).trim();
-        if (!isValidAddress(email)) {
+        email = String(email || '').trim();
+        if ((email || nameEmailRequired) && !isValidAddress(email)) {
             return res.status(400).json({
                 code: 'rest_invalid_param',
                 message: 'A valid author email is required.',
@@ -974,7 +1003,7 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     // Determine initial status. Read once, and BEFORE the honeypot, so the discarded branch can report
     // exactly the status the honest one would have.
     const canModerate = !!(req.user && req.user.can('moderate_comments'));
-    const status = canModerate ? '1' /* approved */ : '0'; /* pending */
+    const status = canModerate || await commentAutoApproved(rawContent, email, userId) ? '1' /* approved */ : '0'; /* pending */
 
     // The row this request would insert, described ONCE, so the honeypot's success payload, the repeat
     // comparison, the plugin filter and the real INSERT can never end up describing different comments.

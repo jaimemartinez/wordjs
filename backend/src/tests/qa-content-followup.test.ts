@@ -203,3 +203,107 @@ test('a user deletes their own account with the password; the last administrator
     assert.strictEqual(last.status, 403);
     assert.strictEqual(last.body.code, 'rest_last_administrator');
 });
+
+// ── settings that now have a control and a reader (M2-06 / M2-07) ─────────────────────────────────
+
+const putSettings = (body: any) => request(app).put(`${B}/settings`).set(bearer('admin')).send(body);
+
+test('the reading/writing/discussion settings are validated, and the dead keys are gone from the API', async () => {
+    assert.strictEqual((await putSettings({ date_format: 'Y-m-d', time_format: 'H:i', posts_per_rss: '15', comment_max_links: '3', blog_public: '1' })).status, 200);
+    assert.strictEqual((await putSettings({ date_format: 'l, jS' })).status, 400, 'only the offered formats');
+    assert.strictEqual((await putSettings({ posts_per_rss: '0' })).status, 400);
+    assert.strictEqual((await putSettings({ default_comment_status: 'maybe' })).status, 400);
+    assert.strictEqual((await putSettings({ thumbnail_size_w: '-5' })).status, 400);
+    assert.strictEqual((await putSettings({ default_category: '987654' })).status, 400, 'an existing category');
+    const all = await request(app).get(`${B}/settings/all`).set(bearer('admin'));
+    for (const dead of ['default_post_format', 'default_pingback_flag', 'default_ping_status', 'permalink_structure', 'start_of_week']) {
+        assert.ok(!(dead in all.body), `${dead} is no longer a setting`);
+    }
+});
+
+test('the posts page must be a published page other than the front page', async () => {
+    const home = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Front', status: 'publish' });
+    const blog = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Blog', status: 'publish' });
+    assert.strictEqual((await putSettings({ homepage_id: String(home.body.id) })).status, 200);
+    assert.strictEqual((await putSettings({ page_for_posts: String(home.body.id) })).status, 400, 'not the front page itself');
+    assert.strictEqual((await putSettings({ page_for_posts: '987654' })).status, 400);
+    assert.strictEqual((await putSettings({ page_for_posts: String(blog.body.id) })).status, 200);
+    assert.strictEqual(String((await request(app).get(`${B}/settings`)).body.page_for_posts), String(blog.body.id), 'public: the SSR reads it');
+    await putSettings({ page_for_posts: '', homepage_id: '' });
+});
+
+test('«Discourage search engines» closes robots.txt; new entries take the default comment status', async () => {
+    await putSettings({ blog_public: '0' });
+    const robots = await request(app).get(`${B}/seo/robots.txt`);
+    assert.match(robots.text, /Disallow: \/\s*$/);
+    assert.strictEqual((await request(app).get(`${B}/settings`)).body.blog_public, 0, 'public, so the layout can say noindex');
+    await putSettings({ blog_public: '1' });
+    assert.doesNotMatch((await request(app).get(`${B}/seo/robots.txt`)).text, /Disallow: \/\s*$/);
+
+    await putSettings({ default_comment_status: 'closed' });
+    const closed = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ title: 'Quiet', status: 'publish' });
+    assert.strictEqual(closed.body.commentStatus, 'closed');
+    const explicit = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ title: 'Talk', status: 'publish', comment_status: 'open' });
+    assert.strictEqual(explicit.body.commentStatus, 'open');
+    await putSettings({ default_comment_status: 'open' });
+});
+
+test('comment moderation rules: hold everything by default; off, approve unless a rule holds it', async () => {
+    await setOption('comment_rate_anon', 1000); // six guest comments in a row: not what the limiter is for here
+    const post = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ title: 'Rules', status: 'publish' });
+    const comment = (body: any) => request(app).post(`${B}/comments`).set(SAME_ORIGIN).send({ post: post.body.id, ...body });
+    const statusOf = async (id: number) => (await request(app).get(`${B}/comments/${id}`).set(bearer('admin'))).body.status;
+
+    const held = await comment({ author_name: 'Ana', author_email: 'ana@example.com', content: 'First!' });
+    assert.strictEqual(held.status, 201, JSON.stringify(held.body));
+    assert.match(String(await statusOf(held.body.id)), /^(0|pending|hold)$/, 'default: held');
+
+    await putSettings({ comment_moderation: '0', comment_previously_approved: '1', comment_max_links: '2' });
+    const stillHeld = await comment({ author_name: 'Ana', author_email: 'ana@example.com', content: 'Second' });
+    assert.match(String(await statusOf(stillHeld.body.id)), /^(0|pending|hold)$/, 'no approved comment yet');
+    await request(app).post(`${B}/comments/${held.body.id}/approve`).set(bearer('admin'));
+    const nowOk = await comment({ author_name: 'Ana', author_email: 'ANA@example.com', content: 'Third' });
+    assert.match(String(await statusOf(nowOk.body.id)), /^(1|approved)$/, 'a previously approved author is published');
+    const links = await comment({ author_name: 'Ana', author_email: 'ana@example.com', content: 'see https://a.example and https://b.example' });
+    assert.match(String(await statusOf(links.body.id)), /^(0|pending|hold)$/, 'two links hold it');
+
+    const rne = await putSettings({ require_name_email: '0' });
+    assert.strictEqual(rne.status, 200, JSON.stringify(rne.body));
+    const anon = await comment({ content: 'No name given' });
+    assert.strictEqual(anon.status, 201, JSON.stringify(anon.body));
+    await putSettings({ require_name_email: '1', comment_moderation: '1' });
+    assert.strictEqual((await comment({ content: 'No name again' })).status, 400);
+});
+
+test('REGRESSION: a category parent sent as a numeric string is accepted', async () => {
+    const top = await request(app).post(`${B}/categories`).set(bearer('admin')).send({ name: 'String Parent Top' });
+    const child = await request(app).post(`${B}/categories`).set(bearer('admin')).send({ name: 'String Parent Child', parent: String(top.body.id) });
+    assert.strictEqual(child.status, 201, JSON.stringify(child.body));
+    assert.strictEqual(child.body.parent, top.body.id);
+});
+
+// ── menus: submenus and new tabs (S1-14) ──────────────────────────────────────────────────────────
+
+test('a menu item nests under another item of the same menu, opens in a new tab, and cannot loop', async () => {
+    const menu = await request(app).post(`${B}/menus`).set(bearer('admin')).send({ name: 'Followup Nav', slug: 'followup-nav' });
+    assert.strictEqual(menu.status, 201, JSON.stringify(menu.body));
+    const other = await request(app).post(`${B}/menus`).set(bearer('admin')).send({ name: 'Other Nav', slug: 'other-nav' });
+    const add = (menuId: number, body: any) => request(app).post(`${B}/menus/${menuId}/items`).set(bearer('admin')).send(body);
+    const top = await add(menu.body.id, { title: 'About', url: '/about' });
+    const child = await add(menu.body.id, { title: 'Team', url: '/team', parent: top.body.id, target: '_blank' });
+    assert.strictEqual(child.status, 201, JSON.stringify(child.body));
+    assert.strictEqual(Number(child.body.parent), top.body.id);
+    assert.strictEqual(child.body.target, '_blank');
+
+    const foreign = await add(other.body.id, { title: 'X', url: '/x' });
+    assert.strictEqual((await add(menu.body.id, { title: 'Bad', url: '/b', parent: foreign.body.id })).status, 400, 'another menu’s item');
+    assert.strictEqual((await add(menu.body.id, { title: 'Bad', url: '/b', target: 'evil' })).status, 400);
+
+    const loop = await request(app).put(`${B}/menus/items/${top.body.id}`).set(bearer('admin')).send({ parent: child.body.id });
+    assert.strictEqual(loop.status, 400, 'under its own sub-item');
+    const self = await request(app).put(`${B}/menus/items/${top.body.id}`).set(bearer('admin')).send({ parent: top.body.id });
+    assert.strictEqual(self.status, 400);
+    const ok = await request(app).put(`${B}/menus/items/${child.body.id}`).set(bearer('admin')).send({ parent: 0, target: '_self' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(Number(ok.body.parent), 0);
+});

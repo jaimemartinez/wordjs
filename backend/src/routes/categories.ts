@@ -32,7 +32,7 @@ router.param('id', requireRouteId({ code: 'rest_term_invalid', message: 'Invalid
  */
 async function resolveParent(raw: unknown, termId: number | null): Promise<{ parent: number } | { problem: string }> {
     if (raw === undefined || raw === null || raw === '' || raw === 0 || raw === '0') return { parent: 0 };
-    const parent = typeof raw === 'number' ? raw : /^d+$/.test(String(raw)) ? parseInt(String(raw), 10) : NaN;
+    const parent = typeof raw === 'number' ? raw : /^\d+$/.test(String(raw)) ? parseInt(String(raw), 10) : NaN;
     if (!Number.isSafeInteger(parent) || parent < 0) return { problem: 'parent must be a category ID (0 for none).' };
     if (termId !== null && parent === termId) return { problem: 'A category cannot be its own parent.' };
     // Walk up from the proposed parent: it must exist, and the chain must not pass through this category.

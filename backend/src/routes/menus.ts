@@ -430,6 +430,30 @@ router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req: Req
  *       403:
  *         description: Not an administrator
  */
+/**
+ * SUBMENUS AND NEW TABS (QA S1-14): an item's `parent` must be 0 or another item of the SAME menu, and
+ * never the item itself or one of its descendants (a loop every nav renderer would follow); `target` is
+ * `_self` or `_blank`. Neither was checked, so a stray parent id nested an item under another menu's.
+ */
+async function menuItemProblem(menuId: number, itemId: number | null, data: { parent?: unknown; target?: unknown }): Promise<string | null> {
+    if (data.target !== undefined && data.target !== null && data.target !== '' && data.target !== '_self' && data.target !== '_blank') {
+        return 'target must be "_self" or "_blank".';
+    }
+    if (data.parent === undefined || data.parent === null || data.parent === '' || Number(data.parent) === 0) return null;
+    const parentId = Number(data.parent);
+    if (!Number.isSafeInteger(parentId) || parentId < 0) return 'parent must be a menu item id (0 for the top level).';
+    if (itemId !== null && parentId === itemId) return 'A menu item cannot be its own parent.';
+    const items = await MenuItem.findByMenu(menuId);
+    const byId = new Map<number, any>(items.map((i: any) => [Number(i.id), i]));
+    if (!byId.has(parentId)) return 'parent must be an item of the same menu.';
+    let cursor = parentId;
+    for (let depth = 0; cursor && depth < 50; depth++) {
+        if (itemId !== null && cursor === itemId) return 'A menu item cannot be moved under one of its own sub-items.';
+        cursor = Number(byId.get(cursor)?.parent) || 0;
+    }
+    return null;
+}
+
 router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const menuId = parseInt(req.params.id as string, 10);
     const { title, url, target, type, objectId, parent, order, classes } = req.body;
@@ -441,6 +465,8 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req: Reques
             data: { status: 400 }
         });
     }
+    const problem = await menuItemProblem(menuId, null, { parent, target });
+    if (problem) return res.status(400).json({ code: 'rest_invalid_param', message: problem, data: { status: 400 } });
 
     const item = await MenuItem.create({
         menuId,
@@ -521,6 +547,9 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Req
             data: { status: 404 }
         });
     }
+
+    const problem = await menuItemProblem(existing.menuId, itemId, { parent: (req.body || {}).parent, target: (req.body || {}).target });
+    if (problem) return res.status(400).json({ code: 'rest_invalid_param', message: problem, data: { status: 400 } });
 
     // SECURITY (XSS-03): sanitize the url before persisting. Only sanitize when a url is actually being
     // updated so the model's "update only provided fields" contract is preserved; an explicitly-cleared

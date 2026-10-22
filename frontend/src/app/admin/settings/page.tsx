@@ -16,6 +16,7 @@ import { useOptionalAuth } from "@/contexts/AuthContext";
 import { withServerReason } from "@/lib/errorText";
 import { isSignupSafeRole } from "@/lib/signupRoles";
 import { PageHeader } from "@/components/ui";
+import { DateTimeFormats, ImageSizes, ReadingExtras, SITE_BEHAVIOUR_DEFAULTS, WritingDiscussion, siteBehaviourFrom, type SiteBehaviourValues } from "./SiteBehaviourSettings";
 
 
 /**
@@ -104,6 +105,8 @@ export default function SettingsPage() {
         timezone_string: "UTC",
     });
     const [roles, setRoles] = useState<Record<string, Role>>({});
+    // Reading / writing / discussion / media settings that had no control (QA M2-06), saved with the rest.
+    const [behaviour, setBehaviour] = useState<SiteBehaviourValues>(SITE_BEHAVIOUR_DEFAULTS);
     // The upload limit that applies right now (derived on the server: the panel's value or the default).
     const [uploadLimitBytes, setUploadLimitBytes] = useState<number | null>(null);
     const [saving, setSaving] = useState(false);
@@ -204,6 +207,7 @@ export default function SettingsPage() {
                 site_text_direction: data.site_text_direction || "",
                 timezone_string: data.timezone_string || "UTC",
             });
+            setBehaviour(siteBehaviourFrom(data as Record<string, unknown>));
             const effective = Number((data as Record<string, unknown>).upload_max_bytes);
             setUploadLimitBytes(Number.isFinite(effective) && effective > 0 ? effective : null);
         } catch (error) {
@@ -219,7 +223,7 @@ export default function SettingsPage() {
         setSaved(false);
 
         try {
-            await settingsApi.update(settings);
+            await settingsApi.update({ ...settings, ...behaviour });
             setSaved(true);
             setTimeout(() => setSaved(false), 3000);
         } catch (error) {
@@ -505,6 +509,8 @@ export default function SettingsPage() {
                                     <p className="text-xs text-gray-400 mt-1">{t('settings.site.timezone.help')}</p>
                                 </div>
 
+                                <DateTimeFormats values={behaviour} onChange={setBehaviour} />
+
                                 <div className="space-y-2">
                                     <ModernSelect
                                         label={t('settings.text.direction')}
@@ -554,6 +560,8 @@ export default function SettingsPage() {
                                     />
                                 </div>
                             </div>
+
+                            <ReadingExtras values={behaviour} onChange={setBehaviour} pages={pages} homepageId={settings.homepage_id ? String(settings.homepage_id) : ""} />
 
                             <div className="p-5 bg-blue-50/50 rounded-2xl border border-blue-100 space-y-4 group hover:bg-blue-100/50 transition-colors">
                                 <div className="flex items-center justify-between gap-6">
@@ -765,6 +773,8 @@ export default function SettingsPage() {
                             </div>
                         </div>
                     </div>
+                    <WritingDiscussion values={behaviour} onChange={setBehaviour} />
+
                     {/* Media Section */}
                     <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden" data-testid="settings-media">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
@@ -790,6 +800,7 @@ export default function SettingsPage() {
                                 {uploadLimitBytes ? " " + t('settings.media.maxUpload.current').replace('{mb}', String(Math.round((uploadLimitBytes / 1048576) * 10) / 10)) : ''}
                             </p>
                         </div>
+                        <ImageSizes values={behaviour} onChange={setBehaviour} />
                     </div>
 
                     {/* Performance Section */}

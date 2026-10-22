@@ -35,8 +35,8 @@ const PUBLIC_SETTINGS = [
     'timezone_string',
     'date_format',
     'time_format',
-    'start_of_week',
     'posts_per_page',
+    'page_for_posts',       // the page that lists the posts when the front page is a static page
     'site_logo',
     'homepage_id',
     'footer_text',
@@ -67,7 +67,8 @@ const PUBLIC_SETTINGS = [
     'default_role',
     'comment_registration',
     'WPLANG',               // site locale — drives <html lang> (and the RSS <language>, see routes/seo)
-    'site_text_direction'   // explicit <html dir> override: '' (derive from WPLANG) | ltr | rtl | auto
+    'site_text_direction',  // explicit <html dir> override: '' (derive from WPLANG) | ltr | rtl | auto
+    'blog_public'           // '0' = discourage search engines: the SSR layout adds noindex (routes/seo robots.txt too)
 ];
 
 // All settings that can be modified
@@ -75,21 +76,20 @@ const ALL_SETTINGS = [
     ...PUBLIC_SETTINGS,
     'admin_email', // SECURITY: Admin-only access
     'default_category',
-    'default_post_format',
+    // (default_post_format, the two pingback switches, permalink_structure and start_of_week are gone: no
+    // code ever read them, so writing them changed nothing. WordJS has no post formats or pingbacks, and
+    // its addresses are always /<slug>.)
     'show_on_front',
     'page_on_front',
-    'page_for_posts',
-    'blog_public',
-    'default_pingback_flag',
-    'default_ping_status',
-    'default_comment_status',
+    'posts_per_rss',        // items in the RSS / Atom / JSON feeds (core/feeds)
+
+    'default_comment_status', // 'open' | 'closed' for new entries
     'comments_notify',
     'moderation_notify',
     'comment_moderation',
     'require_name_email',
     'comment_previously_approved',
     'comment_max_links',
-    'permalink_structure',
     'thumbnail_size_w',
     'thumbnail_size_h',
     'medium_size_w',
@@ -292,6 +292,23 @@ function knownLocaleTag(tag: string): boolean {
  * does not exist (or a draft, or a post) was stored and the front page fell back without a word.
  */
 async function settingDataProblem(key: string, value: any): Promise<string | null> {
+    if (key === 'page_for_posts') {
+        const raw = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+        if (raw === '' || raw === '0') return null; // no posts page
+        if (!/^[0-9]{1,10}$/.test(raw)) return 'page_for_posts must be the id of a published page (or empty).';
+        const page = await require('../models/Post').findById(Number(raw));
+        if (!page || page.postType !== 'page' || page.postStatus !== 'publish') return 'page_for_posts ' + raw + ' is not a published page.';
+        const home = String(await require('../core/options').getOption('homepage_id', '') ?? '');
+        if (home && home === raw) return 'The posts page cannot also be the front page.';
+        return null;
+    }
+    if (key === 'default_category') {
+        const raw = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+        if (raw === '' || raw === '0') return null;
+        if (!/^[0-9]{1,10}$/.test(raw)) return 'default_category must be a category id.';
+        const term = await require('../models/Term').findById(Number(raw), 'category');
+        return term ? null : 'Category ' + raw + ' does not exist.';
+    }
     if (key !== 'homepage_id') return null;
     const raw = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
     if (raw === '' || raw === '0') return null; // "Latest posts"
@@ -344,6 +361,17 @@ const booleanishSetting = (v: any): '1' | '0' | null => {
     return null;
 };
 
+/** The date and time formats the panel offers (WordPress spellings; lib/public/siteDate renders them). */
+const DATE_FORMATS = ['F j, Y', 'M j, Y', 'j F Y', 'Y-m-d', 'm/d/Y', 'd/m/Y'];
+const TIME_FORMATS = ['g:i a', 'H:i'];
+
+/** A whole number in [min, max], given as a number or a numeric string ('' is not one). */
+function integerSettingProblem(key: string, v: any, min: number, max: number): string | null {
+    const s = typeof v === 'number' ? String(v) : (typeof v === 'string' ? v.trim() : '');
+    if (!/^[0-9]{1,6}$/.test(s) || Number(s) < min || Number(s) > max) return key + ' must be a whole number from ' + min + ' to ' + max + '.';
+    return null;
+}
+
 const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     upload_max_size_mb: (v: any) => require('../core/upload-limit').uploadLimitProblem(v),
     // The role an anonymous sign-up receives: an existing role that cannot run the site
@@ -362,6 +390,22 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     },
     // On/off switches the public site and POST /comments read (see core/options getBooleanOption).
     comments_enabled: (v: any) => booleanishSetting(v) === null ? 'comments_enabled must be a boolean ("1" or "0").' : null,
+    // Settings → Reading / Discussion / Media (M2-06): every one of these now has a control and a reader.
+    blog_public: (v: any) => booleanishSetting(v) === null ? 'blog_public must be a boolean ("1" or "0").' : null,
+    comment_moderation: (v: any) => booleanishSetting(v) === null ? 'comment_moderation must be a boolean ("1" or "0").' : null,
+    comment_previously_approved: (v: any) => booleanishSetting(v) === null ? 'comment_previously_approved must be a boolean ("1" or "0").' : null,
+    require_name_email: (v: any) => booleanishSetting(v) === null ? 'require_name_email must be a boolean ("1" or "0").' : null,
+    default_comment_status: (v: any) => (v === 'open' || v === 'closed') ? null : 'default_comment_status must be "open" or "closed".',
+    comment_max_links: (v: any) => integerSettingProblem('comment_max_links', v, 0, 100),
+    posts_per_rss: (v: any) => integerSettingProblem('posts_per_rss', v, 1, 100),
+    date_format: (v: any) => (v === '' || DATE_FORMATS.includes(v)) ? null : 'date_format must be one of: ' + DATE_FORMATS.join(', ') + '.',
+    time_format: (v: any) => (v === '' || TIME_FORMATS.includes(v)) ? null : 'time_format must be one of: ' + TIME_FORMATS.join(', ') + '.',
+    thumbnail_size_w: (v: any) => integerSettingProblem('thumbnail_size_w', v, 0, 4000),
+    thumbnail_size_h: (v: any) => integerSettingProblem('thumbnail_size_h', v, 0, 4000),
+    medium_size_w: (v: any) => integerSettingProblem('medium_size_w', v, 0, 4000),
+    medium_size_h: (v: any) => integerSettingProblem('medium_size_h', v, 0, 4000),
+    large_size_w: (v: any) => integerSettingProblem('large_size_w', v, 0, 4000),
+    large_size_h: (v: any) => integerSettingProblem('large_size_h', v, 0, 4000),
     comment_registration: (v: any) => booleanishSetting(v) === null ? 'comment_registration must be a boolean ("1" or "0").' : null,
     // Interruptor de la caché de objetos: booleano cerrado (ver booleanishSetting arriba).
     redis_cache_enabled: (v: any) => booleanishSetting(v) === null
@@ -476,6 +520,18 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     // Stored as the canonical "1"/"0" so every reader agrees on what was saved.
     comments_enabled: (v: any) => booleanishSetting(v) ?? '1',
     comment_registration: (v: any) => booleanishSetting(v) ?? '0',
+    blog_public: (v: any) => booleanishSetting(v) ?? '1',
+    comment_moderation: (v: any) => booleanishSetting(v) ?? '1',
+    comment_previously_approved: (v: any) => booleanishSetting(v) ?? '1',
+    require_name_email: (v: any) => booleanishSetting(v) ?? '1',
+    comment_max_links: (v: any) => String(Number(String(v).trim())),
+    posts_per_rss: (v: any) => String(Number(String(v).trim())),
+    thumbnail_size_w: (v: any) => String(Number(String(v).trim())),
+    thumbnail_size_h: (v: any) => String(Number(String(v).trim())),
+    medium_size_w: (v: any) => String(Number(String(v).trim())),
+    medium_size_h: (v: any) => String(Number(String(v).trim())),
+    large_size_w: (v: any) => String(Number(String(v).trim())),
+    large_size_h: (v: any) => String(Number(String(v).trim())),
 };
 
 /** El valor EXACTO que se persiste para esta clave (idéntico al recibido si no hay normalizador). */

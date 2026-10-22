@@ -141,8 +141,10 @@ class Comment {
             agent = ''
         } = data;
 
-        if (!postId || !author || !authorEmail || !content) {
-            throw new Error('Post ID, author, email, and content are required');
+        // The email may be empty: with Settings → Discussion «name and email required» off, a guest may
+        // leave it out (routes/comments.ts decides; the route still requires it by default).
+        if (!postId || !author || !content) {
+            throw new Error('Post ID, author and content are required');
         }
 
         // Sanitize content

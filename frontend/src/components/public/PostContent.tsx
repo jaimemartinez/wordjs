@@ -17,7 +17,7 @@ import { featuredImageSrc } from "@/lib/mediaUsage";
 import { mediaBaseFromSettings } from "@/lib/mediaDelivery";
 import MembersOnlyGate from "./MembersOnlyGate";
 import ProtectedEntryUnlock from "./ProtectedEntryUnlock";
-import { siteDateLanguage, siteTimeZone } from "@/lib/public/siteDate";
+import { siteDateLanguage, siteTimeZone, siteDateFormats } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
 import CommentsSection from "@/components/CommentsSection";
 import { optionEnabled } from "@/lib/optionFlags";
@@ -176,7 +176,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                                     <span>•</span>
                                 </>
                             )}
-                            <span className="wjs-post-meta-date"><LocalizedDate date={post.date} gmt={post.dateGmt} timeZone={siteTimeZone(settings)} lang={siteDateLanguage(settings)} /></span>
+                            <span className="wjs-post-meta-date"><LocalizedDate date={post.date} gmt={post.dateGmt} timeZone={siteTimeZone(settings)} lang={siteDateLanguage(settings)} format={siteDateFormats(settings).format} /></span>
                             <span>•</span>
                             <span className="wjs-post-meta-author">{post.author?.displayName || "Admin"}</span>
                         </div>
@@ -220,7 +220,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 </article>
             )}
 
-            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} requireLogin={commentsRequireLogin} timeZone={siteTimeZone(settings)} />}
+            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} requireLogin={commentsRequireLogin} timeZone={siteTimeZone(settings)} dateFormat={siteDateFormats(settings).format} timeFormat={siteDateFormats(settings).timeFormat} />}
 
             <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)] flex justify-between items-center px-4">
                 <Link href="/" className="text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] font-medium flex items-center gap-2">

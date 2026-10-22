@@ -4,7 +4,7 @@ import { getSettings, searchPostsPaged } from "@/lib/server-api";
 import { getPostsPerPage } from "@/lib/public/archives";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { postCardExcerpt } from "@/lib/postExcerpt";
-import { formatSiteDate, siteDateLanguage, siteTimeZone } from "@/lib/public/siteDate";
+import { formatSiteDate, siteDateLanguage, siteTimeZone, siteDateFormats } from "@/lib/public/siteDate";
 
 interface SearchParams {
     q?: string | string[];
@@ -136,7 +136,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                                     {post.type === "page" ? "Page" : "Post"}
                                 </span>
                                 <span className="text-sm text-[var(--wjs-color-text-muted,#9ca3af)]">
-                                    {formatSiteDate(post.date, dateLang, { gmt: post.dateGmt, timeZone: dateZone })}
+                                    {formatSiteDate(post.date, dateLang, { gmt: post.dateGmt, timeZone: dateZone, format: siteDateFormats(siteSettings).format })}
                                 </span>
                             </div>
 
