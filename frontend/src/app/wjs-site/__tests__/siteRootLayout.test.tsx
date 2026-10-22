@@ -114,7 +114,7 @@ describe("a secondary site's root layout renders that site's document", () => {
         expect(titleOf(meta).default).toBe("Sitio Dos");
         const html = renderToStaticMarkup(await SiteRootLayout({
             ...params(TWO),
-            children: SiteLoginLayout({ children: <form data-probe="login" /> }),
+            children: await SiteLoginLayout({ children: <form data-probe="login" /> }),
         }));
         expect(htmlTag(html)).toContain('lang="ar-SA"');
         expect(html).toContain('data-probe="login"');
@@ -148,14 +148,17 @@ describe("the main site's document is unchanged", () => {
         expect(net.reads.every((site) => site === null)).toBe(true);
     });
 
+    // A sign-in screen's <html lang> names the language the SCREEN is in (lib/adminLanguage.server.ts:
+    // the visitor's stored choice, else the site's language) — with no cookie, the main site's en-US
+    // gives English, `en`.
     it("its sign-in screens keep the main site's document and title", async () => {
         const html = renderToStaticMarkup(await LoginLayout({ children: <form /> }));
-        expect(htmlTag(html)).toContain('lang="en-US"');
+        expect(htmlTag(html)).toContain('lang="en"');
         expect(html).toContain('class="font-inter"');
         for (const meta of [await loginMetadata(), await registerMetadata(), await publicRootMetadata()]) {
             expect(titleOf(meta)).toEqual({ default: "Main Site", template: "%s | Main Site" });
         }
-        expect(renderToStaticMarkup(await RegisterLayout({ children: null }))).toContain('lang="en-US"');
+        expect(renderToStaticMarkup(await RegisterLayout({ children: null }))).toContain('lang="en"');
         expect(net.declared).toBeNull();
     });
 
@@ -163,7 +166,7 @@ describe("the main site's document is unchanged", () => {
         await SiteRootLayout({ ...params(TWO), children: null });
         net.declared = null; // a new request: the holder is request-scoped
         const html = renderToStaticMarkup(await LoginLayout({ children: null }));
-        expect(htmlTag(html)).toContain('lang="en-US"');
+        expect(htmlTag(html)).toContain('lang="en"'); // English from en-US, nothing of the other site's ar-SA
     });
 });
 

@@ -974,6 +974,15 @@ the boot error links there too.
 
 ### Fixed
 
+- **Sign-in and account screens speak the admin's language, from the first paint.**
+  - **Language decided on the server.** The admin's language was kept only in the browser, so the server rendered every sign-in screen in Spanish and it switched after loading. A fresh browser also started in Spanish on an English site. The choice now travels in a cookie too: `/login`, `/register`, `/reset-password`, `/verify-email` (also on network sites) and the admin render in it from the server. With no choice stored, the site's language decides, and `<html lang>` follows the screen.
+  - **Screens no longer English- or Spanish-only.** `/reset-password` was English-only, while `/register` and `/verify-email` were Spanish-only. The same applies to the two-factor gate and an administrator's two-factor reset.
+  - **Translated server errors.** Errors from the server ("Invalid username or password.", the sign-in lockout with its minutes, a wrong 2FA code, an expired reset link…) are shown in the admin's language, keyed on their stable code.
+  - **Fixed in passing.** The reset confirmation now says what happens when the user's role requires two-factor authentication. The final reset screen no longer offers two links to sign-in.
+- **Account screens at tablet width (1024px).**
+  - **My account.** The two-factor status pill no longer pushes out of its card, which had caused horizontal scroll. The manual key and the 6-digit code box no longer collapse to a narrow strip.
+  - **API tokens and Account mail.** The two pages keep their form full width until there is room for the side column, and the SMTP port field fits five digits.
+
 - **"Also delete this plugin's data" leaves nothing of the plugin behind.** Beyond its tables it now deletes the
   options the plugin created (recorded when the plugin first writes them; a site setting it merely changed is
   never touched), revokes the account capabilities it declared from every account, and removes its private

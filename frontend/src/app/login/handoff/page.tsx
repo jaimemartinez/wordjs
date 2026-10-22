@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { authApi } from "@/lib/api";
-import { I18nProvider, useI18n } from "@/contexts/I18nContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 /**
  * /login/handoff — where a network administrator's "Open as administrator" lands (multisite).
@@ -14,12 +14,9 @@ import { I18nProvider, useI18n } from "@/contexts/I18nContext";
  * 30-minute session marked as a handoff (backend core/network-handoff). Then it goes to the admin, where the
  * handoff banner says who is in and until when. A token works once: a reload of this page cannot reuse it.
  */
+// The language provider comes from the sign-in shell (login/layout.tsx → _root/AuthScreen.tsx).
 export default function HandoffPage() {
-    return (
-        <I18nProvider>
-            <Handoff />
-        </I18nProvider>
-    );
+    return <Handoff />;
 }
 
 /** Why the handoff failed: the server's message, or one of ours by its key. */

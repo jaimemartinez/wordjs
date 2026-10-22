@@ -30,11 +30,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authApi, settingsApi } from "@/lib/api";
 import { currentReturnPath } from "@/lib/safeReturnPath";
+import { useI18n } from "@/contexts/I18nContext";
 import {
     EMPTY_DRAFT,
     PASSWORD_MAX,
     PASSWORD_MIN,
-    REGISTRATION_DISABLED_MESSAGE,
+    REGISTRATION_DISABLED_KEY,
     isRegistrationDisabledError,
     registerErrorMessage,
     registerOutcome,
@@ -49,6 +50,7 @@ type View = "form" | "disabled" | "verify-sent" | "signed-in";
 
 function RegisterForm() {
     const router = useRouter();
+    const { t } = useI18n();
     const [draft, setDraft] = useState<RegisterDraft>(EMPTY_DRAFT);
     const [fieldErrors, setFieldErrors] = useState<RegisterErrors>({});
     const [error, setError] = useState("");
@@ -80,7 +82,7 @@ function RegisterForm() {
         e.preventDefault();
         setError("");
 
-        const errors = validateRegisterDraft(draft);
+        const errors = validateRegisterDraft(draft, t);
         setFieldErrors(errors);
         if (Object.keys(errors).length > 0) return;
 
@@ -91,7 +93,7 @@ function RegisterForm() {
         } catch (err) {
             // Que el sitio tenga el registro apagado no es un error del formulario: es otra pantalla.
             if (isRegistrationDisabledError(err)) setView("disabled");
-            else setError(registerErrorMessage(err));
+            else setError(registerErrorMessage(err, t));
         } finally {
             setLoading(false);
         }
@@ -105,12 +107,12 @@ function RegisterForm() {
                         <i className="fa-solid fa-rocket text-blue-600"></i>
                         WordJS
                     </h1>
-                    <p className="text-gray-500 mt-2">Crear una cuenta</p>
+                    <p className="text-gray-500 mt-2">{t("register.subtitle")}</p>
                 </div>
                 {children}
                 <div className="mt-6 text-center">
                     <a href="/login" className="text-sm text-gray-500 hover:text-blue-600">
-                        &larr; Volver al inicio de sesión
+                        &larr; {t("auth.backToLogin")}
                     </a>
                 </div>
             </div>
@@ -122,8 +124,8 @@ function RegisterForm() {
         return shell(
             <div className="text-center space-y-4" role="status">
                 <i className="fa-solid fa-user-slash text-amber-500 text-4xl"></i>
-                <h2 className="text-lg font-semibold text-gray-800">Registro cerrado</h2>
-                <p className="text-sm text-gray-600 leading-relaxed">{REGISTRATION_DISABLED_MESSAGE}</p>
+                <h2 className="text-lg font-semibold text-gray-800">{t("register.disabledTitle")}</h2>
+                <p className="text-sm text-gray-600 leading-relaxed">{t(REGISTRATION_DISABLED_KEY)}</p>
             </div>
         );
     }
@@ -133,12 +135,9 @@ function RegisterForm() {
         return shell(
             <div className="text-center space-y-4" role="status">
                 <i className="fa-solid fa-envelope-circle-check text-blue-500 text-4xl"></i>
-                <h2 className="text-lg font-semibold text-gray-800">Revisa tu correo</h2>
-                <p className="text-sm text-gray-600 leading-relaxed">
-                    Tu cuenta se ha creado, pero todavía no puedes entrar: hemos enviado un enlace de
-                    confirmación a tu dirección. Ábrelo para activarla.
-                </p>
-                <p className="text-xs text-gray-500">El enlace caduca a las 24 horas.</p>
+                <h2 className="text-lg font-semibold text-gray-800">{t("register.verifyTitle")}</h2>
+                <p className="text-sm text-gray-600 leading-relaxed">{t("register.verifyBody")}</p>
+                <p className="text-xs text-gray-500">{t("register.verifyExpiry")}</p>
             </div>
         );
     }
@@ -148,17 +147,15 @@ function RegisterForm() {
         return shell(
             <div className="text-center space-y-4" role="status">
                 <i className="fa-solid fa-circle-check text-green-500 text-4xl"></i>
-                <h2 className="text-lg font-semibold text-gray-800">¡Cuenta creada!</h2>
-                <p className="text-sm text-gray-600 leading-relaxed">
-                    Ya tienes la sesión iniciada con tu cuenta nueva.
-                </p>
+                <h2 className="text-lg font-semibold text-gray-800">{t("register.createdTitle")}</h2>
+                <p className="text-sm text-gray-600 leading-relaxed">{t("register.createdBody")}</p>
                 <button
                     type="button"
                     onClick={() => router.push(currentReturnPath() || "/admin")}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
                 >
                     {/* Rendered only after a submit (client state), so reading the URL here cannot mismatch the server HTML. */}
-                    {currentReturnPath() ? "Continuar" : "Ir al panel"}
+                    {currentReturnPath() ? t("register.continue") : t("register.goToDashboard")}
                 </button>
             </div>
         );
@@ -169,7 +166,7 @@ function RegisterForm() {
         <form onSubmit={handleSubmit} className="space-y-5" noValidate>
             <div>
                 <label htmlFor="reg-username" className="block text-sm font-medium text-gray-700 mb-2">
-                    Nombre de usuario
+                    {t("register.username")}
                 </label>
                 <input
                     id="reg-username"
@@ -179,14 +176,14 @@ function RegisterForm() {
                     onChange={set("username")}
                     aria-invalid={!!fieldErrors.username}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder="Con el que iniciarás sesión"
+                    placeholder={t("register.usernamePlaceholder")}
                 />
                 {fieldErrors.username && <p className="mt-1.5 text-sm text-red-600">{fieldErrors.username}</p>}
             </div>
 
             <div>
                 <label htmlFor="reg-email" className="block text-sm font-medium text-gray-700 mb-2">
-                    Correo electrónico
+                    {t("register.email")}
                 </label>
                 <input
                     id="reg-email"
@@ -196,14 +193,14 @@ function RegisterForm() {
                     onChange={set("email")}
                     aria-invalid={!!fieldErrors.email}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder="tu@ejemplo.com"
+                    placeholder={t("register.emailPlaceholder")}
                 />
                 {fieldErrors.email && <p className="mt-1.5 text-sm text-red-600">{fieldErrors.email}</p>}
             </div>
 
             <div>
                 <label htmlFor="reg-display" className="block text-sm font-medium text-gray-700 mb-2">
-                    Nombre visible <span className="font-normal text-gray-400">(opcional)</span>
+                    {t("register.displayName")} <span className="font-normal text-gray-400">{t("register.optional")}</span>
                 </label>
                 <input
                     id="reg-display"
@@ -212,13 +209,13 @@ function RegisterForm() {
                     value={draft.displayName}
                     onChange={set("displayName")}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder="Cómo quieres que te vean"
+                    placeholder={t("register.displayNamePlaceholder")}
                 />
             </div>
 
             <div>
                 <label htmlFor="reg-password" className="block text-sm font-medium text-gray-700 mb-2">
-                    Contraseña
+                    {t("register.password")}
                 </label>
                 <div className="relative">
                     <input
@@ -229,12 +226,12 @@ function RegisterForm() {
                         onChange={set("password")}
                         aria-invalid={!!fieldErrors.password}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 pr-10"
-                        placeholder={`Entre ${PASSWORD_MIN} y ${PASSWORD_MAX} caracteres`}
+                        placeholder={t("register.passwordPlaceholder").replace("{min}", String(PASSWORD_MIN)).replace("{max}", String(PASSWORD_MAX))}
                     />
                     <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        aria-label={showPassword ? "Ocultar la contraseña" : "Mostrar la contraseña"}
+                        aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
                         className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
                     >
                         <i className={`fa-solid ${showPassword ? "fa-eye-slash" : "fa-eye"}`}></i>
@@ -245,7 +242,7 @@ function RegisterForm() {
 
             <div>
                 <label htmlFor="reg-confirm" className="block text-sm font-medium text-gray-700 mb-2">
-                    Repite la contraseña
+                    {t("register.confirm")}
                 </label>
                 <input
                     id="reg-confirm"
@@ -255,7 +252,7 @@ function RegisterForm() {
                     onChange={set("confirm")}
                     aria-invalid={!!fieldErrors.confirm}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder="La misma contraseña"
+                    placeholder={t("register.confirmPlaceholder")}
                 />
                 {fieldErrors.confirm && <p className="mt-1.5 text-sm text-red-600">{fieldErrors.confirm}</p>}
             </div>
@@ -267,7 +264,7 @@ function RegisterForm() {
                 disabled={loading}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
             >
-                {loading ? "Creando la cuenta…" : "Crear cuenta"}
+                {loading ? t("register.submitting") : t("register.submit")}
             </button>
         </form>
     );

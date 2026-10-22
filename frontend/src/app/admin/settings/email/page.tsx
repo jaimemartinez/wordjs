@@ -150,8 +150,8 @@ export default function AccountMailSettingsPage() {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <Card variant="default" padding="lg" className="lg:col-span-2">
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+                <Card variant="default" padding="lg" className="xl:col-span-2">
                     <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6 flex items-center gap-2">
                         <i className="fa-solid fa-server text-blue-500"></i>{t("accountMail.smtpTitle")}
                     </h2>
@@ -159,8 +159,10 @@ export default function AccountMailSettingsPage() {
                         <div className="p-10 text-center text-gray-400 text-xs font-bold uppercase tracking-widest">{t("common.loading")}</div>
                     ) : (
                         <form onSubmit={save} className="space-y-5">
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div className="sm:col-span-2">
+                            {/* The port gets a fixed column wide enough for five digits next to its icon: a third of
+                                this form at tablet widths cut "2525" to "252". */}
+                            <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_9rem] gap-4">
+                                <div className="min-w-0">
                                     <Input label={t("accountMail.host")} icon="fa-server" value={host} onChange={(e) => setHost(e.target.value)} placeholder="smtp.example.com" autoComplete="off" />
                                 </div>
                                 <Input label={t("accountMail.port")} icon="fa-hashtag" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ""))} />

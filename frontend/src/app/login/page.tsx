@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { authApi, settingsApi } from "@/lib/api";
 import { currentReturnPath } from "@/lib/safeReturnPath";
-import { I18nProvider, useI18n } from "@/contexts/I18nContext";
+import { useI18n } from "@/contexts/I18nContext";
+import { apiErrorText } from "@/lib/apiErrorText";
 
 function LoginForm() {
     const [username, setUsername] = useState("");
@@ -57,7 +58,7 @@ function LoginForm() {
         } else if (result.success) {
             router.push(currentReturnPath() || "/admin");
         } else {
-            setError(result.error || t('login.invalidCredentials'));
+            setError(apiErrorText(t, result.apiError ?? result.error, 'login.invalidCredentials'));
         }
 
         setLoading(false);
@@ -72,7 +73,7 @@ function LoginForm() {
         if (result.success) {
             router.push(currentReturnPath() || "/admin");
         } else {
-            setError(result.error || t('mfa.invalidCode'));
+            setError(apiErrorText(t, result.apiError ?? result.error, 'mfa.invalidCode'));
         }
         setLoading(false);
     };
@@ -211,12 +212,12 @@ function LoginForm() {
     );
 }
 
+// The language provider comes from the sign-in shell (layout.tsx → _root/AuthScreen.tsx), seeded with
+// the language the server rendered in.
 export default function LoginPage() {
     return (
-        <I18nProvider>
-            <AuthProvider>
-                <LoginForm />
-            </AuthProvider>
-        </I18nProvider>
+        <AuthProvider>
+            <LoginForm />
+        </AuthProvider>
     );
 }

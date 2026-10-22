@@ -17,8 +17,9 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi } from "@/lib/api";
+import { useI18n } from "@/contexts/I18nContext";
 import {
-    VERIFY_COPY,
+    verifyCopy,
     classifyVerifyFailure,
     markVerifiedHere,
     parseVerifyLink,
@@ -37,6 +38,7 @@ const TONE_CLASS: Record<VerifyTone, string> = {
 
 function VerifyEmailInner() {
     const router = useRouter();
+    const { t } = useI18n();
     const params = useSearchParams();
     // La lista blanca se aplica en el render, no en el efecto: un enlace mal formado es un estado
     // INICIAL («enlace incompleto»), no algo que descubramos después de pintar otra cosa.
@@ -72,7 +74,7 @@ function VerifyEmailInner() {
         };
     }, [link]);
 
-    const copy = VERIFY_COPY[status];
+    const copy = verifyCopy(status, t);
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
@@ -82,7 +84,7 @@ function VerifyEmailInner() {
                         <i className="fa-solid fa-rocket text-blue-600"></i>
                         WordJS
                     </h1>
-                    <p className="text-gray-500 mt-2">Confirmación de correo</p>
+                    <p className="text-gray-500 mt-2">{t("verify.subtitle")}</p>
                 </div>
 
                 <div className="text-center space-y-4" role="status" aria-live="polite">
@@ -102,7 +104,7 @@ function VerifyEmailInner() {
 
                 <div className="mt-6 text-center">
                     <a href="/" className="text-sm text-gray-500 hover:text-blue-600">
-                        &larr; Volver al inicio
+                        &larr; {t("verify.backHome")}
                     </a>
                 </div>
             </div>

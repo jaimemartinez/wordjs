@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import DashboardLayoutClient from "./DashboardLayoutClient";
 import { declareSiteFromRequest, getSettings } from "@/lib/server-api";
 import { inter } from "../fonts";
+import { initialAdminLanguage } from "@/lib/adminLanguage.server";
 import RootDocument, { rootMetadata } from "../_root/RootDocument";
 import "./admin-globals.css";
 
@@ -55,6 +56,9 @@ export default async function DashboardLayout({
     // Multisite: the document of another site's admin is that site's (its lang, its fonts). The admin is
     // dynamic anyway, so reading the edge's header costs nothing here.
     await declareSiteFromRequest();
+    // The admin's language for this request (cookie, else the site's): the server renders in it and the
+    // client provider starts from it, so nothing switches after hydration.
+    const lang = await initialAdminLanguage();
     // inter.className re-applies the Inter face to the whole admin tree (the root <body> now
     // carries only inter.variable so the public tree can resolve fonts through wordjs-ui.css).
     // The wrapper covers every DashboardLayoutClient return path, including the fullscreen
@@ -68,9 +72,10 @@ export default async function DashboardLayout({
     // admin exactly as it is today instead of shipping a half-mirrored one; remove this the moment
     // the dashboard's utilities are audited. The public tree is unaffected.
     return RootDocument({
+        uiLanguage: lang,
         children: (
             <div dir="ltr" className={inter.className}>
-                <DashboardLayoutClient>{children}</DashboardLayoutClient>
+                <DashboardLayoutClient initialLanguage={lang}>{children}</DashboardLayoutClient>
             </div>
         ),
     });
