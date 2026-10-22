@@ -74,7 +74,7 @@ export default function AccountPage() {
             await refreshUser();
             addToast(t('account.avatar.updated'), "success");
         } catch (err: any) {
-            addToast(err?.message || t('account.avatar.error'), "error");
+            addToast(apiErrorText(t, err, 'account.avatar.error'), "error");
         } finally {
             setAvatarBusy(false);
         }
@@ -86,7 +86,7 @@ export default function AccountPage() {
             await usersApi.removeAvatar();
             await refreshUser();
         } catch (err: any) {
-            addToast(err?.message || t('account.avatar.error'), "error");
+            addToast(apiErrorText(t, err, 'account.avatar.error'), "error");
         } finally {
             setAvatarBusy(false);
         }
@@ -105,7 +105,7 @@ export default function AccountPage() {
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
         } catch (err: any) {
-            addToast(err?.message || t('account.export.error'), "error");
+            addToast(apiErrorText(t, err, 'account.export.error'), "error");
         } finally {
             setExporting(false);
         }
@@ -121,8 +121,8 @@ export default function AccountPage() {
             setTimeout(() => { logout(); router.replace("/login"); }, 900);
         } catch (err: any) {
             addToast(isBadCurrentPassword(err)
-                ? (err?.message || t('account.currentPassword'))
-                : (err?.message || t('account.delete.error')), "error");
+                ? apiErrorText(t, err, 'account.currentPassword')
+                : apiErrorText(t, err, 'account.delete.error'), "error");
             setDeleting(false);
         }
     };
