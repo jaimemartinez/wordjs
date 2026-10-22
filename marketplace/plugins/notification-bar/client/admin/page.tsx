@@ -15,6 +15,7 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
+import { useT } from "./i18n";
 
 const DEFAULT_CONFIG = {
     enabled: false,
@@ -44,11 +45,14 @@ const IconX = (props) => (
 );
 
 export default function NotificationBarAdminPage() {
+    const { t } = useT();
     const [cfg, setCfg] = useState(DEFAULT_CONFIG);
     const [reprompt, setReprompt] = useState(false);
     const [busy, setBusy] = useState(false);
     const [loaded, setLoaded] = useState(false);
     const [message, setMessage] = useState("");
+    // Error styling is decided by this flag, not by matching the (translated) message text.
+    const [messageIsError, setMessageIsError] = useState(false);
 
     const set = (patch) => setCfg((c) => ({ ...c, ...patch }));
 
@@ -58,7 +62,8 @@ export default function NotificationBarAdminPage() {
                 const c = await api("/plugin/notification-bar/config");
                 setCfg({ ...DEFAULT_CONFIG, ...c });
             } catch {
-                setMessage("Error: no se pudo cargar la configuración. ¿Está activo el plugin?");
+                setMessageIsError(true);
+                setMessage(t("msg.loadError"));
             } finally {
                 setLoaded(true);
             }
@@ -69,16 +74,19 @@ export default function NotificationBarAdminPage() {
         e.preventDefault();
         setBusy(true);
         setMessage("");
+        setMessageIsError(false);
         try {
             const saved = await apiPost("/plugin/notification-bar/config", { ...cfg, reprompt });
             setCfg({ ...DEFAULT_CONFIG, ...saved });
             const bumped = reprompt;
             setReprompt(false);
+            setMessageIsError(false);
             setMessage(bumped
-                ? `Guardado — la barra se volverá a mostrar a todos (versión ${saved.version}).`
-                : "Guardado — la configuración de la barra se actualizó.");
+                ? t("msg.savedReprompt", { version: saved.version })
+                : t("msg.saved"));
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            setMessageIsError(true);
+            setMessage(t("msg.saveError", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -90,9 +98,9 @@ export default function NotificationBarAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconMegaphone /></div>
                 <div>
-                    <h1 className="cf-title">Barra de Anuncios</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Aviso fijo en todo el sitio — mensaje, enlace, colores y programación
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
@@ -100,9 +108,9 @@ export default function NotificationBarAdminPage() {
 
             {/* Live preview reflecting the current (unsaved) form values */}
             <div className="cf-preview-head">
-                <span className="cf-label" style={{ marginBottom: 0 }}>Vista previa ({cfg.position === "bottom" ? "abajo del sitio" : "arriba del sitio"})</span>
+                <span className="cf-label" style={{ marginBottom: 0 }}>{t("preview.label", { where: cfg.position === "bottom" ? t("preview.bottom") : t("preview.top") })}</span>
                 <span className={`cf-status-pill ${cfg.enabled ? "is-on" : "is-off"}`}>
-                    {cfg.enabled ? "Activa" : "Desactivada"}
+                    {cfg.enabled ? t("status.on") : t("status.off")}
                 </span>
             </div>
             <div className="cf-preview-shell">
@@ -111,7 +119,7 @@ export default function NotificationBarAdminPage() {
                     style={{ backgroundColor: cfg.bgColor, color: cfg.textColor }}
                 >
                     <span>
-                        {cfg.message || "(escribe un mensaje abajo)"}
+                        {cfg.message || t("preview.empty")}
                         {cfg.linkUrl && cfg.linkLabel ? (
                             <span className="cf-preview-link">{cfg.linkLabel}</span>
                         ) : null}
@@ -127,18 +135,18 @@ export default function NotificationBarAdminPage() {
                 <div className="cf-editor-body" style={{ display: "grid", gap: "1.2rem" }}>
                     <label className="cf-check">
                         <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
-                        Mostrar la barra en el sitio
+                        {t("form.enabled")}
                     </label>
 
                     <div>
-                        <label className="cf-label" htmlFor="nb-message">Mensaje</label>
+                        <label className="cf-label" htmlFor="nb-message">{t("form.message")}</label>
                         <textarea
                             id="nb-message"
                             value={cfg.message}
                             onChange={(e) => set({ message: e.target.value })}
                             maxLength={300}
                             rows={2}
-                            placeholder="Ej.: Envío gratis en pedidos superiores a 50 € hasta el domingo"
+                            placeholder={t("form.messagePlaceholder")}
                             className="cf-input"
                         />
                         <p className="cf-counter">{(cfg.message || "").length}/300</p>
@@ -146,58 +154,58 @@ export default function NotificationBarAdminPage() {
 
                     <div className="cf-grid">
                         <div>
-                            <label className="cf-label" htmlFor="nb-link-label">Etiqueta del enlace (opcional)</label>
-                            <input id="nb-link-label" type="text" value={cfg.linkLabel} onChange={(e) => set({ linkLabel: e.target.value })} maxLength={60} placeholder="Ver ofertas" className="cf-input" />
+                            <label className="cf-label" htmlFor="nb-link-label">{t("form.linkLabel")}</label>
+                            <input id="nb-link-label" type="text" value={cfg.linkLabel} onChange={(e) => set({ linkLabel: e.target.value })} maxLength={60} placeholder={t("form.linkLabelPlaceholder")} className="cf-input" />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="nb-link-url">URL del enlace (opcional)</label>
-                            <input id="nb-link-url" type="text" value={cfg.linkUrl} onChange={(e) => set({ linkUrl: e.target.value })} placeholder="https://… o /pagina" className="cf-input" />
+                            <label className="cf-label" htmlFor="nb-link-url">{t("form.linkUrl")}</label>
+                            <input id="nb-link-url" type="text" value={cfg.linkUrl} onChange={(e) => set({ linkUrl: e.target.value })} placeholder={t("form.linkUrlPlaceholder")} className="cf-input" />
                         </div>
                     </div>
 
                     <div className="cf-grid-3">
                         <div>
-                            <label className="cf-label" htmlFor="nb-bg">Color de fondo</label>
+                            <label className="cf-label" htmlFor="nb-bg">{t("form.bgColor")}</label>
                             <div className="cf-color-row">
                                 <input id="nb-bg" type="color" value={cfg.bgColor} onChange={(e) => set({ bgColor: e.target.value })} className="cf-color-input" />
                                 <span className="cf-color-code">{cfg.bgColor}</span>
                             </div>
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="nb-text">Color del texto</label>
+                            <label className="cf-label" htmlFor="nb-text">{t("form.textColor")}</label>
                             <div className="cf-color-row">
                                 <input id="nb-text" type="color" value={cfg.textColor} onChange={(e) => set({ textColor: e.target.value })} className="cf-color-input" />
                                 <span className="cf-color-code">{cfg.textColor}</span>
                             </div>
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="nb-position">Posición</label>
+                            <label className="cf-label" htmlFor="nb-position">{t("form.position")}</label>
                             <select id="nb-position" value={cfg.position} onChange={(e) => set({ position: e.target.value })} className="cf-select">
-                                <option value="top">Superior (arriba)</option>
-                                <option value="bottom">Inferior (abajo)</option>
+                                <option value="top">{t("form.posTop")}</option>
+                                <option value="bottom">{t("form.posBottom")}</option>
                             </select>
                         </div>
                     </div>
 
                     <label className="cf-check">
                         <input type="checkbox" checked={cfg.dismissible} onChange={(e) => set({ dismissible: e.target.checked })} />
-                        Permitir cerrar la barra (botón ×)
+                        {t("form.dismissible")}
                     </label>
 
                     <div className="cf-grid">
                         <div>
-                            <label className="cf-label" htmlFor="nb-starts">Mostrar desde (opcional)</label>
+                            <label className="cf-label" htmlFor="nb-starts">{t("form.startsAt")}</label>
                             <input id="nb-starts" type="datetime-local" value={cfg.starts_at} onChange={(e) => set({ starts_at: e.target.value })} className="cf-input" />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="nb-ends">Mostrar hasta (opcional)</label>
+                            <label className="cf-label" htmlFor="nb-ends">{t("form.endsAt")}</label>
                             <input id="nb-ends" type="datetime-local" value={cfg.ends_at} onChange={(e) => set({ ends_at: e.target.value })} className="cf-input" />
                         </div>
                     </div>
                     {(cfg.starts_at || cfg.ends_at) ? (
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "-0.6rem" }}>
                             <button type="button" onClick={() => set({ starts_at: "", ends_at: "" })} className="cf-link-clear">
-                                <IconX /> Quitar programación
+                                <IconX /> {t("form.clearSchedule")}
                             </button>
                         </div>
                     ) : null}
@@ -206,23 +214,22 @@ export default function NotificationBarAdminPage() {
                         <label className="cf-check">
                             <input type="checkbox" checked={reprompt} onChange={(e) => setReprompt(e.target.checked)} />
                             <span>
-                                <span className="cf-nested-title">Volver a mostrar a quienes la cerraron</span>
+                                <span className="cf-nested-title">{t("form.reprompt")}</span>
                                 <span className="cf-help">
-                                    Al guardar se incrementa la versión del aviso (actual: v{cfg.version}), así la barra reaparece para
-                                    los visitantes que ya la habían cerrado. Úsalo cuando cambies el mensaje.
+                                    {t("form.repromptHelp", { version: cfg.version })}
                                 </span>
                             </span>
                         </label>
                     </div>
 
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem" }}>
-                        <button type="submit" className="cf-btn" disabled={busy || !loaded}>{busy ? "Guardando…" : "Guardar"}</button>
+                        <button type="submit" className="cf-btn" disabled={busy || !loaded}>{busy ? t("common.saving") : t("common.save")}</button>
                     </div>
 
                     {message && (
                         <div
-                            role={/^Error/i.test(message) ? "alert" : "status"}
-                            className={`cf-flash ${/^Error/i.test(message) ? "is-error" : "is-ok"}`}
+                            role={messageIsError ? "alert" : "status"}
+                            className={`cf-flash ${messageIsError ? "is-error" : "is-ok"}`}
                             style={{ marginBottom: 0 }}
                         >
                             {message}
@@ -232,9 +239,7 @@ export default function NotificationBarAdminPage() {
             </form>
 
             <p className="cf-footnote">
-                La barra se muestra en todas las páginas públicas mientras el plugin esté activo y "Mostrar la barra" esté
-                marcado. Si defines un rango de fechas, solo aparece dentro de ese rango. El cierre se recuerda en el
-                navegador del visitante hasta que incrementes la versión.
+                {t("footnote")}
             </p>
         </div>
     );

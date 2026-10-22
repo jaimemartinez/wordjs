@@ -1,7 +1,7 @@
 {
     "id": "testimonials",
     "name": "Testimonials",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Dynamic, database-backed testimonials with moderation (pending/approved) and an optional public submission form. Ships the Verso block \"Testimonials\" (carousel or grid) that pulls approved testimonials live from the database — unlike the core static \"Testimonial\" block, which is a single testimonial typed directly in the editor.",
     "author": "WordJS",
     "isolated": true,

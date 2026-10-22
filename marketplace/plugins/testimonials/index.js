@@ -18,7 +18,7 @@
 
 exports.metadata = {
     name: 'Testimonials',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Managed testimonials with moderation, optional public submissions and a Verso display block (carousel/grid).',
     author: 'WordJS',
 };

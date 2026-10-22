@@ -157,3 +157,54 @@ describe("the core members-only notice with registration closed", () => {
         expect(membersGateStrings({}).signupOpen).toBe(true);
     });
 });
+
+describe("mail-server: the mailbox toggle gives the address field back (M2-24)", () => {
+    const load = async () => (await import("../../../../marketplace/plugins/mail-server/client/UserFormExtension")) as any;
+    it("on fills <username>@<mail domain>; off restores what the administrator had", async () => {
+        const { mailboxEmailStep } = await load();
+        let memo = { generated: null, before: null };
+        let r = mailboxEmailStep(memo, { granted: true, username: "Ana", domain: "example.org", currentEmail: "ana@personal.test" });
+        expect(r.email).toBe("ana@example.org");
+        memo = r.memo;
+        r = mailboxEmailStep(memo, { granted: false, username: "Ana", domain: "example.org", currentEmail: "ana@example.org" });
+        expect(r.email).toBe("ana@personal.test");
+        // Then typing works on a clean field: nothing more is written.
+        expect(mailboxEmailStep(r.memo, { granted: false, username: "Ana", domain: "example.org", currentEmail: "x" }).email).toBeUndefined();
+    });
+    it("a username change while on keeps the original value to restore", async () => {
+        const { mailboxEmailStep } = await load();
+        let r = mailboxEmailStep({ generated: null, before: null }, { granted: true, username: "an", domain: "d.test", currentEmail: "" });
+        r = mailboxEmailStep(r.memo, { granted: true, username: "ana", domain: "d.test", currentEmail: "an@d.test" });
+        expect(r.email).toBe("ana@d.test");
+        r = mailboxEmailStep(r.memo, { granted: false, username: "ana", domain: "d.test", currentEmail: "ana@d.test" });
+        expect(r.email).toBe("");
+    });
+    it("an existing account's stored address is never taken away", async () => {
+        const { mailboxEmailStep } = await load();
+        // Loaded with the grant on and the mailbox address already stored: nothing generated here.
+        let r = mailboxEmailStep({ generated: null, before: null }, { granted: true, username: "ana", domain: "d.test", currentEmail: "ana@d.test" });
+        expect(r.email).toBeUndefined();
+        r = mailboxEmailStep(r.memo, { granted: false, username: "ana", domain: "d.test", currentEmail: "ana@d.test" });
+        expect(r.email).toBeUndefined();
+    });
+    it("an address the administrator edited after switching on is left alone", async () => {
+        const { mailboxEmailStep } = await load();
+        const on = mailboxEmailStep({ generated: null, before: null }, { granted: true, username: "ana", domain: "d.test", currentEmail: "old@x.test" });
+        expect(mailboxEmailStep(on.memo, { granted: false, username: "ana", domain: "d.test", currentEmail: "other@x.test" }).email).toBeUndefined();
+    });
+});
+
+describe("mail-server: the message body does not creep down after opening (FALLOS 126)", () => {
+    const src = fs.readFileSync(path.join(PLUGINS, "mail-server/client/admin/ui.tsx"), "utf8");
+    it("measures the message's own wrapper, not the frame's document", () => {
+        expect(src).toContain('<div id="wjs-mail-body">');
+        expect(src).toContain("#wjs-mail-body{display:flow-root}");
+        expect(src).toMatch(/getElementById\('wjs-mail-body'\)/);
+        // The document is at least as tall as the frame: measuring it (+ a margin) grew the frame every tick.
+        expect(src).not.toMatch(/documentElement\.scrollHeight/);
+        expect(src).not.toMatch(/body\.scrollHeight/);
+    });
+    it("compares with the current height through a ref, not a stale closure", () => {
+        expect(src).toMatch(/heightRef\.current = next;/);
+    });
+});

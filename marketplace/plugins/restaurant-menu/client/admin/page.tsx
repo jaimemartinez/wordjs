@@ -13,30 +13,32 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import {
     BASE, inputCls, labelCls, btnCls, btnGhostCls, cardCls, chipOnCls, chipOffCls,
-    TAGS, ALLERGENS, STATUS_META, PAY_META, DAY_ORDER, DAY_LABELS,
+    TAGS, ALLERGENS, STATUS_META, PAY_META, DAY_ORDER,
     fmtMoney, centsToInput, inputToCents, fmtDate, tagsToArray, Modal,
 } from "./shared";
 import { ModifiersTab, KitchenTab, TablesTab, ReservationsTab, ReportsTab } from "./v2tabs";
+import { useT } from "./i18n";
 
 // ---- module-level modals (NEVER define components inside components — focus loss) ----------------
 
 function SectionModal({ initial, busy, onSave, onClose }) {
+    const { t } = useT();
     const [name, setName] = useState(initial ? initial.name : "");
     const [nameEn, setNameEn] = useState(initial ? initial.name_en || "" : "");
     return (
-        <Modal title={initial ? "Editar sección" : "Nueva sección"} onClose={onClose}>
+        <Modal title={initial ? t("section.edit") : t("section.new")} onClose={onClose}>
             <form onSubmit={(e) => { e.preventDefault(); onSave({ name: name.trim(), name_en: nameEn.trim() }); }}>
                 <div className="mb-4">
-                    <label className={labelCls}>Nombre de la sección</label>
-                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Entradas, Platos fuertes, Bebidas…" className={inputCls} maxLength={120} required autoFocus />
+                    <label className={labelCls}>{t("section.name")}</label>
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("section.namePh")} className={inputCls} maxLength={120} required autoFocus />
                 </div>
                 <div className="mb-5">
-                    <label className={labelCls}>Nombre en inglés (opcional)</label>
+                    <label className={labelCls}>{t("common.nameEnOptional")}</label>
                     <input type="text" value={nameEn} onChange={(e) => setNameEn(e.target.value)} placeholder="Starters, Mains, Drinks…" className={inputCls} maxLength={120} />
                 </div>
                 <div className="flex justify-end gap-3">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy || !name.trim()} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                    <button type="button" onClick={onClose} className={btnGhostCls}>{t("common.cancel")}</button>
+                    <button type="submit" disabled={busy || !name.trim()} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                 </div>
             </form>
         </Modal>
@@ -44,6 +46,7 @@ function SectionModal({ initial, busy, onSave, onClose }) {
 }
 
 function ItemModal({ initial, sections, groups, defaultSectionId, busy, onSave, onClose }) {
+    const { t } = useT();
     const [name, setName] = useState(initial ? initial.name : "");
     const [description, setDescription] = useState(initial ? initial.description || "" : "");
     const [priceStr, setPriceStr] = useState(initial ? centsToInput(initial.price_cents) : "");
@@ -57,8 +60,8 @@ function ItemModal({ initial, sections, groups, defaultSectionId, busy, onSave, 
     const [prepStr, setPrepStr] = useState(initial && initial.prep_minutes ? String(initial.prep_minutes) : "");
     const [groupIds, setGroupIds] = useState(initial ? (initial.modifier_group_ids || []) : []);
 
-    const toggleTag = (id) => setTags((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
-    const toggleAllergen = (id) => setAllergens((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
+    const toggleTag = (id) => setTags((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    const toggleAllergen = (id) => setAllergens((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
     const toggleGroup = (id) => setGroupIds((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]));
 
     const submit = (e) => {
@@ -80,35 +83,35 @@ function ItemModal({ initial, sections, groups, defaultSectionId, busy, onSave, 
     };
 
     return (
-        <Modal title={initial ? "Editar plato" : "Nuevo plato"} onClose={onClose} wide>
+        <Modal title={initial ? t("item.edit") : t("item.new")} onClose={onClose} wide>
             <form onSubmit={submit} className="space-y-4">
                 <div className="grid sm:grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Nombre del plato</label>
-                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Pizza Margarita" className={inputCls} maxLength={160} required autoFocus />
+                        <label className={labelCls}>{t("item.name")}</label>
+                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("item.namePh")} className={inputCls} maxLength={160} required autoFocus />
                     </div>
                     <div>
-                        <label className={labelCls}>Nombre en inglés (opcional)</label>
+                        <label className={labelCls}>{t("common.nameEnOptional")}</label>
                         <input type="text" value={nameEn} onChange={(e) => setNameEn(e.target.value)} placeholder="Margherita Pizza" className={inputCls} maxLength={160} />
                     </div>
                 </div>
                 <div className="grid sm:grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Descripción</label>
-                        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ingredientes, presentación…" className={inputCls} rows={2} maxLength={1000} />
+                        <label className={labelCls}>{t("item.description")}</label>
+                        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("item.descriptionPh")} className={inputCls} rows={2} maxLength={1000} />
                     </div>
                     <div>
-                        <label className={labelCls}>Descripción en inglés (opcional)</label>
+                        <label className={labelCls}>{t("item.descriptionEn")}</label>
                         <textarea value={descriptionEn} onChange={(e) => setDescriptionEn(e.target.value)} placeholder="Ingredients…" className={inputCls} rows={2} maxLength={1000} />
                     </div>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                     <div>
-                        <label className={labelCls}>Precio</label>
+                        <label className={labelCls}>{t("item.price")}</label>
                         <input type="text" inputMode="decimal" value={priceStr} onChange={(e) => setPriceStr(e.target.value)} placeholder="0.00" className={inputCls} required />
                     </div>
                     <div>
-                        <label className={labelCls}>Sección</label>
+                        <label className={labelCls}>{t("item.section")}</label>
                         <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} className={inputCls}>
                             {sections.map((s) => (
                                 <option key={s.id} value={s.id}>{s.name}</option>
@@ -116,39 +119,39 @@ function ItemModal({ initial, sections, groups, defaultSectionId, busy, onSave, 
                         </select>
                     </div>
                     <div>
-                        <label className={labelCls}>Prep. (min, opcional)</label>
+                        <label className={labelCls}>{t("item.prep")}</label>
                         <input type="number" min={0} max={600} value={prepStr} onChange={(e) => setPrepStr(e.target.value)} placeholder="—" className={inputCls} />
                     </div>
                 </div>
                 <div>
-                    <label className={labelCls}>Foto (URL, opcional)</label>
-                    <input type="text" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="/uploads/2026/07/plato.jpg o https://…" className={inputCls} maxLength={600} />
+                    <label className={labelCls}>{t("item.photo")}</label>
+                    <input type="text" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder={t("item.photoPh")} className={inputCls} maxLength={600} />
                 </div>
                 <div>
-                    <label className={labelCls}>Etiquetas</label>
+                    <label className={labelCls}>{t("item.tags")}</label>
                     <div className="flex flex-wrap gap-2">
-                        {TAGS.map((t) => (
-                            <button key={t.id} type="button" onClick={() => toggleTag(t.id)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${tags.includes(t.id) ? chipOnCls : chipOffCls}`}>
-                                {t.emoji} {t.label}
+                        {TAGS.map((tag) => (
+                            <button key={tag.id} type="button" onClick={() => toggleTag(tag.id)}
+                                className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${tags.includes(tag.id) ? chipOnCls : chipOffCls}`}>
+                                {tag.emoji} {t(`tag.${tag.id}`)}
                             </button>
                         ))}
                     </div>
                 </div>
                 <div>
-                    <label className={labelCls}>Alérgenos (UE-14)</label>
+                    <label className={labelCls}>{t("item.allergens")}</label>
                     <div className="flex flex-wrap gap-1.5">
                         {ALLERGENS.map((a) => (
-                            <button key={a.id} type="button" onClick={() => toggleAllergen(a.id)} title={a.label}
+                            <button key={a.id} type="button" onClick={() => toggleAllergen(a.id)} title={t(`allergen.${a.id}`)}
                                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold border-2 transition-all ${allergens.includes(a.id) ? "bg-amber-500 text-white border-amber-500" : chipOffCls}`}>
-                                {a.emoji} {a.label}
+                                {a.emoji} {t(`allergen.${a.id}`)}
                             </button>
                         ))}
                     </div>
                 </div>
                 {groups && groups.length > 0 ? (
                     <div>
-                        <label className={labelCls}>Grupos de opciones (modificadores)</label>
+                        <label className={labelCls}>{t("item.groups")}</label>
                         <div className="flex flex-wrap gap-2">
                             {groups.map((g) => (
                                 <button key={g.id} type="button" onClick={() => toggleGroup(g.id)}
@@ -157,12 +160,12 @@ function ItemModal({ initial, sections, groups, defaultSectionId, busy, onSave, 
                                 </button>
                             ))}
                         </div>
-                        <p className="text-[11px] text-gray-400 mt-1.5">Se crean en la pestaña Modificadores (ej. Tamaño, Extras).</p>
+                        <p className="text-[11px] text-gray-400 mt-1.5">{t("item.groupsHelp")}</p>
                     </div>
                 ) : null}
                 <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy || !name.trim() || inputToCents(priceStr) === null} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                    <button type="button" onClick={onClose} className={btnGhostCls}>{t("common.cancel")}</button>
+                    <button type="submit" disabled={busy || !name.trim() || inputToCents(priceStr) === null} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                 </div>
             </form>
         </Modal>
@@ -170,22 +173,25 @@ function ItemModal({ initial, sections, groups, defaultSectionId, busy, onSave, 
 }
 
 function OrderDetailModal({ order, symbol, busy, onStatus, onPaid, onDelete, onClose }) {
+    const { t, locale } = useT();
     const meta = STATUS_META[order.status] || STATUS_META.new;
+    const statusKey = STATUS_META[order.status] ? order.status : "new";
     const phoneDigits = String(order.customer_phone || "").replace(/\D/g, "");
     const pay = PAY_META[order.payment_method] || PAY_META.whatsapp;
+    const payKey = PAY_META[order.payment_method] ? order.payment_method : "whatsapp";
     const lineTotal = (it) => (Number.isFinite(it.line_cents) ? it.line_cents : it.price_cents * it.qty);
     return (
-        <Modal title={`Pedido #${order.id}`} onClose={onClose}>
+        <Modal title={t("order.title", { id: order.id })} onClose={onClose}>
             <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
-                    <span className={`px-3 py-1 rounded-full text-xs font-black border ${meta.color}`}>{meta.label}</span>
+                    <span className={`px-3 py-1 rounded-full text-xs font-black border ${meta.color}`}>{t(`status.${statusKey}`)}</span>
                     {order.table_label ? (
                         <span className="px-3 py-1 rounded-full text-xs font-black bg-purple-50 text-purple-700 border border-purple-200">🪑 {order.table_label}</span>
                     ) : null}
                     <span className={`px-3 py-1 rounded-full text-xs font-black border ${order.payment_status === "paid" ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
-                        {pay.emoji} {pay.label}{order.payment_status === "paid" ? " · PAGADO ✓" : order.payment_status === "pending" ? " · pendiente" : ""}
+                        {pay.emoji} {t(`pay.${payKey}`)}{order.payment_status === "paid" ? t("order.paidSuffix") : order.payment_status === "pending" ? t("order.pendingSuffix") : ""}
                     </span>
-                    <span className="text-xs text-gray-400 font-bold">{fmtDate(order.created_at)}</span>
+                    <span className="text-xs text-gray-400 font-bold">{fmtDate(order.created_at, locale)}</span>
                 </div>
                 <div className="bg-gray-50 rounded-2xl p-4 text-sm space-y-1">
                     <p><span className="font-black">{order.customer_name}</span></p>
@@ -198,13 +204,13 @@ function OrderDetailModal({ order, symbol, busy, onStatus, onPaid, onDelete, onC
                         </p>
                     ) : null}
                     <p className="text-gray-500">
-                        {order.delivery_type === "table" ? `🪑 En mesa: ${order.table_label || "—"}`
-                            : order.delivery_type === "delivery" ? `🛵 Domicilio: ${order.customer_address || "—"}`
-                            : "🏪 Recoger en local"}
+                        {order.delivery_type === "table" ? t("order.atTable", { table: order.table_label || "—" })
+                            : order.delivery_type === "delivery" ? t("order.deliveryTo", { address: order.customer_address || "—" })
+                            : t("order.pickupAtStore")}
                     </p>
                 </div>
                 <div>
-                    <p className={labelCls}>Productos</p>
+                    <p className={labelCls}>{t("order.products")}</p>
                     <div className="divide-y divide-gray-100 border border-gray-100 rounded-2xl overflow-hidden">
                         {(Array.isArray(order.items) ? order.items : []).map((it, i) => (
                             <div key={i} className="px-4 py-2.5 text-sm">
@@ -223,22 +229,22 @@ function OrderDetailModal({ order, symbol, busy, onStatus, onPaid, onDelete, onC
                     </div>
                 </div>
                 <div className="text-sm space-y-1">
-                    <div className="flex justify-between text-gray-500"><span>Subtotal</span><span className="tabular-nums">{fmtMoney(order.subtotal_cents, symbol)}</span></div>
+                    <div className="flex justify-between text-gray-500"><span>{t("order.subtotal")}</span><span className="tabular-nums">{fmtMoney(order.subtotal_cents, symbol)}</span></div>
                     {order.delivery_cents > 0 ? (
-                        <div className="flex justify-between text-gray-500"><span>Envío</span><span className="tabular-nums">{fmtMoney(order.delivery_cents, symbol)}</span></div>
+                        <div className="flex justify-between text-gray-500"><span>{t("order.shipping")}</span><span className="tabular-nums">{fmtMoney(order.delivery_cents, symbol)}</span></div>
                     ) : null}
-                    <div className="flex justify-between font-black text-base"><span>Total</span><span className="tabular-nums">{fmtMoney(order.total_cents, symbol)}</span></div>
+                    <div className="flex justify-between font-black text-base"><span>{t("order.total")}</span><span className="tabular-nums">{fmtMoney(order.total_cents, symbol)}</span></div>
                 </div>
                 {order.notes ? (
                     <div className="bg-amber-50 text-amber-700 rounded-2xl px-4 py-3 text-sm">📝 {order.notes}</div>
                 ) : null}
                 <div>
-                    <p className={labelCls}>Cambiar estado</p>
+                    <p className={labelCls}>{t("order.changeStatus")}</p>
                     <div className="flex flex-wrap gap-2">
                         {Object.keys(STATUS_META).map((s) => (
                             <button key={s} type="button" disabled={busy || order.status === s} onClick={() => onStatus(order.id, s)}
                                 className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all disabled:opacity-40 ${order.status === s ? chipOnCls : chipOffCls}`}>
-                                {STATUS_META[s].label}
+                                {t(`status.${s}`)}
                             </button>
                         ))}
                     </div>
@@ -247,11 +253,11 @@ function OrderDetailModal({ order, symbol, busy, onStatus, onPaid, onDelete, onC
                     <div className="flex gap-2">
                         <button type="button" disabled={busy} onClick={() => onPaid(order.id, order.payment_status !== "paid")}
                             className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all disabled:opacity-50 ${order.payment_status === "paid" ? "bg-gray-100 text-gray-600 hover:bg-gray-200" : "bg-green-600 text-white hover:bg-green-700"}`}>
-                            {order.payment_status === "paid" ? "Desmarcar pago" : "💵 Marcar pagado"}
+                            {order.payment_status === "paid" ? t("order.unmarkPaid") : t("order.markPaid")}
                         </button>
-                        <button type="button" disabled={busy} onClick={() => onDelete(order.id)} className="text-xs font-bold text-red-500 hover:text-red-700 px-2">Eliminar pedido</button>
+                        <button type="button" disabled={busy} onClick={() => onDelete(order.id)} className="text-xs font-bold text-red-500 hover:text-red-700 px-2">{t("order.delete")}</button>
                     </div>
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cerrar</button>
+                    <button type="button" onClick={onClose} className={btnGhostCls}>{t("common.close")}</button>
                 </div>
             </div>
         </Modal>
@@ -261,6 +267,7 @@ function OrderDetailModal({ order, symbol, busy, onStatus, onPaid, onDelete, onC
 // ---- configuración -------------------------------------------------------------------------------
 
 function HoursEditor({ weekHours, onChange }) {
+    const { t } = useT();
     const setRange = (day, idx, pos, value) => {
         const next = { ...weekHours };
         const ranges = (next[String(day)] || []).map((r) => r.slice());
@@ -293,9 +300,9 @@ function HoursEditor({ weekHours, onChange }) {
                 const ranges = weekHours[String(day)] || [];
                 return (
                     <div key={day} className="flex items-center gap-3 flex-wrap bg-gray-50/60 rounded-2xl px-4 py-2.5">
-                        <span className="w-24 text-xs font-black text-gray-700">{DAY_LABELS[day]}</span>
+                        <span className="w-24 text-xs font-black text-gray-700">{t(`day.${day}`)}</span>
                         {ranges.length === 0 ? (
-                            <span className="text-xs font-bold text-red-400 uppercase tracking-wider">Cerrado</span>
+                            <span className="text-xs font-bold text-red-400 uppercase tracking-wider">{t("hours.closed")}</span>
                         ) : (
                             ranges.map((r, i) => (
                                 <span key={i} className="flex items-center gap-1.5">
@@ -306,18 +313,19 @@ function HoursEditor({ weekHours, onChange }) {
                                 </span>
                             ))
                         )}
-                        <button type="button" onClick={() => addRange(day)} disabled={ranges.length >= 3} className="text-[11px] font-black uppercase tracking-wider text-gray-400 hover:text-gray-900 disabled:opacity-30">+ Horario</button>
+                        <button type="button" onClick={() => addRange(day)} disabled={ranges.length >= 3} className="text-[11px] font-black uppercase tracking-wider text-gray-400 hover:text-gray-900 disabled:opacity-30">{t("hours.addRange")}</button>
                         <div className="flex-1"></div>
-                        <button type="button" onClick={() => copyToAll(day)} title="Copiar este horario a todos los días" className="text-[10px] font-bold text-gray-300 hover:text-gray-600">copiar a todos</button>
+                        <button type="button" onClick={() => copyToAll(day)} title={t("hours.copyAllTitle")} className="text-[10px] font-bold text-gray-300 hover:text-gray-600">{t("hours.copyAll")}</button>
                     </div>
                 );
             })}
-            <p className="text-[11px] text-gray-400">Un cierre posterior a medianoche se escribe tal cual (ej. 20:00 – 02:00).</p>
+            <p className="text-[11px] text-gray-400">{t("hours.help")}</p>
         </div>
     );
 }
 
 function StripeKeyBox({ flash }) {
+    const { t } = useT();
     const [hasKey, setHasKey] = useState(null);
     const [key, setKey] = useState("");
     const [busy, setBusy] = useState(false);
@@ -331,9 +339,9 @@ function StripeKeyBox({ flash }) {
             const out = await apiPost(`${BASE}/stripe-key`, { key: value });
             setHasKey(out.hasKey);
             setKey("");
-            flash(value ? "Clave de Stripe guardada." : "Clave de Stripe eliminada.");
+            flash(value ? t("stripe.saved") : t("stripe.removed"));
         } catch (e) {
-            flash(`Error: ${e?.message || e}`);
+            flash(t("common.error", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -341,19 +349,20 @@ function StripeKeyBox({ flash }) {
     return (
         <div className="bg-gray-50/60 rounded-2xl px-5 py-4 space-y-3">
             <p className="text-xs font-bold text-gray-500">
-                Clave secreta de Stripe (sk_test_… / sk_live_…). Solo escritura: nunca se vuelve a mostrar.{" "}
-                {hasKey === null ? "" : hasKey ? <span className="text-green-600 font-black">● Configurada</span> : <span className="text-gray-400 font-black">○ Sin configurar</span>}
+                {t("stripe.help")}{" "}
+                {hasKey === null ? "" : hasKey ? <span className="text-green-600 font-black">{t("stripe.configured")}</span> : <span className="text-gray-400 font-black">{t("stripe.notConfigured")}</span>}
             </p>
             <div className="flex gap-2 flex-wrap">
                 <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk_test_…" className={`${inputCls} flex-1 min-w-[220px]`} autoComplete="off" />
-                <button type="button" disabled={busy || !key.trim()} onClick={() => save(key.trim())} className={btnCls}>Guardar clave</button>
-                {hasKey ? <button type="button" disabled={busy} onClick={() => save("")} className={btnGhostCls}>Quitar</button> : null}
+                <button type="button" disabled={busy || !key.trim()} onClick={() => save(key.trim())} className={btnCls}>{t("stripe.saveKey")}</button>
+                {hasKey ? <button type="button" disabled={busy} onClick={() => save("")} className={btnGhostCls}>{t("stripe.remove")}</button> : null}
             </div>
         </div>
     );
 }
 
 function ConfigForm({ initial, busy, onSave, flash }) {
+    const { t } = useT();
     const [orderingEnabled, setOrderingEnabled] = useState(!!initial.orderingEnabled);
     const [whatsappNumber, setWhatsappNumber] = useState(initial.whatsappNumber || "");
     const [deliveryStr, setDeliveryStr] = useState(centsToInput(initial.deliveryCents));
@@ -417,101 +426,101 @@ function ConfigForm({ initial, busy, onSave, flash }) {
     return (
         <form onSubmit={submit} className="space-y-5">
             <div className={`${cardCls} p-6 sm:p-8 space-y-5`}>
-                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">Pedidos y entrega</h3>
-                {toggleRow(orderingEnabled, setOrderingEnabled, "Pedidos en línea", "Habilita el carrito y el envío de pedidos desde el bloque del menú.")}
+                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">{t("config.ordersTitle")}</h3>
+                {toggleRow(orderingEnabled, setOrderingEnabled, t("config.onlineOrders"), t("config.onlineOrdersHint"))}
                 <div className="grid sm:grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Número de WhatsApp</label>
-                        <input type="text" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder="Ej. 573001234567 (con código de país)" className={inputCls} />
-                        <p className="text-[11px] text-gray-400 mt-1.5">Solo dígitos, con código de país. El cliente enviará ahí el resumen del pedido.</p>
+                        <label className={labelCls}>{t("config.whatsapp")}</label>
+                        <input type="text" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder={t("config.whatsappPh")} className={inputCls} />
+                        <p className="text-[11px] text-gray-400 mt-1.5">{t("config.whatsappHelp")}</p>
                     </div>
                     <div>
-                        <label className={labelCls}>Email de notificación (opcional)</label>
-                        <input type="email" value={notifyEmail} onChange={(e) => setNotifyEmail(e.target.value)} placeholder="pedidos@mirestaurante.com" className={inputCls} />
-                        <p className="text-[11px] text-gray-400 mt-1.5">Se envía un correo por cada pedido o reserva nuevos.</p>
+                        <label className={labelCls}>{t("config.notifyEmail")}</label>
+                        <input type="email" value={notifyEmail} onChange={(e) => setNotifyEmail(e.target.value)} placeholder={t("config.notifyEmailPh")} className={inputCls} />
+                        <p className="text-[11px] text-gray-400 mt-1.5">{t("config.notifyEmailHelp")}</p>
                     </div>
                 </div>
                 <div className="grid sm:grid-cols-3 gap-4">
                     <div>
-                        <label className={labelCls}>Costo de domicilio</label>
+                        <label className={labelCls}>{t("config.deliveryCost")}</label>
                         <input type="text" inputMode="decimal" value={deliveryStr} onChange={(e) => setDeliveryStr(e.target.value)} placeholder="0.00" className={inputCls} />
                     </div>
                     <div>
-                        <label className={labelCls}>Símbolo de moneda</label>
+                        <label className={labelCls}>{t("config.currencySymbol")}</label>
                         <input type="text" value={currencySymbol} onChange={(e) => setCurrencySymbol(e.target.value)} placeholder="$" maxLength={5} className={inputCls} />
                     </div>
                     <div>
-                        <label className={labelCls}>Código ISO (para Stripe)</label>
+                        <label className={labelCls}>{t("config.currencyCode")}</label>
                         <input type="text" value={currencyCode} onChange={(e) => setCurrencyCode(e.target.value)} placeholder="usd, eur, cop…" maxLength={3} className={inputCls} />
                     </div>
                 </div>
                 <div className="grid sm:grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Etiqueta "recoger"</label>
+                        <label className={labelCls}>{t("config.pickupLabel")}</label>
                         <input type="text" value={pickupLabel} onChange={(e) => setPickupLabel(e.target.value)} maxLength={60} className={inputCls} />
                     </div>
                     <div>
-                        <label className={labelCls}>Etiqueta "domicilio"</label>
+                        <label className={labelCls}>{t("config.deliveryLabel")}</label>
                         <input type="text" value={deliveryLabel} onChange={(e) => setDeliveryLabel(e.target.value)} maxLength={60} className={inputCls} />
                     </div>
                 </div>
             </div>
 
             <div className={`${cardCls} p-6 sm:p-8 space-y-5`}>
-                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">Horario de apertura</h3>
-                {toggleRow(hoursEnabled, setHoursEnabled, "Aceptar pedidos solo en horario", "Fuera del horario el bloque muestra \"cerrado\" y rechaza pedidos.")}
+                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">{t("config.hoursTitle")}</h3>
+                {toggleRow(hoursEnabled, setHoursEnabled, t("config.hoursOnly"), t("config.hoursOnlyHint"))}
                 <div className="grid sm:grid-cols-3 gap-4">
                     <div>
-                        <label className={labelCls}>Zona horaria (IANA)</label>
-                        <input type="text" list="rm-tz" value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="America/Bogota (vacío = servidor)" className={inputCls} />
+                        <label className={labelCls}>{t("config.timezone")}</label>
+                        <input type="text" list="rm-tz" value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder={t("config.timezonePh")} className={inputCls} />
                         <datalist id="rm-tz">
                             {["America/Bogota", "America/Mexico_City", "America/Argentina/Buenos_Aires", "America/Santiago", "America/Lima", "Europe/Madrid", "America/New_York", "America/Los_Angeles"].map((z) => <option key={z} value={z} />)}
                         </datalist>
                     </div>
                     <div>
-                        <label className={labelCls}>Preparación por defecto (min)</label>
+                        <label className={labelCls}>{t("config.prepDefault")}</label>
                         <input type="number" min={0} max={600} value={prepStr} onChange={(e) => setPrepStr(e.target.value)} className={inputCls} />
                     </div>
                     <div>
-                        <label className={labelCls}>Mensaje al estar cerrado (opcional)</label>
-                        <input type="text" value={closedMessage} onChange={(e) => setClosedMessage(e.target.value)} maxLength={300} placeholder="Automático si se deja vacío" className={inputCls} />
+                        <label className={labelCls}>{t("config.closedMessage")}</label>
+                        <input type="text" value={closedMessage} onChange={(e) => setClosedMessage(e.target.value)} maxLength={300} placeholder={t("config.closedMessagePh")} className={inputCls} />
                     </div>
                 </div>
                 <HoursEditor weekHours={weekHours} onChange={setWeekHours} />
             </div>
 
             <div className={`${cardCls} p-6 sm:p-8 space-y-5`}>
-                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">Pedidos en mesa (QR)</h3>
-                {toggleRow(tableOrderingEnabled, setTableOrderingEnabled, "Pedidos desde la mesa", "Los clientes escanean el QR de su mesa y el pedido llega directo a Cocina.")}
+                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">{t("config.tableTitle")}</h3>
+                {toggleRow(tableOrderingEnabled, setTableOrderingEnabled, t("config.tableOrders"), t("config.tableOrdersHint"))}
                 <div>
-                    <label className={labelCls}>URL de la página del menú</label>
-                    <input type="text" value={menuPageUrl} onChange={(e) => setMenuPageUrl(e.target.value)} placeholder="/menu o https://mirestaurante.com/menu" maxLength={600} className={inputCls} />
-                    <p className="text-[11px] text-gray-400 mt-1.5">La página pública donde está el bloque del menú — los QR de las mesas apuntan ahí.</p>
+                    <label className={labelCls}>{t("config.menuPageUrl")}</label>
+                    <input type="text" value={menuPageUrl} onChange={(e) => setMenuPageUrl(e.target.value)} placeholder={t("config.menuPageUrlPh")} maxLength={600} className={inputCls} />
+                    <p className="text-[11px] text-gray-400 mt-1.5">{t("config.menuPageUrlHelp")}</p>
                 </div>
             </div>
 
             <div className={`${cardCls} p-6 sm:p-8 space-y-5`}>
-                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">Reservas</h3>
-                {toggleRow(reservationsEnabled, setReservationsEnabled, "Reservas en línea", "El bloque muestra el botón \"Reservar mesa\". Las confirmas en la pestaña Reservas.")}
+                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">{t("config.reservationsTitle")}</h3>
+                {toggleRow(reservationsEnabled, setReservationsEnabled, t("config.onlineReservations"), t("config.onlineReservationsHint"))}
                 <div className="max-w-xs">
-                    <label className={labelCls}>Máximo de personas por reserva</label>
+                    <label className={labelCls}>{t("config.partyMax")}</label>
                     <input type="number" min={1} max={100} value={partyMax} onChange={(e) => setPartyMax(e.target.value)} className={inputCls} />
                 </div>
             </div>
 
             <div className={`${cardCls} p-6 sm:p-8 space-y-5`}>
-                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">Pago en línea (Stripe)</h3>
-                {toggleRow(payOnlineEnabled, setPayOnlineEnabled, "Ofrecer pago con tarjeta", "Además de WhatsApp/efectivo. Requiere la clave secreta de Stripe.")}
+                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">{t("config.payTitle")}</h3>
+                {toggleRow(payOnlineEnabled, setPayOnlineEnabled, t("config.payCard"), t("config.payCardHint"))}
                 <StripeKeyBox flash={flash} />
             </div>
 
             <div className={`${cardCls} p-6 sm:p-8 space-y-5`}>
-                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">Idiomas</h3>
-                {toggleRow(i18nEnabled, setI18nEnabled, "Menú bilingüe (es/en)", "El bloque muestra un selector de idioma y usa los nombres en inglés cuando existan.")}
+                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest">{t("config.languagesTitle")}</h3>
+                {toggleRow(i18nEnabled, setI18nEnabled, t("config.bilingual"), t("config.bilingualHint"))}
             </div>
 
             <div className="flex justify-end">
-                <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar configuración"}</button>
+                <button type="submit" disabled={busy} className={btnCls}>{busy ? t("common.saving") : t("config.save")}</button>
             </div>
         </form>
     );
@@ -520,6 +529,7 @@ function ConfigForm({ initial, busy, onSave, flash }) {
 // ---- page ------------------------------------------------------------------------------------------
 
 export default function RestaurantAdminPage() {
+    const { t, locale } = useT();
     const [tab, setTab] = useState("menu"); // menu | modifiers | orders | kitchen | tables | reservations | reports | config
     const [sections, setSections] = useState(null);
     const [groups, setGroups] = useState([]);            // modifier groups (for the item modal)
@@ -529,6 +539,7 @@ export default function RestaurantAdminPage() {
     const [showHistory, setShowHistory] = useState(false);
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState("");
+    const [messageIsError, setMessageIsError] = useState(false);
 
     const [sectionModal, setSectionModal] = useState(null);   // {section|null}
     const [itemModal, setItemModal] = useState(null);         // {item|null, sectionId}
@@ -537,8 +548,10 @@ export default function RestaurantAdminPage() {
 
     const symbol = (config && config.currencySymbol) || "$";
 
+    // Error styling is keyed off the message prefix in every language ("Error" es/en, "Erro" pt).
     const flash = (msg) => {
         setMessage(msg);
+        setMessageIsError(/Error|Erro/i.test(String(msg)));
         if (typeof window !== "undefined") {
             if (flashTimer.current) window.clearTimeout(flashTimer.current);
             flashTimer.current = window.setTimeout(() => setMessage(""), 4000);
@@ -564,7 +577,7 @@ export default function RestaurantAdminPage() {
             });
         } catch (e) {
             setSections([]);
-            flash(`Error al cargar el menú: ${e?.message || e}`);
+            flash(t("msg.menuLoadError", { msg: e?.message || e }));
         }
     };
     const loadGroups = async () => {
@@ -598,7 +611,7 @@ export default function RestaurantAdminPage() {
             await fn();
             if (okMsg) flash(okMsg);
         } catch (e) {
-            flash(`Error: ${e?.message || e}`);
+            flash(t("common.error", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -610,7 +623,7 @@ export default function RestaurantAdminPage() {
         else await apiPost(`${BASE}/sections`, payload);
         setSectionModal(null);
         await loadMenu();
-    }, "Sección guardada.");
+    }, t("msg.sectionSaved"));
     const toggleSectionActive = (s) => run(async () => {
         await apiPut(`${BASE}/sections/${s.id}`, { is_active: !s.is_active });
         await loadMenu();
@@ -620,11 +633,11 @@ export default function RestaurantAdminPage() {
         await loadMenu();
     });
     const deleteSection = (s) => {
-        if (typeof window !== "undefined" && !window.confirm(`¿Eliminar la sección "${s.name}" y todos sus platos?`)) return;
+        if (typeof window !== "undefined" && !window.confirm(t("msg.sectionDeleteConfirm", { name: s.name }))) return;
         run(async () => {
             await apiDelete(`${BASE}/sections/${s.id}`);
             await loadMenu();
-        }, "Sección eliminada.");
+        }, t("msg.sectionDeleted"));
     };
 
     // --- item actions ---
@@ -641,14 +654,14 @@ export default function RestaurantAdminPage() {
         setItemModal(null);
         await loadMenu();
         await loadGroups(); // attach counters
-    }, "Plato guardado.");
+    }, t("msg.itemSaved"));
     const toggleItemAvailable = (it) => run(async () => {
         await apiPut(`${BASE}/items/${it.id}`, { is_available: !it.is_available });
         await loadMenu();
     });
     const toggleItemTag = (it, tagId) => run(async () => {
         const current = tagsToArray(it.tags);
-        const next = current.includes(tagId) ? current.filter((t) => t !== tagId) : [...current, tagId];
+        const next = current.includes(tagId) ? current.filter((x) => x !== tagId) : [...current, tagId];
         await apiPut(`${BASE}/items/${it.id}`, { tags: next.join(",") });
         await loadMenu();
     });
@@ -657,11 +670,11 @@ export default function RestaurantAdminPage() {
         await loadMenu();
     });
     const deleteItem = (it) => {
-        if (typeof window !== "undefined" && !window.confirm(`¿Eliminar el plato "${it.name}"?`)) return;
+        if (typeof window !== "undefined" && !window.confirm(t("msg.itemDeleteConfirm", { name: it.name }))) return;
         run(async () => {
             await apiDelete(`${BASE}/items/${it.id}`);
             await loadMenu();
-        }, "Plato eliminado.");
+        }, t("msg.itemDeleted"));
     };
 
     // --- order actions ---
@@ -676,19 +689,19 @@ export default function RestaurantAdminPage() {
         setSelectedOrder((prev) => (prev && prev.id === id ? { ...prev, payment_status: paid ? "paid" : "none" } : prev));
     });
     const deleteOrder = (id) => {
-        if (typeof window !== "undefined" && !window.confirm("¿Eliminar este pedido definitivamente?")) return;
+        if (typeof window !== "undefined" && !window.confirm(t("msg.orderDeleteConfirm"))) return;
         run(async () => {
             await apiDelete(`${BASE}/orders/${id}`);
             setSelectedOrder(null);
             await loadOrders();
-        }, "Pedido eliminado.");
+        }, t("msg.orderDeleted"));
     };
 
     // --- config actions ---
     const saveConfig = (payload) => run(async () => {
         const next = await apiPost(`${BASE}/config`, payload);
         setConfig(next);
-    }, "Configuración guardada.");
+    }, t("msg.configSaved"));
 
     const counts = (ordersData && ordersData.counts) || {};
     const orders = (ordersData && ordersData.orders) || [];
@@ -708,9 +721,9 @@ export default function RestaurantAdminPage() {
     );
 
     const orderCard = (o) => {
-        const nextAction = o.status === "new" ? { status: "preparing", label: "Preparar →" }
-            : o.status === "preparing" ? { status: "ready", label: "Listo →" }
-            : o.status === "ready" ? { status: "delivered", label: "Entregado ✓" } : null;
+        const nextAction = o.status === "new" ? { status: "preparing", label: t("order.next.prepare") }
+            : o.status === "preparing" ? { status: "ready", label: t("order.next.ready") }
+            : o.status === "ready" ? { status: "delivered", label: t("order.next.delivered") } : null;
         const pay = PAY_META[o.payment_method] || PAY_META.whatsapp;
         return (
             <div key={o.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
@@ -720,10 +733,10 @@ export default function RestaurantAdminPage() {
                         <span className="font-black text-sm tabular-nums">{fmtMoney(o.total_cents, symbol)}</span>
                     </div>
                     <p className="text-[11px] text-gray-400 font-bold mt-0.5">
-                        {o.table_label ? `🪑 ${o.table_label}` : o.delivery_type === "delivery" ? "🛵 Domicilio" : "🏪 Recoger"}
-                        {" · "}{(Array.isArray(o.items) ? o.items : []).reduce((n, it) => n + (it.qty || 0), 0)} items
+                        {o.table_label ? `🪑 ${o.table_label}` : o.delivery_type === "delivery" ? `🛵 ${t("order.deliveryShort")}` : `🏪 ${t("order.pickupShort")}`}
+                        {" · "}{t("order.itemsCount", { n: (Array.isArray(o.items) ? o.items : []).reduce((n, it) => n + (it.qty || 0), 0) })}
                         {" · "}{pay.emoji}{o.payment_status === "paid" ? " ✓" : ""}
-                        {" · "}{fmtDate(o.created_at)}
+                        {" · "}{fmtDate(o.created_at, locale)}
                     </p>
                 </button>
                 <div className="flex gap-2 mt-3">
@@ -734,7 +747,7 @@ export default function RestaurantAdminPage() {
                     ) : null}
                     {(o.status === "new" || o.status === "preparing") ? (
                         <button type="button" disabled={busy} onClick={() => setOrderStatus(o.id, "cancelled")} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-[11px] uppercase tracking-wider transition-all disabled:opacity-50">
-                            Cancelar
+                            {t("common.cancel")}
                         </button>
                     ) : null}
                 </div>
@@ -745,39 +758,39 @@ export default function RestaurantAdminPage() {
     return (
         <div className="max-w-6xl mx-auto p-4 sm:p-8">
             <div className="mb-6">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Restaurante</h1>
+                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">{t("app.title")}</h1>
                 <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Menú · modificadores · pedidos en línea y en mesa · reservas · cocina en vivo · informes
+                    {t("app.subtitle")}
                 </p>
             </div>
 
             <div className="flex flex-wrap gap-2 mb-6">
-                {tabBtn("menu", "Menú", 0)}
-                {tabBtn("modifiers", "Modificadores", 0)}
-                {tabBtn("orders", "Pedidos", counts.new || 0)}
-                {tabBtn("kitchen", "Cocina", (counts.new || 0) + (counts.preparing || 0))}
-                {tabBtn("tables", "Mesas", 0)}
-                {tabBtn("reservations", "Reservas", 0)}
-                {tabBtn("reports", "Informes", 0)}
-                {tabBtn("config", "Configuración", 0)}
+                {tabBtn("menu", t("tab.menu"), 0)}
+                {tabBtn("modifiers", t("tab.modifiers"), 0)}
+                {tabBtn("orders", t("tab.orders"), counts.new || 0)}
+                {tabBtn("kitchen", t("tab.kitchen"), (counts.new || 0) + (counts.preparing || 0))}
+                {tabBtn("tables", t("tab.tables"), 0)}
+                {tabBtn("reservations", t("tab.reservations"), 0)}
+                {tabBtn("reports", t("tab.reports"), 0)}
+                {tabBtn("config", t("tab.config"), 0)}
             </div>
 
             {message ? (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-5 ${/Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>{message}</div>
+                <div className={`text-sm px-4 py-3 rounded-xl mb-5 ${messageIsError ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>{message}</div>
             ) : null}
 
             {/* ============================== MENÚ ============================== */}
             {tab === "menu" ? (
                 <div className="space-y-4">
                     <div className="flex justify-end">
-                        <button type="button" onClick={() => setSectionModal({ section: null })} className={btnCls}>+ Nueva sección</button>
+                        <button type="button" onClick={() => setSectionModal({ section: null })} className={btnCls}>{t("menu.newSection")}</button>
                     </div>
 
                     {sections === null ? (
-                        <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando menú…</div>
+                        <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("menu.loading")}</div>
                     ) : sections.length === 0 ? (
                         <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>
-                            Aún no hay secciones. Crea la primera (ej. "Entradas") y luego agrega platos.
+                            {t("menu.empty")}
                         </div>
                     ) : (
                         sections.map((s, si) => (
@@ -788,20 +801,20 @@ export default function RestaurantAdminPage() {
                                     </button>
                                     <h2 className="font-black text-gray-900 flex-1 truncate">{s.name}
                                         {s.name_en ? <span className="text-[10px] text-gray-300 font-bold ml-2">EN: {s.name_en}</span> : null}
-                                        <span className="text-[11px] text-gray-400 font-bold ml-2">{(s.items || []).length} platos</span>
-                                        {!s.is_active ? <span className="text-[10px] font-black uppercase text-red-400 ml-2">Oculta</span> : null}
+                                        <span className="text-[11px] text-gray-400 font-bold ml-2">{t("menu.dishCount", { n: (s.items || []).length })}</span>
+                                        {!s.is_active ? <span className="text-[10px] font-black uppercase text-red-400 ml-2">{t("menu.hidden")}</span> : null}
                                     </h2>
-                                    <button type="button" disabled={busy || si === 0} onClick={() => moveSection(s.id, "up")} className={btnGhostCls} title="Subir">↑</button>
-                                    <button type="button" disabled={busy || si === sections.length - 1} onClick={() => moveSection(s.id, "down")} className={btnGhostCls} title="Bajar">↓</button>
-                                    <button type="button" disabled={busy} onClick={() => toggleSectionActive(s)} className={btnGhostCls}>{s.is_active ? "Ocultar" : "Mostrar"}</button>
-                                    <button type="button" disabled={busy} onClick={() => setSectionModal({ section: s })} className={btnGhostCls}>Editar</button>
+                                    <button type="button" disabled={busy || si === 0} onClick={() => moveSection(s.id, "up")} className={btnGhostCls} title={t("common.moveUp")}>↑</button>
+                                    <button type="button" disabled={busy || si === sections.length - 1} onClick={() => moveSection(s.id, "down")} className={btnGhostCls} title={t("common.moveDown")}>↓</button>
+                                    <button type="button" disabled={busy} onClick={() => toggleSectionActive(s)} className={btnGhostCls}>{s.is_active ? t("menu.hide") : t("menu.show")}</button>
+                                    <button type="button" disabled={busy} onClick={() => setSectionModal({ section: s })} className={btnGhostCls}>{t("common.edit")}</button>
                                     <button type="button" disabled={busy} onClick={() => deleteSection(s)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                                 </div>
 
                                 {expanded[s.id] ? (
                                     <div className="divide-y divide-gray-50">
                                         {(s.items || []).length === 0 ? (
-                                            <p className="px-5 py-4 text-sm text-gray-400">Sin platos en esta sección.</p>
+                                            <p className="px-5 py-4 text-sm text-gray-400">{t("menu.noDishes")}</p>
                                         ) : (
                                             s.items.map((it, ii) => (
                                                 <div key={it.id} className={`px-5 py-3 flex flex-wrap items-center gap-3 ${it.is_available ? "" : "opacity-50"}`}>
@@ -821,31 +834,31 @@ export default function RestaurantAdminPage() {
                                                         </p>
                                                     </div>
                                                     <div className="flex flex-wrap gap-1">
-                                                        {TAGS.map((t) => {
-                                                            const on = tagsToArray(it.tags).includes(t.id);
+                                                        {TAGS.map((tag) => {
+                                                            const on = tagsToArray(it.tags).includes(tag.id);
                                                             return (
-                                                                <button key={t.id} type="button" disabled={busy} title={t.label} onClick={() => toggleItemTag(it, t.id)}
+                                                                <button key={tag.id} type="button" disabled={busy} title={t(`tag.${tag.id}`)} onClick={() => toggleItemTag(it, tag.id)}
                                                                     className={`px-2 py-1 rounded-full text-xs border transition-all ${on ? "bg-gray-900 border-gray-900" : "bg-white border-gray-200 opacity-40 hover:opacity-100 grayscale"}`}>
-                                                                    {t.emoji}
+                                                                    {tag.emoji}
                                                                 </button>
                                                             );
                                                         })}
                                                     </div>
                                                     <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 cursor-pointer select-none">
                                                         <input type="checkbox" checked={!!it.is_available} disabled={busy} onChange={() => toggleItemAvailable(it)} className="w-4 h-4 accent-green-600" />
-                                                        Disponible
+                                                        {t("common.available")}
                                                     </label>
                                                     <div className="flex gap-1.5">
-                                                        <button type="button" disabled={busy || ii === 0} onClick={() => moveItem(it.id, "up")} className={btnGhostCls} title="Subir">↑</button>
-                                                        <button type="button" disabled={busy || ii === s.items.length - 1} onClick={() => moveItem(it.id, "down")} className={btnGhostCls} title="Bajar">↓</button>
-                                                        <button type="button" disabled={busy} onClick={() => openItemModal(it, s.id)} className={btnGhostCls}>Editar</button>
+                                                        <button type="button" disabled={busy || ii === 0} onClick={() => moveItem(it.id, "up")} className={btnGhostCls} title={t("common.moveUp")}>↑</button>
+                                                        <button type="button" disabled={busy || ii === s.items.length - 1} onClick={() => moveItem(it.id, "down")} className={btnGhostCls} title={t("common.moveDown")}>↓</button>
+                                                        <button type="button" disabled={busy} onClick={() => openItemModal(it, s.id)} className={btnGhostCls}>{t("common.edit")}</button>
                                                         <button type="button" disabled={busy} onClick={() => deleteItem(it)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                                                     </div>
                                                 </div>
                                             ))
                                         )}
                                         <div className="px-5 py-3">
-                                            <button type="button" onClick={() => openItemModal(null, s.id)} className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-gray-900 transition-colors">+ Agregar plato</button>
+                                            <button type="button" onClick={() => openItemModal(null, s.id)} className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-gray-900 transition-colors">{t("menu.addDish")}</button>
                                         </div>
                                     </div>
                                 ) : null}
@@ -862,22 +875,22 @@ export default function RestaurantAdminPage() {
             {tab === "orders" ? (
                 <div className="space-y-5">
                     <div className="flex justify-end">
-                        <button type="button" disabled={busy} onClick={loadOrders} className={btnGhostCls}>⟳ Actualizar</button>
+                        <button type="button" disabled={busy} onClick={loadOrders} className={btnGhostCls}>{t("common.refresh")}</button>
                     </div>
                     {ordersData === null ? (
-                        <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando pedidos…</div>
+                        <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("orders.loading")}</div>
                     ) : (
                         <>
                             <div className="grid md:grid-cols-3 gap-4">
                                 {["new", "preparing", "ready"].map((st) => (
                                     <div key={st} className="bg-gray-50/80 rounded-3xl p-4 border border-gray-100">
                                         <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3 flex items-center justify-between">
-                                            {STATUS_META[st].label}
+                                            {t(`status.${st}`)}
                                             <span className={`px-2 py-0.5 rounded-full border text-[10px] ${STATUS_META[st].color}`}>{board[st].length}</span>
                                         </p>
                                         <div className="space-y-3">
                                             {board[st].length === 0 ? (
-                                                <p className="text-xs text-gray-300 text-center py-4">Sin pedidos</p>
+                                                <p className="text-xs text-gray-300 text-center py-4">{t("common.noOrders")}</p>
                                             ) : (
                                                 board[st].map(orderCard)
                                             )}
@@ -887,19 +900,19 @@ export default function RestaurantAdminPage() {
                             </div>
                             <div className={`${cardCls} p-5`}>
                                 <button type="button" onClick={() => setShowHistory((v) => !v)} className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-gray-900 transition-colors">
-                                    {showHistory ? "▾" : "▸"} Historial (entregados / cancelados) — {board.history.length}
+                                    {showHistory ? "▾" : "▸"} {t("orders.history", { n: board.history.length })}
                                 </button>
                                 {showHistory ? (
                                     <div className="mt-4 divide-y divide-gray-50">
                                         {board.history.length === 0 ? (
-                                            <p className="text-sm text-gray-400 py-3">Sin historial todavía.</p>
+                                            <p className="text-sm text-gray-400 py-3">{t("orders.noHistory")}</p>
                                         ) : (
                                             board.history.map((o) => (
                                                 <button key={o.id} type="button" onClick={() => setSelectedOrder(o)} className="w-full text-left py-2.5 flex flex-wrap items-center gap-3 hover:bg-gray-50 rounded-xl px-2 transition-colors">
-                                                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-black ${(STATUS_META[o.status] || STATUS_META.new).color}`}>{(STATUS_META[o.status] || STATUS_META.new).label}</span>
+                                                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-black ${(STATUS_META[o.status] || STATUS_META.new).color}`}>{t(`status.${STATUS_META[o.status] ? o.status : "new"}`)}</span>
                                                     <span className="font-bold text-sm text-gray-700 flex-1 truncate">#{o.id} · {o.customer_name}</span>
                                                     {o.table_label ? <span className="text-[10px] font-black text-purple-500">🪑 {o.table_label}</span> : null}
-                                                    <span className="text-xs text-gray-400">{fmtDate(o.created_at)}</span>
+                                                    <span className="text-xs text-gray-400">{fmtDate(o.created_at, locale)}</span>
                                                     <span className="font-black text-sm tabular-nums">{fmtMoney(o.total_cents, symbol)}</span>
                                                 </button>
                                             ))
@@ -927,7 +940,7 @@ export default function RestaurantAdminPage() {
             {/* ============================== CONFIGURACIÓN ============================== */}
             {tab === "config" ? (
                 config === null ? (
-                    <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando configuración…</div>
+                    <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("config.loading")}</div>
                 ) : (
                     <ConfigForm initial={config} busy={busy} onSave={saveConfig} flash={flash} />
                 )

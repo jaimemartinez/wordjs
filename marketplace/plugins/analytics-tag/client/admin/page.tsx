@@ -13,6 +13,7 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
+import { useT } from "./i18n";
 
 const PROVIDER_LABELS = { ga4: "Google Analytics 4", plausible: "Plausible", matomo: "Matomo" };
 
@@ -59,6 +60,7 @@ function ToggleRow({ label, hint, checked, onChange }) {
 }
 
 export default function AnalyticsTagAdminPage() {
+    const { t } = useT();
     const [config, setConfig] = useState(null);   // the form being edited
     const [saved, setSaved] = useState(null);     // last server-confirmed state (drives the status card)
     const [busy, setBusy] = useState(false);
@@ -72,7 +74,7 @@ export default function AnalyticsTagAdminPage() {
             setSaved(cfg);
             setLoadError("");
         } catch (err) {
-            setLoadError(`No se pudo cargar la configuración: ${err?.message || err}`);
+            setLoadError(t("app.loadError", { msg: err?.message || err }));
         }
     };
     useEffect(() => { load(); }, []);
@@ -87,9 +89,9 @@ export default function AnalyticsTagAdminPage() {
             const next = await apiPost("/plugin/analytics-tag/config", config);
             setConfig(next);
             setSaved(next);
-            setMessage("Configuración guardada.");
+            setMessage(t("saved"));
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            setMessage(t("error.save", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -101,13 +103,13 @@ export default function AnalyticsTagAdminPage() {
                 <div className="cf-header">
                     <div className="cf-stamp" aria-hidden="true"><IconChart /></div>
                     <div>
-                        <h1 className="cf-title">Analytics</h1>
+                        <h1 className="cf-title">{t("app.title")}</h1>
                     </div>
                 </div>
                 <div className="cf-airmail-rule" aria-hidden="true"></div>
                 {loadError
                     ? <div role="alert" className="cf-flash is-error">{loadError}</div>
-                    : <p className="cf-status-sub">Cargando configuración…</p>}
+                    : <p className="cf-status-sub">{t("app.loading")}</p>}
             </div>
         );
     }
@@ -121,9 +123,9 @@ export default function AnalyticsTagAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconChart /></div>
                 <div>
-                    <h1 className="cf-title">Analytics</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Etiqueta de analítica en todo el sitio — GA4, Plausible o Matomo
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
@@ -133,14 +135,14 @@ export default function AnalyticsTagAdminPage() {
             <form onSubmit={save} className="cf-editor">
                 <div className="cf-editor-body" style={{ display: "grid", gap: "1.4rem" }}>
                     <ToggleRow
-                        label="Activar la analítica"
-                        hint="Inyecta el script del proveedor elegido en todas las páginas públicas del sitio."
+                        label={t("enabled.label")}
+                        hint={t("enabled.hint")}
                         checked={config.enabled}
                         onChange={(v) => update({ enabled: v })}
                     />
 
                     <div>
-                        <label className="cf-label" htmlFor="at-provider">Proveedor</label>
+                        <label className="cf-label" htmlFor="at-provider">{t("provider.label")}</label>
                         <select
                             id="at-provider"
                             value={config.provider}
@@ -155,7 +157,7 @@ export default function AnalyticsTagAdminPage() {
 
                     {config.provider === "ga4" && (
                         <div>
-                            <label className="cf-label" htmlFor="at-ga4">ID de medición (GA4)</label>
+                            <label className="cf-label" htmlFor="at-ga4">{t("ga4.label")}</label>
                             <input
                                 id="at-ga4"
                                 type="text"
@@ -165,24 +167,24 @@ export default function AnalyticsTagAdminPage() {
                                 className="cf-input"
                             />
                             <p className="cf-help">
-                                Lo encuentras en Google Analytics → Administrar → Flujos de datos. Formato G-XXXXXXXXXX.
+                                {t("ga4.help")}
                             </p>
                         </div>
                     )}
 
                     {config.provider === "plausible" && (
                         <div>
-                            <label className="cf-label" htmlFor="at-plausible">Dominio (Plausible)</label>
+                            <label className="cf-label" htmlFor="at-plausible">{t("plausible.label")}</label>
                             <input
                                 id="at-plausible"
                                 type="text"
                                 value={config.plausibleDomain || ""}
                                 onChange={(e) => update({ plausibleDomain: e.target.value })}
-                                placeholder="midominio.com"
+                                placeholder={t("plausible.placeholder")}
                                 className="cf-input"
                             />
                             <p className="cf-help">
-                                El dominio tal como está dado de alta en Plausible — solo el nombre de host, sin https:// ni rutas.
+                                {t("plausible.help")}
                             </p>
                         </div>
                     )}
@@ -190,21 +192,21 @@ export default function AnalyticsTagAdminPage() {
                     {config.provider === "matomo" && (
                         <div style={{ display: "grid", gap: "1.05rem" }}>
                             <div>
-                                <label className="cf-label" htmlFor="at-matomo-url">URL de la instancia Matomo</label>
+                                <label className="cf-label" htmlFor="at-matomo-url">{t("matomo.urlLabel")}</label>
                                 <input
                                     id="at-matomo-url"
                                     type="text"
                                     value={config.matomoUrl || ""}
                                     onChange={(e) => update({ matomoUrl: e.target.value })}
-                                    placeholder="https://analitica.midominio.com"
+                                    placeholder={t("matomo.urlPlaceholder")}
                                     className="cf-input"
                                 />
                                 <p className="cf-help">
-                                    Debe ser una URL https://. El cargador le añade /matomo.js y /matomo.php automáticamente.
+                                    {t("matomo.urlHelp")}
                                 </p>
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="at-matomo-siteid">ID de sitio (Matomo)</label>
+                                <label className="cf-label" htmlFor="at-matomo-siteid">{t("matomo.siteLabel")}</label>
                                 <input
                                     id="at-matomo-siteid"
                                     type="text"
@@ -214,27 +216,27 @@ export default function AnalyticsTagAdminPage() {
                                     className="cf-input"
                                 />
                                 <p className="cf-help">
-                                    Solo dígitos — el idSite que Matomo asigna a este sitio web.
+                                    {t("matomo.siteHelp")}
                                 </p>
                             </div>
                         </div>
                     )}
 
                     <ToggleRow
-                        label="Respetar el consentimiento de cookies"
-                        hint="Espera a que el visitante acepte las cookies si el plugin cookie-consent está activo. Si el visitante las rechaza, no se carga nada; si no hay gestor de consentimiento instalado, el script se carga igualmente."
+                        label={t("consent.label")}
+                        hint={t("consent.hint")}
                         checked={config.respectConsent}
                         onChange={(v) => update({ respectConsent: v })}
                     />
 
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.75rem", justifyContent: "flex-end" }}>
-                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                     </div>
 
                     {message && (
                         <div
-                            role={/Error/i.test(message) ? "alert" : "status"}
-                            className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}
+                            role={/Erro/i.test(message) ? "alert" : "status"}
+                            className={`cf-flash ${/Erro/i.test(message) ? "is-error" : "is-ok"}`}
                             style={{ marginBottom: 0 }}
                         >
                             {message}
@@ -246,49 +248,47 @@ export default function AnalyticsTagAdminPage() {
             {/* status card: what the public site is actually injecting (server-saved state) */}
             <div className="cf-card-item" style={{ marginTop: "1.5rem" }}>
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1rem" }}>
-                    <h2 className="cf-status-title"><IconPulse /> Estado</h2>
+                    <h2 className="cf-status-title"><IconPulse /> {t("status.title")}</h2>
                     <span className={`cf-pill ${injecting ? "is-on" : "is-off"}`}>
                         <span className="cf-pill-dot" aria-hidden="true"></span>
-                        {injecting ? "Inyectando" : "Sin inyectar"}
+                        {injecting ? t("status.injecting") : t("status.notInjecting")}
                     </span>
                 </div>
 
                 {!saved?.enabled ? (
                     <p className="cf-status-sub">
-                        La analítica está desactivada — no se inyecta ningún script en el sitio público.
+                        {t("status.disabled")}
                     </p>
                 ) : !savedConfigured ? (
                     <div className="cf-flash is-warn" style={{ marginBottom: 0 }}>
-                        Activada pero incompleta: faltan datos de {PROVIDER_LABELS[saved.provider] || saved.provider}. Completa los campos y guarda.
+                        {t("status.incomplete", { provider: PROVIDER_LABELS[saved.provider] || saved.provider })}
                     </div>
                 ) : (
                     <div className="cf-status-lines">
                         <p>
-                            <strong>{PROVIDER_LABELS[saved.provider]}</strong> se inyecta en todas las páginas públicas.
+                            <strong>{PROVIDER_LABELS[saved.provider]}</strong>{t("status.injectedEverywhere")}
                         </p>
                         {saved.provider === "ga4" && (
-                            <p className="cf-status-detail">gtag.js con el ID <code className="cf-code">{saved.ga4Id}</code></p>
+                            <p className="cf-status-detail">{t("status.ga4Detail")}<code className="cf-code">{saved.ga4Id}</code></p>
                         )}
                         {saved.provider === "plausible" && (
-                            <p className="cf-status-detail">plausible.io/js/script.js para el dominio <code className="cf-code">{saved.plausibleDomain}</code></p>
+                            <p className="cf-status-detail">{t("status.plausibleDetail")}<code className="cf-code">{saved.plausibleDomain}</code></p>
                         )}
                         {saved.provider === "matomo" && (
                             <p className="cf-status-detail">
-                                <code className="cf-code">{saved.matomoUrl}/matomo.js</code> con idSite <code className="cf-code">{saved.matomoSiteId}</code>
+                                <code className="cf-code">{saved.matomoUrl}/matomo.js</code>{t("status.matomoDetail")}<code className="cf-code">{saved.matomoSiteId}</code>
                             </p>
                         )}
                         <p className="cf-status-detail">
                             {saved.respectConsent
-                                ? "Espera la aceptación de cookies del visitante (integración con cookie-consent; sin gestor de consentimiento se carga directamente)."
-                                : "Se inyecta inmediatamente, sin esperar consentimiento."}
+                                ? t("status.waitsConsent")
+                                : t("status.immediate")}
                         </p>
                     </div>
                 )}
 
                 <p className="cf-footnote">
-                    El script cargador se sirve solo en las páginas públicas mientras el plugin está activo. Recuerda
-                    conceder el permiso de <strong>assets</strong> al plugin en la pantalla de Plugins para que el
-                    cargador pueda publicarse.
+                    {t("footnote1")}<strong>assets</strong>{t("footnote2")}
                 </p>
             </div>
         </div>

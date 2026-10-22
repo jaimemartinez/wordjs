@@ -14,18 +14,15 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
 const BASE = "/plugin/job-board";
 
-const TYPE_LABELS = {
-    "full-time": "Tiempo completo",
-    "part-time": "Medio tiempo",
-    "contract": "Contrato",
-    "internship": "Prácticas",
-    "temporary": "Temporal",
-};
-const PERIOD_LABELS = { hour: "Por hora", month: "Al mes", year: "Al año" };
-const STATUS_LABELS = { new: "Nueva", reviewed: "Revisada", shortlisted: "Preseleccionada", rejected: "Rechazada" };
+// Option values in display order; their labels are translated at render time (type.*, period.*, status.*).
+const JOB_TYPES = ["full-time", "part-time", "contract", "internship", "temporary"];
+const PERIODS = ["hour", "month", "year"];
+const STATUSES = ["new", "reviewed", "shortlisted", "rejected"];
+const typeLabel = (t, type) => (JOB_TYPES.includes(type) ? t(`type.${type}`) : type);
 // Maps each application status to its cf-status-select tint modifier (see admin.css).
 const STATUS_COLORS = {
     new: "is-new",
@@ -42,11 +39,11 @@ const inputToCents = (v) => {
     const n = parseFloat(String(v).replace(",", "."));
     return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : 0;
 };
-const fmtDate = (iso) => {
+const fmtDate = (iso, locale) => {
     if (!iso) return "";
     const s = String(iso);
     const d = new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
-    return isNaN(d.getTime()) ? s : d.toLocaleString();
+    return isNaN(d.getTime()) ? s : d.toLocaleString(locale);
 };
 
 /* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
@@ -90,6 +87,7 @@ const IconFileText = (props) => (
 );
 // ---- Vacante create/edit modal (module level — never define a component inside a component) ----
 function JobModal({ initial, onClose, onSaved }) {
+    const { t } = useT();
     const [form, setForm] = useState(() => ({
         title: initial?.title || "",
         company: initial?.company || "",
@@ -151,83 +149,83 @@ function JobModal({ initial, onClose, onSaved }) {
                 className="cf-letter is-wide"
                 role="dialog"
                 aria-modal="true"
-                aria-label={initial?.id ? "Editar vacante" : "Nueva vacante"}
+                aria-label={initial?.id ? t("job.edit") : t("job.new")}
             >
                 <div className="cf-letter-body">
                     <h2 className="cf-editor-title">
                         <IconPen />
-                        {initial?.id ? "Editar vacante" : "Nueva vacante"}
+                        {initial?.id ? t("job.edit") : t("job.new")}
                     </h2>
                     <div style={{ display: "grid", gap: "1.05rem" }}>
                         <div>
-                            <label className="cf-label" htmlFor="jb-title">Título *</label>
+                            <label className="cf-label" htmlFor="jb-title">{t("job.title")}</label>
                             <input id="jb-title" type="text" value={form.title} onChange={set("title")} className="cf-input" required maxLength={200} />
                         </div>
                         <div className="cf-grid">
                             <div>
-                                <label className="cf-label" htmlFor="jb-company">Empresa</label>
+                                <label className="cf-label" htmlFor="jb-company">{t("job.company")}</label>
                                 <input id="jb-company" type="text" value={form.company} onChange={set("company")} className="cf-input" maxLength={200} />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="jb-location">Ubicación</label>
+                                <label className="cf-label" htmlFor="jb-location">{t("job.location")}</label>
                                 <input id="jb-location" type="text" value={form.location} onChange={set("location")} className="cf-input" maxLength={200} />
                             </div>
                         </div>
                         <div className="cf-grid" style={{ alignItems: "end" }}>
                             <div>
-                                <label className="cf-label" htmlFor="jb-type">Tipo</label>
+                                <label className="cf-label" htmlFor="jb-type">{t("job.type")}</label>
                                 <select id="jb-type" value={form.type} onChange={set("type")} className="cf-select">
-                                    {Object.entries(TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                                    {JOB_TYPES.map((v) => <option key={v} value={v}>{t(`type.${v}`)}</option>)}
                                 </select>
                             </div>
                             <label className="cf-check">
                                 <input type="checkbox" checked={form.is_remote} onChange={set("is_remote")} />
-                                Trabajo remoto
+                                {t("job.remote")}
                             </label>
                         </div>
                         <div className="cf-grid-3">
                             <div>
-                                <label className="cf-label" htmlFor="jb-salary-min">Salario mín.</label>
-                                <input id="jb-salary-min" type="number" min="0" step="0.01" value={form.salaryMin} onChange={set("salaryMin")} className="cf-input" placeholder="0 = no mostrar" />
+                                <label className="cf-label" htmlFor="jb-salary-min">{t("job.salaryMin")}</label>
+                                <input id="jb-salary-min" type="number" min="0" step="0.01" value={form.salaryMin} onChange={set("salaryMin")} className="cf-input" placeholder={t("job.salaryPlaceholder")} />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="jb-salary-max">Salario máx.</label>
-                                <input id="jb-salary-max" type="number" min="0" step="0.01" value={form.salaryMax} onChange={set("salaryMax")} className="cf-input" placeholder="0 = no mostrar" />
+                                <label className="cf-label" htmlFor="jb-salary-max">{t("job.salaryMax")}</label>
+                                <input id="jb-salary-max" type="number" min="0" step="0.01" value={form.salaryMax} onChange={set("salaryMax")} className="cf-input" placeholder={t("job.salaryPlaceholder")} />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="jb-period">Periodo</label>
+                                <label className="cf-label" htmlFor="jb-period">{t("job.period")}</label>
                                 <select id="jb-period" value={form.salary_period} onChange={set("salary_period")} className="cf-select">
-                                    {Object.entries(PERIOD_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                                    {PERIODS.map((v) => <option key={v} value={v}>{t(`period.${v}`)}</option>)}
                                 </select>
                             </div>
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="jb-description">Descripción *</label>
+                            <label className="cf-label" htmlFor="jb-description">{t("job.description")}</label>
                             <textarea id="jb-description" value={form.description} onChange={set("description")} className="cf-textarea" style={{ minHeight: "120px" }} required />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="jb-requirements">Requisitos</label>
+                            <label className="cf-label" htmlFor="jb-requirements">{t("job.requirements")}</label>
                             <textarea id="jb-requirements" value={form.requirements} onChange={set("requirements")} className="cf-textarea" style={{ minHeight: "80px" }} />
                         </div>
                         <div className="cf-grid">
                             <div>
-                                <label className="cf-label" htmlFor="jb-apply-email">Email para postulaciones</label>
-                                <input id="jb-apply-email" type="email" value={form.apply_email} onChange={set("apply_email")} className="cf-input" placeholder="(vacío = email de configuración)" maxLength={254} />
+                                <label className="cf-label" htmlFor="jb-apply-email">{t("job.applyEmail")}</label>
+                                <input id="jb-apply-email" type="email" value={form.apply_email} onChange={set("apply_email")} className="cf-input" placeholder={t("job.applyEmailPlaceholder")} maxLength={254} />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="jb-expires">Expira</label>
+                                <label className="cf-label" htmlFor="jb-expires">{t("job.expires")}</label>
                                 <input id="jb-expires" type="date" value={form.expires_at} onChange={set("expires_at")} className="cf-input" />
-                                <p className="cf-help">Vacía = nunca expira.</p>
+                                <p className="cf-help">{t("job.expiresHelp")}</p>
                             </div>
                         </div>
                         <label className="cf-check">
                             <input type="checkbox" checked={form.is_published} onChange={set("is_published")} />
-                            Publicada
+                            {t("job.published")}
                         </label>
                         {error && <div role="alert" className="cf-flash is-error" style={{ marginBottom: 0 }}>{error}</div>}
                         <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "0.35rem" }}>
-                            <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
-                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                            <button type="button" onClick={onClose} className="cf-btn-ghost">{t("common.cancel")}</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                         </div>
                     </div>
                 </div>
@@ -238,6 +236,7 @@ function JobModal({ initial, onClose, onSaved }) {
 
 // ---- Cover letter modal ------------------------------------------------------------------------
 function CoverLetterModal({ application, onClose }) {
+    const { t } = useT();
     return (
         <div className="cf-overlay" onClick={onClose}>
             <div
@@ -245,18 +244,18 @@ function CoverLetterModal({ application, onClose }) {
                 className="cf-letter"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Carta de presentación"
+                aria-label={t("letter.title")}
             >
                 <div className="cf-letter-body">
-                    <h2 className="cf-editor-title" style={{ marginBottom: 0 }}><IconFileText /> Carta de presentación</h2>
+                    <h2 className="cf-editor-title" style={{ marginBottom: 0 }}><IconFileText /> {t("letter.title")}</h2>
                     <p className="cf-postmark">
                         {application.name} · {application.email}
                     </p>
                     <p className="cf-prose">
-                        {application.cover_letter || "(sin carta de presentación)"}
+                        {application.cover_letter || t("letter.none")}
                     </p>
                     <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.4rem" }}>
-                        <button type="button" onClick={onClose} className="cf-btn-ghost">Cerrar</button>
+                        <button type="button" onClick={onClose} className="cf-btn-ghost">{t("common.close")}</button>
                     </div>
                 </div>
             </div>
@@ -266,6 +265,7 @@ function CoverLetterModal({ application, onClose }) {
 
 // ---- Vacantes tab --------------------------------------------------------------------------------
 function JobsTab({ jobs, onReload, onMessage }) {
+    const { t } = useT();
     const [modalJob, setModalJob] = useState(undefined); // undefined = closed, null = new, object = edit
 
     const togglePublish = async (job) => {
@@ -273,18 +273,18 @@ function JobsTab({ jobs, onReload, onMessage }) {
             await apiPost(`${BASE}/jobs/${job.id}/publish`, { is_published: job.is_published ? 0 : 1 });
             onReload();
         } catch (err) {
-            onMessage(`Error: ${err?.message || err}`);
+            onMessage(t("common.error", { msg: err?.message || err }));
         }
     };
 
     const remove = async (job) => {
-        if (!window.confirm(`¿Eliminar la vacante "${job.title}" y todas sus postulaciones?`)) return;
+        if (!window.confirm(t("jobs.confirmDelete", { title: job.title }))) return;
         try {
             await apiDelete(`${BASE}/jobs/${job.id}`);
             onReload();
-            onMessage("Vacante eliminada.");
+            onMessage(t("jobs.deleted"));
         } catch (err) {
-            onMessage(`Error: ${err?.message || err}`);
+            onMessage(t("common.error", { msg: err?.message || err }));
         }
     };
 
@@ -293,26 +293,26 @@ function JobsTab({ jobs, onReload, onMessage }) {
     return (
         <div className="cf-card-item">
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.15rem" }}>
-                <h2 className="cf-form-name">Vacantes ({jobs.length})</h2>
-                <button type="button" onClick={() => setModalJob(null)} className="cf-btn"><IconPlus /> Nueva vacante</button>
+                <h2 className="cf-form-name">{t("jobs.heading", { count: jobs.length })}</h2>
+                <button type="button" onClick={() => setModalJob(null)} className="cf-btn"><IconPlus /> {t("jobs.new")}</button>
             </div>
             {jobs.length === 0 ? (
                 <div className="cf-empty">
                     <IconBriefcase />
-                    <span>Aún no hay vacantes — crea la primera.</span>
+                    <span>{t("jobs.empty")}</span>
                 </div>
             ) : (
                 <div className="cf-table-wrap">
                     <table className="cf-table is-static">
                         <thead>
                             <tr>
-                                <th>Título</th>
-                                <th>Tipo</th>
-                                <th>Ubicación</th>
-                                <th style={{ textAlign: "right" }}>Vistas</th>
-                                <th style={{ textAlign: "right" }}>Postulaciones</th>
-                                <th>Publicada</th>
-                                <th>Expira</th>
+                                <th>{t("jobs.colTitle")}</th>
+                                <th>{t("jobs.colType")}</th>
+                                <th>{t("jobs.colLocation")}</th>
+                                <th style={{ textAlign: "right" }}>{t("jobs.colViews")}</th>
+                                <th style={{ textAlign: "right" }}>{t("jobs.colApplications")}</th>
+                                <th>{t("jobs.colPublished")}</th>
+                                <th>{t("jobs.colExpires")}</th>
                                 <th></th>
                             </tr>
                         </thead>
@@ -325,10 +325,10 @@ function JobsTab({ jobs, onReload, onMessage }) {
                                     </td>
                                     <td style={{ whiteSpace: "nowrap" }}>
                                         <span className="cf-pill is-accent">
-                                            {TYPE_LABELS[job.type] || job.type}
+                                            {typeLabel(t, job.type)}
                                         </span>
                                         {job.is_remote ? (
-                                            <span className="cf-pill is-ok">Remoto</span>
+                                            <span className="cf-pill is-ok">{t("jobs.remote")}</span>
                                         ) : null}
                                     </td>
                                     <td>{job.location || "—"}</td>
@@ -337,7 +337,7 @@ function JobsTab({ jobs, onReload, onMessage }) {
                                         <span style={{ fontWeight: 650, color: "var(--cf-ink)" }}>{job.app_count || 0}</span>
                                         {job.new_count > 0 && (
                                             <span className="cf-chip is-unread" style={{ marginLeft: "0.4rem" }}>
-                                                {job.new_count} nuevas
+                                                {t("jobs.newCount", { count: job.new_count })}
                                             </span>
                                         )}
                                     </td>
@@ -347,18 +347,18 @@ function JobsTab({ jobs, onReload, onMessage }) {
                                             onClick={() => togglePublish(job)}
                                             className={`cf-switch ${job.is_published ? "is-on" : ""}`}
                                             aria-pressed={!!job.is_published}
-                                            aria-label={job.is_published ? "Publicada — clic para ocultar" : "Oculta — clic para publicar"}
-                                            title={job.is_published ? "Publicada — clic para ocultar" : "Oculta — clic para publicar"}
+                                            aria-label={job.is_published ? t("jobs.publishedToggle") : t("jobs.hiddenToggle")}
+                                            title={job.is_published ? t("jobs.publishedToggle") : t("jobs.hiddenToggle")}
                                         ></button>
                                     </td>
                                     <td className="cf-cell-date">
                                         {job.expires_at ? (
-                                            <span className={isExpired(job) ? "cf-expired" : ""}>{job.expires_at}{isExpired(job) ? " (expirada)" : ""}</span>
-                                        ) : "Nunca"}
+                                            <span className={isExpired(job) ? "cf-expired" : ""}>{job.expires_at}{isExpired(job) ? t("jobs.expiredSuffix") : ""}</span>
+                                        ) : t("jobs.never")}
                                     </td>
                                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                                        <button type="button" onClick={() => setModalJob(job)} className="cf-linkbtn">Editar</button>
-                                        <button type="button" onClick={() => remove(job)} className="cf-linkbtn is-danger">Eliminar</button>
+                                        <button type="button" onClick={() => setModalJob(job)} className="cf-linkbtn">{t("common.edit")}</button>
+                                        <button type="button" onClick={() => remove(job)} className="cf-linkbtn is-danger">{t("common.delete")}</button>
                                     </td>
                                 </tr>
                             ))}
@@ -370,7 +370,7 @@ function JobsTab({ jobs, onReload, onMessage }) {
                 <JobModal
                     initial={modalJob}
                     onClose={() => setModalJob(undefined)}
-                    onSaved={() => { setModalJob(undefined); onReload(); onMessage("Vacante guardada."); }}
+                    onSaved={() => { setModalJob(undefined); onReload(); onMessage(t("jobs.saved")); }}
                 />
             )}
         </div>
@@ -379,6 +379,7 @@ function JobsTab({ jobs, onReload, onMessage }) {
 
 // ---- Postulaciones tab -----------------------------------------------------------------------------
 function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
+    const { t, locale } = useT();
     const [applications, setApplications] = useState([]);
     const [counts, setCounts] = useState({ new: 0, total: 0 });
     const [jobFilter, setJobFilter] = useState("");
@@ -397,7 +398,7 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
             setCounts(data.counts || { new: 0, total: 0 });
             if (onCountsChange) onCountsChange(data.counts || {});
         } catch (err) {
-            onMessage(`Error: ${err?.message || err}`);
+            onMessage(t("common.error", { msg: err?.message || err }));
         } finally {
             setLoading(false);
         }
@@ -410,18 +411,18 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
             await apiPost(`${BASE}/applications/${app.id}/status`, { status });
             load();
         } catch (err) {
-            onMessage(`Error: ${err?.message || err}`);
+            onMessage(t("common.error", { msg: err?.message || err }));
         }
     };
 
     const remove = async (app) => {
-        if (!window.confirm(`¿Eliminar la postulación de ${app.name}?`)) return;
+        if (!window.confirm(t("apps.confirmDelete", { name: app.name }))) return;
         try {
             await apiDelete(`${BASE}/applications/${app.id}`);
             load();
-            onMessage("Postulación eliminada.");
+            onMessage(t("apps.deleted"));
         } catch (err) {
-            onMessage(`Error: ${err?.message || err}`);
+            onMessage(t("common.error", { msg: err?.message || err }));
         }
     };
 
@@ -437,12 +438,12 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = data.filename || "postulaciones.csv";
+            a.download = data.filename || t("apps.csvName");
             a.click();
             URL.revokeObjectURL(url);
-            onMessage(`Exportadas ${data.count || 0} postulaciones.`);
+            onMessage(t("apps.exported", { count: data.count || 0 }));
         } catch (err) {
-            onMessage(`Error al exportar: ${err?.message || err}`);
+            onMessage(t("apps.exportError", { msg: err?.message || err }));
         }
     };
 
@@ -450,43 +451,43 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
         <div className="cf-card-item">
             <div className="cf-toolbar">
                 <h2 className="cf-form-name" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                    Postulaciones
+                    {t("apps.heading")}
                     {counts.new > 0 && (
                         <span className="cf-chip is-unread">
-                            {counts.new} nuevas
+                            {t("apps.newCount", { count: counts.new })}
                         </span>
                     )}
                 </h2>
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.6rem" }}>
-                    <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} className="cf-select" aria-label="Filtrar por vacante">
-                        <option value="">Todas las vacantes</option>
+                    <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} className="cf-select" aria-label={t("apps.filterJob")}>
+                        <option value="">{t("apps.allJobs")}</option>
                         {jobs.map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
                     </select>
-                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="cf-select" aria-label="Filtrar por estado">
-                        <option value="">Todos los estados</option>
-                        {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="cf-select" aria-label={t("apps.filterStatus")}>
+                        <option value="">{t("apps.allStatuses")}</option>
+                        {STATUSES.map((v) => <option key={v} value={v}>{t(`status.${v}`)}</option>)}
                     </select>
-                    <button type="button" onClick={exportCsv} className="cf-btn-ghost"><IconDownload /> Exportar CSV</button>
+                    <button type="button" onClick={exportCsv} className="cf-btn-ghost"><IconDownload /> {t("apps.exportCsv")}</button>
                 </div>
             </div>
             {loading ? (
-                <p className="cf-meta">Cargando…</p>
+                <p className="cf-meta">{t("common.loading")}</p>
             ) : applications.length === 0 ? (
                 <div className="cf-empty">
                     <IconInboxEmpty />
-                    <span>No hay postulaciones con estos filtros.</span>
+                    <span>{t("apps.empty")}</span>
                 </div>
             ) : (
                 <div className="cf-table-wrap">
                     <table className="cf-table is-static">
                         <thead>
                             <tr>
-                                <th>Candidato</th>
-                                <th>Vacante</th>
-                                <th>CV</th>
-                                <th>Carta</th>
-                                <th>Estado</th>
-                                <th>Fecha</th>
+                                <th>{t("apps.colCandidate")}</th>
+                                <th>{t("apps.colJob")}</th>
+                                <th>{t("apps.colCv")}</th>
+                                <th>{t("apps.colLetter")}</th>
+                                <th>{t("apps.colStatus")}</th>
+                                <th>{t("apps.colDate")}</th>
                                 <th></th>
                             </tr>
                         </thead>
@@ -503,27 +504,27 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
                                     <td>{app.job_title || `#${app.job_id}`}</td>
                                     <td>
                                         {app.cv_url ? (
-                                            <a href={app.cv_url} target="_blank" rel="noopener noreferrer" className="cf-tlink">Ver CV</a>
+                                            <a href={app.cv_url} target="_blank" rel="noopener noreferrer" className="cf-tlink">{t("apps.viewCv")}</a>
                                         ) : <span className="cf-void">—</span>}
                                     </td>
                                     <td>
                                         {app.cover_letter ? (
-                                            <button type="button" onClick={() => setLetterApp(app)} className="cf-linkbtn">Leer</button>
+                                            <button type="button" onClick={() => setLetterApp(app)} className="cf-linkbtn">{t("apps.read")}</button>
                                         ) : <span className="cf-void">—</span>}
                                     </td>
                                     <td>
                                         <select
                                             value={app.status}
                                             onChange={(e) => setStatus(app, e.target.value)}
-                                            aria-label={`Estado de la postulación de ${app.name}`}
+                                            aria-label={t("apps.statusOf", { name: app.name })}
                                             className={`cf-status-select ${STATUS_COLORS[app.status] || ""}`}
                                         >
-                                            {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                                            {STATUSES.map((v) => <option key={v} value={v}>{t(`status.${v}`)}</option>)}
                                         </select>
                                     </td>
-                                    <td className="cf-cell-date">{fmtDate(app.created_at)}</td>
+                                    <td className="cf-cell-date">{fmtDate(app.created_at, locale)}</td>
                                     <td style={{ textAlign: "right" }}>
-                                        <button type="button" onClick={() => remove(app)} className="cf-linkbtn is-danger">Eliminar</button>
+                                        <button type="button" onClick={() => remove(app)} className="cf-linkbtn is-danger">{t("common.delete")}</button>
                                     </td>
                                 </tr>
                             ))}
@@ -538,6 +539,7 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
 
 // ---- Configuración tab -----------------------------------------------------------------------------
 function ConfigTab({ onMessage }) {
+    const { t } = useT();
     const [config, setConfig] = useState({ currencySymbol: "$", notifyEmail: "", showSalary: true });
     const [busy, setBusy] = useState(false);
 
@@ -553,9 +555,9 @@ function ConfigTab({ onMessage }) {
         try {
             const d = await apiPost(`${BASE}/config`, config);
             if (d && d.config) setConfig(d.config);
-            onMessage("Configuración guardada.");
+            onMessage(t("config.saved"));
         } catch (err) {
-            onMessage(`Error: ${err?.message || err}`);
+            onMessage(t("common.error", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -566,23 +568,23 @@ function ConfigTab({ onMessage }) {
             <div className="cf-editor-body">
                 <div style={{ display: "grid", gap: "1.2rem" }}>
                     <div>
-                        <label className="cf-label" htmlFor="jb-currency">Símbolo de moneda</label>
+                        <label className="cf-label" htmlFor="jb-currency">{t("config.currency")}</label>
                         <input id="jb-currency" type="text" value={config.currencySymbol} onChange={(e) => setConfig((c) => ({ ...c, currencySymbol: e.target.value }))} className="cf-input" maxLength={5} />
-                        <p className="cf-help">Se usa para mostrar los rangos salariales, p. ej. $ o €.</p>
+                        <p className="cf-help">{t("config.currencyHelp")}</p>
                     </div>
                     <div>
-                        <label className="cf-label" htmlFor="jb-notify">Email de notificación</label>
-                        <input id="jb-notify" type="email" value={config.notifyEmail} onChange={(e) => setConfig((c) => ({ ...c, notifyEmail: e.target.value }))} className="cf-input" placeholder="(vacío = sin notificaciones)" maxLength={254} />
+                        <label className="cf-label" htmlFor="jb-notify">{t("config.notifyEmail")}</label>
+                        <input id="jb-notify" type="email" value={config.notifyEmail} onChange={(e) => setConfig((c) => ({ ...c, notifyEmail: e.target.value }))} className="cf-input" placeholder={t("config.notifyPlaceholder")} maxLength={254} />
                         <p className="cf-help">
-                            Recibe un correo por cada postulación. Si la vacante tiene su propio email, ese tiene prioridad.
+                            {t("config.notifyHelp")}
                         </p>
                     </div>
                     <label className="cf-check">
                         <input type="checkbox" checked={!!config.showSalary} onChange={(e) => setConfig((c) => ({ ...c, showSalary: e.target.checked }))} />
-                        Mostrar salarios en el sitio público
+                        {t("config.showSalary")}
                     </label>
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                     </div>
                 </div>
             </div>
@@ -592,6 +594,7 @@ function ConfigTab({ onMessage }) {
 
 // ---- Page ------------------------------------------------------------------------------------------
 export default function JobBoardAdminPage() {
+    const { t } = useT();
     const [tab, setTab] = useState("jobs");
     const [jobs, setJobs] = useState([]);
     const [newCount, setNewCount] = useState(0);
@@ -636,9 +639,9 @@ export default function JobBoardAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconBriefcase /></div>
                 <div>
-                    <h1 className="cf-title">Bolsa de empleo</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Vacantes · postulaciones · bloque JobBoard en el editor visual
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
@@ -646,13 +649,14 @@ export default function JobBoardAdminPage() {
 
             {/* tabs */}
             <div className="cf-tabs" role="tablist">
-                {tabBtn("jobs", "Vacantes", 0)}
-                {tabBtn("applications", "Postulaciones", newCount)}
-                {tabBtn("config", "Configuración", 0)}
+                {tabBtn("jobs", t("tab.jobs"), 0)}
+                {tabBtn("applications", t("tab.applications"), newCount)}
+                {tabBtn("config", t("tab.config"), 0)}
             </div>
 
+            {/* Client-built errors start with "Error" (es/en) or "Erro" (pt). */}
             {message && (
-                <div role={/^Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/^Error/i.test(message) ? "is-error" : "is-ok"}`}>
+                <div role={/^Erro/i.test(message) ? "alert" : "status"} className={`cf-flash ${/^Erro/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}

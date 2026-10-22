@@ -11,6 +11,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
+import { useT } from "./i18n";
 
 const YoutubeIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
@@ -58,6 +59,7 @@ const CalendarIcon = (props: React.SVGProps<SVGSVGElement>) => (
 );
 
 export default function YoutubeVideosAdminPage() {
+    const { t, locale } = useT();
     const [status, setStatus] = useState(null);
     const [channel, setChannel] = useState("");
     const [apiKey, setApiKey] = useState("");      // write-only: never echoed back by the server
@@ -109,10 +111,10 @@ export default function YoutubeVideosAdminPage() {
             else if (apiKey.trim()) body.apiKey = apiKey.trim();
             const s = await apiPost("/plugin/youtube-videos/settings", body);
             setStatus(s); setApiKey(""); setClearKey(false);
-            setMessage(s.error ? `Guardado, pero la carga falló: ${s.error}` : `Guardado — ${s.videoCount} videos (modo ${s.mode === "api" ? "API completa" : "RSS"}).`);
+            setMessage(s.error ? t("msg.savedButFailed", { error: s.error }) : t("msg.saved", { count: s.videoCount, mode: s.mode === "api" ? t("msg.modeApi") : t("msg.modeRss") }));
             loadPreview();
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            setMessage(t("msg.saveError", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -123,16 +125,17 @@ export default function YoutubeVideosAdminPage() {
         try {
             const s = await apiPost("/plugin/youtube-videos/refresh", {});
             setStatus(s);
-            setMessage(s.error ? `La carga falló: ${s.error}` : `Actualizado — ${s.videoCount} videos.`);
+            setMessage(s.error ? t("msg.loadFailed", { error: s.error }) : t("msg.refreshed", { count: s.videoCount }));
             loadPreview();
         } catch (err) {
-            setMessage(`Error: ${err?.message || err}`);
+            setMessage(t("msg.error", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
     };
 
-    const isErrorMsg = /falló|Error/i.test(message);
+    // Matches the failure messages in es ("falló", "Error"), en ("failed", "Error") and pt ("falhou", "Erro").
+    const isErrorMsg = /falló|failed|falhou|Erro/i.test(message);
 
     return (
         <div className="cf-shell">
@@ -140,8 +143,8 @@ export default function YoutubeVideosAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><YoutubeIcon /></div>
                 <div>
-                    <h1 className="cf-title">YouTube Videos</h1>
-                    <p className="cf-subtitle">Configura la sincronización de videos para el editor visual</p>
+                    <h1 className="cf-title">{t("app.title")}</h1>
+                    <p className="cf-subtitle">{t("app.subtitle")}</p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
@@ -150,35 +153,35 @@ export default function YoutubeVideosAdminPage() {
                 {/* configuration form */}
                 <form onSubmit={save} className="cf-editor">
                     <div className="cf-editor-body">
-                        <h2 className="cf-editor-title"><SyncIcon /> Ajustes de Sincronización</h2>
+                        <h2 className="cf-editor-title"><SyncIcon /> {t("form.title")}</h2>
 
                         <div className="cf-grid">
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="yt-channel">Canal (UC…, @handle o URL)</label>
-                                <input id="yt-channel" type="text" value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="@micanal · UCxxxxxxxx · https://youtube.com/@micanal" className="cf-input" required />
+                                <label className="cf-label" htmlFor="yt-channel">{t("form.channel")}</label>
+                                <input id="yt-channel" type="text" value={channel} onChange={(e) => setChannel(e.target.value)} placeholder={t("form.channelPh")} className="cf-input" required />
                             </div>
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="yt-ttl">Intervalo de Actualización de Caché (minutos)</label>
+                                <label className="cf-label" htmlFor="yt-ttl">{t("form.ttl")}</label>
                                 <input id="yt-ttl" type="number" min="1" value={cacheTtl} onChange={(e) => setCacheTtl(Math.max(1, parseInt(e.target.value, 10) || 1))} placeholder="30" className="cf-input" required />
                                 <p className="cf-help">
-                                    Tiempo que el plugin mantendrá los vídeos guardados localmente antes de consultar a YouTube de nuevo (mínimo 1 minuto).
+                                    {t("form.ttlHelp")}
                                 </p>
                             </div>
                             <div className="cf-span-2">
-                                <label className="cf-label" htmlFor="yt-key">YouTube Data API v3 key (opcional)</label>
-                                <input id="yt-key" type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); setClearKey(false); }} placeholder={status?.hasApiKey ? "(configurada — escribe para reemplazar)" : "(sin key: modo RSS, últimos 15 videos)"} className="cf-input" autoComplete="new-password" />
+                                <label className="cf-label" htmlFor="yt-key">{t("form.apiKey")}</label>
+                                <input id="yt-key" type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); setClearKey(false); }} placeholder={status?.hasApiKey ? t("form.apiKeyPhSet") : t("form.apiKeyPhUnset")} className="cf-input" autoComplete="new-password" />
 
                                 <div className="cf-note">
                                     <InfoIcon />
                                     <span>
-                                        Sin API Key se utiliza el feed RSS público del canal (límite de 15 videos). Para obtener el historial completo (hasta 500 videos) ingresa una API Key válida.
+                                        {t("form.apiKeyNote")}
                                     </span>
                                 </div>
 
                                 {status?.hasApiKey && (
                                     <label className="cf-check" style={{ marginTop: "0.5rem" }}>
                                         <input type="checkbox" checked={clearKey} onChange={(e) => { setClearKey(e.target.checked); if (e.target.checked) setApiKey(""); }} />
-                                        <span>Quitar la API Key guardada (volver a modo RSS)</span>
+                                        <span>{t("form.clearKey")}</span>
                                     </label>
                                 )}
                             </div>
@@ -187,11 +190,11 @@ export default function YoutubeVideosAdminPage() {
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
                             <button type="button" onClick={refresh} disabled={busy} className="cf-btn-ghost">
                                 <SyncIcon className={busy ? "cf-spin" : ""} />
-                                Actualizar
+                                {t("form.refresh")}
                             </button>
                             <button type="submit" disabled={busy} className="cf-btn">
                                 <SaveIcon />
-                                {busy ? "Guardando…" : "Guardar"}
+                                {busy ? t("common.saving") : t("common.save")}
                             </button>
                         </div>
 
@@ -206,39 +209,39 @@ export default function YoutubeVideosAdminPage() {
 
                 {/* status card */}
                 <div className="cf-card-item">
-                    <h3 className="cf-panel-title">Estado del Plugin</h3>
+                    <h3 className="cf-panel-title">{t("status.title")}</h3>
                     {status ? (
                         <dl className="cf-stat-list">
                             <div className="cf-stat-row">
-                                <dt className="cf-stat-key">Videos importados</dt>
+                                <dt className="cf-stat-key">{t("status.videos")}</dt>
                                 <dd className="cf-stat-val">{status.videoCount}</dd>
                             </div>
                             <div className="cf-stat-row">
-                                <dt className="cf-stat-key">Modo de carga</dt>
+                                <dt className="cf-stat-key">{t("status.mode")}</dt>
                                 <dd>
                                     <span className={`cf-pill ${status.mode === "api" ? "is-accent" : ""}`}>
-                                        {status.mode === "api" ? "API v3" : "RSS Feed"}
+                                        {status.mode === "api" ? t("status.modeApi") : t("status.modeRss")}
                                     </span>
                                 </dd>
                             </div>
                             <div className="cf-stat-row">
-                                <dt className="cf-stat-key">Última actualización</dt>
+                                <dt className="cf-stat-key">{t("status.lastUpdate")}</dt>
                                 <dd className="cf-stat-val">
                                     <CalendarIcon style={{ width: "0.85rem", height: "0.85rem" }} />
-                                    {status.fetchedAt ? new Date(status.fetchedAt).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" }) : "Nunca"}
+                                    {status.fetchedAt ? new Date(status.fetchedAt).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : t("status.never")}
                                 </dd>
                             </div>
                         </dl>
                     ) : (
                         <div className="cf-note">
                             <ExclamationIcon />
-                            <span>Cargando estado...</span>
+                            <span>{t("status.loading")}</span>
                         </div>
                     )}
                     {status?.error && (
                         <div className="cf-note is-warn">
                             <ExclamationIcon />
-                            <span>Último error: {status.error}</span>
+                            <span>{t("status.lastError", { error: status.error })}</span>
                         </div>
                     )}
                 </div>
@@ -248,13 +251,13 @@ export default function YoutubeVideosAdminPage() {
             <div className="cf-card-item" style={{ marginTop: "1rem" }}>
                 <h3 className="cf-editor-title" style={{ marginBottom: "1.35rem" }}>
                     <YoutubeIcon style={{ width: "1.05rem", height: "1.05rem" }} />
-                    <span>Vista Previa de Videos</span>
-                    {preview.length > 0 && <span className="cf-pill is-ok">En caché</span>}
+                    <span>{t("preview.title")}</span>
+                    {preview.length > 0 && <span className="cf-pill is-ok">{t("preview.cached")}</span>}
                 </h3>
                 {preview.length === 0 ? (
                     <div className="cf-empty">
                         <YoutubeIcon />
-                        <span>Sin videos cargados aún. Configura el canal e importa los videos.</span>
+                        <span>{t("preview.empty")}</span>
                     </div>
                 ) : (
                     <div className="cf-video-grid">
@@ -273,7 +276,7 @@ export default function YoutubeVideosAdminPage() {
                 <div className="cf-note" style={{ marginTop: "1.5rem" }}>
                     <InfoIcon />
                     <span>
-                        Para mostrar estos videos en tu sitio web, agrega el bloque <strong>YoutubeVideos</strong> en el editor visual. Podrás configurar filtros, límites de cantidad, reproducción automática e intervalos.
+                        {t("preview.note.before")} <strong>YoutubeVideos</strong> {t("preview.note.after")}
                     </span>
                 </div>
             </div>

@@ -13,7 +13,7 @@
 
 exports.metadata = {
     name: 'Photo Carousel',
-    version: '2.1.1',
+    version: '2.1.2',
     description: 'Create and manage image carousels with admin UI',
     author: 'WordJS'
 };

@@ -9,8 +9,9 @@
  * scoped to .plugin-admin-lightbox) — the markup below only uses cf-* classes.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost } from "@/lib/api";
+import { useT } from "./i18n";
 
 const MAX_SCOPE_LEN = 100;
 const DEFAULT_SCOPE = ".wjs-content";
@@ -21,9 +22,10 @@ function demoSvg(from, to, label) {
     return "data:image/svg+xml," + encodeURIComponent(svg);
 }
 
-const DEMO_IMAGES = [
-    { src: demoSvg("#6366f1", "#0ea5e9", "Costa al atardecer"), alt: "Costa al atardecer — imagen de demostración" },
-    { src: demoSvg("#f59e0b", "#ef4444", "Montañas al amanecer"), alt: "Montañas al amanecer — imagen de demostración" },
+// Demo image specs; the labels are translated at render time (see DEMO_IMAGES in the page).
+const DEMO_SPECS = [
+    { from: "#6366f1", to: "#0ea5e9", labelKey: "demo.coast" },
+    { from: "#f59e0b", to: "#ef4444", labelKey: "demo.mountains" },
 ];
 
 /* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
@@ -74,6 +76,11 @@ function ToggleRow({ label, help, checked, onChange }) {
 }
 
 export default function ImageLightboxAdminPage() {
+    const { t, lang } = useT();
+    const DEMO_IMAGES = useMemo(() => DEMO_SPECS.map((d) => {
+        const label = t(d.labelKey);
+        return { src: demoSvg(d.from, d.to, label), alt: t("demo.alt", { label }) };
+    }), [lang]); // eslint-disable-line react-hooks/exhaustive-deps
     const [enabled, setEnabled] = useState(true);
     const [captions, setCaptions] = useState(true);
     const [scope, setScope] = useState(DEFAULT_SCOPE);
@@ -120,25 +127,26 @@ export default function ImageLightboxAdminPage() {
     const save = async (e) => {
         e.preventDefault();
         const s = scope.trim();
-        if (!s) { setMessage("Error: el selector de ámbito no puede estar vacío."); return; }
-        if (s.length > MAX_SCOPE_LEN) { setMessage(`Error: el selector de ámbito no puede superar los ${MAX_SCOPE_LEN} caracteres.`); return; }
-        if (s.includes("<")) { setMessage('Error: el selector de ámbito no puede contener el carácter "<".'); return; }
+        if (!s) { setMessage(t("error.scopeEmpty")); return; }
+        if (s.length > MAX_SCOPE_LEN) { setMessage(t("error.scopeTooLong", { max: MAX_SCOPE_LEN })); return; }
+        if (s.includes("<")) { setMessage(t("error.scopeLt")); return; }
         setBusy(true); setMessage("");
         try {
             const cfg = await apiPost("/plugin/image-lightbox/config", { enabled, captions, scope: s });
             setEnabled(cfg.enabled !== false);
             setCaptions(cfg.captions !== false);
             setScope(cfg.scope || DEFAULT_SCOPE);
-            setMessage("Guardado — los cambios se aplican en la próxima carga de las páginas públicas.");
+            setMessage(t("saved"));
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            setMessage(t("error.save", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
     };
 
     const demo = demoIndex === null ? null : DEMO_IMAGES[demoIndex];
-    const isErrorMsg = /^Error/i.test(message);
+    // Client-built errors start with "Error" (es/en) or "Erro" (pt).
+    const isErrorMsg = /^Erro/i.test(message);
 
     return (
         <div className="cf-shell">
@@ -146,11 +154,11 @@ export default function ImageLightboxAdminPage() {
             <div className="cf-header" style={{ flexWrap: "wrap" }}>
                 <div className="cf-stamp" aria-hidden="true"><IconImage /></div>
                 <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-                    <h1 className="cf-title">Lightbox de imágenes</h1>
-                    <p className="cf-subtitle">Clic para ampliar las imágenes del contenido en todo el sitio</p>
+                    <h1 className="cf-title">{t("app.title")}</h1>
+                    <p className="cf-subtitle">{t("app.subtitle")}</p>
                 </div>
                 <span className={`cf-pill ${enabled ? "is-on" : "is-off"}`}>
-                    {enabled ? "Activado" : "Desactivado"}
+                    {enabled ? t("status.on") : t("status.off")}
                 </span>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
@@ -160,19 +168,19 @@ export default function ImageLightboxAdminPage() {
                 <div className="cf-editor-body">
                     <div style={{ display: "grid", gap: "1.4rem" }}>
                         <ToggleRow
-                            label="Activar el lightbox"
-                            help="Al hacer clic en una imagen del contenido se abre ampliada sobre un fondo oscuro, con flechas y teclado (← → Esc)."
+                            label={t("enabled.label")}
+                            help={t("enabled.help")}
                             checked={enabled}
                             onChange={setEnabled}
                         />
                         <ToggleRow
-                            label="Mostrar leyendas"
-                            help="Usa el texto alternativo (alt) de la imagen como leyenda debajo de la vista ampliada."
+                            label={t("captions.label")}
+                            help={t("captions.help")}
                             checked={captions}
                             onChange={setCaptions}
                         />
                         <div>
-                            <label className="cf-label" htmlFor="lb-scope">Selector de ámbito (CSS)</label>
+                            <label className="cf-label" htmlFor="lb-scope">{t("scope.label")}</label>
                             <input
                                 id="lb-scope"
                                 type="text"
@@ -184,15 +192,11 @@ export default function ImageLightboxAdminPage() {
                                 disabled={!loaded}
                             />
                             <p className="cf-help">
-                                Solo las imágenes dentro de elementos que coincidan con este selector abren el lightbox
-                                (se admiten varios selectores separados por comas). El tema envuelve el contenido público
-                                en <code className="cf-code">.wjs-content</code>, el valor por defecto.
-                                Si el selector no coincide con nada en la página, el script usa <code className="cf-code">main</code> como respaldo.
-                                Se ignoran las imágenes pequeñas (&lt;100px), las de la cabecera/menú/pie y las que enlazan a otras páginas.
+                                {t("scope.help1")}<code className="cf-code">.wjs-content</code>{t("scope.help2")}<code className="cf-code">main</code>{t("scope.help3")}
                             </p>
                         </div>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                            <button type="submit" disabled={busy || !loaded} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                            <button type="submit" disabled={busy || !loaded} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                         </div>
                         {message && (
                             <div role={isErrorMsg ? "alert" : "status"} className={`cf-flash ${isErrorMsg ? "is-error" : "is-ok"}`} style={{ marginBottom: 0 }}>{message}</div>
@@ -203,10 +207,9 @@ export default function ImageLightboxAdminPage() {
 
             {/* demo: two thumbnails that open the same overlay the public site uses */}
             <div className="cf-card-item">
-                <h2 className="cf-editor-title" style={{ marginBottom: "0.35rem" }}><IconZoomIn /> Demostración</h2>
+                <h2 className="cf-editor-title" style={{ marginBottom: "0.35rem" }}><IconZoomIn /> {t("demo.title")}</h2>
                 <p className="cf-help" style={{ marginTop: 0, marginBottom: "1.1rem" }}>
-                    Haz clic en una miniatura para ver el efecto tal y como se comporta en el sitio público
-                    (flechas, teclado ← → Esc, clic en el fondo para cerrar).
+                    {t("demo.help")}
                 </p>
                 <div className="cf-demo-grid">
                     {DEMO_IMAGES.map((img, i) => (
@@ -224,7 +227,7 @@ export default function ImageLightboxAdminPage() {
                     className="cf-lightbox"
                     role="dialog"
                     aria-modal="true"
-                    aria-label="Visor de imagen (demostración)"
+                    aria-label={t("viewer.label")}
                     onClick={() => setDemoIndex(null)}
                 >
                     <figure className="cf-lightbox-figure" onClick={(e) => e.stopPropagation()}>
@@ -234,19 +237,19 @@ export default function ImageLightboxAdminPage() {
                     </figure>
                     <button
                         type="button"
-                        aria-label="Imagen anterior"
+                        aria-label={t("viewer.prev")}
                         onClick={(e) => { e.stopPropagation(); setDemoIndex((i) => ((i ?? 0) - 1 + DEMO_IMAGES.length) % DEMO_IMAGES.length); }}
                         className="cf-lightbox-nav is-prev"
                     ><IconChevronLeft /></button>
                     <button
                         type="button"
-                        aria-label="Imagen siguiente"
+                        aria-label={t("viewer.next")}
                         onClick={(e) => { e.stopPropagation(); setDemoIndex((i) => ((i ?? 0) + 1) % DEMO_IMAGES.length); }}
                         className="cf-lightbox-nav is-next"
                     ><IconChevronRight /></button>
                     <button
                         type="button"
-                        aria-label="Cerrar"
+                        aria-label={t("viewer.close")}
                         onClick={() => setDemoIndex(null)}
                         className="cf-lightbox-nav cf-lightbox-close"
                     ><IconX /></button>

@@ -5,7 +5,7 @@
  * Admin page for the FAQ plugin (/admin/plugin/faq).
  * Lists the questions grouped by category with publish toggles, up/down reordering,
  * edit/delete, and a create/edit modal. API calls go through the host's api helpers
- * (session cookie). All user-facing text in Spanish.
+ * (session cookie). User-facing text follows the admin's language (./i18n).
  *
  * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected
  * by the host admin shell and scoped to .plugin-admin-faq) — the markup below only uses
@@ -14,6 +14,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
 const EMPTY_FORM = { id: null, question: "", answer: "", category: "" };
 
@@ -59,6 +60,7 @@ const IconBlock = (props) => (
 );
 
 export default function FaqAdminPage() {
+    const { t } = useT();
     const [faqs, setFaqs] = useState(null); // null = loading
     const [categories, setCategories] = useState([]);
     const [message, setMessage] = useState("");
@@ -81,7 +83,7 @@ export default function FaqAdminPage() {
             setFaqs((r && r.faqs) || []);
         } catch (err) {
             setFaqs([]);
-            setMessage(`Error al cargar la lista: ${err?.message || err}`);
+            setMessage(t("msg.loadError", { msg: err?.message || err }));
         }
         loadCategories();
     };
@@ -109,7 +111,7 @@ export default function FaqAdminPage() {
     const save = async (e) => {
         e.preventDefault();
         if (!form.question.trim() || !form.answer.trim()) {
-            setModalError("La pregunta y la respuesta son obligatorias.");
+            setModalError(t("msg.required"));
             return;
         }
         setBusy(true); setModalError("");
@@ -118,10 +120,10 @@ export default function FaqAdminPage() {
             if (form.id) body.id = form.id;
             await apiPost("/plugin/faq/save", body);
             setModalOpen(false);
-            setMessage(form.id ? "Pregunta actualizada." : "Pregunta creada.");
+            setMessage(form.id ? t("msg.updated") : t("msg.created"));
             loadAll();
         } catch (err) {
-            setModalError(`Error al guardar: ${err?.message || err}`);
+            setModalError(t("msg.saveError", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -132,19 +134,19 @@ export default function FaqAdminPage() {
             const r = await apiPost(`/plugin/faq/${f.id}/toggle`, {});
             setFaqs((prev) => (prev || []).map((x) => (x.id === f.id ? { ...x, is_published: r.is_published } : x)));
         } catch (err) {
-            setMessage(`Error al cambiar la visibilidad: ${err?.message || err}`);
+            setMessage(t("msg.toggleError", { msg: err?.message || err }));
         }
     };
 
     const remove = async (f) => {
-        if (typeof window !== "undefined" && !window.confirm("¿Eliminar esta pregunta de forma permanente?")) return;
+        if (typeof window !== "undefined" && !window.confirm(t("msg.deleteConfirm"))) return;
         try {
             await apiDelete(`/plugin/faq/${f.id}`);
             setFaqs((prev) => (prev || []).filter((x) => x.id !== f.id));
-            setMessage("Pregunta eliminada.");
+            setMessage(t("msg.deleted"));
             loadCategories();
         } catch (err) {
-            setMessage(`Error al eliminar: ${err?.message || err}`);
+            setMessage(t("msg.deleteError", { msg: err?.message || err }));
         }
     };
 
@@ -163,7 +165,7 @@ export default function FaqAdminPage() {
         try {
             await apiPost("/plugin/faq/reorder", { ids: flat.map((x) => x.id) });
         } catch (err) {
-            setMessage(`Error al reordenar: ${err?.message || err}`);
+            setMessage(t("msg.reorderError", { msg: err?.message || err }));
             loadAll();
         }
     };
@@ -176,18 +178,18 @@ export default function FaqAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconHelp /></div>
                 <div>
-                    <h1 className="cf-title">FAQ</h1>
-                    <p className="cf-subtitle">Preguntas frecuentes por categoría → bloque acordeón con SEO</p>
+                    <h1 className="cf-title">{t("app.title")}</h1>
+                    <p className="cf-subtitle">{t("app.subtitle")}</p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                <button type="button" onClick={openNew} className="cf-btn"><IconPlus /> Nueva pregunta</button>
+                <button type="button" onClick={openNew} className="cf-btn"><IconPlus /> {t("app.newQuestion")}</button>
             </div>
 
             {message && (
-                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>
+                <div role={/Erro/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Erro/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
@@ -195,30 +197,30 @@ export default function FaqAdminPage() {
             {/* questions grouped by category */}
             <div className="cf-card-item">
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "1.1rem" }}>
-                    <h2 className="cf-card-title"><IconBlock /> Preguntas</h2>
+                    <h2 className="cf-card-title"><IconBlock /> {t("list.title")}</h2>
                     <span className="cf-count">
-                        {total} pregunta{total === 1 ? "" : "s"} · {groups.filter((g) => g.category).length} categoría{groups.filter((g) => g.category).length === 1 ? "" : "s"}
+                        {t(total === 1 ? "count.questions.one" : "count.questions.other", { n: total })} · {t(groups.filter((g) => g.category).length === 1 ? "count.categories.one" : "count.categories.other", { n: groups.filter((g) => g.category).length })}
                     </span>
                 </div>
 
                 {faqs === null ? (
-                    <p className="cf-help">Cargando…</p>
+                    <p className="cf-help">{t("list.loading")}</p>
                 ) : total === 0 ? (
                     <div className="cf-empty">
                         <IconHelp />
-                        <span>No hay preguntas todavía — crea la primera con "Nueva pregunta".</span>
+                        <span>{t("list.empty")}</span>
                     </div>
                 ) : (
                     <div>
                         {groups.map((g) => (
                             <div key={g.category || "__none__"} className="cf-group">
-                                <h3 className="cf-group-title">{g.category || "Sin categoría"}</h3>
+                                <h3 className="cf-group-title">{g.category || t("list.noCategory")}</h3>
                                 <ul className="cf-faq-list">
                                     {g.items.map((f, i) => (
                                         <li key={f.id} className={`cf-faq-row ${Number(f.is_published) === 1 ? "" : "is-hidden"}`}>
                                             <div className="cf-move">
-                                                <button type="button" onClick={() => move(f, -1)} disabled={i === 0} className="cf-iconbtn" title="Subir" aria-label="Subir"><IconChevronUp /></button>
-                                                <button type="button" onClick={() => move(f, 1)} disabled={i === g.items.length - 1} className="cf-iconbtn" title="Bajar" aria-label="Bajar"><IconChevronDown /></button>
+                                                <button type="button" onClick={() => move(f, -1)} disabled={i === 0} className="cf-iconbtn" title={t("row.moveUp")} aria-label={t("row.moveUp")}><IconChevronUp /></button>
+                                                <button type="button" onClick={() => move(f, 1)} disabled={i === g.items.length - 1} className="cf-iconbtn" title={t("row.moveDown")} aria-label={t("row.moveDown")}><IconChevronDown /></button>
                                             </div>
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 <p className="cf-faq-q">{f.question}</p>
@@ -228,12 +230,12 @@ export default function FaqAdminPage() {
                                                 type="button"
                                                 onClick={() => toggle(f)}
                                                 className={`cf-pill ${Number(f.is_published) === 1 ? "is-on" : "is-off"}`}
-                                                title={Number(f.is_published) === 1 ? "Clic para ocultar" : "Clic para publicar"}
+                                                title={Number(f.is_published) === 1 ? t("row.clickToHide") : t("row.clickToPublish")}
                                             >
-                                                {Number(f.is_published) === 1 ? "Publicada" : "Oculta"}
+                                                {Number(f.is_published) === 1 ? t("row.published") : t("row.hidden")}
                                             </button>
-                                            <button type="button" onClick={() => openEdit(f)} className="cf-iconbtn" title="Editar" aria-label="Editar"><IconPen /></button>
-                                            <button type="button" onClick={() => remove(f)} className="cf-iconbtn is-danger" title="Eliminar" aria-label="Eliminar"><IconX /></button>
+                                            <button type="button" onClick={() => openEdit(f)} className="cf-iconbtn" title={t("common.edit")} aria-label={t("common.edit")}><IconPen /></button>
+                                            <button type="button" onClick={() => remove(f)} className="cf-iconbtn is-danger" title={t("common.delete")} aria-label={t("common.delete")}><IconX /></button>
                                         </li>
                                     ))}
                                 </ul>
@@ -245,12 +247,9 @@ export default function FaqAdminPage() {
 
             {/* how to render on the public site */}
             <div className="cf-card-item">
-                <h2 className="cf-card-title"><IconHelp /> Cómo mostrarlas en tu sitio</h2>
+                <h2 className="cf-card-title"><IconHelp /> {t("help.title")}</h2>
                 <p className="cf-prose">
-                    En el editor visual, agrega el bloque <strong>Faq</strong>: renderiza estas preguntas como un
-                    acordeón filtrable por categoría e incluye datos estructurados <strong>FAQPage (JSON-LD)</strong>,
-                    lo que permite que Google muestre tus preguntas como resultados enriquecidos en el buscador —
-                    a diferencia del bloque estático "Accordion" del núcleo, que no aporta ese marcado SEO.
+                    {t("help.p1")} <strong>Faq</strong>{t("help.p2")} <strong>FAQPage (JSON-LD)</strong>{t("help.p3")}
                 </p>
             </div>
 
@@ -263,47 +262,47 @@ export default function FaqAdminPage() {
                         className="cf-letter"
                         role="dialog"
                         aria-modal="true"
-                        aria-label={form.id ? "Editar pregunta" : "Nueva pregunta"}
+                        aria-label={form.id ? t("form.editTitle") : t("form.newTitle")}
                     >
                         <div className="cf-letter-body">
                             <h2 className="cf-editor-title">
                                 <IconPen />
-                                {form.id ? "Editar pregunta" : "Nueva pregunta"}
+                                {form.id ? t("form.editTitle") : t("form.newTitle")}
                             </h2>
                             <div style={{ display: "grid", gap: "1.05rem" }}>
                                 <div>
-                                    <label className="cf-label" htmlFor="fq-question">Pregunta</label>
+                                    <label className="cf-label" htmlFor="fq-question">{t("form.question")}</label>
                                     <input
                                         id="fq-question"
                                         type="text"
                                         value={form.question}
                                         onChange={(e) => setForm({ ...form, question: e.target.value })}
-                                        placeholder="¿Cómo puedo…?"
+                                        placeholder={t("form.questionPh")}
                                         className="cf-input"
                                         maxLength={500}
                                         required
                                     />
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="fq-answer">Respuesta</label>
+                                    <label className="cf-label" htmlFor="fq-answer">{t("form.answer")}</label>
                                     <textarea
                                         id="fq-answer"
                                         value={form.answer}
                                         onChange={(e) => setForm({ ...form, answer: e.target.value })}
-                                        placeholder="Escribe la respuesta (texto plano; los saltos de línea se respetan)"
+                                        placeholder={t("form.answerPh")}
                                         className="cf-input"
                                         maxLength={10000}
                                         required
                                     />
                                 </div>
                                 <div>
-                                    <label className="cf-label" htmlFor="fq-category">Categoría (opcional)</label>
+                                    <label className="cf-label" htmlFor="fq-category">{t("form.category")}</label>
                                     <input
                                         id="fq-category"
                                         type="text"
                                         value={form.category}
                                         onChange={(e) => setForm({ ...form, category: e.target.value })}
-                                        placeholder="General, Envíos, Pagos…"
+                                        placeholder={t("form.categoryPh")}
                                         className="cf-input"
                                         maxLength={120}
                                         list="wjfq-categorias"
@@ -316,10 +315,10 @@ export default function FaqAdminPage() {
                             </div>
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.4rem" }}>
                                 <button type="button" onClick={() => setModalOpen(false)} disabled={busy} className="cf-btn-ghost">
-                                    Cancelar
+                                    {t("common.cancel")}
                                 </button>
                                 <button type="submit" disabled={busy} className="cf-btn">
-                                    {busy ? "Guardando…" : "Guardar"}
+                                    {busy ? t("common.saving") : t("common.save")}
                                 </button>
                             </div>
                         </div>

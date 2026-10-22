@@ -261,3 +261,37 @@ test('with Require STARTTLS off, an internal relay whose certificate cannot be v
         assert.ok(other.transports.every((t: any) => !(t.tls && t.tls.rejectUnauthorized === false)));
     } finally { other.plugin.deactivate(); }
 });
+
+test('relay settings saved by another process take effect at the next delivery (X4-15)', async () => {
+    // The transport is per process: a queue pass running where the settings were NOT saved kept the relay it
+    // had built — mail kept failing with "Relay unavailable" after the relay had been removed.
+    const b = await boot({
+        options: { mail_server: '192.168.182.56', mail_port: '1025', mail_relay_require_tls: '0' },
+        verify: async () => { throw new Error(SANDBOX_REFUSAL); },
+    });
+    try {
+        let r = await b.call('post', '/test', { to: 'someone@example.org' });
+        assert.match(r.body.failed[0].error, /^Relay unavailable: /);
+
+        // Another process clears the relay: only the shared setting changes here.
+        b.options.mail_server = '';
+        const lookupsBefore = b.mxLookups.length;
+        r = await b.call('post', '/test', { to: 'someone@example.org' });
+        assert.doesNotMatch(String(r.body.failed && r.body.failed[0] && r.body.failed[0].error), /Relay unavailable/, JSON.stringify(r.body));
+        assert.ok(b.mxLookups.slice(lookupsBefore).some((l) => l.startsWith('MX')), 'delivery went direct-to-MX, as with no relay');
+        const settings = (await b.call('get', '/settings')).body;
+        assert.strictEqual(settings.relay_status.configured, false);
+    } finally { b.plugin.deactivate(); }
+});
+
+test('a relay configured by another process is used at the next delivery', async () => {
+    const b = await boot({});
+    try {
+        b.options.mail_server = 'relay.lan';
+        b.options.mail_port = '587';
+        const r = await b.call('post', '/test', { to: 'someone@example.org' });
+        assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
+        assert.strictEqual(r.body.delivered[0].via, 'relay');
+        assert.strictEqual(b.relaySends.length, 1);
+    } finally { b.plugin.deactivate(); }
+});

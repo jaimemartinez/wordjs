@@ -14,6 +14,7 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
+import { useT } from "./i18n";
 
 /* Tiny inline icon set (viewBox 24, stroke currentColor) so the identity needs no icon-font. */
 const IconQuote = (props) => (
@@ -46,9 +47,10 @@ const IconStar = (props) => (
 // ── module-level components (never define a component inside a component) ──────────────────────
 
 function StarsRow({ rating }) {
+    const { t } = useT();
     const r = Math.max(1, Math.min(5, Number(rating) || 5));
     return (
-        <span className="cf-stars" aria-label={`${r} de 5 estrellas`}>
+        <span className="cf-stars" aria-label={t("stars.label", { n: r })}>
             {[1, 2, 3, 4, 5].map((i) => (
                 <IconStar key={i} className={i <= r ? "" : "is-off"} />
             ))}
@@ -57,14 +59,15 @@ function StarsRow({ rating }) {
 }
 
 function RatingPicker({ value, onChange }) {
+    const { t } = useT();
     return (
-        <span className="cf-star-row" role="radiogroup" aria-label="Calificación">
+        <span className="cf-star-row" role="radiogroup" aria-label={t("stars.rating")}>
             {[1, 2, 3, 4, 5].map((i) => (
                 <button
                     key={i}
                     type="button"
                     className={`cf-star-btn ${i <= value ? "is-on" : ""}`}
-                    aria-label={`${i} de 5 estrellas`}
+                    aria-label={t("stars.label", { n: i })}
                     aria-pressed={i === value}
                     onClick={() => onChange(i)}
                 ><IconStar /></button>
@@ -87,6 +90,7 @@ function AuthorAvatar({ item }) {
 }
 
 function TestimonialCard({ item, busy, onApprove, onEdit, onDelete }) {
+    const { t, locale } = useT();
     return (
         <div className="cf-card-item cf-tcard">
             <div className="cf-tcard-head">
@@ -98,23 +102,23 @@ function TestimonialCard({ item, busy, onApprove, onEdit, onDelete }) {
                 <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.35rem" }}>
                     <StarsRow rating={item.rating} />
                     <span className={`cf-pill ${item.source === "public" ? "is-public" : ""}`}>
-                        {item.source === "public" ? "Público" : "Admin"}
+                        {item.source === "public" ? t("card.public") : t("card.admin")}
                     </span>
                 </div>
             </div>
             <p className="cf-t-quote">{item.content}</p>
             <div className="cf-tcard-foot">
                 <span className="cf-t-date">
-                    {item.created_at ? new Date(item.created_at).toLocaleDateString() : ""}
+                    {item.created_at ? new Date(item.created_at).toLocaleDateString(locale) : ""}
                 </span>
                 {item.status === "pending" && (
                     <button type="button" disabled={busy} onClick={() => onApprove(item)} className="cf-btn">
-                        <IconCheck /> Aprobar
+                        <IconCheck /> {t("card.approve")}
                     </button>
                 )}
-                <button type="button" disabled={busy} onClick={() => onEdit(item)} className="cf-btn-ghost"><IconPen /> Editar</button>
+                <button type="button" disabled={busy} onClick={() => onEdit(item)} className="cf-btn-ghost"><IconPen /> {t("common.edit")}</button>
                 <button type="button" disabled={busy} onClick={() => onDelete(item)} className="cf-btn-danger">
-                    Eliminar
+                    {t("common.delete")}
                 </button>
             </div>
         </div>
@@ -126,6 +130,7 @@ function TestimonialCard({ item, busy, onApprove, onEdit, onDelete }) {
  * (via key) each time it opens, so stale state never leaks between edits.
  */
 function TestimonialModal({ initial, onClose, onSaved }) {
+    const { t } = useT();
     const [name, setName] = useState(initial?.author_name || "");
     const [role, setRole] = useState(initial?.author_role || "");
     const [photo, setPhoto] = useState(initial?.author_photo || "");
@@ -154,7 +159,7 @@ function TestimonialModal({ initial, onClose, onSaved }) {
             await apiPost("/plugin/testimonials/save", body);
             onSaved();
         } catch (err) {
-            setError(err?.message || "No se pudo guardar el testimonio.");
+            setError(err?.message || t("modal.saveError"));
         } finally {
             setBusy(false);
         }
@@ -168,47 +173,47 @@ function TestimonialModal({ initial, onClose, onSaved }) {
                 className="cf-letter"
                 role="dialog"
                 aria-modal="true"
-                aria-label={initial?.id ? "Editar testimonio" : "Nuevo testimonio"}
+                aria-label={initial?.id ? t("modal.edit") : t("modal.new")}
             >
                 <div className="cf-letter-body">
                     <h2 className="cf-editor-title">
                         {initial?.id ? <IconPen /> : <IconPlus />}
-                        {initial?.id ? "Editar testimonio" : "Nuevo testimonio"}
+                        {initial?.id ? t("modal.edit") : t("modal.new")}
                     </h2>
                     <div style={{ display: "grid", gap: "1.05rem" }}>
                         <div>
-                            <label className="cf-label" htmlFor="tm-name">Nombre *</label>
+                            <label className="cf-label" htmlFor="tm-name">{t("modal.name")}</label>
                             <input id="tm-name" type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} className="cf-input" required />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="tm-role">Cargo / Empresa</label>
+                            <label className="cf-label" htmlFor="tm-role">{t("modal.role")}</label>
                             <input id="tm-role" type="text" value={role} maxLength={120} onChange={(e) => setRole(e.target.value)} className="cf-input" />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="tm-photo">URL de la foto (http/https, opcional)</label>
+                            <label className="cf-label" htmlFor="tm-photo">{t("modal.photo")}</label>
                             <input id="tm-photo" type="url" value={photo} maxLength={500} onChange={(e) => setPhoto(e.target.value)} placeholder="https://…" className="cf-input" />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="tm-content">Testimonio *</label>
+                            <label className="cf-label" htmlFor="tm-content">{t("modal.content")}</label>
                             <textarea id="tm-content" value={content} maxLength={2000} onChange={(e) => setContent(e.target.value)} rows={4} className="cf-input" required />
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "1.5rem" }}>
                             <div>
-                                <span className="cf-label">Calificación</span>
+                                <span className="cf-label">{t("stars.rating")}</span>
                                 <RatingPicker value={rating} onChange={setRating} />
                             </div>
                             <div style={{ flex: 1, minWidth: "140px" }}>
-                                <label className="cf-label" htmlFor="tm-status">Estado</label>
+                                <label className="cf-label" htmlFor="tm-status">{t("modal.status")}</label>
                                 <select id="tm-status" value={status} onChange={(e) => setStatus(e.target.value)} className="cf-select">
-                                    <option value="approved">Aprobado</option>
-                                    <option value="pending">Pendiente</option>
+                                    <option value="approved">{t("modal.statusApproved")}</option>
+                                    <option value="pending">{t("modal.statusPending")}</option>
                                 </select>
                             </div>
                         </div>
                         {error && <div role="alert" className="cf-flash is-error" style={{ marginBottom: 0 }}>{error}</div>}
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", paddingTop: "0.35rem" }}>
-                            <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
-                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                            <button type="button" onClick={onClose} className="cf-btn-ghost">{t("common.cancel")}</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                         </div>
                     </div>
                 </div>
@@ -218,6 +223,7 @@ function TestimonialModal({ initial, onClose, onSaved }) {
 }
 
 export default function TestimonialsAdminPage() {
+    const { t } = useT();
     const [items, setItems] = useState([]);
     const [counts, setCounts] = useState({ pending: 0, approved: 0 });
     const [tab, setTab] = useState("pending");
@@ -232,7 +238,7 @@ export default function TestimonialsAdminPage() {
             setItems(data.items || []);
             setCounts(data.counts || { pending: 0, approved: 0 });
         } catch (err) {
-            setMessage(`Error al cargar: ${err?.message || err}`);
+            setMessage(t("app.loadError", { msg: err?.message || err }));
         }
     };
     const loadSettings = async () => {
@@ -250,24 +256,24 @@ export default function TestimonialsAdminPage() {
         setBusy(true); setMessage("");
         try {
             await apiPost(`/plugin/testimonials/${item.id}/approve`, {});
-            setMessage(`Testimonio de ${item.author_name} aprobado.`);
+            setMessage(t("app.approved", { name: item.author_name }));
             await load();
         } catch (err) {
-            setMessage(`Error al aprobar: ${err?.message || err}`);
+            setMessage(t("app.approveError", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
     };
 
     const remove = async (item) => {
-        if (typeof window !== "undefined" && !window.confirm(`¿Eliminar el testimonio de ${item.author_name}? Esta acción no se puede deshacer.`)) return;
+        if (typeof window !== "undefined" && !window.confirm(t("app.confirmDelete", { name: item.author_name }))) return;
         setBusy(true); setMessage("");
         try {
             await apiDelete(`/plugin/testimonials/${item.id}`);
-            setMessage("Testimonio eliminado.");
+            setMessage(t("app.deleted"));
             await load();
         } catch (err) {
-            setMessage(`Error al eliminar: ${err?.message || err}`);
+            setMessage(t("app.deleteError", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -280,7 +286,7 @@ export default function TestimonialsAdminPage() {
             await apiPost("/plugin/testimonials/settings", { allowPublicSubmit: next });
         } catch (err) {
             setAllowPublicSubmit(!next); // revert
-            setMessage(`Error al guardar la configuración: ${err?.message || err}`);
+            setMessage(t("app.settingsError", { msg: err?.message || err }));
         }
     };
 
@@ -292,23 +298,23 @@ export default function TestimonialsAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconQuote /></div>
                 <div>
-                    <h1 className="cf-title">Testimonios</h1>
-                    <p className="cf-subtitle">Moderación + bloque "Testimonials" en el editor visual</p>
+                    <h1 className="cf-title">{t("app.title")}</h1>
+                    <p className="cf-subtitle">{t("app.subtitle")}</p>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> Nuevo testimonio</button>
+                <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> {t("app.new")}</button>
             </div>
 
             {/* Settings toggle */}
             <div className="cf-card-item" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "1rem", marginBottom: "1.5rem" }}>
                 <div style={{ minWidth: 0, flex: "1 1 18rem" }}>
-                    <p className="cf-setting-title">Permitir envíos públicos desde el bloque</p>
+                    <p className="cf-setting-title">{t("settings.title")}</p>
                     <p className="cf-setting-desc">
-                        Si está activo, el bloque puede mostrar un formulario público; los envíos entran como
-                        <strong> pendientes</strong> y solo se publican cuando los apruebas aquí.
+                        {t("settings.desc1")}
+                        <strong>{t("settings.descStrong")}</strong>{t("settings.desc2")}
                     </p>
                 </div>
                 <button
@@ -316,7 +322,7 @@ export default function TestimonialsAdminPage() {
                     onClick={toggleSubmit}
                     role="switch"
                     aria-checked={allowPublicSubmit}
-                    aria-label="Permitir envíos públicos desde el bloque"
+                    aria-label={t("settings.title")}
                     className={`cf-switch ${allowPublicSubmit ? "is-on" : ""}`}
                 >
                     <span className="cf-switch-knob" />
@@ -332,7 +338,7 @@ export default function TestimonialsAdminPage() {
                     onClick={() => setTab("pending")}
                     className={`cf-tab ${tab === "pending" ? "is-active" : ""}`}
                 >
-                    Pendientes
+                    {t("tab.pending")}
                     {counts.pending > 0 && (
                         <span className="cf-badge">
                             {counts.pending}
@@ -346,12 +352,12 @@ export default function TestimonialsAdminPage() {
                     onClick={() => setTab("approved")}
                     className={`cf-tab ${tab === "approved" ? "is-active" : ""}`}
                 >
-                    Aprobados ({counts.approved})
+                    {t("tab.approved", { n: counts.approved })}
                 </button>
             </div>
 
             {message && (
-                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>
+                <div role={/Error/i.test(message) || /^Erro\b/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) || /^Erro\b/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
@@ -362,8 +368,8 @@ export default function TestimonialsAdminPage() {
                     <IconQuote />
                     <span>
                         {tab === "pending"
-                            ? "No hay testimonios pendientes de moderación."
-                            : "No hay testimonios aprobados todavía — crea uno con “Nuevo testimonio”."}
+                            ? t("empty.pending")
+                            : t("empty.approved")}
                     </span>
                 </div>
             ) : (
@@ -382,10 +388,7 @@ export default function TestimonialsAdminPage() {
             )}
 
             <p className="cf-footnote">
-                En el editor visual, agrega el bloque <strong>Testimonials</strong> (categoría Testimonios) —
-                muestra los testimonios aprobados en carrusel o cuadrícula y, si lo permites arriba, un
-                formulario de envío público. (El bloque estático "Testimonial" del núcleo es distinto: uno
-                solo, escrito a mano en el editor.)
+                {t("footnote.before")}<strong>Testimonials</strong>{t("footnote.after")}
             </p>
 
             {modal !== null && (
@@ -393,7 +396,7 @@ export default function TestimonialsAdminPage() {
                     key={modal.id || "new"}
                     initial={modal.id ? modal : null}
                     onClose={() => setModal(null)}
-                    onSaved={() => { setModal(null); setMessage("Testimonio guardado."); load(); }}
+                    onSaved={() => { setModal(null); setMessage(t("app.saved")); load(); }}
                 />
             )}
         </div>

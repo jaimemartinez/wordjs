@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Newsletter',
-    version: '1.0.3',
+    version: '1.0.4',
     description: 'Newsletter subscriptions (double opt-in) + HTML campaigns with unsubscribe links',
     author: 'WordJS',
 };

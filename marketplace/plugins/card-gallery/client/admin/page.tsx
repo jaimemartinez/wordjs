@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import MediaPickerModal from "../../../../../frontend/src/components/MediaPickerModal";
 import { useModal } from "@/contexts/ModalContext";
+import { useT } from "./i18n";
 
 // Types
 interface Card {
@@ -49,6 +50,7 @@ export default function CardGalleryAdminPage() {
     // View State
     const [view, setView] = useState<'list' | 'detail'>('list');
     const { alert, confirm } = useModal();
+    const { t } = useT();
 
     // Data State
     const [galleries, setGalleries] = useState<Gallery[]>([]);
@@ -103,12 +105,12 @@ export default function CardGalleryAdminPage() {
             loadGallery(newGallery.id); // Open it immediately
         } catch (err) {
             console.error("Failed to create gallery:", err);
-            await alert("Failed to create gallery");
+            await alert(t("error.createGallery"));
         }
     };
 
     const handleDeleteGallery = async (id: string) => {
-        if (!await confirm("Are you sure you want to delete this gallery and all its cards?", "Delete Gallery", true)) return;
+        if (!await confirm(t("confirm.deleteGallery"), t("confirm.deleteGalleryTitle"), true)) return;
         try {
             await galleriesApi.delete(id);
             setGalleries(galleries.filter(g => g.id !== id));
@@ -118,7 +120,7 @@ export default function CardGalleryAdminPage() {
             }
         } catch (err) {
             console.error(err);
-            await alert("Failed to delete gallery");
+            await alert(t("error.deleteGallery"));
         }
     };
 
@@ -137,7 +139,7 @@ export default function CardGalleryAdminPage() {
                 subtitle: "",
                 dates: "",
                 image: "",
-                buttonText: "INSCRÍBETE AQUÍ",
+                buttonText: t("editor.buttonTextDefault"),
                 buttonLink: "",
                 // order: selectedGallery?.cards.length || 0 // Order handled by array position
             });
@@ -168,7 +170,7 @@ export default function CardGalleryAdminPage() {
             setIsNewCard(false);
         } catch (err) {
             console.error("Failed to save card:", err);
-            await alert("Failed to save card");
+            await alert(t("error.saveCard"));
         } finally {
             setSaving(false);
         }
@@ -176,7 +178,7 @@ export default function CardGalleryAdminPage() {
 
     const deleteCard = async (index: number) => {
         if (!selectedGallery) return;
-        if (!await confirm("Are you sure you want to delete this card?", "Delete Card", true)) return;
+        if (!await confirm(t("confirm.deleteCard"), t("confirm.deleteCardTitle"), true)) return;
 
         setSaving(true);
 
@@ -190,7 +192,7 @@ export default function CardGalleryAdminPage() {
             setGalleries(galleries.map(g => g.id === updatedGallery.id ? updatedGallery : g));
         } catch (err) {
             console.error("Failed to delete card:", err);
-            await alert("Failed to delete card");
+            await alert(t("error.deleteCard"));
         } finally {
             setSaving(false);
         }
@@ -214,7 +216,7 @@ export default function CardGalleryAdminPage() {
         } catch (err) {
             console.error("Failed to save reorder:", err);
             // Revert on error would be ideal here
-            await alert("Failed to save new order");
+            await alert(t("error.saveOrder"));
         }
     };
 
@@ -227,10 +229,10 @@ export default function CardGalleryAdminPage() {
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
                     <div>
                         <h1 className="text-4xl md:text-5xl font-black text-gray-900 italic tracking-tighter mb-2 flex items-center gap-3">
-                            <i className="fa-solid fa-images text-blue-600 text-3xl"></i> Galerías de Tarjetas
+                            <i className="fa-solid fa-images text-blue-600 text-3xl"></i> {t("list.title")}
                         </h1>
                         <p className="text-xs font-bold uppercase tracking-widest text-gray-400">
-                            Administra tus colecciones de tarjetas
+                            {t("list.subtitle")}
                         </p>
                     </div>
                 </div>
@@ -239,17 +241,17 @@ export default function CardGalleryAdminPage() {
                 {isCreatingGallery && (
                     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
                         <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
-                            <h3 className="text-xl font-bold mb-4">Nueva Galería</h3>
+                            <h3 className="text-xl font-bold mb-4">{t("create.title")}</h3>
                             <input
                                 className="w-full border p-3 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 outline-none"
-                                placeholder="Nombre de la galería"
+                                placeholder={t("create.namePlaceholder")}
                                 value={newGalleryName}
                                 onChange={e => setNewGalleryName(e.target.value)}
                                 autoFocus
                             />
                             <div className="flex justify-end gap-2">
-                                <button onClick={() => setIsCreatingGallery(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancelar</button>
-                                <button onClick={handleCreateGallery} disabled={!newGalleryName} className="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Crear</button>
+                                <button onClick={() => setIsCreatingGallery(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">{t("common.cancel")}</button>
+                                <button onClick={handleCreateGallery} disabled={!newGalleryName} className="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">{t("create.submit")}</button>
                             </div>
                         </div>
                     </div>
@@ -258,7 +260,7 @@ export default function CardGalleryAdminPage() {
                 {loading ? (
                     <div className="text-center py-12 text-gray-400">
                         <i className="fa-solid fa-circle-notch fa-spin text-3xl mb-3"></i>
-                        <p>Cargando galerías...</p>
+                        <p>{t("list.loading")}</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -270,7 +272,7 @@ export default function CardGalleryAdminPage() {
                             <div className="w-20 h-20 rounded-3xl bg-gray-50 group-hover:bg-blue-600 text-gray-400 group-hover:text-white flex items-center justify-center mb-6 text-3xl shadow-inner group-hover:shadow-lg transition-all duration-300 transform group-hover:scale-110 group-hover:-rotate-3">
                                 <i className="fa-solid fa-plus"></i>
                             </div>
-                            <span className="font-black text-lg uppercase tracking-wide group-hover:tracking-widest transition-all">Nueva Galería</span>
+                            <span className="font-black text-lg uppercase tracking-wide group-hover:tracking-widest transition-all">{t("list.newGallery")}</span>
                         </div>
 
                         {galleries.map(g => (
@@ -287,7 +289,7 @@ export default function CardGalleryAdminPage() {
                                             <i className="fa-solid fa-layer-group"></i>
                                         </div>
                                         <div className="text-right">
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-300 block">Tarjetas</span>
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-300 block">{t("list.cards")}</span>
                                             <span className="text-2xl font-black text-gray-900 leading-none">{(g.cards || []).length}</span>
                                         </div>
                                     </div>
@@ -295,7 +297,7 @@ export default function CardGalleryAdminPage() {
                                     <div className="mb-4">
                                         <h3 className="text-2xl font-black text-gray-900 italic tracking-tighter group-hover:text-blue-600 transition-colors line-clamp-1 mb-1">{g.name}</h3>
                                         <p className="text-xs font-bold text-gray-400 uppercase tracking-widest line-clamp-1 flex items-center gap-1">
-                                            <i className="fa-solid fa-location-dot text-[10px]"></i> {g.location || "Sin ubicación"}
+                                            <i className="fa-solid fa-location-dot text-[10px]"></i> {g.location || t("list.noLocation")}
                                         </p>
                                     </div>
                                 </div>
@@ -303,14 +305,14 @@ export default function CardGalleryAdminPage() {
                                 <button
                                     onClick={(e) => { e.stopPropagation(); handleDeleteGallery(g.id); }}
                                     className="absolute bottom-6 right-6 w-10 h-10 rounded-xl bg-gray-50 text-gray-300 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all z-20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 duration-300 hover:shadow-lg hover:shadow-red-200"
-                                    title="Eliminar galería"
+                                    title={t("list.deleteGallery")}
                                 >
                                     <i className="fa-solid fa-trash text-sm"></i>
                                 </button>
 
                                 <div className="mt-auto pt-4 border-t border-gray-100/50 flex items-center text-sm relative z-10">
                                     <span className="text-blue-600 font-bold uppercase text-[10px] tracking-widest group-hover:translate-x-1 transition-transform flex items-center gap-2">
-                                        Gestionar Galería <i className="fa-solid fa-arrow-right"></i>
+                                        {t("list.manage")} <i className="fa-solid fa-arrow-right"></i>
                                     </span>
                                 </div>
                             </div>
@@ -336,7 +338,7 @@ export default function CardGalleryAdminPage() {
                     <div className="min-w-0">
                         <h1 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-1 break-words">{selectedGallery?.name}</h1>
                         <p className="text-xs font-bold uppercase tracking-widest text-gray-400">
-                            Gestionando tarjetas
+                            {t("detail.subtitle")}
                         </p>
                     </div>
                 </div>
@@ -346,7 +348,7 @@ export default function CardGalleryAdminPage() {
                         className="px-8 py-4 bg-blue-600 text-white rounded-2xl hover:bg-blue-700 transition-all shadow-xl shadow-blue-200 hover:shadow-blue-500/30 flex items-center gap-3 transform hover:-translate-y-1 active:scale-95 group"
                     >
                         <i className="fa-solid fa-plus text-sm group-hover:rotate-90 transition-transform"></i>
-                        <span className="font-black text-[10px] uppercase tracking-widest">Agregar Tarjeta</span>
+                        <span className="font-black text-[10px] uppercase tracking-widest">{t("detail.addCard")}</span>
                     </button>
                 </div>
             </div>
@@ -355,13 +357,13 @@ export default function CardGalleryAdminPage() {
             {!selectedGallery?.cards || selectedGallery.cards.length === 0 ? (
                 <div className="text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
                     <div className="text-gray-300 text-7xl mb-6"><i className="fa-solid fa-images"></i></div>
-                    <h3 className="text-xl font-bold text-gray-700 mb-2">Esta galería está vacía</h3>
-                    <p className="text-gray-500 mb-6">Agrega tarjetas para mostrar contenido visual atractivo.</p>
+                    <h3 className="text-xl font-bold text-gray-700 mb-2">{t("detail.emptyTitle")}</h3>
+                    <p className="text-gray-500 mb-6">{t("detail.emptyText")}</p>
                     <button
                         onClick={() => openCardEditor()}
                         className="px-6 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 font-medium"
                     >
-                        Comenzar
+                        {t("detail.start")}
                     </button>
                 </div>
             ) : (
@@ -394,14 +396,14 @@ export default function CardGalleryAdminPage() {
                                     <button
                                         onClick={() => openCardEditor(index)}
                                         className="w-12 h-12 rounded-2xl bg-white text-blue-600 shadow-lg hover:scale-110 transition-transform flex items-center justify-center transform translate-y-4 group-hover:translate-y-0 duration-300"
-                                        title="Editar"
+                                        title={t("card.edit")}
                                     >
                                         <i className="fa-solid fa-pencil"></i>
                                     </button>
                                     <button
                                         onClick={() => deleteCard(index)}
                                         className="w-12 h-12 rounded-2xl bg-white text-red-500 shadow-lg hover:scale-110 transition-transform flex items-center justify-center transform translate-y-4 group-hover:translate-y-0 duration-300 delay-75"
-                                        title="Eliminar"
+                                        title={t("card.delete")}
                                     >
                                         <i className="fa-solid fa-trash"></i>
                                     </button>
@@ -428,7 +430,7 @@ export default function CardGalleryAdminPage() {
                                     {card.buttonText && (
                                         <div className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
                                             <i className="fa-solid fa-link text-xs"></i>
-                                            BTN
+                                            {t("card.hasButton")}
                                         </div>
                                     )}
                                 </div>
@@ -449,7 +451,7 @@ export default function CardGalleryAdminPage() {
                                 <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg">
                                     <i className={`fa-solid ${isNewCard ? 'fa-plus' : 'fa-pen-to-square'}`}></i>
                                 </span>
-                                {isNewCard ? "Nueva Tarjeta" : "Editar Tarjeta"}
+                                {isNewCard ? t("editor.newCard") : t("editor.editCard")}
                             </h2>
                             <button
                                 onClick={() => { setEditingCardIndex(null); setIsNewCard(false); }}
@@ -462,29 +464,29 @@ export default function CardGalleryAdminPage() {
                         <div className="p-8 overflow-y-auto space-y-6 custom-scrollbar">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="col-span-1 md:col-span-2">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Título *</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("editor.title")}</label>
                                     <input
                                         type="text"
                                         value={cardForm.title || ""}
                                         onChange={(e) => setCardForm({ ...cardForm, title: e.target.value })}
                                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium text-lg"
-                                        placeholder="Nombre del evento o tarjeta"
+                                        placeholder={t("editor.titlePlaceholder")}
                                     />
                                 </div>
 
                                 <div className="col-span-1 md:col-span-2">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Subtítulo</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("editor.subtitle")}</label>
                                     <input
                                         type="text"
                                         value={cardForm.subtitle || ""}
                                         onChange={(e) => setCardForm({ ...cardForm, subtitle: e.target.value })}
                                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                        placeholder="Ubicación o detalle corto"
+                                        placeholder={t("editor.subtitlePlaceholder")}
                                     />
                                 </div>
 
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Fechas</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("editor.dates")}</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                             <i className="fa-regular fa-calendar text-gray-400"></i>
@@ -494,20 +496,20 @@ export default function CardGalleryAdminPage() {
                                             value={cardForm.dates || ""}
                                             onChange={(e) => setCardForm({ ...cardForm, dates: e.target.value })}
                                             className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                            placeholder="Ej: 15-18 ENE 2026"
+                                            placeholder={t("editor.datesPlaceholder")}
                                         />
                                     </div>
                                 </div>
 
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Imagen</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t("editor.image")}</label>
                                     <div className="flex gap-2">
                                         <input
                                             type="text"
                                             value={cardForm.image || ""}
                                             onChange={(e) => setCardForm({ ...cardForm, image: e.target.value })}
                                             className="flex-1 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-sm text-gray-600"
-                                            placeholder="URL de imagen"
+                                            placeholder={t("editor.imagePlaceholder")}
                                         />
                                         <button
                                             type="button"
@@ -523,28 +525,28 @@ export default function CardGalleryAdminPage() {
                             {/* Image Preview */}
                             {cardForm.image && (
                                 <div className="rounded-xl overflow-hidden shadow-md border border-gray-100 h-48 w-full bg-gray-50 relative group">
-                                    <img src={cardForm.image} alt="Preview" className="w-full h-full object-cover" />
-                                    <div className="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded">Vista Previa</div>
+                                    <img src={cardForm.image} alt={t("editor.previewAlt")} className="w-full h-full object-cover" />
+                                    <div className="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded">{t("editor.preview")}</div>
                                 </div>
                             )}
 
                             <div className="p-4 bg-gray-50/80 rounded-2xl border border-gray-100">
                                 <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-                                    <i className="fa-solid fa-link text-blue-500"></i> Acción del Botón
+                                    <i className="fa-solid fa-link text-blue-500"></i> {t("editor.buttonAction")}
                                 </h4>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Texto</label>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t("editor.buttonText")}</label>
                                         <input
                                             type="text"
                                             value={cardForm.buttonText || ""}
                                             onChange={(e) => setCardForm({ ...cardForm, buttonText: e.target.value })}
                                             className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg focus:ring-1 focus:ring-blue-500 outline-none"
-                                            placeholder="INSCRÍBETE"
+                                            placeholder={t("editor.buttonTextPlaceholder")}
                                         />
                                     </div>
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Enlace</label>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t("editor.buttonLink")}</label>
                                         <input
                                             type="text"
                                             value={cardForm.buttonLink || ""}
@@ -562,7 +564,7 @@ export default function CardGalleryAdminPage() {
                                 onClick={() => { setEditingCardIndex(null); setIsNewCard(false); }}
                                 className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"
                             >
-                                Cancelar
+                                {t("common.cancel")}
                             </button>
                             <button
                                 onClick={saveCard}
@@ -570,9 +572,9 @@ export default function CardGalleryAdminPage() {
                                 className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold hover:shadow-lg hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-70 disabled:shadow-none flex items-center gap-2"
                             >
                                 {saving ? (
-                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> Guardando...</>
+                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> {t("editor.saving")}</>
                                 ) : (
-                                    <><i className="fa-solid fa-floppy-disk"></i> Guardar Tarjeta</>
+                                    <><i className="fa-solid fa-floppy-disk"></i> {t("editor.save")}</>
                                 )}
                             </button>
                         </div>

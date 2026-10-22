@@ -551,20 +551,29 @@ export function prepareEmailHtml(html: string, showImages: boolean) {
 export function EmailBodyFrame({ html, showImages, title = 'Message' }: any) {
     const ref = useRef<HTMLIFrameElement>(null);
     const [height, setHeight] = useState(120);
+    const heightRef = useRef(120);
     const prepared = useMemo(() => prepareEmailHtml(html, showImages), [html, showImages]);
     const srcDoc = '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">'
         + '<meta name="referrer" content="no-referrer">'
         + '<style>html,body{margin:0;padding:0}body{font:14px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1e293b;word-break:break-word;overflow-wrap:anywhere}'
         + 'img{max-width:100%;height:auto}a{color:#6d28d9}table{max-width:100%!important}pre{white-space:pre-wrap}'
-        + 'blockquote{margin:0 0 0 .8ex;border-left:2px solid #cbd5e1;padding-left:1ex;color:#475569}img:not([src]){display:inline-block;min-width:16px;min-height:16px;background:#f1f5f9}</style></head><body>'
-        + prepared.html + '</body></html>';
+        + 'blockquote{margin:0 0 0 .8ex;border-left:2px solid #cbd5e1;padding-left:1ex;color:#475569}img:not([src]){display:inline-block;min-width:16px;min-height:16px;background:#f1f5f9}#wjs-mail-body{display:flow-root}</style></head><body>'
+        + '<div id="wjs-mail-body">' + prepared.html + '</div></body></html>';
 
+    // Measure the message's own wrapper, never the document: the document is at least as tall as the frame,
+    // so measuring it (plus a margin) made every check grow the frame by a few pixels — the body crept down
+    // for seconds after opening a message, dragging Reply / Reply all / Forward with it (FALLOS 126). The
+    // current height comes from a ref, not the closure the polling interval captured.
     const measure = () => {
         try {
             const doc = ref.current?.contentDocument;
-            if (!doc || !doc.body) return;
-            const h = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
-            if (h && Math.abs(h - height) > 2) setHeight(Math.min(h + 4, 20000));
+            const root = doc && doc.getElementById('wjs-mail-body');
+            if (!root) return;
+            const next = Math.min(Math.ceil(root.getBoundingClientRect().height) + 4, 20000);
+            if (Math.abs(next - heightRef.current) > 2) {
+                heightRef.current = next;
+                setHeight(next);
+            }
         } catch { /* cross-origin (should not happen with same-origin): keep the current height */ }
     };
     useEffect(() => {

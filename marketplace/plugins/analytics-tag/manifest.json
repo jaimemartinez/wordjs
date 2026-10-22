@@ -1,7 +1,7 @@
 {
     "id": "analytics-tag",
     "name": "Analytics Tag",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Injects a third-party analytics tag site-wide (Google Analytics 4, Plausible or Matomo) with optional cookie-consent gating: when the cookie-consent plugin is active, tracking waits until the visitor accepts cookies.",
     "author": "WordJS",
     "isolated": true,

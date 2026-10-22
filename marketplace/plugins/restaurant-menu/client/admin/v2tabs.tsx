@@ -15,12 +15,14 @@ import {
     downloadText, Modal,
 } from "./shared";
 import { qrSvg } from "./qr";
+import { useT } from "./i18n";
 
 // ================================================================================================
 // MODIFICADORES
 // ================================================================================================
 
 function GroupModal({ initial, busy, onSave, onClose }) {
+    const { t } = useT();
     const [name, setName] = useState(initial ? initial.name : "");
     const [nameEn, setNameEn] = useState(initial ? initial.name_en || "" : "");
     const [minSel, setMinSel] = useState(initial ? String(initial.min_select) : "0");
@@ -35,33 +37,33 @@ function GroupModal({ initial, busy, onSave, onClose }) {
         });
     };
     return (
-        <Modal title={initial ? "Editar grupo" : "Nuevo grupo de opciones"} onClose={onClose}>
+        <Modal title={initial ? t("group.edit") : t("group.new")} onClose={onClose}>
             <form onSubmit={submit} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Nombre</label>
-                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Tamaño, Extras…" className={inputCls} maxLength={120} required autoFocus />
+                        <label className={labelCls}>{t("common.name")}</label>
+                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("group.namePh")} className={inputCls} maxLength={120} required autoFocus />
                     </div>
                     <div>
-                        <label className={labelCls}>Nombre en inglés (opcional)</label>
+                        <label className={labelCls}>{t("common.nameEnOptional")}</label>
                         <input type="text" value={nameEn} onChange={(e) => setNameEn(e.target.value)} placeholder="Size, Extras…" className={inputCls} maxLength={120} />
                     </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Mínimo a elegir</label>
+                        <label className={labelCls}>{t("group.min")}</label>
                         <input type="number" min={0} max={20} value={minSel} onChange={(e) => setMinSel(e.target.value)} className={inputCls} />
-                        <p className="text-[11px] text-gray-400 mt-1.5">0 = opcional · 1+ = obligatorio</p>
+                        <p className="text-[11px] text-gray-400 mt-1.5">{t("group.minHelp")}</p>
                     </div>
                     <div>
-                        <label className={labelCls}>Máximo a elegir</label>
+                        <label className={labelCls}>{t("group.max")}</label>
                         <input type="number" min={1} max={20} value={maxSel} onChange={(e) => setMaxSel(e.target.value)} className={inputCls} />
-                        <p className="text-[11px] text-gray-400 mt-1.5">1 = elegir uno (ej. tamaño)</p>
+                        <p className="text-[11px] text-gray-400 mt-1.5">{t("group.maxHelp")}</p>
                     </div>
                 </div>
                 <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy || !name.trim()} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                    <button type="button" onClick={onClose} className={btnGhostCls}>{t("common.cancel")}</button>
+                    <button type="submit" disabled={busy || !name.trim()} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                 </div>
             </form>
         </Modal>
@@ -69,6 +71,7 @@ function GroupModal({ initial, busy, onSave, onClose }) {
 }
 
 function OptionModal({ initial, busy, onSave, onClose }) {
+    const { t } = useT();
     const [name, setName] = useState(initial ? initial.name : "");
     const [nameEn, setNameEn] = useState(initial ? initial.name_en || "" : "");
     const [deltaStr, setDeltaStr] = useState(initial ? centsToInput(initial.price_delta_cents) : "0.00");
@@ -79,25 +82,25 @@ function OptionModal({ initial, busy, onSave, onClose }) {
         onSave({ name: name.trim(), name_en: nameEn.trim(), price_delta_cents: delta });
     };
     return (
-        <Modal title={initial ? "Editar opción" : "Nueva opción"} onClose={onClose}>
+        <Modal title={initial ? t("option.edit") : t("option.new")} onClose={onClose}>
             <form onSubmit={submit} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Nombre</label>
-                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Grande, Queso extra…" className={inputCls} maxLength={120} required autoFocus />
+                        <label className={labelCls}>{t("common.name")}</label>
+                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("option.namePh")} className={inputCls} maxLength={120} required autoFocus />
                     </div>
                     <div>
-                        <label className={labelCls}>Nombre en inglés (opcional)</label>
+                        <label className={labelCls}>{t("common.nameEnOptional")}</label>
                         <input type="text" value={nameEn} onChange={(e) => setNameEn(e.target.value)} placeholder="Large, Extra cheese…" className={inputCls} maxLength={120} />
                     </div>
                 </div>
                 <div>
-                    <label className={labelCls}>Precio adicional (puede ser 0 o negativo)</label>
+                    <label className={labelCls}>{t("option.priceDelta")}</label>
                     <input type="text" inputMode="decimal" value={deltaStr} onChange={(e) => setDeltaStr(e.target.value)} placeholder="0.00" className={inputCls} />
                 </div>
                 <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy || !name.trim() || inputToCentsSigned(deltaStr) === null} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                    <button type="button" onClick={onClose} className={btnGhostCls}>{t("common.cancel")}</button>
+                    <button type="submit" disabled={busy || !name.trim() || inputToCentsSigned(deltaStr) === null} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                 </div>
             </form>
         </Modal>
@@ -105,6 +108,7 @@ function OptionModal({ initial, busy, onSave, onClose }) {
 }
 
 export function ModifiersTab({ flash, symbol }) {
+    const { t } = useT();
     const [groups, setGroups] = useState(null);
     const [busy, setBusy] = useState(false);
     const [groupModal, setGroupModal] = useState(null); // {group|null}
@@ -116,7 +120,7 @@ export function ModifiersTab({ flash, symbol }) {
             setGroups(data.groups || []);
         } catch (e) {
             setGroups([]);
-            flash(`Error al cargar modificadores: ${e?.message || e}`);
+            flash(t("mod.loadError", { msg: e?.message || e }));
         }
     };
     useEffect(() => { load(); }, []);
@@ -128,7 +132,7 @@ export function ModifiersTab({ flash, symbol }) {
             if (okMsg) flash(okMsg);
             await load();
         } catch (e) {
-            flash(`Error: ${e?.message || e}`);
+            flash(t("common.error", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -138,35 +142,35 @@ export function ModifiersTab({ flash, symbol }) {
         if (groupModal && groupModal.group) await apiPut(`${BASE}/modifier-groups/${groupModal.group.id}`, payload);
         else await apiPost(`${BASE}/modifier-groups`, payload);
         setGroupModal(null);
-    }, "Grupo guardado.");
+    }, t("mod.groupSaved"));
     const saveOption = (payload) => run(async () => {
         if (optionModal && optionModal.option) await apiPut(`${BASE}/modifier-options/${optionModal.option.id}`, payload);
         else await apiPost(`${BASE}/modifier-options`, { ...payload, group_id: optionModal.groupId });
         setOptionModal(null);
-    }, "Opción guardada.");
+    }, t("mod.optionSaved"));
     const deleteGroup = (g) => {
-        if (typeof window !== "undefined" && !window.confirm(`¿Eliminar el grupo "${g.name}" con sus opciones? Se quitará de todos los platos.`)) return;
-        run(() => apiDelete(`${BASE}/modifier-groups/${g.id}`), "Grupo eliminado.");
+        if (typeof window !== "undefined" && !window.confirm(t("mod.groupDeleteConfirm", { name: g.name }))) return;
+        run(() => apiDelete(`${BASE}/modifier-groups/${g.id}`), t("mod.groupDeleted"));
     };
     const deleteOption = (o) => {
-        if (typeof window !== "undefined" && !window.confirm(`¿Eliminar la opción "${o.name}"?`)) return;
-        run(() => apiDelete(`${BASE}/modifier-options/${o.id}`), "Opción eliminada.");
+        if (typeof window !== "undefined" && !window.confirm(t("mod.optionDeleteConfirm", { name: o.name }))) return;
+        run(() => apiDelete(`${BASE}/modifier-options/${o.id}`), t("mod.optionDeleted"));
     };
 
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-gray-400 font-bold max-w-xl">
-                    Los grupos (ej. "Tamaño", "Extras") se crean una vez y se asignan a los platos desde el botón Editar de cada plato en la pestaña Menú.
+                    {t("mod.intro")}
                 </p>
-                <button type="button" onClick={() => setGroupModal({ group: null })} className={btnCls}>+ Nuevo grupo</button>
+                <button type="button" onClick={() => setGroupModal({ group: null })} className={btnCls}>{t("mod.newGroup")}</button>
             </div>
 
             {groups === null ? (
-                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando…</div>
+                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("common.loading")}</div>
             ) : groups.length === 0 ? (
                 <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>
-                    Sin grupos todavía. Crea "Tamaño" (mínimo 1, máximo 1) o "Extras" (mínimo 0) y agrégales opciones con precio.
+                    {t("mod.empty")}
                 </div>
             ) : (
                 groups.map((g, gi) => (
@@ -177,22 +181,22 @@ export function ModifiersTab({ flash, symbol }) {
                                 {g.name_en ? <span className="text-[11px] text-gray-400 font-bold ml-2">EN: {g.name_en}</span> : null}
                             </h2>
                             <span className="text-[10px] font-black uppercase tracking-wider text-gray-400 bg-white border border-gray-200 rounded-full px-2.5 py-1">
-                                {g.min_select === 0 ? "Opcional" : `Mín ${g.min_select}`} · Máx {g.max_select}
+                                {g.min_select === 0 ? t("mod.optional") : t("mod.min", { n: g.min_select })} · {t("mod.max", { n: g.max_select })}
                             </span>
                             <span className="text-[10px] font-black uppercase tracking-wider text-gray-400 bg-white border border-gray-200 rounded-full px-2.5 py-1">
-                                En {g.attached_items} plato{g.attached_items === 1 ? "" : "s"}
+                                {t(g.attached_items === 1 ? "mod.attachedOne" : "mod.attachedMany", { n: g.attached_items })}
                             </span>
                             <button type="button" disabled={busy || gi === 0} onClick={() => run(() => apiPost(`${BASE}/modifier-groups/${g.id}/move`, { dir: "up" }))} className={btnGhostCls}>↑</button>
                             <button type="button" disabled={busy || gi === groups.length - 1} onClick={() => run(() => apiPost(`${BASE}/modifier-groups/${g.id}/move`, { dir: "down" }))} className={btnGhostCls}>↓</button>
                             <button type="button" disabled={busy} onClick={() => run(() => apiPut(`${BASE}/modifier-groups/${g.id}`, { is_active: !g.is_active }))} className={btnGhostCls}>
-                                {g.is_active ? "Desactivar" : "Activar"}
+                                {g.is_active ? t("mod.deactivate") : t("mod.activate")}
                             </button>
-                            <button type="button" disabled={busy} onClick={() => setGroupModal({ group: g })} className={btnGhostCls}>Editar</button>
+                            <button type="button" disabled={busy} onClick={() => setGroupModal({ group: g })} className={btnGhostCls}>{t("common.edit")}</button>
                             <button type="button" disabled={busy} onClick={() => deleteGroup(g)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                         </div>
                         <div className="divide-y divide-gray-50">
                             {(g.options || []).length === 0 ? (
-                                <p className="px-5 py-4 text-sm text-gray-400">Sin opciones en este grupo.</p>
+                                <p className="px-5 py-4 text-sm text-gray-400">{t("mod.noOptions")}</p>
                             ) : (
                                 g.options.map((o, oi) => (
                                     <div key={o.id} className={`px-5 py-2.5 flex items-center gap-3 flex-wrap ${o.is_available ? "" : "opacity-50"}`}>
@@ -205,12 +209,12 @@ export function ModifiersTab({ flash, symbol }) {
                                         </span>
                                         <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 cursor-pointer select-none">
                                             <input type="checkbox" checked={!!o.is_available} disabled={busy} onChange={() => run(() => apiPut(`${BASE}/modifier-options/${o.id}`, { is_available: !o.is_available }))} className="w-4 h-4 accent-green-600" />
-                                            Disponible
+                                            {t("common.available")}
                                         </label>
                                         <div className="flex gap-1.5">
                                             <button type="button" disabled={busy || oi === 0} onClick={() => run(() => apiPost(`${BASE}/modifier-options/${o.id}/move`, { dir: "up" }))} className={btnGhostCls}>↑</button>
                                             <button type="button" disabled={busy || oi === g.options.length - 1} onClick={() => run(() => apiPost(`${BASE}/modifier-options/${o.id}/move`, { dir: "down" }))} className={btnGhostCls}>↓</button>
-                                            <button type="button" disabled={busy} onClick={() => setOptionModal({ option: o, groupId: g.id })} className={btnGhostCls}>Editar</button>
+                                            <button type="button" disabled={busy} onClick={() => setOptionModal({ option: o, groupId: g.id })} className={btnGhostCls}>{t("common.edit")}</button>
                                             <button type="button" disabled={busy} onClick={() => deleteOption(o)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                                         </div>
                                     </div>
@@ -218,7 +222,7 @@ export function ModifiersTab({ flash, symbol }) {
                             )}
                             <div className="px-5 py-3">
                                 <button type="button" onClick={() => setOptionModal({ option: null, groupId: g.id })} className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-gray-900 transition-colors">
-                                    + Agregar opción
+                                    {t("mod.addOption")}
                                 </button>
                             </div>
                         </div>
@@ -237,6 +241,7 @@ export function ModifiersTab({ flash, symbol }) {
 // ================================================================================================
 
 export function KitchenTab({ flash }) {
+    const { t } = useT();
     const [orders, setOrders] = useState(null);
     const [busy, setBusy] = useState(false);
     const [live, setLive] = useState(false);
@@ -285,7 +290,7 @@ export function KitchenTab({ flash }) {
             await apiPost(`${BASE}/orders/${id}/status`, { status });
             await load();
         } catch (e) {
-            flash(`Error: ${e?.message || e}`);
+            flash(t("common.error", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -302,10 +307,11 @@ export function KitchenTab({ flash }) {
     const card = (o) => {
         const age = ageOf(o);
         const late = age > 20 * 60;
-        const next = o.status === "new" ? { s: "preparing", label: "Preparar →" }
-            : o.status === "preparing" ? { s: "ready", label: "Listo →" }
-            : { s: "delivered", label: "Entregado ✓" };
+        const next = o.status === "new" ? { s: "preparing", label: t("order.next.prepare") }
+            : o.status === "preparing" ? { s: "ready", label: t("order.next.ready") }
+            : { s: "delivered", label: t("order.next.delivered") };
         const pay = PAY_META[o.payment_method] || PAY_META.whatsapp;
+        const payKey = PAY_META[o.payment_method] ? o.payment_method : "whatsapp";
         return (
             <div key={o.id} className={`bg-white border-2 rounded-2xl p-4 shadow-sm ${o.status === "new" ? "border-blue-200" : late ? "border-red-300" : "border-gray-100"}`}>
                 <div className="flex justify-between items-start gap-2 flex-wrap">
@@ -315,7 +321,7 @@ export function KitchenTab({ flash }) {
                             <span className="px-2.5 py-1 rounded-full text-[11px] font-black bg-purple-50 text-purple-700 border border-purple-200">🪑 {o.table_label}</span>
                         ) : (
                             <span className="px-2.5 py-1 rounded-full text-[11px] font-black bg-gray-50 text-gray-500 border border-gray-200">
-                                {o.delivery_type === "delivery" ? "🛵 Domicilio" : "🏪 Recoger"}
+                                {o.delivery_type === "delivery" ? `🛵 ${t("order.deliveryShort")}` : `🏪 ${t("order.pickupShort")}`}
                             </span>
                         )}
                         <span className={`px-2.5 py-1 rounded-full text-[11px] font-black tabular-nums ${late ? "bg-red-50 text-red-600 border border-red-200" : "bg-gray-50 text-gray-500 border border-gray-200"}`}>
@@ -324,9 +330,9 @@ export function KitchenTab({ flash }) {
                     </div>
                 </div>
                 <p className="text-[11px] text-gray-400 font-bold mt-1">
-                    {o.customer_name} · {pay.emoji} {pay.label}
-                    {o.payment_status === "paid" ? <span className="text-green-600 ml-1">· PAGADO ✓</span> : null}
-                    {o.payment_status === "pending" ? <span className="text-amber-600 ml-1">· pago pendiente</span> : null}
+                    {o.customer_name} · {pay.emoji} {t(`pay.${payKey}`)}
+                    {o.payment_status === "paid" ? <span className="text-green-600 ml-1">{t("kitchen.paid")}</span> : null}
+                    {o.payment_status === "pending" ? <span className="text-amber-600 ml-1">{t("kitchen.payPending")}</span> : null}
                 </p>
                 <div className="mt-3 space-y-1.5">
                     {(Array.isArray(o.items) ? o.items : []).map((it, i) => (
@@ -345,7 +351,7 @@ export function KitchenTab({ flash }) {
                         {next.label}
                     </button>
                     {o.status !== "ready" ? (
-                        <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(`¿Cancelar el pedido #${o.id}?`)) setStatus(o.id, "cancelled"); }} className="px-3 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50">
+                        <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(t("kitchen.cancelConfirm", { id: o.id }))) setStatus(o.id, "cancelled"); }} className="px-3 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50">
                             ✕
                         </button>
                     ) : null}
@@ -358,22 +364,22 @@ export function KitchenTab({ flash }) {
         <div className="space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className={`px-3 py-1.5 rounded-full text-[11px] font-black border ${live ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-50 text-gray-400 border-gray-200"}`}>
-                    {live ? "● En vivo" : "○ Actualizando cada 20 s"}
+                    {live ? t("kitchen.live") : t("kitchen.polling")}
                 </span>
-                <button type="button" onClick={load} className={btnGhostCls}>⟳ Actualizar</button>
+                <button type="button" onClick={load} className={btnGhostCls}>{t("common.refresh")}</button>
             </div>
             {orders === null ? (
-                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando cocina…</div>
+                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("kitchen.loading")}</div>
             ) : (
                 <div className="grid lg:grid-cols-3 gap-4">
                     {["new", "preparing", "ready"].map((st) => (
                         <div key={st} className="bg-gray-50/80 rounded-3xl p-4 border border-gray-100">
                             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3 flex items-center justify-between">
-                                {STATUS_META[st].label}
+                                {t(`status.${st}`)}
                                 <span className={`px-2 py-0.5 rounded-full border text-[10px] ${STATUS_META[st].color}`}>{cols[st].length}</span>
                             </p>
                             <div className="space-y-3">
-                                {cols[st].length === 0 ? <p className="text-xs text-gray-300 text-center py-6">Sin pedidos</p> : cols[st].map(card)}
+                                {cols[st].length === 0 ? <p className="text-xs text-gray-300 text-center py-6">{t("common.noOrders")}</p> : cols[st].map(card)}
                             </div>
                         </div>
                     ))}
@@ -403,6 +409,7 @@ function tableUrl(menuPageUrl, token) {
 }
 
 function QRModal({ table, menuPageUrl, onClose }) {
+    const { t } = useT();
     const url = tableUrl(menuPageUrl, table.token);
     const svg = qrSvg(url, 5);
     return (
@@ -411,32 +418,33 @@ function QRModal({ table, menuPageUrl, onClose }) {
                 {svg ? (
                     <div className="inline-block border border-gray-100 rounded-2xl p-2 bg-white" dangerouslySetInnerHTML={{ __html: svg }} />
                 ) : (
-                    <p className="text-sm text-red-500">No se pudo generar el QR (URL demasiado larga).</p>
+                    <p className="text-sm text-red-500">{t("qr.error")}</p>
                 )}
                 <p className="text-xs text-gray-500 break-all font-mono bg-gray-50 rounded-xl px-3 py-2">{url}</p>
                 {!menuPageUrl ? (
                     <p className="text-[11px] text-amber-600 font-bold">
-                        ⚠ Configura la "URL de la página del menú" en Configuración para que el QR apunte a la página correcta.
+                        {t("qr.configureHint")}
                     </p>
                 ) : null}
-                <button type="button" onClick={onClose} className={btnGhostCls}>Cerrar</button>
+                <button type="button" onClick={onClose} className={btnGhostCls}>{t("common.close")}</button>
             </div>
         </Modal>
     );
 }
 
-/** Print sheet: opens a minimal document with one QR card per active table and calls print(). */
-function printAllQRs(tables, menuPageUrl) {
+/** Print sheet: opens a minimal document with one QR card per active table and calls print().
+ *  `t` is the caller's translator (this is a plain function, not a component). */
+function printAllQRs(tables, menuPageUrl, t) {
     if (typeof window === "undefined") return;
     const w = window.open("", "_blank", "noopener=false");
     if (!w) return;
-    const cards = tables.filter((t) => t.is_active).map((t) => {
-        const url = tableUrl(menuPageUrl, t.token);
+    const cards = tables.filter((tb) => tb.is_active).map((tb) => {
+        const url = tableUrl(menuPageUrl, tb.token);
         const svg = qrSvg(url, 4);
-        if (!svg) return `<div class="card"><h2>${String(t.label).replace(/[<>&]/g, "")}</h2><p>⚠ URL demasiado larga para el QR — acorta la URL del menú</p></div>`;
-        return `<div class="card"><div class="qr">${svg}</div><h2>${String(t.label).replace(/[<>&]/g, "")}</h2><p>Escanea para ver el menú y pedir</p></div>`;
+        if (!svg) return `<div class="card"><h2>${String(tb.label).replace(/[<>&]/g, "")}</h2><p>${t("qr.printTooLong")}</p></div>`;
+        return `<div class="card"><div class="qr">${svg}</div><h2>${String(tb.label).replace(/[<>&]/g, "")}</h2><p>${t("qr.printScan")}</p></div>`;
     }).join("");
-    w.document.write(`<!doctype html><html><head><title>QR mesas</title><style>
+    w.document.write(`<!doctype html><html><head><title>${t("qr.printTitle")}</title><style>
         body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; }
         .grid { display: flex; flex-wrap: wrap; gap: 16px; }
         .card { border: 2px dashed #bbb; border-radius: 16px; padding: 18px 22px; text-align: center; page-break-inside: avoid; }
@@ -448,6 +456,7 @@ function printAllQRs(tables, menuPageUrl) {
 }
 
 export function TablesTab({ flash }) {
+    const { t } = useT();
     const [tables, setTables] = useState(null);
     const [menuPageUrl, setMenuPageUrl] = useState("");
     const [label, setLabel] = useState("");
@@ -472,7 +481,7 @@ export function TablesTab({ flash }) {
             if (okMsg) flash(okMsg);
             await load();
         } catch (e) {
-            flash(`Error: ${e?.message || e}`);
+            flash(t("common.error", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -484,49 +493,49 @@ export function TablesTab({ flash }) {
         run(async () => {
             await apiPost(`${BASE}/tables`, { label: label.trim() });
             setLabel("");
-        }, "Mesa creada.");
+        }, t("tables.created"));
     };
 
     return (
         <div className="space-y-4">
             <form onSubmit={addTable} className={`${cardCls} p-5 flex items-end gap-3 flex-wrap`}>
                 <div className="flex-1 min-w-[200px]">
-                    <label className={labelCls}>Nueva mesa</label>
-                    <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Ej. Mesa 1, Terraza 3, Barra…" className={inputCls} maxLength={60} />
+                    <label className={labelCls}>{t("tables.new")}</label>
+                    <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t("tables.newPh")} className={inputCls} maxLength={60} />
                 </div>
-                <button type="submit" disabled={busy || !label.trim()} className={btnCls}>+ Crear</button>
-                <button type="button" disabled={busy || !tables || tables.filter((t) => t.is_active).length === 0} onClick={() => printAllQRs(tables || [], menuPageUrl)} className={btnGhostCls}>
-                    🖨 Imprimir todos los QR
+                <button type="submit" disabled={busy || !label.trim()} className={btnCls}>{t("tables.create")}</button>
+                <button type="button" disabled={busy || !tables || tables.filter((tb) => tb.is_active).length === 0} onClick={() => printAllQRs(tables || [], menuPageUrl, t)} className={btnGhostCls}>
+                    {t("tables.printAll")}
                 </button>
             </form>
 
             {!menuPageUrl ? (
                 <div className="bg-amber-50 text-amber-700 rounded-2xl px-4 py-3 text-xs font-bold">
-                    ⚠ Aún no configuraste la "URL de la página del menú" (Configuración → Pedidos en mesa). Los QR usarán la portada del sitio.
+                    {t("tables.noMenuUrl")}
                 </div>
             ) : null}
 
             {tables === null ? (
-                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando mesas…</div>
+                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("tables.loading")}</div>
             ) : tables.length === 0 ? (
                 <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>
-                    Sin mesas. Crea una mesa y pega su QR en la mesa física: los clientes escanean, piden y el pedido llega directo a Cocina.
+                    {t("tables.empty")}
                 </div>
             ) : (
                 <div className={`${cardCls} divide-y divide-gray-50`}>
-                    {tables.map((t, ti) => (
-                        <div key={t.id} className={`px-5 py-3 flex items-center gap-3 flex-wrap ${t.is_active ? "" : "opacity-50"}`}>
-                            <span className="font-black text-sm text-gray-900 flex-1 min-w-[120px] truncate">🪑 {t.label}</span>
-                            <button type="button" onClick={() => setQrModal(t)} className={btnGhostCls}>Ver QR</button>
+                    {tables.map((tb, ti) => (
+                        <div key={tb.id} className={`px-5 py-3 flex items-center gap-3 flex-wrap ${tb.is_active ? "" : "opacity-50"}`}>
+                            <span className="font-black text-sm text-gray-900 flex-1 min-w-[120px] truncate">🪑 {tb.label}</span>
+                            <button type="button" onClick={() => setQrModal(tb)} className={btnGhostCls}>{t("tables.viewQr")}</button>
                             <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 cursor-pointer select-none">
-                                <input type="checkbox" checked={!!t.is_active} disabled={busy} onChange={() => run(() => apiPut(`${BASE}/tables/${t.id}`, { is_active: !t.is_active }))} className="w-4 h-4 accent-green-600" />
-                                Activa
+                                <input type="checkbox" checked={!!tb.is_active} disabled={busy} onChange={() => run(() => apiPut(`${BASE}/tables/${tb.id}`, { is_active: !tb.is_active }))} className="w-4 h-4 accent-green-600" />
+                                {t("tables.active")}
                             </label>
                             <div className="flex gap-1.5">
-                                <button type="button" disabled={busy || ti === 0} onClick={() => run(() => apiPost(`${BASE}/tables/${t.id}/move`, { dir: "up" }))} className={btnGhostCls}>↑</button>
-                                <button type="button" disabled={busy || ti === tables.length - 1} onClick={() => run(() => apiPost(`${BASE}/tables/${t.id}/move`, { dir: "down" }))} className={btnGhostCls}>↓</button>
-                                <button type="button" disabled={busy} title="Regenerar el enlace (invalida el QR impreso)" onClick={() => { if (typeof window === "undefined" || window.confirm("¿Regenerar el enlace? El QR impreso dejará de funcionar.")) run(() => apiPut(`${BASE}/tables/${t.id}`, { regenerate_token: true }), "Enlace regenerado."); }} className={btnGhostCls}>⟳</button>
-                                <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(`¿Eliminar la mesa "${t.label}"?`)) run(() => apiDelete(`${BASE}/tables/${t.id}`), "Mesa eliminada."); }} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
+                                <button type="button" disabled={busy || ti === 0} onClick={() => run(() => apiPost(`${BASE}/tables/${tb.id}/move`, { dir: "up" }))} className={btnGhostCls}>↑</button>
+                                <button type="button" disabled={busy || ti === tables.length - 1} onClick={() => run(() => apiPost(`${BASE}/tables/${tb.id}/move`, { dir: "down" }))} className={btnGhostCls}>↓</button>
+                                <button type="button" disabled={busy} title={t("tables.regenTitle")} onClick={() => { if (typeof window === "undefined" || window.confirm(t("tables.regenConfirm"))) run(() => apiPut(`${BASE}/tables/${tb.id}`, { regenerate_token: true }), t("tables.regenerated")); }} className={btnGhostCls}>⟳</button>
+                                <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(t("tables.deleteConfirm", { name: tb.label }))) run(() => apiDelete(`${BASE}/tables/${tb.id}`), t("tables.deleted")); }} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                             </div>
                         </div>
                     ))}
@@ -543,6 +552,7 @@ export function TablesTab({ flash }) {
 // ================================================================================================
 
 function ReservationModal({ busy, onSave, onClose }) {
+    const { t } = useT();
     const [name, setName] = useState("");
     const [phone, setPhone] = useState("");
     const [email, setEmail] = useState("");
@@ -563,43 +573,43 @@ function ReservationModal({ busy, onSave, onClose }) {
         });
     };
     return (
-        <Modal title="Nueva reserva (manual)" onClose={onClose}>
+        <Modal title={t("resv.newManualTitle")} onClose={onClose}>
             <form onSubmit={submit} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className={labelCls}>Nombre</label>
+                        <label className={labelCls}>{t("common.name")}</label>
                         <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputCls} maxLength={120} required autoFocus />
                     </div>
                     <div>
-                        <label className={labelCls}>Teléfono</label>
+                        <label className={labelCls}>{t("resv.phone")}</label>
                         <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} className={inputCls} maxLength={30} />
                     </div>
                 </div>
                 <div>
-                    <label className={labelCls}>Email (opcional — para enviar confirmación)</label>
+                    <label className={labelCls}>{t("resv.email")}</label>
                     <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} maxLength={200} />
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                     <div>
-                        <label className={labelCls}>Fecha</label>
+                        <label className={labelCls}>{t("resv.date")}</label>
                         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} required />
                     </div>
                     <div>
-                        <label className={labelCls}>Hora</label>
+                        <label className={labelCls}>{t("resv.time")}</label>
                         <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} required />
                     </div>
                     <div>
-                        <label className={labelCls}>Personas</label>
+                        <label className={labelCls}>{t("resv.party")}</label>
                         <input type="number" min={1} max={200} value={party} onChange={(e) => setParty(e.target.value)} className={inputCls} required />
                     </div>
                 </div>
                 <div>
-                    <label className={labelCls}>Notas</label>
+                    <label className={labelCls}>{t("resv.notes")}</label>
                     <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className={inputCls} maxLength={500} />
                 </div>
                 <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy || !name.trim()} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                    <button type="button" onClick={onClose} className={btnGhostCls}>{t("common.cancel")}</button>
+                    <button type="submit" disabled={busy || !name.trim()} className={btnCls}>{busy ? t("common.saving") : t("common.save")}</button>
                 </div>
             </form>
         </Modal>
@@ -607,6 +617,7 @@ function ReservationModal({ busy, onSave, onClose }) {
 }
 
 export function ReservationsTab({ flash }) {
+    const { t } = useT();
     const [data, setData] = useState(null); // {reservations, counts, today}
     const [busy, setBusy] = useState(false);
     const [dateFilter, setDateFilter] = useState("");
@@ -635,7 +646,7 @@ export function ReservationsTab({ flash }) {
             if (okMsg) flash(okMsg + (out && out.mailNote ? ` (${out.mailNote})` : ""));
             await load();
         } catch (e) {
-            flash(`Error: ${e?.message || e}`);
+            flash(t("common.error", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -648,42 +659,43 @@ export function ReservationsTab({ flash }) {
         <div className="space-y-4">
             <div className="flex items-end gap-3 flex-wrap">
                 <div>
-                    <label className={labelCls}>Día</label>
+                    <label className={labelCls}>{t("resv.day")}</label>
                     <input type="date" value={dateFilter} onChange={(e) => { setDateFilter(e.target.value); load(e.target.value, statusFilter, showAll); }} className={inputCls} />
                 </div>
                 <div className="flex gap-1.5 flex-wrap items-center pb-1">
                     <button type="button" onClick={() => { setStatusFilter(""); load(dateFilter, "", showAll); }}
                         className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${statusFilter === "" ? chipOnCls : chipOffCls}`}>
-                        Todas
+                        {t("resv.all")}
                     </button>
                     {Object.keys(RES_STATUS_META).map((s) => (
                         <button key={s} type="button" onClick={() => { setStatusFilter(s); load(dateFilter, s, showAll); }}
                             className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${statusFilter === s ? chipOnCls : chipOffCls}`}>
-                            {RES_STATUS_META[s].label} {counts[s] ? `(${counts[s]})` : ""}
+                            {t(`res.${s}`)} {counts[s] ? `(${counts[s]})` : ""}
                         </button>
                     ))}
                     <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 cursor-pointer select-none ml-2">
                         <input type="checkbox" checked={showAll} onChange={(e) => { setShowAll(e.target.checked); load(dateFilter, statusFilter, e.target.checked); }} className="w-4 h-4 accent-gray-900" />
-                        Incluir pasadas
+                        {t("resv.includePast")}
                     </label>
                 </div>
                 <div className="flex-1"></div>
-                <button type="button" onClick={() => setModal(true)} className={btnCls}>+ Reserva manual</button>
+                <button type="button" onClick={() => setModal(true)} className={btnCls}>{t("resv.manual")}</button>
             </div>
 
             {data === null ? (
-                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando reservas…</div>
+                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("resv.loading")}</div>
             ) : rows.length === 0 ? (
-                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Sin reservas para el filtro elegido.</div>
+                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("resv.empty")}</div>
             ) : (
                 <div className={`${cardCls} divide-y divide-gray-50`}>
                     {rows.map((r) => {
                         const meta = RES_STATUS_META[r.status] || RES_STATUS_META.pending;
+                        const statusKey = RES_STATUS_META[r.status] ? r.status : "pending";
                         const isToday = data && r.reserved_date === data.today;
                         return (
                             <div key={r.id} className="px-5 py-3.5 flex items-center gap-3 flex-wrap">
                                 <div className="text-center min-w-[76px]">
-                                    <p className={`text-sm font-black ${isToday ? "text-orange-600" : "text-gray-900"}`}>{isToday ? "HOY" : r.reserved_date}</p>
+                                    <p className={`text-sm font-black ${isToday ? "text-orange-600" : "text-gray-900"}`}>{isToday ? t("resv.today") : r.reserved_date}</p>
                                     <p className="text-lg font-black tabular-nums leading-none">{r.reserved_time}</p>
                                 </div>
                                 <div className="flex-1 min-w-[160px]">
@@ -694,23 +706,23 @@ export function ReservationsTab({ flash }) {
                                         {r.customer_phone}{r.customer_email ? ` · ${r.customer_email}` : ""}{r.notes ? ` · 📝 ${r.notes}` : ""}
                                     </p>
                                 </div>
-                                <span className={`px-3 py-1 rounded-full text-xs font-black border ${meta.color}`}>{meta.label}</span>
+                                <span className={`px-3 py-1 rounded-full text-xs font-black border ${meta.color}`}>{t(`res.${statusKey}`)}</span>
                                 <div className="flex gap-1.5 flex-wrap">
                                     {r.status === "pending" ? (
-                                        <button type="button" disabled={busy} onClick={() => run(() => apiPost(`${BASE}/reservations/${r.id}/status`, { status: "confirmed" }), "Reserva confirmada.")} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-xl font-black text-[11px] uppercase tracking-wider disabled:opacity-50">
-                                            Confirmar
+                                        <button type="button" disabled={busy} onClick={() => run(() => apiPost(`${BASE}/reservations/${r.id}/status`, { status: "confirmed" }), t("resv.confirmed"))} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-xl font-black text-[11px] uppercase tracking-wider disabled:opacity-50">
+                                            {t("resv.confirm")}
                                         </button>
                                     ) : null}
                                     {(r.status === "pending" || r.status === "confirmed") ? (
                                         <>
-                                            <button type="button" disabled={busy} onClick={() => run(() => apiPost(`${BASE}/reservations/${r.id}/status`, { status: "completed" }))} className={btnGhostCls}>Completada</button>
-                                            <button type="button" disabled={busy} onClick={() => run(() => apiPost(`${BASE}/reservations/${r.id}/status`, { status: "no_show" }))} className={btnGhostCls}>No llegó</button>
+                                            <button type="button" disabled={busy} onClick={() => run(() => apiPost(`${BASE}/reservations/${r.id}/status`, { status: "completed" }))} className={btnGhostCls}>{t("res.completed")}</button>
+                                            <button type="button" disabled={busy} onClick={() => run(() => apiPost(`${BASE}/reservations/${r.id}/status`, { status: "no_show" }))} className={btnGhostCls}>{t("res.no_show")}</button>
                                             <button type="button" disabled={busy} onClick={() => run(() => apiPost(`${BASE}/reservations/${r.id}/status`, { status: "cancelled" }))} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-[11px] uppercase tracking-wider disabled:opacity-50">
-                                                Cancelar
+                                                {t("common.cancel")}
                                             </button>
                                         </>
                                     ) : null}
-                                    <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm("¿Eliminar esta reserva definitivamente?")) run(() => apiDelete(`${BASE}/reservations/${r.id}`), "Reserva eliminada."); }} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
+                                    <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(t("resv.deleteConfirm"))) run(() => apiDelete(`${BASE}/reservations/${r.id}`), t("resv.deleted")); }} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                                 </div>
                             </div>
                         );
@@ -722,7 +734,7 @@ export function ReservationsTab({ flash }) {
                 <ReservationModal busy={busy} onClose={() => setModal(false)} onSave={(payload) => run(async () => {
                     await apiPost(`${BASE}/reservations`, payload);
                     setModal(false);
-                }, "Reserva creada.")} />
+                }, t("resv.created"))} />
             ) : null}
         </div>
     );
@@ -763,17 +775,18 @@ function BarRow({ values, labels, title }) {
 }
 
 export function ReportsTab({ flash, symbol }) {
+    const { t } = useT();
     const [from, setFrom] = useState(daysAgoISO(29));
     const [to, setTo] = useState(todayISO());
     const [report, setReport] = useState(null);
     const [busy, setBusy] = useState(false);
 
-    const load = async (f = from, t = to) => {
+    const load = async (f = from, toDate = to) => {
         setBusy(true);
         try {
-            setReport(await api(`${BASE}/reports?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`));
+            setReport(await api(`${BASE}/reports?from=${encodeURIComponent(f)}&to=${encodeURIComponent(toDate)}`));
         } catch (e) {
-            flash(`Error al cargar informes: ${e?.message || e}`);
+            flash(t("rep.loadError", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -784,9 +797,9 @@ export function ReportsTab({ flash, symbol }) {
         setBusy(true);
         try {
             const data = await api(`${BASE}/reports/csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-            downloadText(data.filename || "pedidos.csv", data.csv || "");
+            downloadText(data.filename || t("rep.csvName"), data.csv || "");
         } catch (e) {
-            flash(`Error al exportar: ${e?.message || e}`);
+            flash(t("rep.exportError", { msg: e?.message || e }));
         } finally {
             setBusy(false);
         }
@@ -799,38 +812,38 @@ export function ReportsTab({ flash, symbol }) {
         <div className="space-y-4">
             <div className="flex items-end gap-3 flex-wrap">
                 <div>
-                    <label className={labelCls}>Desde</label>
+                    <label className={labelCls}>{t("rep.from")}</label>
                     <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={inputCls} />
                 </div>
                 <div>
-                    <label className={labelCls}>Hasta</label>
+                    <label className={labelCls}>{t("rep.to")}</label>
                     <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={inputCls} />
                 </div>
-                <button type="button" disabled={busy} onClick={() => load()} className={btnCls}>{busy ? "Cargando…" : "Aplicar"}</button>
+                <button type="button" disabled={busy} onClick={() => load()} className={btnCls}>{busy ? t("common.loading") : t("rep.apply")}</button>
                 <div className="flex-1"></div>
-                <button type="button" disabled={busy || !r} onClick={exportCsv} className={btnGhostCls}>⬇ Exportar CSV</button>
+                <button type="button" disabled={busy || !r} onClick={exportCsv} className={btnGhostCls}>{t("rep.export")}</button>
             </div>
 
             {!r ? (
-                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando informes…</div>
+                <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>{t("rep.loading")}</div>
             ) : (
                 <>
                     <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                        <Tile label="Pedidos" value={r.totals.orders} />
-                        <Tile label="Ingresos" value={money(r.totals.revenue_cents)} accent="text-green-700" />
-                        <Tile label="Ticket promedio" value={money(r.totals.avg_ticket_cents)} />
-                        <Tile label="Cobrado en línea" value={money(r.totals.paid_online_cents)} />
-                        <Tile label="Cancelados" value={r.totals.cancelled} accent={r.totals.cancelled > 0 ? "text-red-500" : "text-gray-900"} />
+                        <Tile label={t("rep.orders")} value={r.totals.orders} />
+                        <Tile label={t("rep.revenue")} value={money(r.totals.revenue_cents)} accent="text-green-700" />
+                        <Tile label={t("rep.avgTicket")} value={money(r.totals.avg_ticket_cents)} />
+                        <Tile label={t("rep.paidOnline")} value={money(r.totals.paid_online_cents)} />
+                        <Tile label={t("rep.cancelled")} value={r.totals.cancelled} accent={r.totals.cancelled > 0 ? "text-red-500" : "text-gray-900"} />
                     </div>
 
                     <div className="grid lg:grid-cols-2 gap-4">
                         <BarRow
-                            title="Ventas por día"
+                            title={t("rep.salesByDay")}
                             values={r.byDay.map((d) => d.revenue_cents / 100)}
                             labels={r.byDay.map((d) => d.date.slice(5))}
                         />
                         <BarRow
-                            title="Horas pico (pedidos por hora local)"
+                            title={t("rep.peakHours")}
                             values={r.peakHours}
                             labels={r.peakHours.map((_, h) => (h % 3 === 0 ? String(h) : ""))}
                         />
@@ -838,16 +851,16 @@ export function ReportsTab({ flash, symbol }) {
 
                     <div className="grid lg:grid-cols-2 gap-4">
                         <div className={`${cardCls} p-5`}>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Platos más vendidos</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t("rep.topDishes")}</p>
                             {r.topDishes.length === 0 ? (
-                                <p className="text-sm text-gray-400">Sin ventas en el rango.</p>
+                                <p className="text-sm text-gray-400">{t("rep.noSales")}</p>
                             ) : (
                                 <div className="divide-y divide-gray-50">
                                     {r.topDishes.map((d, i) => (
                                         <div key={i} className="flex items-center gap-3 py-2 text-sm">
                                             <span className="w-6 text-center font-black text-gray-300">{i + 1}</span>
                                             <span className="flex-1 font-bold text-gray-900 truncate">{d.name}</span>
-                                            <span className="font-black text-gray-500 tabular-nums">{d.qty} uds</span>
+                                            <span className="font-black text-gray-500 tabular-nums">{t("rep.units", { n: d.qty })}</span>
                                             <span className="font-black tabular-nums">{money(d.revenue_cents)}</span>
                                         </div>
                                     ))}
@@ -856,28 +869,28 @@ export function ReportsTab({ flash, symbol }) {
                         </div>
                         <div className="space-y-4">
                             <div className={`${cardCls} p-5`}>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Cómo pagan</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t("rep.howPay")}</p>
                                 <div className="flex gap-2 flex-wrap">
                                     {Object.keys(PAY_META).map((k) => (
                                         <span key={k} className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">
-                                            {PAY_META[k].emoji} {PAY_META[k].label}: {r.byPayment[k] || 0}
+                                            {PAY_META[k].emoji} {t(`pay.${k}`)}: {r.byPayment[k] || 0}
                                         </span>
                                     ))}
                                 </div>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-4 mb-2">De dónde vienen</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-4 mb-2">{t("rep.whereFrom")}</p>
                                 <div className="flex gap-2 flex-wrap">
-                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">🌐 Web: {r.bySource.web || 0}</span>
-                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">🪑 Mesa (QR): {r.bySource.table || 0}</span>
-                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">🏪 Recoger: {r.byType.pickup || 0}</span>
-                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">🛵 Domicilio: {r.byType.delivery || 0}</span>
+                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">{t("rep.web", { n: r.bySource.web || 0 })}</span>
+                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">{t("rep.table", { n: r.bySource.table || 0 })}</span>
+                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">{t("rep.pickup", { n: r.byType.pickup || 0 })}</span>
+                                    <span className="px-3 py-1.5 rounded-full text-xs font-black bg-gray-50 border border-gray-200 text-gray-600">{t("rep.delivery", { n: r.byType.delivery || 0 })}</span>
                                 </div>
                             </div>
                             <div className={`${cardCls} p-5`}>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Reservas en el rango</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t("rep.reservations")}</p>
                                 <div className="flex gap-2 flex-wrap">
                                     {Object.keys(RES_STATUS_META).map((s) => (
                                         <span key={s} className={`px-3 py-1.5 rounded-full text-xs font-black border ${RES_STATUS_META[s].color}`}>
-                                            {RES_STATUS_META[s].label}: {r.reservations[s] || 0}
+                                            {t(`res.${s}`)}: {r.reservations[s] || 0}
                                         </span>
                                     ))}
                                 </div>

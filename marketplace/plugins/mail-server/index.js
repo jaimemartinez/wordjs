@@ -76,7 +76,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.2.0',
+    version: '3.2.1',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -614,7 +614,21 @@ function relayErrorText(e, host, port) {
     return msg;
 }
 
+// The stored relay settings, as one string. The transport (and relayStatus) are per process; the settings
+// are shared. A queue pass running in a process that did not handle the settings save kept delivering — or
+// refusing — through the relay it had built earlier: after the relay was removed, queued mail kept failing
+// with "Relay unavailable" for minutes (X4-15). readyRelay() rebuilds when this changes.
+async function relaySettingsFingerprint() {
+    const parts = await Promise.all([
+        getOption('mail_server', ''), getOption('mail_port', '587'), getOption('mail_secure', '0'),
+        getOption('mail_user', ''), getOption('mail_pass', ''), getOption('mail_relay_require_tls', '1'),
+    ]);
+    return crypto.createHash('sha256').update(parts.map((v) => String(v == null ? '' : v).trim()).join(String.fromCharCode(0))).digest('hex');
+}
+let relayBuiltFrom = null;
+
 async function initTransporter() {
+    relayBuiltFrom = await relaySettingsFingerprint();
     const host = String(await getOption('mail_server', '') || '').trim();
     const port = parseInt(await getOption('mail_port', '587'), 10) || 587;
     const user = await getOption('mail_user', '');
@@ -717,6 +731,11 @@ async function setDeliveryReady(ready) {
 
 /** The ready relay, re-checking a configured-but-failed one at most once a minute. null = none ready. */
 async function readyRelay() {
+    // Settings changed in another process (or this one) since the transport was built: rebuild first, so a
+    // removed relay stops holding mail back and a new one is used at once.
+    try {
+        if (relayBuiltFrom !== null && (await relaySettingsFingerprint()) !== relayBuiltFrom) await initTransporter();
+    } catch (e) { /* relayStatus describes a failed rebuild */ }
     if (transporter) return transporter;
     if (relayStatus.configured && Date.now() >= relayRetryAt) {
         try { await initTransporter(); } catch (e) { /* relayStatus already describes it */ }

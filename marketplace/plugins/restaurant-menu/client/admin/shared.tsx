@@ -19,57 +19,58 @@ export const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl sh
 export const chipOnCls = "bg-gray-900 text-white border-gray-900";
 export const chipOffCls = "bg-white text-gray-500 border-gray-200 hover:border-gray-400";
 
+// Labels are translated at render time through i18n.ts: tag.<id>, allergen.<id>, status.<key>,
+// res.<key>, pay.<key>, day.<n>.
 export const TAGS = [
-    { id: "vegano", emoji: "🌱", label: "Vegano" },
-    { id: "picante", emoji: "🌶️", label: "Picante" },
-    { id: "sin-gluten", emoji: "🚫🌾", label: "Sin gluten" },
-    { id: "nuevo", emoji: "✨", label: "Nuevo" },
-    { id: "popular", emoji: "⭐", label: "Popular" },
+    { id: "vegano", emoji: "🌱" },
+    { id: "picante", emoji: "🌶️" },
+    { id: "sin-gluten", emoji: "🚫🌾" },
+    { id: "nuevo", emoji: "✨" },
+    { id: "popular", emoji: "⭐" },
 ];
 
 // EU-14 allergens — keys match the backend whitelist.
 export const ALLERGENS = [
-    { id: "gluten", emoji: "🌾", label: "Gluten" },
-    { id: "crustaceos", emoji: "🦐", label: "Crustáceos" },
-    { id: "huevo", emoji: "🥚", label: "Huevo" },
-    { id: "pescado", emoji: "🐟", label: "Pescado" },
-    { id: "cacahuetes", emoji: "🥜", label: "Cacahuetes" },
-    { id: "soja", emoji: "🫘", label: "Soja" },
-    { id: "lacteos", emoji: "🥛", label: "Lácteos" },
-    { id: "frutos-secos", emoji: "🌰", label: "Frutos secos" },
-    { id: "apio", emoji: "🥬", label: "Apio" },
-    { id: "mostaza", emoji: "🟡", label: "Mostaza" },
-    { id: "sesamo", emoji: "⚪", label: "Sésamo" },
-    { id: "sulfitos", emoji: "🍷", label: "Sulfitos" },
-    { id: "altramuces", emoji: "🫛", label: "Altramuces" },
-    { id: "moluscos", emoji: "🐚", label: "Moluscos" },
+    { id: "gluten", emoji: "🌾" },
+    { id: "crustaceos", emoji: "🦐" },
+    { id: "huevo", emoji: "🥚" },
+    { id: "pescado", emoji: "🐟" },
+    { id: "cacahuetes", emoji: "🥜" },
+    { id: "soja", emoji: "🫘" },
+    { id: "lacteos", emoji: "🥛" },
+    { id: "frutos-secos", emoji: "🌰" },
+    { id: "apio", emoji: "🥬" },
+    { id: "mostaza", emoji: "🟡" },
+    { id: "sesamo", emoji: "⚪" },
+    { id: "sulfitos", emoji: "🍷" },
+    { id: "altramuces", emoji: "🫛" },
+    { id: "moluscos", emoji: "🐚" },
 ];
 
 export const STATUS_META = {
-    new: { label: "Nuevo", color: "bg-blue-50 text-blue-700 border-blue-200" },
-    preparing: { label: "Preparando", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    ready: { label: "Listo", color: "bg-green-50 text-green-700 border-green-200" },
-    delivered: { label: "Entregado", color: "bg-gray-50 text-gray-500 border-gray-200" },
-    cancelled: { label: "Cancelado", color: "bg-red-50 text-red-500 border-red-200" },
+    new: { color: "bg-blue-50 text-blue-700 border-blue-200" },
+    preparing: { color: "bg-amber-50 text-amber-700 border-amber-200" },
+    ready: { color: "bg-green-50 text-green-700 border-green-200" },
+    delivered: { color: "bg-gray-50 text-gray-500 border-gray-200" },
+    cancelled: { color: "bg-red-50 text-red-500 border-red-200" },
 };
 
 export const RES_STATUS_META = {
-    pending: { label: "Pendiente", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    confirmed: { label: "Confirmada", color: "bg-green-50 text-green-700 border-green-200" },
-    completed: { label: "Completada", color: "bg-gray-50 text-gray-500 border-gray-200" },
-    cancelled: { label: "Cancelada", color: "bg-red-50 text-red-500 border-red-200" },
-    no_show: { label: "No llegó", color: "bg-purple-50 text-purple-500 border-purple-200" },
+    pending: { color: "bg-amber-50 text-amber-700 border-amber-200" },
+    confirmed: { color: "bg-green-50 text-green-700 border-green-200" },
+    completed: { color: "bg-gray-50 text-gray-500 border-gray-200" },
+    cancelled: { color: "bg-red-50 text-red-500 border-red-200" },
+    no_show: { color: "bg-purple-50 text-purple-500 border-purple-200" },
 };
 
 export const PAY_META = {
-    whatsapp: { label: "WhatsApp", emoji: "💬" },
-    cash: { label: "Efectivo", emoji: "💵" },
-    stripe: { label: "En línea", emoji: "💳" },
+    whatsapp: { emoji: "💬" },
+    cash: { emoji: "💵" },
+    stripe: { emoji: "💳" },
 };
 
 // Monday-first display order for the weekly hours editor (keys are Sun=0…Sat=6).
 export const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
-export const DAY_LABELS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 export function fmtMoney(cents, symbol) {
     const n = Number(cents) || 0;
@@ -89,12 +90,12 @@ export function inputToCentsSigned(str) {
     if (!Number.isFinite(n)) return null;
     return Math.round(n * 100);
 }
-export function fmtDate(s) {
+export function fmtDate(s, locale) {
     if (!s) return "";
     try {
         const iso = String(s).includes("T") ? String(s) : `${String(s).replace(" ", "T")}Z`;
         const d = new Date(iso);
-        return isNaN(d.getTime()) ? String(s) : d.toLocaleString();
+        return isNaN(d.getTime()) ? String(s) : d.toLocaleString(locale);
     } catch {
         return String(s);
     }

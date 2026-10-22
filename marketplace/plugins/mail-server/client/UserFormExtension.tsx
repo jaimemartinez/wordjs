@@ -3,7 +3,7 @@
 // plugin's client components (card-gallery, photo-carousel, video-gallery).
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { pluginHooks } from '../../../../frontend/src/lib/plugin-hooks';
 import { api } from '../../../../frontend/src/lib/api';
 
@@ -25,6 +25,31 @@ const MAILBOX_CAPABILITY = 'mail_server_mailbox';
 // filter below (registered once at module load, so it can't read React state) can see it. It is written
 // by the mounted component's effect and is NOT used to seed any form's initial state.
 let isAutoEmailActive = false;
+
+export type MailboxEmailMemo = { generated: string | null; before: string | null };
+
+/**
+ * One step of the address field while the mailbox toggle is used: what to write into Email (undefined =
+ * leave it), and what to remember. On: the field gets <username>@<mail domain>, and what it held before is
+ * kept. Off: the field gets that value back (M2-24 — it used to keep the generated address, and what the
+ * administrator typed was appended to it). Only an address this form generated is taken back, so an existing
+ * account's stored address is never touched.
+ */
+export function mailboxEmailStep(
+    memo: MailboxEmailMemo,
+    s: { granted: boolean; username: string; domain: string; currentEmail: string },
+): { email?: string; memo: MailboxEmailMemo } {
+    if (s.granted && s.username && s.domain) {
+        const next = `${s.username.toLowerCase()}@${s.domain}`;
+        if (s.currentEmail.toLowerCase() === next) return { memo };
+        return { email: next, memo: { generated: next, before: memo.generated === null ? s.currentEmail : memo.before } };
+    }
+    if (!s.granted && memo.generated !== null) {
+        const restore = s.currentEmail.toLowerCase() === memo.generated.toLowerCase();
+        return { email: restore ? (memo.before || '') : undefined, memo: { generated: null, before: null } };
+    }
+    return { memo };
+}
 
 const UserFormExtension = ({ data }: { data: any }) => {
     const { formData, setFormData } = data || {};
@@ -59,13 +84,13 @@ const UserFormExtension = ({ data }: { data: any }) => {
         pluginHooks.notify();
     }, [granted]);
 
+    // Generated address and what the field held before it (see mailboxEmailStep).
+    const stepRef = useRef<MailboxEmailMemo>({ generated: null, before: null });
+
     useEffect(() => {
-        if (granted && username && domain) {
-            const nextEmail = `${username.toLowerCase()}@${domain}`;
-            if (currentEmail.toLowerCase() !== nextEmail) {
-                setFormData?.((prev: any) => ({ ...prev, email: nextEmail }));
-            }
-        }
+        const { email, memo } = mailboxEmailStep(stepRef.current, { granted, username, domain, currentEmail });
+        stepRef.current = memo;
+        if (email !== undefined) setFormData?.((prev: any) => ({ ...prev, email }));
     }, [username, granted, domain, setFormData, currentEmail]);
 
     if (!granted) return null;

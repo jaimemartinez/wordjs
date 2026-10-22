@@ -14,7 +14,9 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
+import { useT } from "./i18n";
 
+// Default banner content (site-facing text saved with the config, same defaults as index.js) — not admin UI.
 const DEFAULT_FORM = {
     enabled: false,
     message: "Usamos cookies para mejorar tu experiencia. Puedes aceptarlas o rechazarlas.",
@@ -71,6 +73,7 @@ function BannerPreview({ form }) {
                 <div className="cf-skel" style={{ width: "66%" }} />
                 <div className="cf-skel" style={{ width: "100%", height: "6rem", borderRadius: "0.75rem" }} />
             </div>
+            {/* The banner texts below mirror what public/banner.js renders (its fallbacks are Spanish). */}
             <div className={boxCls}>
                 <p className="cf-preview-msg">{form.message || " "}</p>
                 {form.policyUrl ? (
@@ -96,6 +99,7 @@ function StatTile({ label, value, accent }) {
 }
 
 export default function CookieConsentAdminPage() {
+    const { t } = useT();
     const [form, setForm] = useState(DEFAULT_FORM);
     const [reprompt, setReprompt] = useState(false);
     const [stats, setStats] = useState(null);
@@ -133,11 +137,11 @@ export default function CookieConsentAdminPage() {
             setReprompt(false);
             setMessage(
                 wasReprompt
-                    ? `Guardado — el banner volverá a mostrarse a todos los visitantes (versión ${saved.version}).`
-                    : "Configuración guardada."
+                    ? t("msg.savedReprompt", { version: saved.version })
+                    : t("msg.saved")
             );
         } catch (err) {
-            setMessage(`Error al guardar: ${err?.message || err}`);
+            setMessage(t("msg.saveError", { msg: err?.message || err }));
         } finally {
             setBusy(false);
         }
@@ -156,9 +160,9 @@ export default function CookieConsentAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconCookie /></div>
                 <div>
-                    <h1 className="cf-title">Cookie Consent</h1>
+                    <h1 className="cf-title">{t("app.title")}</h1>
                     <p className="cf-subtitle">
-                        Banner de cookies (RGPD) en todo el sitio público + estadísticas anónimas
+                        {t("app.subtitle")}
                     </p>
                 </div>
             </div>
@@ -176,11 +180,11 @@ export default function CookieConsentAdminPage() {
                                 checked={!!form.enabled}
                                 onChange={(e) => setField("enabled", e.target.checked)}
                             />
-                            <span>Mostrar el banner en el sitio público</span>
+                            <span>{t("form.enabled")}</span>
                         </label>
 
                         <div>
-                            <label className="cf-label" htmlFor="cc-message">Mensaje (máx. 500 caracteres)</label>
+                            <label className="cf-label" htmlFor="cc-message">{t("form.message")}</label>
                             <textarea
                                 id="cc-message"
                                 value={form.message}
@@ -194,41 +198,41 @@ export default function CookieConsentAdminPage() {
 
                         <div className="cf-grid">
                             <div>
-                                <label className="cf-label" htmlFor="cc-accept">Botón aceptar (máx. 40)</label>
+                                <label className="cf-label" htmlFor="cc-accept">{t("form.accept")}</label>
                                 <input id="cc-accept" type="text" value={form.acceptLabel} onChange={(e) => setField("acceptLabel", e.target.value)} maxLength={40} className="cf-input" />
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="cc-reject">Botón rechazar (máx. 40)</label>
+                                <label className="cf-label" htmlFor="cc-reject">{t("form.reject")}</label>
                                 <input id="cc-reject" type="text" value={form.rejectLabel} onChange={(e) => setField("rejectLabel", e.target.value)} maxLength={40} className="cf-input" />
                             </div>
                         </div>
 
                         <div>
-                            <label className="cf-label" htmlFor="cc-policy">URL de la política de cookies (opcional)</label>
+                            <label className="cf-label" htmlFor="cc-policy">{t("form.policy")}</label>
                             <input
                                 id="cc-policy"
                                 type="url"
                                 value={form.policyUrl}
                                 onChange={(e) => setField("policyUrl", e.target.value)}
                                 maxLength={300}
-                                placeholder="https://misitio.com/politica-de-cookies"
+                                placeholder={t("form.policyPh")}
                                 className="cf-input"
                             />
                         </div>
 
                         <div className="cf-grid">
                             <div>
-                                <label className="cf-label" htmlFor="cc-position">Posición</label>
+                                <label className="cf-label" htmlFor="cc-position">{t("form.position")}</label>
                                 <select id="cc-position" value={form.position} onChange={(e) => setField("position", e.target.value)} className="cf-select">
-                                    <option value="bottom">Barra inferior (todo el ancho)</option>
-                                    <option value="corner">Tarjeta en la esquina</option>
+                                    <option value="bottom">{t("form.position.bottom")}</option>
+                                    <option value="corner">{t("form.position.corner")}</option>
                                 </select>
                             </div>
                             <div>
-                                <label className="cf-label" htmlFor="cc-theme">Tema</label>
+                                <label className="cf-label" htmlFor="cc-theme">{t("form.theme")}</label>
                                 <select id="cc-theme" value={form.theme} onChange={(e) => setField("theme", e.target.value)} className="cf-select">
-                                    <option value="dark">Oscuro</option>
-                                    <option value="light">Claro</option>
+                                    <option value="dark">{t("form.theme.dark")}</option>
+                                    <option value="light">{t("form.theme.light")}</option>
                                 </select>
                             </div>
                         </div>
@@ -241,25 +245,24 @@ export default function CookieConsentAdminPage() {
                                 onChange={(e) => setReprompt(e.target.checked)}
                             />
                             <span>
-                                <span className="cf-callout-title">Volver a preguntar a todos</span>
+                                <span className="cf-callout-title">{t("form.reprompt.title")}</span>
                                 <span className="cf-callout-text">
-                                    Al guardar se invalida el consentimiento guardado de cada visitante y el banner se muestra de
-                                    nuevo (versión actual: {form.version}).
+                                    {t("form.reprompt.text", { version: form.version })}
                                 </span>
                             </span>
                         </label>
 
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
                             <p className="cf-help" style={{ margin: 0 }}>
-                                El banner aparece en el sitio público cuando el plugin está activo y habilitado.
+                                {t("form.help")}
                             </p>
-                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                         </div>
 
                         {message && (
                             <div
-                                role={/Error/i.test(message) ? "alert" : "status"}
-                                className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}
+                                role={/Erro/i.test(message) ? "alert" : "status"}
+                                className={`cf-flash ${/Erro/i.test(message) ? "is-error" : "is-ok"}`}
                                 style={{ margin: 0 }}
                             >
                                 {message}
@@ -271,37 +274,36 @@ export default function CookieConsentAdminPage() {
 
             {/* --- Live preview ------------------------------------------------------------------- */}
             <div className="cf-card-item" style={{ marginTop: "1.5rem" }}>
-                <h2 className="cf-editor-title" style={{ marginBottom: "1rem" }}><IconEye /> Vista previa</h2>
+                <h2 className="cf-editor-title" style={{ marginBottom: "1rem" }}><IconEye /> {t("preview.title")}</h2>
                 <BannerPreview form={form} />
                 <p className="cf-help" style={{ marginTop: "0.9rem" }}>
-                    Vista aproximada — en el sitio público el banner usa su propia hoja de estilos y se adapta al ancho
-                    real de la página.
+                    {t("preview.help")}
                 </p>
             </div>
 
             {/* --- Stats ---------------------------------------------------------------------------- */}
             <div className="cf-card-item" style={{ marginTop: "1.5rem" }}>
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "1.1rem" }}>
-                    <h2 className="cf-editor-title" style={{ marginBottom: 0 }}><IconChart /> Estadísticas de consentimiento</h2>
-                    <span className="cf-micro">Registro anónimo — sin datos personales</span>
+                    <h2 className="cf-editor-title" style={{ marginBottom: 0 }}><IconChart /> {t("stats.title")}</h2>
+                    <span className="cf-micro">{t("stats.anonymous")}</span>
                 </div>
 
                 {stats === null ? (
-                    <p className="cf-help" style={{ margin: 0 }}>Sin datos todavía — las elecciones de los visitantes aparecerán aquí.</p>
+                    <p className="cf-help" style={{ margin: 0 }}>{t("stats.noData")}</p>
                 ) : (
                     <>
                         <div className="cf-stat-grid">
-                            <StatTile label="Total" value={total} />
-                            <StatTile label="Aceptados" value={accepted} accent="is-ok" />
-                            <StatTile label="Rechazados" value={rejected} accent="is-danger" />
-                            <StatTile label="% aceptación" value={acceptPct === null ? "—" : `${acceptPct}%`} accent="is-accent" />
+                            <StatTile label={t("stats.total")} value={total} />
+                            <StatTile label={t("stats.accepted")} value={accepted} accent="is-ok" />
+                            <StatTile label={t("stats.rejected")} value={rejected} accent="is-danger" />
+                            <StatTile label={t("stats.acceptPct")} value={acceptPct === null ? "—" : `${acceptPct}%`} accent="is-accent" />
                         </div>
 
                         {last30.length === 0 ? (
-                            <p className="cf-help" style={{ margin: 0 }}>Aún no hay elecciones registradas.</p>
+                            <p className="cf-help" style={{ margin: 0 }}>{t("stats.noChoices")}</p>
                         ) : (
                             <div>
-                                <p className="cf-label">Últimos 30 días con actividad</p>
+                                <p className="cf-label">{t("stats.last30")}</p>
                                 {last30.map((d) => {
                                     const dayTotal = (d.accepted || 0) + (d.rejected || 0);
                                     const accW = Math.round(((d.accepted || 0) / maxDay) * 100);

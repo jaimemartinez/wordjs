@@ -13,8 +13,7 @@
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
-
-const MONTHS_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+import { useT } from "./i18n";
 
 /**
  * Parse the stored local-naive ISO ('YYYY-MM-DD' or 'YYYY-MM-DDTHH:mm') as LOCAL time.
@@ -27,16 +26,17 @@ function parseIso(s) {
     return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0));
 }
 
-function fmtWhen(ev) {
+// `t` and `locale` come from useT() so month names, "all day" and times follow the admin's language.
+function fmtWhen(ev, t, locale) {
     const start = parseIso(ev.starts_at);
     if (!start) return ev.starts_at || "";
-    const datePart = (d) => `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`;
-    const timePart = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const datePart = (d) => `${d.getDate()} ${t(`month.${d.getMonth()}`)} ${d.getFullYear()}`;
+    const timePart = (d) => d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
     const end = ev.ends_at ? parseIso(ev.ends_at) : null;
 
     if (ev.all_day) {
-        if (end && end.toDateString() !== start.toDateString()) return `${datePart(start)} → ${datePart(end)} · Todo el día`;
-        return `${datePart(start)} · Todo el día`;
+        if (end && end.toDateString() !== start.toDateString()) return `${datePart(start)} → ${datePart(end)} · ${t("when.allDay")}`;
+        return `${datePart(start)} · ${t("when.allDay")}`;
     }
     if (!end) return `${datePart(start)} · ${timePart(start)}`;
     if (end.toDateString() === start.toDateString()) return `${datePart(start)} · ${timePart(start)} – ${timePart(end)}`;
@@ -74,6 +74,7 @@ const IconCalendarEmpty = (props) => (
  * it on every parent render and steal input focus). It owns its form state, seeded from `initial`.
  */
 function EventModal({ initial, onClose, onSaved }) {
+    const { t } = useT();
     const ev = initial || {};
     const [title, setTitle] = useState(ev.title || "");
     const [allDay, setAllDay] = useState(!!ev.all_day);
@@ -89,8 +90,8 @@ function EventModal({ initial, onClose, onSaved }) {
     const submit = async (e) => {
         e.preventDefault();
         setError("");
-        if (!title.trim()) { setError("El título es obligatorio."); return; }
-        if (!startsAt) { setError("La fecha de inicio es obligatoria."); return; }
+        if (!title.trim()) { setError(t("form.errTitle")); return; }
+        if (!startsAt) { setError(t("form.errStart")); return; }
 
         // All-day events carry date-only values in the inputs; normalize to the stored shape so
         // string comparison stays chronological ('T00:00' start, inclusive 'T23:59' end).
@@ -105,7 +106,7 @@ function EventModal({ initial, onClose, onSaved }) {
             description: description.trim(),
         };
         if (payload.ends_at && payload.ends_at < payload.starts_at) {
-            setError("La fecha de fin debe ser igual o posterior a la de inicio.");
+            setError(t("form.errEnd"));
             return;
         }
         if (ev.id) payload.id = ev.id;
@@ -113,9 +114,9 @@ function EventModal({ initial, onClose, onSaved }) {
         setBusy(true);
         try {
             await apiPost("/plugin/events-calendar/events", payload);
-            onSaved(ev.id ? "Evento actualizado." : "Evento creado.");
+            onSaved(ev.id ? t("msg.updated") : t("msg.created"));
         } catch (err) {
-            setError(err?.message || "No se pudo guardar el evento.");
+            setError(err?.message || t("msg.saveError"));
         } finally {
             setBusy(false);
         }
@@ -129,29 +130,29 @@ function EventModal({ initial, onClose, onSaved }) {
                 className="cf-letter"
                 role="dialog"
                 aria-modal="true"
-                aria-label={ev.id ? "Editar evento" : "Nuevo evento"}
+                aria-label={ev.id ? t("form.editTitle") : t("form.newTitle")}
             >
                 <div className="cf-letter-body">
                     <h2 className="cf-editor-title">
                         {ev.id ? <IconPen /> : <IconPlus />}
-                        {ev.id ? "Editar evento" : "Nuevo evento"}
+                        {ev.id ? t("form.editTitle") : t("form.newTitle")}
                     </h2>
 
                     <div className="cf-grid">
                         <div className="cf-span-2">
-                            <label className="cf-label" htmlFor="ec-title">Título *</label>
-                            <input id="ec-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="cf-input" placeholder="Nombre del evento" required />
+                            <label className="cf-label" htmlFor="ec-title">{t("form.title")}</label>
+                            <input id="ec-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="cf-input" placeholder={t("form.titlePh")} required />
                         </div>
 
                         <div className="cf-span-2">
                             <label className="cf-check">
                                 <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
-                                Todo el día
+                                {t("form.allDay")}
                             </label>
                         </div>
 
                         <div>
-                            <label className="cf-label" htmlFor="ec-starts">Inicio *</label>
+                            <label className="cf-label" htmlFor="ec-starts">{t("form.starts")}</label>
                             {allDay ? (
                                 <input id="ec-starts" type="date" value={startsAt.slice(0, 10)} onChange={(e) => setStartsAt(e.target.value ? e.target.value + "T00:00" : "")} className="cf-input" required />
                             ) : (
@@ -159,7 +160,7 @@ function EventModal({ initial, onClose, onSaved }) {
                             )}
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="ec-ends">Fin (opcional)</label>
+                            <label className="cf-label" htmlFor="ec-ends">{t("form.ends")}</label>
                             {allDay ? (
                                 <input id="ec-ends" type="date" value={endsAt.slice(0, 10)} onChange={(e) => setEndsAt(e.target.value ? e.target.value + "T23:59" : "")} className="cf-input" />
                             ) : (
@@ -168,30 +169,30 @@ function EventModal({ initial, onClose, onSaved }) {
                         </div>
 
                         <div>
-                            <label className="cf-label" htmlFor="ec-location">Lugar</label>
-                            <input id="ec-location" type="text" value={location} onChange={(e) => setLocation(e.target.value)} className="cf-input" placeholder="Auditorio, dirección…" />
+                            <label className="cf-label" htmlFor="ec-location">{t("form.location")}</label>
+                            <input id="ec-location" type="text" value={location} onChange={(e) => setLocation(e.target.value)} className="cf-input" placeholder={t("form.locationPh")} />
                         </div>
                         <div>
-                            <label className="cf-label" htmlFor="ec-color">Color</label>
+                            <label className="cf-label" htmlFor="ec-color">{t("form.color")}</label>
                             <input id="ec-color" type="color" value={color} onChange={(e) => setColor(e.target.value)} className="cf-color-input" />
                         </div>
 
                         <div className="cf-span-2">
-                            <label className="cf-label" htmlFor="ec-url">Enlace "Más info" (opcional)</label>
+                            <label className="cf-label" htmlFor="ec-url">{t("form.url")}</label>
                             <input id="ec-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} className="cf-input" placeholder="https://…" />
                         </div>
 
                         <div className="cf-span-2">
-                            <label className="cf-label" htmlFor="ec-description">Descripción</label>
-                            <textarea id="ec-description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="cf-input" placeholder="Detalles del evento…" />
+                            <label className="cf-label" htmlFor="ec-description">{t("form.description")}</label>
+                            <textarea id="ec-description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="cf-input" placeholder={t("form.descriptionPh")} />
                         </div>
                     </div>
 
                     {error && <div role="alert" className="cf-flash is-error" style={{ marginTop: "1.05rem", marginBottom: 0 }}>{error}</div>}
 
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}>
-                        <button type="button" onClick={onClose} disabled={busy} className="cf-btn-ghost">Cancelar</button>
-                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                        <button type="button" onClick={onClose} disabled={busy} className="cf-btn-ghost">{t("common.cancel")}</button>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? t("common.saving") : t("common.save")}</button>
                     </div>
                 </div>
             </form>
@@ -199,13 +200,15 @@ function EventModal({ initial, onClose, onSaved }) {
     );
 }
 
+// Labels are looked up through `t` at render time so they follow the admin's language.
 const SCOPES = [
-    { value: "upcoming", label: "Próximos" },
-    { value: "past", label: "Pasados" },
-    { value: "all", label: "Todos" },
+    { value: "upcoming", labelKey: "scope.upcoming" },
+    { value: "past", labelKey: "scope.past" },
+    { value: "all", labelKey: "scope.all" },
 ];
 
 export default function EventsCalendarAdminPage() {
+    const { t, locale } = useT();
     const [events, setEvents] = useState(null); // null = loading
     const [scope, setScope] = useState("upcoming");
     const [message, setMessage] = useState("");
@@ -218,22 +221,22 @@ export default function EventsCalendarAdminPage() {
             setEvents(data.events || []);
         } catch (err) {
             setEvents([]);
-            setMessage(`Error al cargar los eventos: ${err?.message || err}`);
+            setMessage(t("msg.loadError", { msg: err?.message || err }));
         }
     };
 
     useEffect(() => { load(scope); }, [scope]);
 
     const remove = async (ev) => {
-        if (!window.confirm(`¿Eliminar el evento "${ev.title}"? Esta acción no se puede deshacer.`)) return;
+        if (!window.confirm(t("msg.deleteConfirm", { title: ev.title }))) return;
         setBusyId(ev.id);
         setMessage("");
         try {
             await apiDelete(`/plugin/events-calendar/events/${ev.id}`);
-            setMessage("Evento eliminado.");
+            setMessage(t("msg.deleted"));
             load(scope);
         } catch (err) {
-            setMessage(`Error al eliminar: ${err?.message || err}`);
+            setMessage(t("msg.deleteError", { msg: err?.message || err }));
         } finally {
             setBusyId(null);
         }
@@ -245,11 +248,11 @@ export default function EventsCalendarAdminPage() {
             <div className="cf-header">
                 <div className="cf-stamp" aria-hidden="true"><IconCalendar /></div>
                 <div style={{ minWidth: 0 }}>
-                    <h1 className="cf-title">Eventos</h1>
-                    <p className="cf-subtitle">Calendario de eventos → bloque EventsCalendar en el editor visual</p>
+                    <h1 className="cf-title">{t("app.title")}</h1>
+                    <p className="cf-subtitle">{t("app.subtitle")}</p>
                 </div>
                 <div style={{ marginLeft: "auto" }}>
-                    <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> Nuevo evento</button>
+                    <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> {t("app.newEvent")}</button>
                 </div>
             </div>
             <div className="cf-airmail-rule" aria-hidden="true"></div>
@@ -265,13 +268,13 @@ export default function EventsCalendarAdminPage() {
                         onClick={() => setScope(s.value)}
                         className={`cf-tab ${scope === s.value ? "is-active" : ""}`}
                     >
-                        {s.label}
+                        {t(s.labelKey)}
                     </button>
                 ))}
             </div>
 
             {message && (
-                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>
+                <div role={/Erro/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Erro/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
@@ -280,13 +283,13 @@ export default function EventsCalendarAdminPage() {
                 {events === null ? (
                     <div className="cf-empty">
                         <IconCalendarEmpty />
-                        <span>Cargando eventos…</span>
+                        <span>{t("list.loading")}</span>
                     </div>
                 ) : events.length === 0 ? (
                     <div className="cf-empty">
                         <IconCalendarEmpty />
                         <span>
-                            {scope === "upcoming" ? "No hay eventos próximos." : scope === "past" ? "No hay eventos pasados." : "Todavía no hay eventos — crea el primero."}
+                            {scope === "upcoming" ? t("list.emptyUpcoming") : scope === "past" ? t("list.emptyPast") : t("list.emptyAll")}
                         </span>
                     </div>
                 ) : (
@@ -294,10 +297,10 @@ export default function EventsCalendarAdminPage() {
                         <table className="cf-table">
                             <thead>
                                 <tr>
-                                    <th>Evento</th>
-                                    <th>Fecha</th>
-                                    <th>Lugar</th>
-                                    <th style={{ textAlign: "right" }}>Acciones</th>
+                                    <th>{t("col.event")}</th>
+                                    <th>{t("col.date")}</th>
+                                    <th>{t("col.location")}</th>
+                                    <th style={{ textAlign: "right" }}>{t("col.actions")}</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -316,15 +319,15 @@ export default function EventsCalendarAdminPage() {
                                                 </div>
                                             </div>
                                         </td>
-                                        <td className="cf-cell-date">{fmtWhen(ev)}</td>
+                                        <td className="cf-cell-date">{fmtWhen(ev, t, locale)}</td>
                                         <td>{ev.location || "—"}</td>
                                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                                             <div style={{ display: "inline-flex", gap: "0.5rem" }}>
                                                 <button type="button" onClick={() => setModal(ev)} className="cf-btn-ghost">
-                                                    <IconPen /> Editar
+                                                    <IconPen /> {t("common.edit")}
                                                 </button>
                                                 <button type="button" onClick={() => remove(ev)} disabled={busyId === ev.id} className="cf-btn-danger">
-                                                    Eliminar
+                                                    {t("common.delete")}
                                                 </button>
                                             </div>
                                         </td>
@@ -337,8 +340,7 @@ export default function EventsCalendarAdminPage() {
             </div>
 
             <p className="cf-footnote">
-                En el editor visual, agrega el bloque <strong>EventsCalendar</strong> — muestra los eventos como
-                lista de próximos o como calendario mensual, con descripción opcional.
+                {t("app.footnote.before")} <strong>EventsCalendar</strong> {t("app.footnote.after")}
             </p>
 
             {modal !== null && (
