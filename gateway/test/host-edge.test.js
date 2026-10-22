@@ -387,9 +387,12 @@ describe('a dot segment cannot send a request back through Next\'s /api rewrite 
         assert.match(data, /^HTTP\/1\.1 400 /, 'nor without a Host, which the re-entry used to give one');
         assert.deepStrictEqual(gateSaw, [], 'the backend never saw them');
         assert.deepStrictEqual(notices, []);
-        // The direct requests still work, and a remote client's own `Host: localhost` is no collapse (lab X3).
+        // The direct requests still work, and a remote client's own `Host: localhost` is no collapse (lab X3):
+        // it is refused at the edge as the forged name it is (QA X2-14), not served as a loopback request.
         assert.strictEqual(JSON.parse((await harness.request({ port: remotePort, path: '/api/v1/settings', headers: { host: 'example.com' } })).body).cls, 'canonical');
-        assert.strictEqual(JSON.parse((await harness.request({ port: remotePort, path: '/api/v1/settings', headers: { host: 'localhost:3000' } })).body).cls, 'loopback');
+        const forged = await harness.request({ port: remotePort, path: '/api/v1/settings', headers: { host: 'localhost:3000' } });
+        assert.strictEqual(forged.status, 421);
+        assert.deepStrictEqual(gateSaw, ['/api/v1/settings'], 'only the canonical request reached the backend');
         assert.deepStrictEqual(notices, []);
     });
 
@@ -860,6 +863,52 @@ describe('the Host header itself', () => {
     });
 });
 
+// ─── A loopback name from another machine (QA X2-14) ─────────────────────────────────────────────────
+
+describe('a loopback Host from a remote client is not a loopback request (QA X2-14)', () => {
+    const pol = sitePolicy();
+    const ask = (host, remoteAddress, extra = {}) => {
+        const headers = Object.assign({ host }, extra);
+        const req = { url: '/', headers, rawHeaders: Object.entries(headers).flat(), socket: remoteAddress === undefined ? {} : { remoteAddress } };
+        const a = hp.requestAuthority(req, pol);
+        return { a, v: hp.classify(a.parsed, pol, { proxied: a.proxied, remotePeer: a.remotePeer }) };
+    };
+
+    it('localhost, 127.x and [::1] from a public or LAN peer are unknown (refused like any undeclared name)', () => {
+        for (const [host, peer] of [['localhost', '203.0.113.9'], ['localhost:3000', '192.168.1.50'], ['127.0.0.1', '203.0.113.9'], ['[::1]:8443', '2001:db8::7'], ['127.0.0.1', '::ffff:198.51.100.7']]) {
+            const { a, v } = ask(host, peer);
+            assert.strictEqual(a.remotePeer, true, host + ' from ' + peer);
+            assert.deepStrictEqual([v.cls, v.reason], ['unknown', 'loopback-remote'], host + ' from ' + peer);
+        }
+    });
+
+    it('from this machine they stay loopback: a browser on the server, a local nginx with its default Host', () => {
+        for (const [host, peer] of [['localhost', '127.0.0.1'], ['127.0.0.1:3000', '127.0.0.5'], ['[::1]', '::1'], ['localhost', '::ffff:127.0.0.1']]) {
+            const { a, v } = ask(host, peer);
+            assert.strictEqual(a.remotePeer, false, host + ' from ' + peer);
+            assert.strictEqual(v.cls, 'loopback', host + ' from ' + peer);
+        }
+    });
+
+    it('a request with no peer address keeps the old reading, and the main address is unaffected', () => {
+        assert.strictEqual(ask('localhost', undefined).v.cls, 'loopback');
+        assert.strictEqual(ask('example.com', '203.0.113.9').v.cls, 'canonical');
+    });
+
+    it('at the edge: the forged name gets 421 and never reaches the site', async () => {
+        const s = await edgeServer({ policy: pol });
+        try {
+            const edge = hostEdge.createHostEdge({ getPolicy: () => pol, logger: silent, refused: hp.createRefusedHosts() });
+            const res = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k.toLowerCase()] = v; }, getHeader(k) { return this.headers[k.toLowerCase()]; }, writeHead(c) { this.statusCode = c; return this; }, end() { this.ended = true; }, write() {} };
+            const req = { method: 'GET', url: '/wp-admin', headers: { host: 'localhost' }, rawHeaders: ['Host', 'localhost'], socket: { remoteAddress: '203.0.113.9' } };
+            assert.strictEqual(edge.handle(req, res), true, 'the edge answered it');
+            assert.strictEqual(res.statusCode, 421);
+            const local = await s.get('localhost');
+            assert.strictEqual(local.status, 200, 'the same name from this machine is served');
+        } finally { await s.close(); }
+    });
+});
+
 // ─── When nothing is enforced ───────────────────────────────────────────────────────────────────────
 
 describe('nothing is enforced', () => {
@@ -996,12 +1045,13 @@ describe('acmeRedirectLocation', () => {
 
     it('keeps an address the site answers, IPv6 brackets included', () => {
         assert.strictEqual(hostEdge.acmeRedirectLocation(req('blog.example.com'), enforcing), 'https://blog.example.com:8443/p?q=1');
-        assert.strictEqual(hostEdge.acmeRedirectLocation(req('[::1]'), enforcing), 'https://[::1]:8443/p?q=1');
+        const local = Object.assign(req('[::1]'), { socket: { remoteAddress: '::1' } });
+        assert.strictEqual(hostEdge.acmeRedirectLocation(local, enforcing), 'https://[::1]:8443/p?q=1');
         assert.strictEqual(hostEdge.acmeRedirectLocation(req('192.168.1.23'), Object.assign({}, enforcing, { port: 443 })), 'https://192.168.1.23/p?q=1');
     });
 
-    it('sends everything else to the main address — an unknown name, a redirect alias, a proxied IP, garbage', () => {
-        for (const r of [req('evil.example'), req('www.example.com'), req('10.0.0.5', '/p?q=1', { 'x-forwarded-for': '203.0.113.9' }), req('a,b'), req(undefined)]) {
+    it('sends everything else to the main address — an unknown name, a redirect alias, a proxied IP, garbage, a remote loopback name', () => {
+        for (const r of [req('evil.example'), req('localhost'), req('[::1]'), req('127.0.0.1'), req('www.example.com'), req('10.0.0.5', '/p?q=1', { 'x-forwarded-for': '203.0.113.9' }), req('a,b'), req(undefined)]) {
             assert.strictEqual(hostEdge.acmeRedirectLocation(r, enforcing), 'https://example.com:8443/p?q=1', JSON.stringify(r.headers));
         }
     });

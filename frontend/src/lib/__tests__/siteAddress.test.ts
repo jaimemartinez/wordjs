@@ -689,6 +689,12 @@ describe("after an SSL or port change: the main address is followed or suggested
 
         const plain = await run({ siteUrl: "https://example.com" });
         expect(plain.alerts).toEqual(["Settings saved. The gateway reloads itself in a few seconds."]);
+        // A monolith has no gateway: its one process restarts (QA M2-15).
+        const mono = await run({ siteUrl: "https://example.com", monolith: true, restart: "supervisor" });
+        expect(mono.alerts).toEqual(["Settings saved. WordJS restarts by itself in a few seconds to apply it."]);
+        const monoMoved = await run({ suggestCanonical: "http://example.com:3393", monolith: true });
+        expect(monoMoved.alerts[0]).toMatch(/^Settings saved\. WordJS now serves the site at http:\/\/example\.com:3393/);
+        expect(suggested.alerts[0]).toMatch(/^Settings saved\. The gateway now serves the site at/);
         expect(plain.went).toEqual([]);
 
         // HTTPS switched off here: the main address followed the gateway's own listener (QA lab, fix A).

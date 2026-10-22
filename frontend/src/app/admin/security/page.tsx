@@ -135,6 +135,18 @@ import { useRouter } from "next/navigation";
 import { afterGatewayConfigSave } from "@/lib/siteAddress";
 import { gatewayServingNotice, gatewayNeedsCertificate } from "@/lib/gatewayServing";
 
+// The certificate box's note, by the code the backend sends with it; an unknown code (or none, from an older
+// backend) shows the backend's own English text.
+function certInfoMessage(info: { code?: string; message?: string }, t: (key: string) => string): string {
+    switch (info.code) {
+        case 'plain-http': return t('security.cert.plainHttp');
+        case 'plain-http-env': return t('security.cert.plainHttpEnv');
+        case 'cert-missing': return t('security.cert.missing');
+        case 'cert-unreadable': return t('security.cert.unreadable');
+        default: return info.message || '';
+    }
+}
+
 function GatewayConfigForm() {
     const [config, setConfig] = useState<any>(null);
     const [loading, setLoading] = useState(false);
@@ -242,7 +254,12 @@ function GatewayConfigForm() {
     // runtime. Present the live port + TLS state as read-only, with the current certificate, and explain
     // where these are actually set (env / config at startup) instead of showing an editable form whose
     // Save would try to reach a gateway that isn't running.
-    if (config.source === 'monolith') {
+    // A monolith is edited here like the gateway (QA M2-15): saving restarts WordJS by itself. Only a value
+    // the service's environment pins (PORT, WORDJS_HTTP=1) is shown read-only; both pinned = nothing to edit.
+    const monolith = config.source === 'monolith';
+    const pinnedPort = monolith && config.pinned?.port === true;
+    const pinnedTls = monolith && config.pinned?.tls === true;
+    if (monolith && pinnedPort && pinnedTls) {
         const ci = config.certInfo || {};
         return (
             <div className="space-y-6">
@@ -313,6 +330,15 @@ function GatewayConfigForm() {
 
     return (
         <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            {monolith && (
+                <div data-testid="gateway-monolith-note" className="md:col-span-2 p-5 bg-indigo-50/70 rounded-2xl border border-indigo-100 flex items-start gap-4 text-sm text-indigo-900/90">
+                    <i className="fa-solid fa-circle-info text-xl text-indigo-500 mt-0.5"></i>
+                    <div>
+                        <h3 className="font-bold text-base mb-1">{t('security.monolith.title')}</h3>
+                        <p className="opacity-90 leading-relaxed">{t('security.monolith.editable')}</p>
+                    </div>
+                </div>
+            )}
             {notice && (
                 <div role="status" data-testid="gateway-serving-notice" className="md:col-span-2 p-5 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-4">
                     <i className="fa-solid fa-triangle-exclamation text-xl text-amber-600 mt-0.5"></i>
@@ -344,7 +370,7 @@ function GatewayConfigForm() {
                         {config.certInfo.error ? (
                             <div className="col-span-4 text-red-500 font-medium bg-red-50 p-4 rounded-xl border border-red-100">{t('ssl.log.error').replace('{error}', () => config.certInfo.error)}</div>
                         ) : config.certInfo.message ? (
-                            <div className="col-span-4 text-gray-500 font-medium italic">{config.certInfo.message}</div>
+                            <div className="col-span-4 text-gray-500 font-medium italic" data-testid="cert-info-message">{certInfoMessage(config.certInfo, t)}</div>
                         ) : config.certInfo.commonName ? (
                             <>
                                 <div className="p-3 bg-white/60 rounded-xl border border-indigo-50">
@@ -381,23 +407,24 @@ function GatewayConfigForm() {
                     <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-bold">:</span>
                     <input id="security-gateway-port"
                         type="number"
+                        disabled={pinnedPort}
                         value={config.gatewayPort ?? 3000}
                         onChange={e => setConfig({ ...config, gatewayPort: e.target.value })}
                         className="w-full pl-8 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-mono text-gray-800"
                         placeholder="3000"
                     />
                 </div>
-                <p className="text-xs text-gray-500 ml-1">{t('security.gateway.portHint')}</p>
+                <p className="text-xs text-gray-500 ml-1">{t(pinnedPort ? 'security.monolith.portPinned' : monolith ? 'security.monolith.portHint' : 'security.gateway.portHint')}</p>
             </div>
 
-            <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-center justify-between gap-6 group hover:bg-emerald-100/50 transition-all cursor-pointer shadow-sm" onClick={() => setConfig({ ...config, sslEnabled: !config.sslEnabled })}>
+            <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-center justify-between gap-6 group hover:bg-emerald-100/50 transition-all cursor-pointer shadow-sm" aria-disabled={pinnedTls} onClick={() => { if (!pinnedTls) setConfig({ ...config, sslEnabled: !config.sslEnabled }); }}>
                 <div className="flex gap-4 items-center">
                     <div className="bg-white p-3 rounded-xl shadow-sm border border-emerald-200 text-emerald-600 group-hover:scale-110 transition-transform">
                         <i className={`fa-solid ${config.sslEnabled ? 'fa-lock' : 'fa-lock-open'} text-xl`}></i>
                     </div>
                     <div>
                         <h4 className="text-base font-bold text-gray-900">{t('security.gateway.enableSsl')}</h4>
-                        <p className="text-xs text-gray-500 mt-1">{t('security.gateway.enableSslHint')}</p>
+                        <p className="text-xs text-gray-500 mt-1">{t(pinnedTls ? 'security.monolith.tlsPinned' : 'security.gateway.enableSslHint')}</p>
                     </div>
                 </div>
                 <div

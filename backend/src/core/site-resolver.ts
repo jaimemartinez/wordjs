@@ -35,7 +35,7 @@ function resolveSiteId(req: Request, getPolicy: () => any): number | null {
     const authority = hostPolicy.requestAuthority(req, pol);
     if (authority.absent) return siteContext.PRIMARY_SITE_ID;
     if (!authority.parsed) return null;
-    return hostPolicy.siteIdOf(hostPolicy.classify(authority.parsed, pol, { proxied: authority.proxied }));
+    return hostPolicy.siteIdOf(hostPolicy.classify(authority.parsed, pol, { proxied: authority.proxied, remotePeer: authority.remotePeer }));
 }
 
 /**
