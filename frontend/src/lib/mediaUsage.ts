@@ -25,3 +25,16 @@ export function featuredImageSrc(post: { featuredMedia?: { url?: string; path?: 
     }
     return typeof fm.url === "string" && /^(https?:\/\/|\/)/i.test(fm.url) ? fm.url : undefined;
 }
+
+/** The Font Awesome icon for a non-image library file, by its type. */
+export function mediaTypeIcon(mimeType: string | null | undefined): string {
+    const m = String(mimeType || "").toLowerCase();
+    if (m.startsWith("video/")) return "fa-file-video";
+    if (m.startsWith("audio/")) return "fa-file-audio";
+    if (m === "application/pdf") return "fa-file-pdf";
+    if (m.startsWith("text/") || m === "application/json") return "fa-file-lines";
+    if (m.includes("zip") || m.includes("compressed")) return "fa-file-zipper";
+    if (m.includes("spreadsheet") || m.includes("excel") || m === "text/csv") return "fa-file-excel";
+    if (m.includes("word") || m.includes("opendocument.text")) return "fa-file-word";
+    return "fa-file";
+}

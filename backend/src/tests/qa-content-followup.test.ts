@@ -307,3 +307,19 @@ test('a menu item nests under another item of the same menu, opens in a new tab,
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.strictEqual(Number(ok.body.parent), 0);
 });
+
+// ── media: a fitted size is named by the dimensions it really has (S1-23) ──────────────────────────
+
+test('a fitted (not cropped) size of a 3:2 photo is named by its real dimensions', async () => {
+    const sharp = require('sharp');
+    const { generateImageDerivatives } = require('../core/media-derivatives');
+    const dir = fs.mkdtempSync(path.join(TMP_ROOT, 'deriv-'));
+    const file = path.join(dir, 'landscape.jpg');
+    await sharp({ create: { width: 1200, height: 800, channels: 3, background: { r: 200, g: 80, b: 40 } } }).jpeg().toFile(file);
+    const out = await generateImageDerivatives(file, 'image/jpeg');
+    assert.strictEqual(out.sizes.medium.file, 'landscape-300x200.jpg', JSON.stringify(out.sizes.medium));
+    assert.strictEqual(out.sizes.medium.height, 200);
+    assert.ok(fs.existsSync(path.join(dir, 'landscape-300x200.jpg')));
+    // A cropped size really is w×h.
+    assert.strictEqual(out.sizes.thumbnail.file, 'landscape-150x150.jpg', JSON.stringify(out.sizes.thumbnail));
+});

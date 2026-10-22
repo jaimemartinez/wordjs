@@ -120,7 +120,8 @@ router.delete('/:part', authenticate, isAdmin, asyncHandler(async (req: Request,
     const deleted = await deleteOption('site_chrome_' + part);
     // deleteOption fires no updated_option hook, so purge explicitly — the public pages must
     // re-render with the next precedence level (theme chrome / layout variant).
-    if (deleted) purgeFrontend(['settings'], ['/']);
+    // Expire now (QA S1-22): «Restore built-in» reached the public site only after the stale copy was served.
+    if (deleted) purgeFrontend(['settings'], ['/'], { immediate: true });
 
     res.json({ part, deleted: !!deleted });
 }));

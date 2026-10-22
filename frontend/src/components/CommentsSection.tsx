@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { commentThread } from "@/lib/commentThread";
 import { commentsApi, Comment } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { formatSiteDate } from "@/lib/public/siteDate";
@@ -52,6 +53,12 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
+    // Threads (QA S1-23): the comment a reply answers, and the notice that must not hide under the header.
+    const [replyTo, setReplyTo] = useState<{ id: number; author: string } | null>(null);
+    const noticeRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (successMessage) noticeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, [successMessage]);
 
     // Form state
     const [authorName, setAuthorName] = useState("");
@@ -116,11 +123,16 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                 author_name: authorName,
                 author_email: authorEmail,
                 author_url: authorUrl,
+                ...(replyTo ? { parent: replyTo.id } : {}),
                 [HONEYPOT_FIELD]: honeypot
             };
-            await commentsApi.create(payload);
-            setSuccessMessage("Comment submitted successfully! It awaits moderation.");
+            const created = await commentsApi.create(payload) as { status?: string } | null;
+            // Published at once when the site does not hold comments for moderation (Settings → Discussion).
+            const published = created && (created.status === "1" || created.status === "approved");
+            setSuccessMessage(published ? "Your comment is published." : "Comment submitted successfully! It awaits moderation.");
             setContent("");
+            setReplyTo(null);
+            if (published) loadComments();
             // Don't reload immediately if it's pending moderation, 
             // but if we were logged in (future improvement) we might see it.
             // For now, just clear form.
@@ -154,8 +166,9 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                 {comments.length === 0 ? (
                     <p className="wjs-comments-empty text-[var(--wjs-color-text-muted,#6b7280)] italic">No comments yet. Be the first to share your thoughts!</p>
                 ) : (
-                    comments.map((comment) => (
-                        <div key={comment.id} className="wjs-comment flex gap-4">
+                    commentThread(comments).map(({ comment, depth }) => (
+                        <div key={comment.id} className="wjs-comment flex gap-4" data-depth={depth}
+                            style={depth ? { marginInlineStart: Math.min(depth, 4) * 2.5 + "rem" } : undefined}>
                             <div className="wjs-comment-avatar flex-shrink-0">
                                 {comment.authorAvatarUrl ? (
                                     <img
@@ -176,6 +189,13 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                                         </span>
                                     </div>
                                     <div className="wjs-comment-content prose prose-sm text-[var(--wjs-color-text-main,#374151)] max-w-none break-words overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
+                                    {!(requireLogin && !commenter) && (
+                                        <button type="button"
+                                            onClick={() => { setReplyTo({ id: comment.id, author: comment.author }); document.getElementById("wjs-comment-form")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
+                                            className="wjs-comment-reply mt-2 min-h-8 text-xs font-semibold text-[var(--wjs-color-primary,#2563eb)] hover:underline">
+                                            Reply
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -184,7 +204,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
             </div>
 
             {/* Comment Form */}
-            <div className="wjs-comment-form bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-[var(--wjs-card-radius,0.75rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
+            <div id="wjs-comment-form" className="wjs-comment-form scroll-mt-28 bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-[var(--wjs-card-radius,0.75rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
                 <h4 className="wjs-comment-form-title text-lg font-bold text-[var(--wjs-color-heading,#111827)] mb-4">Leave a Reply</h4>
 
                 {/* Alert bg tints (red-50/green-50) stay literal: the contract has no undeclared danger/
@@ -196,7 +216,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                 )}
 
                 {successMessage && (
-                    <div role="alert" aria-live="polite" className="bg-green-50 text-[var(--wjs-form-success-color,oklch(62.7%_0.194_149.214))] p-3 rounded-[var(--wjs-radius,0.5rem)] text-sm mb-4">
+                    <div ref={noticeRef} role="alert" aria-live="polite" className="scroll-mt-28 bg-green-50 text-[var(--wjs-form-success-color,oklch(62.7%_0.194_149.214))] p-3 rounded-[var(--wjs-radius,0.5rem)] text-sm mb-4">
                         {successMessage}
                     </div>
                 )}
@@ -207,6 +227,12 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                     </p>
                 ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
+                    {replyTo && (
+                        <p className="wjs-comment-replying text-sm text-[var(--wjs-color-text-muted,#6b7280)] flex flex-wrap items-center gap-2">
+                            Replying to <strong className="text-[var(--wjs-color-text-main,#374151)]">{replyTo.author}</strong>
+                            <button type="button" onClick={() => setReplyTo(null)} className="min-h-8 text-xs underline">Cancel reply</button>
+                        </p>
+                    )}
                     {commenter ? (
                         <p className="wjs-comment-as text-sm text-[var(--wjs-color-text-muted,#6b7280)]">
                             Commenting as <strong className="text-[var(--wjs-color-text-main,#374151)]">{commenter.displayName}</strong>

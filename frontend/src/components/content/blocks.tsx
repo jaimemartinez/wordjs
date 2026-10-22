@@ -535,7 +535,7 @@ export function SiteLogoBlock({ mode = "both", linkToHome = true, maxHeight = 40
     // `.wjs-header-logo` is the brand hook themes target (Header.tsx emits it on this same <a>/<span>
     // shape). Link home unless the author turned it off — logical, no author URL is involved.
     const brand = linkToHome !== false
-        ? <a className="wjs-header-logo inline-flex items-center gap-2" href="/">{inner}</a>
+        ? <a className="wjs-header-logo inline-flex items-center gap-2" href="/" aria-label={showLogo ? alt : (blogname || "Home")}>{inner}</a>
         : <span className="wjs-header-logo inline-flex items-center gap-2">{inner}</span>;
 
     return (

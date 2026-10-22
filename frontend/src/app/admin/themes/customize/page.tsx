@@ -99,6 +99,16 @@ export default function ThemeCustomizerPage() {
     // Set when the preview iframe is cross-origin (split/separate deploy): reading its contentDocument
     // throws a SecurityError, so seeding/injection can never work — surface a notice instead of polling forever.
     const [previewBlocked, setPreviewBlocked] = useState(false);
+    // What is stored, as JSON: leaving with overrides that differ asks first (QA S1-23 — a changed
+    // primary colour was lost without a word when the admin navigated away).
+    const [savedSnapshot, setSavedSnapshot] = useState("{}");
+    const dirty = JSON.stringify(overrides) !== savedSnapshot;
+    useEffect(() => {
+        if (!dirty) return;
+        const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+        window.addEventListener("beforeunload", warn);
+        return () => window.removeEventListener("beforeunload", warn);
+    }, [dirty]);
 
     const iframeRef = useRef<HTMLIFrameElement>(null);
     // Hidden <input type=file> the "Import" button clicks — reading a JSON file the admin picked.
@@ -133,6 +143,7 @@ export default function ThemeCustomizerPage() {
                                 if (typeof v === "string") clean[k] = v;
                             }
                             setOverrides(clean);
+                            setSavedSnapshot(JSON.stringify(clean));
                         }
                     } catch {
                         // ignore malformed JSON — start with no overrides
@@ -258,6 +269,7 @@ export default function ThemeCustomizerPage() {
             await settingsApi.update({ [MODS_KEY]: JSON.stringify(clean) });
             // Reflect the sanitized result back into state so the UI matches what was stored.
             setOverrides(clean);
+            setSavedSnapshot(JSON.stringify(clean));
             setSaveState("saved");
         } catch (err) {
             setSaveState("error");
@@ -271,6 +283,7 @@ export default function ThemeCustomizerPage() {
         try {
             await settingsApi.update({ [MODS_KEY]: "" });
             setOverrides({});
+            setSavedSnapshot("{}");
             setSaveState("saved");
         } catch (err) {
             setSaveState("error");
@@ -319,6 +332,7 @@ export default function ThemeCustomizerPage() {
                     }
                 }
                 setOverrides(next);
+                setSavedSnapshot(JSON.stringify(next));
                 setSaveState("saved");
             } catch (err) {
                 setSaveState("error");

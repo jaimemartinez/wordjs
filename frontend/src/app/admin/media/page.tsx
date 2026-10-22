@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { mediaApi, settingsApi, type MediaUsage } from "@/lib/api";
-import { deleteMessage } from "@/lib/mediaUsage";
+import { deleteMessage, mediaTypeIcon } from "@/lib/mediaUsage";
 import { uploadSequentially, type UploadFailure } from "@/lib/uploadQueue";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural } from "@/lib/i18n";
@@ -669,7 +669,8 @@ export default function MediaPage() {
                                         {item.mimeType.startsWith('image/') ? (
                                             <img src={item.sourceUrl} alt="" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                         ) : (
-                                            <i className="fa-solid fa-file-pdf text-5xl text-gray-300 group-hover:text-blue-500 transition-colors duration-500" aria-hidden="true"></i>
+                                            // The icon follows the file's type (a WebM showed a PDF icon, QA S1-23).
+                                            <i className={`fa-solid ${mediaTypeIcon(item.mimeType)} text-5xl text-gray-300 group-hover:text-blue-500 transition-colors duration-500`} aria-hidden="true"></i>
                                         )}
                                     </div>
                                     <div className="p-3 sm:p-5">

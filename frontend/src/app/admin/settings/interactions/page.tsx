@@ -53,6 +53,7 @@ import {
     describeMotion,
     editorHref,
     presetUsageByPage,
+    listAllEntries,
     simpleToSpec,
     type UsagePage,
 } from "@/lib/motionLibrary";
@@ -117,7 +118,8 @@ export default function InteractionPresetsPage() {
      */
     const scanContent = useCallback(async (): Promise<IxInventoryEntry[] | null> => {
         try {
-            const [pages, posts] = await Promise.all([postsApi.list("page", "any"), postsApi.list("post", "any")]);
+            const all = (type: string) => listAllEntries((page) => postsApi.listPaged({ type, status: "any", page, perPage: 100 }));
+            const [pages, posts] = await Promise.all([all("page"), all("post")]);
             const out: IxInventoryEntry[] = [];
             let saw = false;
             for (const post of [...pages, ...posts]) {

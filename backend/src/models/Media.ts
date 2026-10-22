@@ -418,7 +418,11 @@ class Media {
         // No entry keeps pointing at it as its featured image (WordPress drops _thumbnail_id too): the
         // dangling id kept announcing an og:image that answered 404.
         if (deleted) {
-            for (const postId of await Media.featuredUsers(id)) await Post.deleteMeta(postId, '_thumbnail_id');
+            for (const postId of await Media.featuredUsers(id)) {
+                await Post.deleteMeta(postId, '_thumbnail_id');
+                // Their cached pages still announced the image (og:image → 404 for ~30–45 s, QA S1-22).
+                await require('../core/frontend-purge').purgeForPost(postId);
+            }
         }
         return deleted;
     }

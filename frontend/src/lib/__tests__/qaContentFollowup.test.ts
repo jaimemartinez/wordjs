@@ -7,6 +7,10 @@ import { runEach } from "@/lib/bulkRun";
 import { isPostsPage, postsPageHref, postsPageId } from "@/lib/public/postsPage";
 import { formatSiteDate, siteDateFormats } from "@/lib/public/siteDate";
 import { flattenMenu, indent, moveWithinSiblings, outdent, parentCandidates } from "@/lib/menuTree";
+import { commentThread } from "@/lib/commentThread";
+import { mediaTypeIcon } from "@/lib/mediaUsage";
+import { listAllEntries } from "@/lib/motionLibrary";
+import { paletteRowOrder } from "@/components/verso/editor/paletteActions";
 
 describe("bulk actions run one write per row and report what failed", () => {
     it("keeps going past a failure and names the first reason", async () => {
@@ -87,5 +91,48 @@ describe("menu tree (submenus in the menu editor)", () => {
 
     it("never offers an item or its descendants as its parent", () => {
         expect(parentCandidates(items, items[1]).map((i) => i.id)).toEqual([1, 4]);
+    });
+});
+
+describe("public comments as threads", () => {
+    it("puts each reply under the comment it answers, with its depth", () => {
+        const rows = commentThread([
+            { id: 1 }, { id: 2 }, { id: 3, parent: 1 }, { id: 4, parent: 3 }, { id: 5, parent: 2 },
+        ]);
+        expect(rows.map((r) => [r.comment.id, r.depth])).toEqual([[1, 0], [3, 1], [4, 2], [2, 0], [5, 1]]);
+    });
+    it("shows a reply whose parent is not listed at the top level instead of dropping it", () => {
+        const rows = commentThread([{ id: 7, parent: 99 }, { id: 8, parent: 8 }]);
+        expect(rows.map((r) => [r.comment.id, r.depth])).toEqual([[7, 0], [8, 0]]);
+    });
+});
+
+describe("media library icons for files that are not images", () => {
+    it("picks the icon by type", () => {
+        expect(mediaTypeIcon("video/mp4")).toBe("fa-file-video");
+        expect(mediaTypeIcon("audio/mpeg")).toBe("fa-file-audio");
+        expect(mediaTypeIcon("application/pdf")).toBe("fa-file-pdf");
+        expect(mediaTypeIcon("application/zip")).toBe("fa-file-zipper");
+        expect(mediaTypeIcon(null)).toBe("fa-file");
+    });
+});
+
+describe("the motion usage scan reads every page", () => {
+    it("keeps asking until the last page", async () => {
+        const asked: number[] = [];
+        const all = await listAllEntries(async (page) => { asked.push(page); return { data: [page * 10, page * 10 + 1], totalPages: 3 }; });
+        expect(asked).toEqual([1, 2, 3]);
+        expect(all).toHaveLength(6);
+    });
+    it("stops at the page cap", async () => {
+        const all = await listAllEntries(async (page) => ({ data: [page], totalPages: 50 }), 4);
+        expect(all).toEqual([1, 2, 3, 4]);
+    });
+});
+
+describe("Ctrl+K: Enter runs a block once the author types", () => {
+    it("lists actions first only while nothing is typed", () => {
+        expect(paletteRowOrder("", 3, 5)).toEqual({ actionsFirst: true, actionOffset: 0, blockOffset: 3 });
+        expect(paletteRowOrder("p", 1, 5)).toEqual({ actionsFirst: false, actionOffset: 5, blockOffset: 0 });
     });
 });

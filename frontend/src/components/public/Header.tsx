@@ -158,9 +158,11 @@ export default function Header({ disableSticky = false, variant = "classic", sti
     const topBg = transparent ? "bg-transparent py-6" : (disableSticky || !sticky ? scrolledBg : "bg-transparent py-6");
 
     const logo = (
-        <Link href="/" className="wjs-header-logo flex items-center gap-2 pointer-coarse:min-h-11">
+        // The link is named for the site even when the logo image has no alt text (QA S1-19); the image
+        // itself is then decorative, so a screen reader does not read the name twice.
+        <Link href="/" aria-label={siteTitle || "Home"} className="wjs-header-logo flex items-center gap-2 pointer-coarse:min-h-11">
             {logoUrl ? (
-                <img src={logoUrl} alt={siteTitle} width={160} height={40} className="h-10 w-auto object-contain" />
+                <img src={logoUrl} alt="" width={160} height={40} className="h-10 w-auto object-contain" />
             ) : siteTitle ? (
                 <span className="text-2xl font-bold text-[var(--wjs-color-text-main,gray)]">
                     {siteTitle}

@@ -281,3 +281,15 @@ export function buildVersoPaletteActions(d: VersoPaletteActionDeps): PaletteActi
     }
     return acts;
 }
+
+/**
+ * Where each group sits in the ⌘K list. With nothing typed the actions lead (the suggested actions);
+ * once the author types, the blocks lead, because «Insert block» is what they opened it for and Enter
+ * runs the first row — «Publish» ran when its label merely shared a letter with the query (QA S1-19).
+ */
+export function paletteRowOrder(query: string, actionCount: number, blockCount: number): { actionsFirst: boolean; actionOffset: number; blockOffset: number } {
+    const actionsFirst = !query.trim();
+    return actionsFirst
+        ? { actionsFirst, actionOffset: 0, blockOffset: actionCount }
+        : { actionsFirst, actionOffset: blockCount, blockOffset: 0 };
+}

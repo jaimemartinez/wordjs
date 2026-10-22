@@ -20,7 +20,7 @@ export const VERSO_CHROME_STRINGS: Tri[] = [
     { es: "Alguien", en: "Someone", pt: "Alguém" },
     { es: "{name} — editando un bloque", en: "{name} — editing a block", pt: "{name} — editando um bloco" },
     { es: "{name} — en la página", en: "{name} — on the page", pt: "{name} — na página" },
-    { es: "{state}. Nadie más está editando esta página.", en: "{state}. No one else is editing this page.", pt: "{state}. Ninguém mais está editando esta página." },
+    { es: "{state}. Nadie más lo está editando.", en: "{state}. No one else is editing it.", pt: "{state}. Ninguém mais está editando." },
     { es: "{state}. {name} está editando esta página.", en: "{state}. {name} is editing this page.", pt: "{state}. {name} está editando esta página." },
     { es: "{state}. {names} y {last} están editando esta página.", en: "{state}. {names} and {last} are editing this page.", pt: "{state}. {names} e {last} estão editando esta página." },
     { es: "1 persona más editando esta página", en: "1 more person editing this page", pt: "Mais 1 pessoa editando esta página" },
