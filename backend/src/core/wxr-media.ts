@@ -274,7 +274,7 @@ async function fetchAttachment(
             await egress.assertUrlAllowed(u.href); // throws on an internal/blocked target
         } catch (e: any) {
             if (/network egress to .* is blocked/.test(String(e && e.message))) {
-                throw new Error(`refused: ${u.hostname} is on a private network, so the download was blocked. If it is the WordPress site you are moving, tick "Allow downloads from this site's private address" and run the import again.`);
+                throw new Error(`refused: ${u.hostname} is on a private network, so the download was blocked. If it is the WordPress site you are moving, tick "Allow downloads from this site's private address" and run the import again.`, { cause: e });
             }
             throw e;
         }
