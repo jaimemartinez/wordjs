@@ -195,6 +195,30 @@ function certificateNames(input: unknown): string[] {
     return names;
 }
 
+/**
+ * Why `input` cannot be the ONE name the certificate form orders, or null when it can: a request that
+ * would fail anyway is refused before any CA work, with a message the form can show. A list typed into
+ * the single-name field ("a.com, www.a.com") is told where lists go, instead of failing in the CA client
+ * as "Invalid domain" behind a generic "provisioning failed" (production, v2.8.0).
+ */
+function singleCertificateNameProblem(input: unknown, { wildcard = false } = {}): { code: string; message: string } | null {
+    const name = typeof input === 'string' ? input.trim() : '';
+    if (name === '') return { code: 'cert_domain_required', message: 'Enter the domain the certificate is for, such as "example.com".' };
+    if (/[\s,;]/.test(name)) {
+        return {
+            code: 'cert_one_name',
+            message: 'This form orders a certificate for one name. To cover several names (such as example.com and www.example.com) with one certificate, list them in Automatic Certificate Renewal (Admin → Security).',
+        };
+    }
+    if (name.startsWith('*.') && !wildcard) {
+        return { code: 'cert_wildcard_needs_dns', message: 'A wildcard name (*.example.com) can only be validated over DNS: choose the DNS-01 method.' };
+    }
+    if (resolveCertDir(LIVE_DIR, name.toLowerCase()) === null) {
+        return { code: 'cert_invalid_domain', message: `${JSON.stringify(name)} is not a domain name. Enter one such as "example.com".` };
+    }
+    return null;
+}
+
 class CertManager {
     client: any;
     accountKeyPath: string;
@@ -1263,3 +1287,4 @@ module.exports = new CertManager();
 // The backend's mTLS control channel to the gateway, for the cluster screen (routes/cluster.ts).
 module.exports.gatewayControlRequest = gatewayControlRequest;
 module.exports.setMonolithGatewayDirForTests = setMonolithGatewayDirForTests;
+module.exports.singleCertificateNameProblem = singleCertificateNameProblem;

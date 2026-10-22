@@ -82,7 +82,7 @@ It (1) looks up the **latest pre-compiled release ZIP** from GitHub (`jaimemarti
 
 The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 random bytes = 48 hex chars; the backend accepts it because it is ≥ 16 chars — see § 1). A fresh release bundle ships **without** `gateway/gateway-config.json` (secrets are never bundled), so the CLI seeds a minimal `{ "ssl": true }` there to enable **self-signed HTTPS** on `:3000` (never overwriting an existing config); pass `--http` to serve plain HTTP (`WORDJS_HTTP=1`) instead. Plain Node, no TypeScript — the only runtime dependency is `adm-zip`. Requires **Node ≥ 20.9** and refuses to run into a non-empty target directory. The version published to npm is set from the release tag at publish time (`npm pkg set version` in `.github/workflows/release.yml`), so the version committed in `packages/create-wordjs/package.json` is not the authoritative one.
 
-An unknown `-`/`--` option is a hard error (`Unknown option: …`), as is an extra positional argument. So are `--port`/`--service-user` without `--systemd`, `--systemd` with `gateway`/`join`, and `--systemd` on a machine that is not Linux (checked before anything is downloaded).
+An unknown `-`/`--` option is a hard error (`Unknown option: …`), as is an extra positional argument. So are `--port`/`--service-user`/`--mail` without `--systemd`, `--systemd` with `gateway`/`join`, and `--systemd` on a machine that is not Linux (checked before anything is downloaded).
 
 **Integrity.** Every path that installs code (create, `upgrade`, `gateway`, `join`) obtains the ZIP through one function and checks it **before extracting anything**:
 
@@ -105,6 +105,7 @@ An unknown `-`/`--` option is a hard error (`Unknown option: …`), as is an ext
 | `--systemd` | (create, `upgrade`; **Linux only**) Also write `wordjs.service` — a systemd unit that runs WordJS as a dedicated **non-root account holding no Linux capabilities** — to a private staging directory outside the site, and print how to install it. With create it implies `--no-start` (the first boot must run as the service account so it owns the files it creates). With `upgrade` the unit is written even when the site is already on the target version, which is how an existing install replaces a hand-written unit. The site path, the node path and the account running the CLI are checked before anything is downloaded. See [below](#running-as-a-systemd-service---systemd). |
 | `--port <n>` | (with `--systemd`) Public port, written into the unit as `Environment=PORT=<n>`. Without it the unit sets no `PORT`, so the site's configured `gatewayPort` (else `3000`) applies. A port below 1024 also produces `60-wordjs-ports.conf` — never a capability. |
 | `--service-user <name>` | (with `--systemd`) The account the unit runs as (default `wordjs`). `root` is refused. |
+| `--mail` | (with `--systemd`) The site will receive mail (the mail-server plugin listens for SMTP on 25): `60-wordjs-ports.conf` lowers the floor to `25`. Implied on `upgrade` when the mail-server plugin is installed. |
 | `-h`, `--help` | Show usage (exit 0). |
 
 ### Running as a systemd service (`--systemd`)
@@ -148,7 +149,7 @@ The CLI stages two files in a fresh private directory (`mkdtemp` under the tempo
   ```
 
   (The generated file also carries comments explaining each choice; they are left out here.) There is no `AmbientCapabilities=` and the bounding set is **empty**: the service cannot hold a capability, and nothing it runs can gain one. `HOME` is pinned to the site directory because npm keeps its cache under `$HOME` when WordJS installs a plugin's declared dependencies, and `ProtectHome=` hides `/home`. When `node` is not in systemd's default `PATH` (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin`) the unit adds an `Environment=PATH=` that puts node's directory first, since WordJS runs `npm` by name. `--http` adds `Environment=WORDJS_HTTP=1`.
-- **`60-wordjs-ports.conf`** — only when a port the process binds is below 1024 (the public port, plus `acme.http01Port` from the config when HTTPS is on). It sets `net.ipv4.ip_unprivileged_port_start` to the lowest such port and states its trade-off in the file: the setting lowers the privileged-port floor for **every** unprivileged process in that network namespace, not for WordJS alone. The file also says how to withdraw it.
+- **`60-wordjs-ports.conf`** — only when a port the site will bind is below 1024. That is the public port; with HTTPS on a port below 1024 also `80`, for Let's Encrypt HTTP-01, which the administrator turns on later in Admin → Security (and `acme.http01Port` if the config already sets another); and `25` with `--mail`, or on `upgrade` when the mail-server plugin is installed, for incoming mail. It sets `net.ipv4.ip_unprivileged_port_start` to the lowest such port, lists each port and what it is for, and states its trade-off in the file: the setting lowers the privileged-port floor for **every** unprivileged process in that network namespace, not for WordJS alone. The file also says how to withdraw it.
 
 The printed steps, for the example above (`<stage>` is the staging directory the CLI printed):
 

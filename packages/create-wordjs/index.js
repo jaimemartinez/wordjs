@@ -84,8 +84,13 @@ Options:
                         the first boot must run as that account.
   --port <n>            (with --systemd) Public port, written into the unit as PORT=<n> (default:
                         the site's configured port, else 3000). Below 1024 it also stages
-                        60-wordjs-ports.conf (net.ipv4.ip_unprivileged_port_start), never a capability.
+                        60-wordjs-ports.conf (net.ipv4.ip_unprivileged_port_start), never a capability,
+                        low enough for every port the site will bind: with HTTPS also 80 (Let's
+                        Encrypt HTTP-01 from Admin -> Security), with --mail also 25.
   --service-user <name> (with --systemd) The account the service runs as (default: wordjs). Not root.
+  --mail                (with --systemd) The site will receive mail (the mail-server plugin, SMTP on
+                        port 25): the drop-in then lowers the floor to 25. Implied on upgrade when the
+                        mail-server plugin is installed.
   -h, --help            Show this help.
 
 Examples:
@@ -126,7 +131,7 @@ function parseArgs(argv) {
     const opts = {
         mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true,
         role: null, gateway: null, token: null, caHash: null, advertise: null, enrollPort: null, host: null,
-        systemd: false, port: null, serviceUser: null,
+        systemd: false, port: null, serviceUser: null, mail: false,
         sha256: null,
     };
     // A leading subcommand selects the mode (default is the monolith create flow).
@@ -159,11 +164,12 @@ function parseArgs(argv) {
         else if (a === '--systemd') opts.systemd = true;
         else if (a === '--port') opts.port = argv[++i] || fail('--port needs a value (1-65535).');
         else if (a === '--service-user') opts.serviceUser = argv[++i] || fail('--service-user needs an account name.');
+        else if (a === '--mail') opts.mail = true;
         else if (a.startsWith('-')) fail(`Unknown option: ${a}`, 'Run with --help to see the available options.');
         else positionals.push(a);
     }
-    if ((opts.port !== null || opts.serviceUser !== null) && !opts.systemd) {
-        fail('--port and --service-user only apply together with --systemd.',
+    if ((opts.port !== null || opts.serviceUser !== null || opts.mail) && !opts.systemd) {
+        fail('--port, --service-user and --mail only apply together with --systemd.',
             'Without a unit, the port comes from the PORT environment variable or the site config (default 3000).');
     }
     if (opts.systemd) {
@@ -789,9 +795,10 @@ function underAny(p, roots) {
  * written into the file itself: whoever later finds it in /etc/sysctl.d/ should not have to guess why
  * it is there or what it costs.
  */
-function sysctlDropIn(start, { http = false } = {}) {
+function sysctlDropIn(start, { http = false, mail = false, ports = [] } = {}) {
     const lines = [
         `# WordJS: allow unprivileged processes to bind ports from ${start} up (written by create-wordjs --systemd).`,
+        ...ports.map((p) => `#   ${p.port}: ${p.why}`),
         '#',
         '# This is NOT a grant to WordJS alone. It lowers the privileged-port floor for EVERY unprivileged',
         `# process in this network namespace, so any local user or service may bind ports ${start}-1023 too, and`,
@@ -801,6 +808,9 @@ function sysctlDropIn(start, { http = false } = {}) {
     ];
     if (!http && start > 80) {
         lines.push(`# Let's Encrypt HTTP-01 (acme.http01Port: 80 in wordjs-config.json) needs this lowered to 80.`);
+    }
+    if (!mail && start > 25) {
+        lines.push('# Receiving mail (the mail-server plugin, SMTP on port 25) needs this lowered to 25: re-run with --mail.');
     }
     lines.push(
         '#',
@@ -821,8 +831,14 @@ function sysctlDropIn(start, { http = false } = {}) {
  *   configuredPort  the port the site's config already sets (gatewayPort), or null.
  *   acmeHttp01Port  acme.http01Port from the config, or null: monolith.js binds it beside an HTTPS
  *                   listener, so it counts toward the privileged-port floor.
+ *   mail            the site receives mail: the mail-server plugin listens for SMTP on 25.
+ *
+ * The floor goes as low as every port the site will bind, not only the ones configured today: the
+ * administrator turns on Let's Encrypt (HTTP-01 on 80) and installs the mail server from the panel,
+ * and neither may then need a file edited as root. An HTTPS site already on a port below 1024 counts
+ * 80 for that reason; a site on a high port gets no drop-in (it sits behind a proxy, or wants none).
  */
-function buildSystemdFiles({ installDir, nodePath, user = DEFAULT_SERVICE_USER, port = null, configuredPort = null, acmeHttp01Port = null, http = false }) {
+function buildSystemdFiles({ installDir, nodePath, user = DEFAULT_SERVICE_USER, port = null, configuredPort = null, acmeHttp01Port = null, http = false, mail = false }) {
     for (const [what, p] of [['site directory', installDir], ['node binary', nodePath]]) {
         if (!unitSafePath(p)) {
             const err = new Error(`The ${what} path "${p}" cannot go into a systemd unit as is: it must be absolute, without spaces, quotes, backslashes, "%" or "$".`);
@@ -836,10 +852,14 @@ function buildSystemdFiles({ installDir, nodePath, user = DEFAULT_SERVICE_USER, 
     if (problem) { const err = new Error(problem.message); err.hint = problem.hint; throw err; }
 
     const publicPort = port || configuredPort || 3000;
-    const bound = [publicPort];
-    if (!http && acmeHttp01Port) bound.push(acmeHttp01Port);
-    const privileged = bound.filter((p) => p < PRIVILEGED_PORT_LIMIT);
-    const sysctlStart = privileged.length ? Math.min(...privileged) : null;
+    const bound = [{ port: publicPort, why: 'the site (its public port)' }];
+    if (!http && acmeHttp01Port) bound.push({ port: acmeHttp01Port, why: "Let's Encrypt HTTP-01 (acme.http01Port)" });
+    if (!http && publicPort < PRIVILEGED_PORT_LIMIT && !bound.some((b) => b.port === 80)) {
+        bound.push({ port: 80, why: "Let's Encrypt HTTP-01, when it is turned on in Admin -> Security" });
+    }
+    if (mail) bound.push({ port: 25, why: 'incoming mail (the mail-server plugin, SMTP)' });
+    const privileged = bound.filter((b) => b.port < PRIVILEGED_PORT_LIMIT).sort((a, b) => a.port - b.port);
+    const sysctlStart = privileged.length ? privileged[0].port : null;
 
     // Two hardening directives depend on WHERE things are, and each is dropped (with a warning) rather
     // than shipped in a shape that cannot start: ProtectHome= hides /home, /root and /run/user, which
@@ -915,7 +935,9 @@ function buildSystemdFiles({ installDir, nodePath, user = DEFAULT_SERVICE_USER, 
 
     return {
         unit,
-        sysctl: sysctlStart ? { start: sysctlStart, content: sysctlDropIn(sysctlStart, { http }) } : null,
+        sysctl: sysctlStart
+            ? { start: sysctlStart, ports: privileged.map((b) => b.port), content: sysctlDropIn(sysctlStart, { http, mail, ports: privileged }) }
+            : null,
         publicPort,
         warnings,
     };
@@ -937,7 +959,7 @@ function systemdInstallSteps({ installDir, user = DEFAULT_SERVICE_USER, built, h
     // `install -o root -g root -m 0644` and not `cp`: root takes the staged file's CONTENT into a file it
     // creates itself, root-owned and not writable by anyone else, whatever the staged copy's mode was.
     if (built.sysctl) {
-        step(`Let it bind port ${built.publicPort} without a capability (read the trade-off in the file first):`,
+        step(`Let it bind ${built.sysctl.ports.length > 1 ? `ports ${built.sysctl.ports.join(', ')}` : `port ${built.sysctl.start}`} without a capability (read the trade-off in the file first):`,
             `sudo install -o root -g root -m 0644 ${staged(SYSCTL_DROPIN_FILE)} /etc/sysctl.d/${SYSCTL_DROPIN_FILE} && sudo sysctl --system`);
     } else if (upgrade) {
         // A site that moved to a high port (behind a proxy, say) no longer needs the floor lowered, and an
@@ -1046,12 +1068,14 @@ function emitSystemd(installDir, opts) {
         configuredPort: Number(appConfig.gatewayPort || gwConfig.gatewayPort) || null,
         acmeHttp01Port: Number(appConfig.acme && appConfig.acme.http01Port) || null,
         http: opts.http,
+        // An installed mail server (an upgrade) receives on 25 whether or not --mail was given.
+        mail: !!opts.mail || fs.existsSync(path.join(installDir, 'backend', 'plugins', 'mail-server')),
     });
     const stageDir = createSystemdStagingDir();
     const written = writeSystemdFiles(stageDir, built);
     console.log('');
     console.log(`   systemd unit staged: ${written.unitPath}`);
-    if (written.sysctlPath) console.log(`   sysctl drop-in for port ${built.publicPort}: ${written.sysctlPath}`);
+    if (written.sysctlPath) console.log(`   sysctl drop-in for ports from ${built.sysctl.start} up (${built.sysctl.ports.join(', ')}): ${written.sysctlPath}`);
     console.log('   (staged outside the site on purpose: the service account will own the site, and must not be able to edit what root installs)');
     for (const w of built.warnings) console.log(`   ⚠️  ${w}`);
     console.log('');

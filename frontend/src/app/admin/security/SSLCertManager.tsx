@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { singleCertificateNameProblem, certificateNameProblemFromCode, CERTIFICATE_NAME_MESSAGE_KEY, type CertificateNameProblem } from "@/lib/certificateName";
 
 interface CertInfo {
     commonName?: string;
@@ -42,6 +43,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
     const [logs, setLogs] = useState<string[]>([]);
     const [dnsData, setDnsData] = useState<any>(null);
     const [error, setError] = useState("");
+    // Set when the name itself is the problem: the box then says what to do, not "provisioning failed".
+    const [nameProblem, setNameProblem] = useState<CertificateNameProblem | null>(null);
 
     const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
@@ -110,6 +113,15 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             return;
         }
 
+        setNameProblem(null);
+        const problem = singleCertificateNameProblem(domain, method);
+        if (problem) {
+            setError(t(CERTIFICATE_NAME_MESSAGE_KEY[problem]).replace('{domain}', () => domain.trim()));
+            setNameProblem(problem);
+            setStatus("error");
+            return;
+        }
+
         setStatus("loading");
         setLogs([]);
         setError("");
@@ -137,8 +149,11 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 setStatus("step1_dns");
             }
         } catch (e: any) {
-            setError(e.message);
-            addLog(t('ssl.log.error').replace('{error}', () => e.message));
+            const refused = certificateNameProblemFromCode(e && e.code);
+            const message = refused ? t(CERTIFICATE_NAME_MESSAGE_KEY[refused]).replace('{domain}', () => domain.trim()) : e.message;
+            setNameProblem(refused);
+            setError(message);
+            addLog(t('ssl.log.error').replace('{error}', () => message));
             setStatus("error");
         }
     };
@@ -376,8 +391,13 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex items-start gap-3">
                     <i className="fa-solid fa-circle-exclamation mt-1"></i>
                     <div>
-                        <h4 className="font-bold">{t('ssl.provisionFailed')}</h4>
-                        <p>{error}</p>
+                        <h4 className="font-bold">{nameProblem ? t('ssl.name.title') : t('ssl.provisionFailed')}</h4>
+                        <p data-testid="ssl-error">{error}</p>
+                        {nameProblem === 'cert_one_name' && (
+                            <a href="#ssl-auto-renewal" className="inline-block mt-2 font-bold underline" data-testid="ssl-go-auto-renewal">
+                                {t('ssl.name.goAutoRenewal')}
+                            </a>
+                        )}
                     </div>
                 </div>
             )}

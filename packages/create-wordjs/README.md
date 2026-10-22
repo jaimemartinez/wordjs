@@ -62,6 +62,7 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 | `--systemd` | (create, `upgrade`; Linux) Also write a systemd unit, `wordjs.service`, to a private staging directory outside the site and print how to install it. The unit runs WordJS as a dedicated non-root account with **no Linux capabilities**. With create it implies `--no-start`. See [Run it as a service](#run-it-as-a-service-linux). |
 | `--port <n>` | (with `--systemd`) Public port written into the unit (`PORT=<n>`); default: the site's configured port, else `3000`. Below 1024 it also stages `60-wordjs-ports.conf`. |
 | `--service-user <name>` | (with `--systemd`) The account the service runs as (default `wordjs`; `root` is refused). |
+| `--mail` | (with `--systemd`) The site will receive mail (mail-server plugin, SMTP on 25): the drop-in also allows 25. Implied on `upgrade` when that plugin is installed. |
 | `-h`, `--help` | Show usage. |
 
 Separate-mode options:
@@ -108,7 +109,10 @@ boot must run as the service account so that account owns the database and certi
 
 **Ports below 1024 (80/443).** The unit never grants `CAP_NET_BIND_SERVICE`. For a port below 1024,
 `--systemd` also stages `60-wordjs-ports.conf`, a `sysctl.d` drop-in that sets
-`net.ipv4.ip_unprivileged_port_start` to that port. Read its trade-off before installing it: it lets
+`net.ipv4.ip_unprivileged_port_start` low enough for every port the site will bind: that port, `80` too
+for an HTTPS site (Let's Encrypt HTTP-01, turned on later in the admin panel) and `25` with `--mail`
+(incoming mail; implied on `upgrade` when the mail-server plugin is installed). Read its trade-off before
+installing it: it lets
 **every** unprivileged process on the host bind ports from that value up to 1023, not just WordJS. On a
 shared host, prefer a reverse proxy (nginx, Caddy) on 80/443 forwarding to WordJS on a high port.
 
