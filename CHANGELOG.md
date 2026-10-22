@@ -53,7 +53,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **mail-server 3.2.1.** Turning *Professional mail account* off in the user form gives the email field back
   (it kept the generated mailbox address, and what was typed was appended to it); an existing account's stored
   address is left as it is. Relay settings saved while the queue runs in another process take effect at the next
-  delivery: removing a relay no longer leaves queued mail failing with "Relay unavailable".
+  delivery: removing a relay no longer leaves queued mail failing with "Relay unavailable". Opening a message no longer
+  makes its body grow for seconds afterwards, sliding *Reply*, *Reply all* and *Forward* slowly down the page.
 - **Every marketplace plugin's admin screen follows the admin language.** The screens of analytics-tag, auctions,
   card-gallery, cookie-consent, events-calendar, faq, image-lightbox, job-board, newsletter, notification-bar,
   online-store, photo-carousel, polls, popup-builder, restaurant-menu, social-share, testimonials, vendor-marketplace,

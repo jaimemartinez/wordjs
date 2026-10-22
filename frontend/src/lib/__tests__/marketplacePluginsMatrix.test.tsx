@@ -193,3 +193,18 @@ describe("mail-server: the mailbox toggle gives the address field back (M2-24)",
         expect(mailboxEmailStep(on.memo, { granted: false, username: "ana", domain: "d.test", currentEmail: "other@x.test" }).email).toBeUndefined();
     });
 });
+
+describe("mail-server: the message body does not creep down after opening (FALLOS 126)", () => {
+    const src = fs.readFileSync(path.join(PLUGINS, "mail-server/client/admin/ui.tsx"), "utf8");
+    it("measures the message's own wrapper, not the frame's document", () => {
+        expect(src).toContain('<div id="wjs-mail-body">');
+        expect(src).toContain("#wjs-mail-body{display:flow-root}");
+        expect(src).toMatch(/getElementById\('wjs-mail-body'\)/);
+        // The document is at least as tall as the frame: measuring it (+ a margin) grew the frame every tick.
+        expect(src).not.toMatch(/documentElement\.scrollHeight/);
+        expect(src).not.toMatch(/body\.scrollHeight/);
+    });
+    it("compares with the current height through a ref, not a stale closure", () => {
+        expect(src).toMatch(/heightRef\.current = next;/);
+    });
+});
