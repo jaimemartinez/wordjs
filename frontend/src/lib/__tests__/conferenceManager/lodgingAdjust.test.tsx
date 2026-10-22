@@ -48,7 +48,7 @@ vi.mock('../../api', async (importOriginal) => {
 
 import {
     adjustedNames, assignCandidates, candidateExclusions, dragBlock, fillVars, groupUnassigned, indexOccupants, moveAdjustments, moveBlock,
-    occupantLocationIds, reviewedInRoom, reviewedLocationOf, reviewedLocationsAmong, runSummaryOf, unassignBlock,
+    needsLodging, noLodgingCount, occupantLocationIds, reviewedInRoom, reviewedLocationOf, reviewedLocationsAmong, runSummaryOf, unassignBlock, unassignedCount,
 } from '../../../../../marketplace/plugins/conference-manager/client/lib/lodgingView';
 import {
     AdjustStamp, DotList, adjustConfirmText, adjustedToastText, adjustRelease, adjustState, adjustStampOf, adjustText, fmtStamp, fmtStampShort, reviewSeen, withAdjusted,
@@ -101,8 +101,23 @@ describe('eligibility (lib/lodgingView.ts): a submitted / validated location is 
         const dan = { id: 13, location_id: 1, room_id: null, status: 'pending' };
         expect(assignCandidates([dan, cel], room102, ctx, { nameOf: (p) => `#${p.id}` }).map(p => p.id)).toEqual([13]);
         const excluded = candidateExclusions([dan, cel, bea], room102, ctx);
-        expect(excluded).toEqual({ cancelled: 1, foreign: 1, moving: 0, noBed: 0, locked: 0 });
+        expect(excluded).toEqual({ cancelled: 1, noLodging: 0, foreign: 1, moving: 0, noBed: 0, locked: 0 });
         expect('frozen' in excluded).toBe(false);
+    });
+    it('«Requiere hospedaje: No» (2.31.0) is never offered, dragged or counted as «sin asignar»', () => {
+        const dan = { id: 13, location_id: 1, room_id: null, status: 'pending' };
+        const noe = { id: 15, location_id: 1, room_id: null, status: 'pending', needs_lodging: 'No' };
+        const yes = { id: 16, location_id: 1, room_id: null, status: 'pending', needs_lodging: 'Sí' };
+        expect(needsLodging(noe)).toBe(false);
+        expect(needsLodging(yes)).toBe(true);
+        expect(needsLodging(dan)).toBe(true);
+        expect(dragBlock(noe, ctx)).toBe('board.no.lodging');
+        expect(moveBlock(noe, room102, ctx, new Map())).toBe('board.no.lodging');
+        expect(assignCandidates([dan, noe, yes], room102, ctx, { nameOf: (p) => `#${p.id}` }).map(p => p.id)).toEqual([13, 16]);
+        expect(candidateExclusions([dan, noe, yes], room102, ctx).noLodging).toBe(1);
+        expect(unassignedCount([dan, noe, yes])).toBe(2);
+        expect(noLodgingCount([dan, noe, yes])).toBe(1);
+        expect(groupUnassigned([dan, noe, yes], LOCS, { nameOf: (p) => `#${p.id}` }).total).toBe(2);
     });
     it('«Sin asignar» marks the group of a reviewed location (with its status) instead of locking it', () => {
         const { list } = groupUnassigned([bea, { id: 14, location_id: 3, room_id: null, status: 'pending' }], LOCS, { nameOf: (p) => `#${p.id}` });

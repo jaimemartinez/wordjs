@@ -31,8 +31,11 @@ import { fieldDisplayValue, rawFieldValue, rosterColWidth } from "../lib/roster"
 import { Pager, MoreButton, SoftWrap } from "./RosterBits";
 import { BalanceChips, PayPill, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
+import { needsLodging } from "../lib/lodgingView";
 
-const roomText = (tx, p) => (p.room_id ? tx('roster.room.short', 'Hab {room}{hotel}', { room: p.room_number || '—', hotel: p.hotel_name ? ` · ${p.hotel_name}` : '' }) : tx('roster.room.none', 'Sin habitación'));
+// «Requiere hospedaje: No» (2.31.0) is no «Sin habitación»: nobody is looking for a bed for them.
+const noRoomText = (tx, p) => (needsLodging(p) ? tx('roster.room.none', 'Sin habitación') : tx('roster.room.not.needed', 'No requiere hospedaje'));
+const roomText = (tx, p) => (p.room_id ? tx('roster.room.short', 'Hab {room}{hotel}', { room: p.room_number || '—', hotel: p.hotel_name ? ` · ${p.hotel_name}` : '' }) : noRoomText(tx, p));
 const PILL_TEXT = { paid: ['fees.pill.paid', 'Pagado'], partial: ['fees.pill.partial', 'Abono'], unpaid: ['fees.pill.unpaid', 'Sin pagar'] };
 const pillText = (tx, state) => { const k = PILL_TEXT[state] || PILL_TEXT.unpaid; return tx(k[0], k[1]); };
 
@@ -185,7 +188,7 @@ export function RosterGroup({ group, page, size, onPage, collapsed, onToggle, co
                                             </td>
                                             {/* Wraps, never «Hab 101 · Hotel …» behind a hover title (the column widens when the card has room). */}
                                             <td className="px-3 py-2.5 text-xs font-bold text-gray-700 break-words" data-cell="lodging">
-                                                {p.room_id ? roomText(tx, p) : <span className="text-amber-800">{tx('roster.room.none', 'Sin habitación')}</span>}
+                                                {p.room_id ? roomText(tx, p) : <span className={needsLodging(p) ? 'text-amber-800' : 'text-gray-600'}>{noRoomText(tx, p)}</span>}
                                             </td>
                                             <td className="px-1.5 py-2.5 text-right">
                                                 <MoreButton id={p.id} name={name} expanded={openId === p.id} onClick={() => onOpen(p)} />

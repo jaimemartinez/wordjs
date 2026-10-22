@@ -154,6 +154,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   as unprefixed post meta (`GET /api/v1/editor/fields`).
 - **`wordjs.posts.get(id)`** (grant `posts:read`) reads a published, public entry with its access level;
   **`wordjs.users.search()`** takes an `offset` to page through every account.
+- **conference-manager 2.31.0: «Requiere hospedaje».** A new field template adds a Sí / No switch to the
+  registration form (admin and coordinators' portal; `switch` is also a field type of its own). Whoever answers
+  «No» is skipped by the automatic room assignment — the conference-wide run, each location's run and «Sugerir
+  reparto» — and can't be given a room by hand: the administration's explorer and the coordinators' Hospedajes
+  tab no longer offer them, and the server refuses the assignment (400). They no longer count as «sin
+  habitación»; the portal lists them apart. Switching an attendee to «No» frees the bed they held. Conferences
+  without the field behave as before.
 - **conference-manager 2.30.0: everything since 2.17.2, in one release.** Versions 2.18.0 to 2.29.0 were built
   and tried on a test site but never released; they ship together now, and the entries below keep the version
   each change was made in: «Pagos de cuotas», split fee payments in the admin and the portal (2.18.0); rooms

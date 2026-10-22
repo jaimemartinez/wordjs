@@ -91,6 +91,7 @@ const focusablesIn = (el: HTMLElement | null): HTMLElement[] =>
 
 const BLOCK_FALLBACK: Record<string, string> = {
     'board.cancelled': 'Participante cancelado: no ocupa habitación',
+    'board.no.lodging': 'No requiere hospedaje: no se le puede asignar habitación',
     'board.moving': 'Movimiento en curso — espera a que termine',
     'board.room.foreign': 'Habitación de otra localidad',
     'board.room.full': 'Habitación llena',
@@ -1812,8 +1813,8 @@ function RoomPickerModal({ person, hotels, scopeHotelId, onClose, onMove, restor
                             <i className="fa-solid fa-xmark" aria-hidden="true"></i> {tx('unassign.room', 'Quitar asignación actual')}
                         </button>
                     )}
-                    {block === 'board.cancelled' ? (
-                        <p className="text-sm text-gray-500 text-center py-4">{blockText(tx, 'board.cancelled')}</p>
+                    {block === 'board.cancelled' || block === 'board.no.lodging' ? (
+                        <p className="text-sm text-gray-500 text-center py-4">{blockText(tx, block)}</p>
                     ) : block === 'board.moving' ? (
                         <p className="text-sm text-gray-500 text-center py-4"><i className="fa-solid fa-spinner fa-spin mr-2" aria-hidden="true"></i>{blockText(tx, 'board.moving')}</p>
                     ) : hotels.length === 0 ? (
@@ -1931,6 +1932,7 @@ function AssignPickerModal({ room, hotel, people, onClose, onMove, restoreFocus,
     };
     const reasons = [
         excluded.cancelled > 0 && txn('explorer.picker.excluded.cancelled', '{n} cancelados', '{n} cancelado', excluded.cancelled),
+        excluded.noLodging > 0 && txn('explorer.picker.excluded.nolodging', '{n} no requieren hospedaje', '{n} no requiere hospedaje', excluded.noLodging),
         excluded.foreign > 0 && tx('explorer.picker.excluded.foreign', '{n} de otras localidades', { n: excluded.foreign }),
         excluded.noBed > 0 && tx('explorer.picker.excluded.nobed', '{n} sin cama libre de su localidad aquí', { n: excluded.noBed }),
         excluded.locked > 0 && tx('explorer.picker.excluded.locked', '{n} de otro género que el fijado para esta habitación compartida', { n: excluded.locked }),
