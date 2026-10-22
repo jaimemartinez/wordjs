@@ -1241,8 +1241,7 @@ the boot error links there too.
   confirmation link opens the booking page even when the visitor used another accepted address. memberships
   1.2.1: the newsletter confirmation names the site, not its host.
 - **Plugins: install, update and permissions.** An update is offered only when the catalog has a *newer* version
-  (an installed build newer than the catalog's was offered a downgrade). Release packages no longer include the
-  two development fixture plugins. The activation dialog has a switch per requested permission, so a permission
+  (an installed build newer than the catalog's was offered a downgrade). The activation dialog has a switch per requested permission, so a permission
   can be left off before the plugin first starts. A plugin request refused for a missing permission answers
   `403 plugin_permission_denied` naming the permission and where to grant it, instead of "Isolated plugin
   error". A plugin screen that could not be fetched while the server restarts says it is temporarily

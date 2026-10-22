@@ -77,11 +77,6 @@ const IGNORE_PATTERNS = [
     'dump-routes.js',
     'build-production.ps1',
     'marketplace', // Marketplace plugins are DISTRIBUTED separately (release assets), never bundled in the core package
-    // Development fixtures, not products: test-schema exists for the backup/permission suites, and hello-world
-    // is the sample `POST /plugins/sample` writes on demand. Shipped, they sat in every site's Installed list
-    // (one asking for database:write) and confused administrators.
-    'backend/plugins/hello-world',
-    'backend/plugins/test-schema',
     // The local exclusion list (see loadLocalExcludes). Its whole job is to name what must stay private,
     // so it must never ship — and it must stay out without relying on git, which is exactly the case it
     // exists for.

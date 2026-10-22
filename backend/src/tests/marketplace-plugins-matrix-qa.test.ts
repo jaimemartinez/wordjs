@@ -4,7 +4,6 @@
  *
  *  · Updates: the catalog offered an "update" to any DIFFERENT version, so an installed build newer than
  *    the catalog's was offered a downgrade.
- *  · Releases shipped the backend development fixtures (hello-world, test-schema) as installable plugins.
  *  · A plugin route that hit a missing permission answered 502 "Isolated plugin error"; it now says which
  *    permission is missing and where to grant it (403 plugin_permission_denied).
  *  · Plugin sidebar entries were a single fixed-language string: `labels` per language, shape-checked.
@@ -30,21 +29,6 @@ describe('update offers', () => {
         assert.strictEqual(isNewerVersion('1.10.0', '1.9.0'), true, 'numeric, not lexical');
         assert.strictEqual(isNewerVersion('1.2.0', '1.2.0'), false);
         assert.strictEqual(isNewerVersion('1.1.0', '1.2.0'), false, 'an older catalog build is not an update (it was offered as one)');
-    });
-});
-
-describe('release contents', () => {
-    const { shouldIgnore, ROOT_DIR } = require('../../../scripts/make-release.js');
-    const p = (rel: string) => path.join(ROOT_DIR, ...rel.split('/'));
-
-    test('the development fixture plugins are not packaged', () => {
-        assert.strictEqual(shouldIgnore(p('backend/plugins/hello-world')), true);
-        assert.strictEqual(shouldIgnore(p('backend/plugins/hello-world/index.js')), true);
-        assert.strictEqual(shouldIgnore(p('backend/plugins/test-schema/manifest.json')), true);
-    });
-
-    test('the plugins directory itself still is', () => {
-        assert.strictEqual(shouldIgnore(p('backend/plugins')), false);
     });
 });
 
