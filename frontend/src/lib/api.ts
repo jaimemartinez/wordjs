@@ -1004,6 +1004,13 @@ export interface MarketplaceEntry {
     // asked again) or 'reinstall' (another source: explicit, keeping the data is a choice). Optional:
     // an older backend does not send it, and then neither button is offered.
     applyMode?: 'update' | 'adopt' | 'reinstall' | null;
+    // The WordJS this version needs (manifest `requires.wordjs`) against this install's. `compatible`
+    // false = not installable or updatable here until WordJS is updated (the API refuses it with 409
+    // core_version_too_old). Optional: an older backend does not send them, and then nothing is blocked.
+    compatible?: boolean;
+    requiresWordjs?: string | null;
+    minWordjs?: string | null;
+    currentWordjs?: string;
 }
 
 /** What POST /marketplace/adopt answers on success: the update result plus what changed hands. */

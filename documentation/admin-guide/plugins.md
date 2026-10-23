@@ -44,6 +44,13 @@ but its earlier permissions are not carried over:
 Both actions are recorded in the **Audit trail** (`marketplace.adopt`), with the old and the new source and the old and
 the new permissions.
 
+A card that reads **Requires WordJS ≥ X — update WordJS first** is a version built for a newer WordJS than
+this site runs. It has no install or update button, because it would not open here; **Go to Updates** takes
+you to **Updates**, where WordJS itself is updated. After that, the card offers the install or update as
+usual. The same check applies to a ZIP you upload. If a plugin's screen was built for a newer WordJS anyway
+(installed before this check existed), its page says **This plugin needs WordJS ≥ X** with a link to Updates
+instead of staying blank.
+
 The gear button (**Configure marketplace sources**) adds other catalogs (https addresses), and the arrows
 button refreshes the catalog.
 

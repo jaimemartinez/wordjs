@@ -164,6 +164,10 @@ function buildOne(slug, ledger) {
         file,
         size: buf.length,
         sha256: crypto.createHash('sha256').update(buf).digest('hex'),
+        // The WordJS this version needs (manifest `requires.wordjs`, a semver range). Cores that know the
+        // field mark the entry incompatible and refuse it; older cores ignore an extra key, so the index
+        // stays readable everywhere. Omitted when the plugin declares none.
+        ...(manifest.requires && typeof manifest.requires.wordjs === 'string' ? { requires: { wordjs: manifest.requires.wordjs } } : {}),
     };
 }
 

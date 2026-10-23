@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import DialogLayer from "@/components/DialogLayer";
 import { marketplaceApi, MarketplaceEntry, MarketplaceSourceStatus } from "@/lib/api";
 import { permMeta } from "@/lib/permissionMeta";
@@ -135,6 +136,14 @@ export function ReviewPill({ review, official }: { review: MarketplaceEntry["rev
  * routes/plugins.ts POST /:slug/activate). An update keeps the grants on record, and what this version
  * adds stays off until it is granted in Permissions.
  */
+/**
+ * Whether the card must withhold its install / update action because this version needs a newer WordJS
+ * (backend `compatible: false`). An installed plugin with nothing newer to take keeps its "Installed" badge.
+ */
+export function needsNewerCore(entry: Pick<MarketplaceEntry, "compatible" | "installed" | "updateAvailable">): boolean {
+    return entry.compatible === false && (!entry.installed || !!entry.updateAvailable);
+}
+
 export function installGrantNoteKey(entry: Pick<MarketplaceEntry, "installed" | "updateAvailable">): string {
     return entry.installed && entry.updateAvailable ? "plugins.marketplace.grantNote.update" : "plugins.marketplace.grantNote.install";
 }
@@ -555,7 +564,16 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                     })}
                                 </div>
 
-                                {e.installed && !e.updateAvailable ? (
+                                {needsNewerCore(e) ? (
+                                    // Built for a newer WordJS than this one: no install or update here — it
+                                    // would leave a blank screen. Update WordJS first.
+                                    <div className="w-full text-amber-800 text-[11px] font-semibold leading-snug bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-center" data-wjs-needs-newer-core={e.id}>
+                                        <div>{fill(t("plugins.marketplace.needsNewerCore"), { version: e.minWordjs || e.requiresWordjs || "" })}</div>
+                                        <Link href="/admin/update" className="inline-flex items-center gap-1 mt-1.5 font-bold underline">
+                                            <i className="fa-solid fa-cloud-arrow-down text-[10px]" aria-hidden="true" /> {t("plugins.marketplace.goToUpdates")}
+                                        </Link>
+                                    </div>
+                                ) : e.installed && !e.updateAvailable ? (
                                     <div className="flex items-center gap-2 text-emerald-600 text-xs font-black uppercase tracking-wider bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 justify-center w-full shadow-sm">
                                         <FaCheck className="text-[11px]" /> {t(e.active ? "plugins.marketplace.installedActive" : "plugins.marketplace.installedInactive")}
                                     </div>

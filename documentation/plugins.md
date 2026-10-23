@@ -100,6 +100,25 @@ added in Step 2 must point at exactly that path (§10.1). `id`, when present, mu
 > [!IMPORTANT]
 > **Hard Lock Protection:** If your plugin requires a version of a package that conflicts with another active plugin (e.g., `lodash@^3.0.0` vs `lodash@^4.0.0`), activation will be **blocked** with a clear error message. You must either deactivate the conflicting plugin or update your dependency.
 
+> [!IMPORTANT]
+> **Declare the WordJS your plugin needs: `requires.wordjs`.** A plugin's admin screens, blocks and hooks
+> import host modules (`@/components/…`, `@/contexts/…`, `@/lib/…`) that the running WordJS provides; a
+> module added in one release does not exist in an older one, and a bundle that imports it shows a blank
+> screen there. Declare the oldest WordJS that has everything you use, as a semver range:
+>
+> ```json
+> "requires": { "wordjs": ">=2.10.0" }
+> ```
+>
+> From the release that ships this check on, WordJS refuses to install or update a plugin whose range it
+> does not satisfy, with 409 `core_version_too_old` (Marketplace install, update and adopt, and ZIP upload),
+> and the Marketplace lists it as *Requires WordJS ≥ X — update WordJS first* with no install button. A
+> malformed range is refused at upload. **Older WordJS releases ignore the field**, so it protects sites
+> from this release on. `npm run build:marketplace` (`build-plugin.js`) refuses a plugin that imports a host
+> module newer than the version it declares — the table is `HOST_MODULE_SINCE` in
+> `backend/scripts/build-plugin.js` (`components/ui/DatePicker` → 2.10.0); add every host module you expose
+> to it with the release that first ships it. When you raise `requires.wordjs`, bump the plugin's version.
+
 ### Bundled Plugins (Advanced)
 
 If you want to avoid dependency conflicts entirely, you can **bundle** your plugin's dependencies so it doesn't share packages with other active plugins. Being "bundled" only tells the core to **skip shared `npm install`/garbage-collection** for this plugin — the backend entry point is still `index.js` (`main.js`/`plugin.js` are also accepted); there is no separate `main` field.
@@ -446,6 +465,7 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 - **Manifest** — must be valid JSON with a `name` and `"isolated": true`.
 - **Permissions** — every `{scope, access}` is checked against the known vocabulary; a typo (`databse`, `readwrite`) is rejected with the valid list, and so is `access: "admin"` on any scope but `email` (§12).
 - **Dependencies** — only registry semver ranges (§2).
+- **WordJS version** — `requires.wordjs`, when present, must be a semver range, and this WordJS must satisfy it: a plugin built for a newer WordJS is refused with 409 `core_version_too_old`, naming the version it needs (§2).
 - **Browser code** — a plugin that ships any frontend entry or prebuilt bundle must declare `browser:script` (§2).
 - **Admin and portal pages** — `frontend.adminPage.slug` and `frontend.portalPage.slug` must not be another installed plugin's (`Invalid admin page` / `Invalid portal page`, §10.1, §10.6).
 - **Declared roles** — a `roles` block must stay inside the plugin's namespace and request `roles:declare` (§12a); anything else is rejected with the reason.
