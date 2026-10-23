@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic';
 import { ComponentType } from 'react';
 import PluginScriptNotGranted from '@/components/PluginScriptNotGranted';
 import PluginUnavailable from '@/components/PluginUnavailable';
+import PluginNeedsNewerWordjs from '@/components/PluginNeedsNewerWordjs';
 // Host modules exposed to plugin bundles. Plugins import these (as `@/…` or via a relative path into
 // frontend/src); build-plugin.js rewrites those specifiers to `window.WordJS.host['<key>']` so the
 // plugin uses the host's OWN module instance — shared session for api(), the host's providers for
@@ -103,10 +104,26 @@ const loadingPromises: Map<string, Promise<React.ComponentType<any>>> = new Map(
  *                    host deliberately does not serve its browser code (routes/plugin-bundles.ts). Not an
  *                    error: the gate working. The page says so and links to the switch.
  *  - 'not-found'   → a 404 that is not that: no active plugin answers to the slug, or it was never built.
+ *  - 'core-too-old'→ the bundle evaluated but imports a host module this WordJS does not provide (the
+ *                    plugin was built for a newer core: "WordJS host did not provide …"). The page says
+ *                    which WordJS it needs (manifest `requires.wordjs`, via the registry) instead of a
+ *                    blank screen or "temporarily unavailable".
  *  - 'failed'      → anything else: a non-404 status (a restarting gateway), a network failure, or bytes
  *                    that would not evaluate as a module.
  */
-export type PluginBundleFailure = 'not-granted' | 'not-found' | 'failed';
+export type PluginBundleFailure = 'not-granted' | 'not-found' | 'core-too-old' | 'failed';
+
+/**
+ * The host module a bundle could not get from this WordJS, read from the error its import shim throws
+ * (backend/scripts/build-plugin.js: "WordJS host did not provide globalThis.WordJS.host[…]"), or null when
+ * the error is something else.
+ */
+export function missingHostModule(err: unknown): string | null {
+    const message = String((err as { message?: unknown } | null)?.message ?? err ?? '');
+    if (!message.includes('WordJS host did not provide')) return null;
+    const m = /WordJS\.host\["([^"]+)"\]/.exec(message);
+    return m ? m[1] : 'unknown';
+}
 
 /**
  * The bundles build-plugin.js publishes (backend core/io-guard PLUGIN_BUNDLE_TYPES). For 'portal' the slug
@@ -125,8 +142,10 @@ export class PluginBundleError extends Error {
      * be its admin-page slug ("emails" for mail-server), and the permissions screen lists folders.
      */
     readonly pluginId: string | null;
+    /** For 'core-too-old': the lowest WordJS the plugin declares it needs, when it declares one. */
+    readonly minWordjs: string | null;
 
-    constructor(init: { slug: string; bundleType: string; reason: PluginBundleFailure; status: number | null; pluginId?: string | null; message: string; cause?: unknown }) {
+    constructor(init: { slug: string; bundleType: string; reason: PluginBundleFailure; status: number | null; pluginId?: string | null; minWordjs?: string | null; message: string; cause?: unknown }) {
         super(init.message);
         this.name = 'PluginBundleError';
         this.slug = init.slug;
@@ -134,6 +153,7 @@ export class PluginBundleError extends Error {
         this.reason = init.reason;
         this.status = init.status;
         this.pluginId = init.pluginId ?? null;
+        this.minWordjs = init.minWordjs ?? null;
         if (init.cause !== undefined) (this as { cause?: unknown }).cause = init.cause;
     }
 }
@@ -171,7 +191,7 @@ export async function loadPluginBundle(
     // Start loading
     const loadPromise = (async () => {
         try {
-            const fail = (reason: PluginBundleFailure, status: number | null, message: string, extra: { pluginId?: string | null; cause?: unknown } = {}) =>
+            const fail = (reason: PluginBundleFailure, status: number | null, message: string, extra: { pluginId?: string | null; minWordjs?: string | null; cause?: unknown } = {}) =>
                 new PluginBundleError({ slug, bundleType, reason, status, message, ...extra });
 
             let response: Response;
@@ -215,6 +235,13 @@ export async function loadPluginBundle(
                 return Component;
 
             } catch (evalError) {
+                const missing = missingHostModule(evalError);
+                if (missing) {
+                    // Built for a newer WordJS: say which one it needs, not "unavailable".
+                    const needs = await requiredCoreFor(slug);
+                    console.warn(`[PluginLoader] '${slug}' needs a newer WordJS: this one does not provide '${missing}'.`);
+                    throw fail('core-too-old', response.status, `bundle for '${slug}' needs a newer WordJS (missing host module '${missing}')`, { pluginId: needs.pluginId, minWordjs: needs.minWordjs, cause: evalError });
+                }
                 console.error(`[PluginLoader] Failed to evaluate bundle for ${slug}:`, evalError);
                 throw fail('failed', response.status, `bundle for '${slug}' could not be evaluated`, { cause: evalError });
             } finally {
@@ -237,6 +264,13 @@ export async function loadPluginBundle(
  * choice is testable without next/dynamic (which renders nothing outside a browser).
  */
 export function remotePluginFailureComponent(err: unknown, fallback: ComponentType<any>): ComponentType<any> {
+    if (err instanceof PluginBundleError && err.reason === 'core-too-old') {
+        const pluginId = err.pluginId || err.slug;
+        const minWordjs = err.minWordjs;
+        const NeedsNewerCore = () => React.createElement(PluginNeedsNewerWordjs, { pluginId, minWordjs });
+        NeedsNewerCore.displayName = 'PluginNeedsNewerWordjs';
+        return NeedsNewerCore;
+    }
     if (err instanceof PluginBundleError && err.reason === 'not-granted') {
         const pluginId = err.pluginId || err.slug;
         const NotGranted = () => React.createElement(PluginScriptNotGranted, { pluginId });
@@ -586,7 +620,7 @@ let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 // `browser` ABSENT means the registry did not say (the caller is not signed in, or has no admin-panel
 // access): only an explicit `false` is ever read as "not granted".
 // `hooks` is `true` from the current backend; an older one sent the manifest's entry path (a string).
-type PluginRegistryEntry = { id?: string; path?: string; browser?: boolean; blocks?: boolean; frontend?: { hooks?: string | boolean } | null };
+type PluginRegistryEntry = { id?: string; path?: string; browser?: boolean; blocks?: boolean; minWordjs?: string; frontend?: { hooks?: string | boolean } | null };
 
 /**
  * The ACTUAL response shape of GET /plugins/registry is an OBJECT: backend/src/routes/plugins.ts ends
@@ -742,6 +776,27 @@ async function pluginFolderForAdminSlug(slug: string): Promise<string | null> {
  * Asks for a FRESH registry: this runs when a page is refused, and the grant may have changed since the
  * session's memo was taken (the permissions screen does not invalidate it).
  */
+/**
+ * The folder id and declared minimum WordJS (`minWordjs`, sent to an admin session only) of the active
+ * plugin behind `slug` — its folder or its admin-page slug. Best effort: nulls when the registry cannot say.
+ */
+async function requiredCoreFor(slug: string): Promise<{ pluginId: string | null; minWordjs: string | null }> {
+    try {
+        const registry = await fetchPluginRegistry({ fresh: true });
+        let entry = registryEntryFor(registry, slug);
+        let folder: string | null = entry ? slug : null;
+        if (!entry) {
+            folder = await pluginFolderForAdminSlug(slug).catch(() => null);
+            entry = folder ? registryEntryFor(registry, folder) : undefined;
+        }
+        const pluginId = entry && typeof entry.id === 'string' && entry.id ? entry.id : folder;
+        const minWordjs = entry && typeof entry.minWordjs === 'string' ? entry.minWordjs : null;
+        return { pluginId, minWordjs };
+    } catch {
+        return { pluginId: null, minWordjs: null };
+    }
+}
+
 async function classifyRefusedBundle(slug: string): Promise<{ reason: PluginBundleFailure; pluginId: string | null }> {
     try {
         const registry = await fetchPluginRegistry({ fresh: true });

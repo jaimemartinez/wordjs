@@ -46,6 +46,8 @@ const { getOption, updateOption, deleteOption } = require('../core/options');
 const { getAllPlugins } = require('../core/plugins');
 const { installPluginFromZip, runPluginUpdate, createInstallTmp } = require('./plugins');
 const pluginOrigins = require('../core/plugin-origins');
+// `requires.wordjs`: which WordJS a catalog entry needs (catalog annotation + the 409 before download).
+const coreRequirement = require('../core/core-requirement');
 const { recordAudit } = require('../core/audit');
 
 // THE SCALAR QUERY RULE — see core/query-params.
@@ -420,6 +422,20 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
  *                         nullable: true
  *                         enum: [update, adopt, reinstall]
  *                         description: For an installed plugin with a newer version, how it can take it - update (same source, POST /marketplace/update), adopt (no recorded origin and the official catalog, POST /marketplace/adopt with mode adopt) or reinstall (a different source, POST /marketplace/adopt with mode reinstall). Null otherwise.
+ *                       compatible:
+ *                         type: boolean
+ *                         description: Whether this install's WordJS satisfies the entry's requires.wordjs range (true when the entry declares none). An incompatible entry is refused by install, update and adopt with 409 core_version_too_old.
+ *                       requiresWordjs:
+ *                         type: string
+ *                         nullable: true
+ *                         description: The semver range the entry declares in requires.wordjs, or null.
+ *                       minWordjs:
+ *                         type: string
+ *                         nullable: true
+ *                         description: The lowest WordJS version that range admits, or null.
+ *                       currentWordjs:
+ *                         type: string
+ *                         description: This install's WordJS version.
  *                       installedFrom:
  *                         type: string
  *                         nullable: true
@@ -459,6 +475,10 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
             const applyMode = local && updateAvailable
                 ? pluginOrigins.catalogApplyMode(recorded, String(e.source || ''), DEFAULT_REMOTE)
                 : null;
+            // The WordJS this version needs (`requires.wordjs`, copied from its manifest by the catalog
+            // build) against this install's: an incompatible entry is listed, but not installable or
+            // updatable here until WordJS itself is updated.
+            const core = coreRequirement.coreCompatibility(e);
             return {
                 ...e,
                 installed: !!local,
@@ -468,6 +488,10 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
                 updatable,
                 applyMode,
                 installedFrom: recorded ? recorded.source : null,
+                compatible: core.compatible,
+                requiresWordjs: core.requires,
+                minWordjs: core.minimum,
+                currentWordjs: core.current,
             };
         });
         // `source`/`isLocal` are kept for back-compat (the primary source); `sources` carries per-source status.
@@ -510,6 +534,8 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
  *         description: Not an administrator
  *       404:
  *         description: No such id in the catalog, or the local package file is missing
+ *       409:
+ *         description: core_version_too_old - the entry or the package's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is downloaded or replaced. The body names requires, minimum and current. An update can also be refused for its origin (see /marketplace/update).
  *       502:
  *         description: The catalog could not be read, or the package could not be downloaded
  */
@@ -542,7 +568,11 @@ function applyAuditDetail(entry: any, result: any): Record<string, any> {
     };
 }
 
-/** The catalog entry for `id`, or the HTTP refusal to send (400 no id, 404 not listed, 502 unreadable). */
+/**
+ * The catalog entry for `id`, or the HTTP refusal to send (400 no id, 404 not listed, 502 unreadable, 409
+ * core_version_too_old when the entry needs a newer WordJS — refused before anything is downloaded; the
+ * installer checks the package's own manifest again, so a catalog that omits the field is still caught).
+ */
 async function findCatalogEntry(idIn: any): Promise<{ entry?: any; status?: number; body?: any }> {
     const id = typeof idIn === 'string' ? idIn.trim() : '';
     if (!id) return { status: 400, body: { error: 'Falta el id del plugin.' } };
@@ -550,6 +580,8 @@ async function findCatalogEntry(idIn: any): Promise<{ entry?: any; status?: numb
         const { merged } = await getCatalog(false);
         const entry = merged.find((e: any) => String(e.id) === id);
         if (!entry) return { status: 404, body: { error: `El plugin "${id}" no está en el catálogo.` } };
+        try { coreRequirement.assertCoreCompatible(entry, id); }
+        catch (e: any) { return { status: e.status || 409, body: e.body || { error: e.message } }; }
         return { entry };
     } catch (e: any) {
         log.error({ err: e }, '[marketplace] plugin catalog read failed');
@@ -686,6 +718,8 @@ router.post('/install', authenticate, isAdmin, handleMarketplaceApply);
  *         description: Not an administrator
  *       404:
  *         description: No such id in the catalog, or the local package file is missing
+ *       409:
+ *         description: core_version_too_old - the entry or the package's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is downloaded or replaced. The body names requires, minimum and current. An update can also be refused for its origin (see /marketplace/update).
  *       502:
  *         description: The catalog could not be read, or the package could not be downloaded
  */
@@ -736,7 +770,7 @@ router.post('/update', authenticate, isAdmin, handleMarketplaceApply);
  *       404:
  *         description: No such id in the catalog, the plugin is not installed, or the local package file is missing
  *       409:
- *         description: The mode does not match the plugin's origin (useUpdate when it was installed from this same source), or another operation on the plugin is in progress
+ *         description: The mode does not match the plugin's origin (useUpdate when it was installed from this same source), another operation on the plugin is in progress, or core_version_too_old - the entry needs a newer WordJS than this install runs
  *       502:
  *         description: The catalog could not be read, or the package could not be downloaded
  */

@@ -86,6 +86,25 @@ const GLOBAL_EXTERNALS_MAP = {
 // Build Single Plugin
 // ============================================
 
+/**
+ * Null when the manifest's `requires.wordjs` admits only cores that have every host module the bundle
+ * imports; otherwise the message to fail the build with. `since` maps a host module to the release that
+ * first exposes it (modules absent from the map predate the field). Exported for tests.
+ */
+function hostModuleRequirementProblem(slug, manifest, usedKeys, since) {
+    const semver = require('semver');
+    const needs = usedKeys.filter((k) => since[k]).map((k) => ({ key: k, version: since[k] }));
+    if (!needs.length) return null;
+    const newest = needs.reduce((a, b) => (semver.gt(b.version, a.version) ? b : a));
+    const range = manifest && manifest.requires && typeof manifest.requires.wordjs === 'string' ? manifest.requires.wordjs : null;
+    let min = null;
+    try { min = range && semver.validRange(range) ? semver.minVersion(range) : null; } catch { min = null; }
+    if (min && semver.gte(min, newest.version)) return null;
+    return `${slug} imports the host module "${newest.key}", first available in WordJS ${newest.version}, but manifest.json ` +
+        `${range ? `requires.wordjs is "${range}"` : 'declares no requires.wordjs'} — set "requires": { "wordjs": ">=${newest.version}" } ` +
+        `(and bump the plugin's version) so older WordJS installs refuse it instead of showing a blank screen.`;
+}
+
 async function buildPlugin(slug) {
     const pluginDir = path.join(PLUGINS_DIR, slug);
     const manifestPath = path.join(pluginDir, 'manifest.json');
@@ -171,6 +190,14 @@ async function buildPlugin(slug) {
         // The admin's own calendar (DatePicker / DateTimePicker): plugins replace their native date inputs with it.
         'components/ui/DatePicker',
     ];
+    // The WordJS release that FIRST exposes each host module added after 2.9.0. A plugin importing one must
+    // declare at least that version in manifest `requires.wordjs`, or an older core installs a bundle it
+    // cannot run (a blank admin screen). The build refuses the plugin otherwise. Add every new HOST_MODULES
+    // entry here with the release it ships in; the modules above that are not listed were in 2.9.0.
+    const HOST_MODULE_SINCE = {
+        'components/ui/DatePicker': '2.10.0',
+    };
+    const usedHostKeys = new Set();
     const REACT_GLOBALS = {
         'react': ['WordJS.React', ['useState', 'useEffect', 'useMemo', 'useCallback', 'useRef', 'useContext', 'useReducer', 'useLayoutEffect', 'useImperativeHandle', 'useTransition', 'useDeferredValue', 'useId', 'useSyncExternalStore', 'createContext', 'createElement', 'cloneElement', 'isValidElement', 'Children', 'Fragment', 'StrictMode', 'Suspense', 'memo', 'forwardRef', 'lazy', 'startTransition', 'Component', 'PureComponent']],
         'react-dom': ['WordJS.ReactDOM', ['createPortal', 'flushSync', 'render', 'unmountComponentAtNode', 'findDOMNode']],
@@ -227,7 +254,7 @@ async function buildPlugin(slug) {
             build.onResolve({ filter: /(^@\/)|(frontend[\\/]src[\\/])/ }, (args) => {
                 const key = hostKeyFor(args.path, args.resolveDir);
                 if (key == null) return null;                         // a plugin-local relative path
-                if (HOST_MODULES.includes(key)) return { path: key, namespace: 'wjs-host' };
+                if (HOST_MODULES.includes(key)) { usedHostKeys.add(key); return { path: key, namespace: 'wjs-host' }; }
                 return { errors: [{ text: `Plugin imports host module "${args.path}" (${key}) which is not exposed to plugin bundles. Add it to HOST_MODULES in build-plugin.js and inject it in pluginBundleLoader.ts, or drop the import.` }] };
             });
             build.onLoad({ filter: /.*/, namespace: 'wjs-react' }, (args) => {
@@ -321,6 +348,13 @@ async function buildPlugin(slug) {
         }
     }
 
+    // A host module newer than the WordJS the plugin declares it needs: refuse the build (see HOST_MODULE_SINCE).
+    const requirementProblem = hostModuleRequirementProblem(slug, manifest, [...usedHostKeys], HOST_MODULE_SINCE);
+    if (requirementProblem) {
+        console.error(`   ❌ ${requirementProblem}`);
+        return false;
+    }
+
     // The Tailwind classes the plugin's UI uses, compiled into the stylesheets the host loads. A failure
     // here fails the build: a package whose screens have no styles is not a package to ship.
     try {
@@ -395,21 +429,25 @@ async function buildAllPlugins() {
 // CLI
 // ============================================
 
-const args = process.argv.slice(2);
+module.exports = { hostModuleRequirementProblem };
 
-if (args.length === 0) {
-    console.log('Usage: node build-plugin.js <plugin-slug>');
-    console.log('       node build-plugin.js --all');
-    process.exit(1);
-}
+if (require.main === module) {
+    const args = process.argv.slice(2);
 
-if (args[0] === '--all') {
-    buildAllPlugins().catch(console.error);
-} else {
-    buildPlugin(args[0])
-        .then(success => process.exit(success ? 0 : 1))
-        .catch(err => {
-            console.error(err);
-            process.exit(1);
-        });
+    if (args.length === 0) {
+        console.log('Usage: node build-plugin.js <plugin-slug>');
+        console.log('       node build-plugin.js --all');
+        process.exit(1);
+    }
+
+    if (args[0] === '--all') {
+        buildAllPlugins().catch(console.error);
+    } else {
+        buildPlugin(args[0])
+            .then(success => process.exit(success ? 0 : 1))
+            .catch(err => {
+                console.error(err);
+                process.exit(1);
+            });
+    }
 }

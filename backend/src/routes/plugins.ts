@@ -334,6 +334,8 @@ function resolveSafePluginDir(slug: any): string {
  *         description: Plugin installed
  *       400:
  *         description: Invalid file or zip slip detected
+ *       409:
+ *         description: core_version_too_old - the plugin's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is installed. The body names requires, minimum and current.
  */
 router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
@@ -388,7 +390,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *       404:
  *         description: The plugin is not installed
  *       409:
- *         description: Another operation on this plugin is in progress, or the sandbox refused to start the new version (rolled back)
+ *         description: Another operation on this plugin is in progress, the sandbox refused to start the new version (rolled back), or core_version_too_old - the zip's manifest requires a newer WordJS (requires.wordjs) than this install runs (nothing was changed)
  */
 // Multisite: not in core/multisite-guards' SITE_PLUGIN_ROUTES, so another site gets the network's 403.
 router.post('/:slug/update', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: Request, res: Response) => {
@@ -751,6 +753,14 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             // inside installPluginDependencies, for whatever reaches the disk another way).
             const depProblems = validateManifestDependencies(manifest.dependencies);
             if (depProblems.length) throw new Error(`Invalid dependencies:\n- ${depProblems.join('\n- ')}`);
+            // The WordJS it needs (`requires.wordjs`, core/core-requirement.ts): a malformed range is a 400, and
+            // a package that needs a newer core than this one is a 409 core_version_too_old — refused here,
+            // before it replaces anything, so an update cannot leave the admin on a blank screen. Upload,
+            // catalog install, update and adopt all pass through this point.
+            const coreRequirement = require('../core/core-requirement');
+            const requiresProblems = coreRequirement.validateManifestRequires(manifest.requires);
+            if (requiresProblems.length) throw new Error(`Invalid requires:\n- ${requiresProblems.join('\n- ')}`);
+            coreRequirement.assertCoreCompatible(manifest, pluginSlug);
             // Browser code (admin page, hooks, Verso blocks, prebuilt dist bundles) runs in the admin's
             // origin with the viewer's session — it must be DECLARED as browser:script so the activation
             // dialog asks about it. See core/plugins.ts BROWSER_SCRIPT_TOKEN.
@@ -784,6 +794,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
                 else fs.rmSync(installedDir, { recursive: true, force: true });
             } catch { /* best-effort */ }
             discardZip();
+            if (valErr && valErr.status === 409 && valErr.body) return { ok: false, status: 409, body: valErr.body };
             return { ok: false, status: 400, body: { error: valErr.message, details: { missingPermissions: valErr.missingPermissions, dangerousCalls: valErr.dangerousCalls } } };
         }
 
@@ -1387,6 +1398,13 @@ router.get('/registry', optionalAuth, asyncHandler(async (req: Request, res: Res
             entry.frontend = manifest.frontend.hooks ? { hooks: true } : {};
         }
         // (A readable manifest with no `frontend` key leaves the property ABSENT — "declares nothing".)
+        // `minWordjs` (admin session only, like `browser`): the WordJS the plugin declares it needs
+        // (`requires.wordjs`), so an admin screen whose bundle cannot run on this core can say which
+        // version to update to instead of rendering nothing.
+        if (showsGrant && manifest && typeof manifest === 'object') {
+            const core = require('../core/core-requirement').coreCompatibility(manifest);
+            if (core.minimum) entry.minWordjs = core.minimum;
+        }
         // `blocks`: would GET /plugins/<id>/bundle?type=component serve something? The public site and
         // the editor asked EVERY active plugin for its block bundle, so each plugin without editor blocks
         // cost a 404 and a console error on every page view (S1-21). This is the same answer that request

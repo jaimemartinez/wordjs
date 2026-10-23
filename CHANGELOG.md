@@ -73,6 +73,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **faq 1.0.5: the FAQ keeps running without the *Add admin menu* permission.** With `admin_menu:register` off
   (on the permission screen, or in the consent dialog of an update), the plugin crashed and restarted in a loop,
   taking its pages and its block down with it. It now runs without its sidebar entry and logs why.
+- **A plugin that needs a newer WordJS is no longer installed on an older one.** A plugin declares the WordJS it
+  needs in its manifest (`"requires": { "wordjs": ">=2.10.0" }`), and the Marketplace catalog carries it. On a
+  site that runs an older WordJS, the Marketplace shows that version as *Requires WordJS ≥ X — update WordJS
+  first*, with a link to Updates and no install or update button. Installing, updating or uploading it is refused
+  with a clear message instead of leaving the plugin's admin screen blank. A plugin screen built for a newer
+  WordJS says *This plugin needs WordJS ≥ X* instead of staying blank. WordJS releases before this one ignore
+  the field. **conference-manager 2.33.5** declares `>=2.10.0` (its date picker comes from WordJS 2.10.0).
 - **conference-manager 2.33.3: «Copiar mensaje» works for people with no e-mail on file.** It used to refuse with
   «se requiere un correo válido». The message is now copied anyway, and the consent page asks the person for their
   e-mail. The signing code goes there, and the e-mail is kept as verified in the evidence (noted as typed on the

@@ -286,6 +286,13 @@ function verifyEntry(entry, kind, srcRoot, seenFiles) {
     if (String(entry.version) !== srcVersion) {
         fail(`${label}: catalog says version ${entry.version} but ${metaFile} says ${srcVersion}`);
     }
+    // The WordJS the plugin needs must reach the catalog as declared: a dropped `requires` would let an
+    // older core install a package it cannot run.
+    if (kind !== 'theme') {
+        const declared = meta.requires && typeof meta.requires.wordjs === 'string' ? meta.requires.wordjs : null;
+        const listed = entry.requires && typeof entry.requires.wordjs === 'string' ? entry.requires.wordjs : null;
+        if (declared !== listed) fail(`${label}: manifest.json requires WordJS ${declared || '(nothing)'} but the catalog lists ${listed || '(nothing)'}`);
+    }
 
     const zipPath = path.join(DIST, entry.file);
     if (!fs.existsSync(zipPath)) {
