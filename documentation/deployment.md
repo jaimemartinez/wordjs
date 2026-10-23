@@ -736,7 +736,10 @@ with a click (password and a two-factor code): a backup, the `create-wordjs upgr
 version does not start (`backend/data/update-state.json`, read by the monolith's supervisor). It is offered
 on a release install running as the monolith under its supervisor, whose files the service account can
 write (the `--systemd` layout). In a container, a git checkout, split or separate mode, or when the code
-belongs to another account, the screen says so and gives the command below instead.
+belongs to another account, the screen says so and gives the command below instead. A container is
+recognised by `/.dockerenv` (Docker), `/run/.containerenv` (podman), `WORDJS_DOCKER=1` (set by the image and
+the Helm chart) or, on Kubernetes, the `KUBERNETES_SERVICE_HOST` every pod gets (containerd and CRI-O write no
+`/.dockerenv`); on Kubernetes the screen says to change the release's `image.tag` (`helm upgrade`).
 
 **A release install** (`npx create-wordjs`, or an unpacked release ZIP) upgrades in place from a terminal:
 

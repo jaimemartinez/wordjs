@@ -83,10 +83,27 @@ let probe = {
     embedded: () => process.env.WORDJS_EMBEDDED === '1',
 };
 
+/**
+ * Is this process in a container, and which kind? A container's code is its image: the panel must not
+ * rewrite it in place (the next restart brings the old image back), so it says how to change the image.
+ * Docker writes /.dockerenv and podman /run/.containerenv, but containerd and CRI-O (every Kubernetes
+ * node today) write neither, so Kubernetes is read from the variable it gives every pod, and the image
+ * and the Helm chart also set WORDJS_DOCKER=1.
+ */
+export function containerKind(env: NodeJS.ProcessEnv = process.env): 'kubernetes' | 'container' | null {
+    if (env.KUBERNETES_SERVICE_HOST) return 'kubernetes';
+    if (env.WORDJS_DOCKER === '1' || probe.exists('/.dockerenv') || probe.exists('/run/.containerenv')) return 'container';
+    return null;
+}
+
 function environment(): Environment {
     const root = installRoot();
     const sudoCmd = `sudo npx create-wordjs@latest upgrade ${root}`;
-    if (probe.exists('/.dockerenv') || process.env.WORDJS_DOCKER === '1') {
+    const container = containerKind();
+    if (container === 'kubernetes') {
+        return { canUpdate: false, reason: 'docker', how: 'This site runs on Kubernetes: update the image tag of its release and let it roll out (helm upgrade <release> <chart> --reuse-values --set image.tag=<version>). Your data is in the persistent volume.', root };
+    }
+    if (container) {
         return { canUpdate: false, reason: 'docker', how: 'This site runs in a container: pull the new image tag and recreate the container (docker compose pull && docker compose up -d). Your data is in the volume.', root };
     }
     if (probe.exists(path.join(root, '.git'))) {
@@ -289,4 +306,4 @@ function _setForTests(o: { fetchJson?: typeof fetchJson; runner?: typeof runner;
     cache = null;
 }
 
-module.exports = { REPO, compareVersions, environment, releases, overview, startUpdate, markBootCompleted, status, upgradeArgs, readState, _setForTests };
+module.exports = { REPO, compareVersions, containerKind, environment, releases, overview, startUpdate, markBootCompleted, status, upgradeArgs, readState, _setForTests };

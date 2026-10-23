@@ -36,7 +36,7 @@ fs.writeFileSync(path.join(BACKEND, 'package.json'), JSON.stringify({ name: 'bac
 const MAIN = 'localhost:3000';
 fs.writeFileSync(path.join(BACKEND, 'wordjs-config.json'), JSON.stringify({ installedAt: '2026-01-01T00:00:00.000Z', dbDriver: 'sqlite-native', siteUrl: `http://${MAIN}` }, null, 2));
 process.chdir(BACKEND);
-const ENV_KEYS = ['WORDJS_SUPERVISED', 'WORDJS_EMBEDDED', 'WORDJS_DOCKER'];
+const ENV_KEYS = ['WORDJS_SUPERVISED', 'WORDJS_EMBEDDED', 'WORDJS_DOCKER', 'KUBERNETES_SERVICE_HOST'];
 const SAVED_ENV: Record<string, string | undefined> = {};
 for (const key of ENV_KEYS) { SAVED_ENV[key] = process.env[key]; delete process.env[key]; }
 process.env.WORDJS_SUPERVISED = '1';
@@ -64,12 +64,13 @@ const RELEASES = [
 ];
 const runs: string[][] = [];
 let exitCodes: number[] = [];
-const probeState = { docker: false, git: false, writable: true };
+const probeState = { docker: false, podman: false, git: false, writable: true };
 updater._setForTests({
     fetchJson: async () => RELEASES,
     runner: async (args: string[]) => { runs.push(args); return exitCodes.length ? exitCodes.shift()! : 0; },
     probe: {
-        exists: (p: string) => (p === '/.dockerenv' ? probeState.docker : p.endsWith(`${path.sep}.git`) ? probeState.git : fs.existsSync(p)),
+        exists: (p: string) => (p === '/.dockerenv' ? probeState.docker : p === '/run/.containerenv' ? probeState.podman
+            : p.endsWith(`${path.sep}.git`) ? probeState.git : fs.existsSync(p)),
         writable: () => probeState.writable,
     },
 });
@@ -151,6 +152,10 @@ describe('where the panel may update, and what it says otherwise', () => {
         assert.strictEqual(updater.environment().canUpdate, true, JSON.stringify(updater.environment()));
         const cases: Array<[string, () => void, () => void, RegExp]> = [
             ['docker', () => { probeState.docker = true; }, () => { probeState.docker = false; }, /pull the new image/],
+            // containerd / CRI-O (every Kubernetes node) write no /.dockerenv: the pod's own variable says so.
+            ['docker', () => { process.env.KUBERNETES_SERVICE_HOST = '10.96.0.1'; }, () => { delete process.env.KUBERNETES_SERVICE_HOST; }, /Kubernetes: update the image tag .*helm upgrade/],
+            ['docker', () => { process.env.WORDJS_DOCKER = '1'; }, () => { delete process.env.WORDJS_DOCKER; }, /pull the new image/],
+            ['docker', () => { probeState.podman = true; }, () => { probeState.podman = false; }, /pull the new image/],
             ['source_checkout', () => { probeState.git = true; }, () => { probeState.git = false; }, /git pull/],
             ['not_writable', () => { probeState.writable = false; }, () => { probeState.writable = true; }, /sudo npx create-wordjs@latest upgrade/],
             ['split_mode', () => { delete process.env.WORDJS_EMBEDDED; }, () => { process.env.WORDJS_EMBEDDED = '1'; }, /each machine/],
@@ -165,6 +170,22 @@ describe('where the panel may update, and what it says otherwise', () => {
                 assert.match(env.how, how, reason);
             } finally { reset(); }
         }
+    });
+});
+
+describe('a container is recognised however it was started (FALLOS 131)', () => {
+    test('Kubernetes wins over the other signs, since its instruction is the one that works there', () => {
+        assert.strictEqual(updater.containerKind({ KUBERNETES_SERVICE_HOST: '10.96.0.1', WORDJS_DOCKER: '1' }), 'kubernetes');
+        assert.strictEqual(updater.containerKind({ WORDJS_DOCKER: '1' }), 'container');
+        assert.strictEqual(updater.containerKind({}), null);
+    });
+
+    test('the image and the Helm chart set WORDJS_DOCKER=1, so no in-place update is offered in a pod', () => {
+        const repo = path.resolve(__dirname, '../../..');
+        const dockerfile = fs.readFileSync(path.join(repo, 'Dockerfile'), 'utf8');
+        assert.match(dockerfile, /^ENV [\s\S]*?\bWORDJS_DOCKER=1\b/m);
+        const deployment = fs.readFileSync(path.join(repo, 'deploy/helm/wordjs/templates/deployment.yaml'), 'utf8');
+        assert.match(deployment, /- name: WORDJS_DOCKER\s*\n\s*value: "1"/);
     });
 });
 
