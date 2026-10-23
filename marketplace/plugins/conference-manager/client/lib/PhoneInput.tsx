@@ -9,8 +9,9 @@
  * national number in the conference's default country. Used by the admin's inscription form and the
  * coordinators' portal; errors stay with the caller's in-place FieldError.
  */
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { countryOptions, flagOf, joinPhone, splitPhone } from "./phone";
+import React, { useEffect, useRef, useState } from "react";
+import { joinPhone, splitPhone } from "./phone";
+import { CountrySelect } from "./CountrySelect";
 
 export const PHONE_LABELS: Record<string, { country: string; number: string }> = {
     es: { country: 'Indicativo de país', number: 'Número' },
@@ -24,7 +25,6 @@ export function PhoneInput({ id, value, onChange, defaultCountry, lang = 'es', l
     dataField?: string; invalid?: boolean; describedBy?: string; selectClassName?: string; inputClassName?: string;
 }) {
     const L = phoneLabels(lang);
-    const options = useMemo(() => countryOptions(lang), [lang]);
     const [iso, setIso] = useState(() => splitPhone(value, defaultCountry).iso);
     const [national, setNational] = useState(() => splitPhone(value, defaultCountry).national);
     const sent = useRef(value);
@@ -42,18 +42,10 @@ export function PhoneInput({ id, value, onChange, defaultCountry, lang = 'es', l
     const name = label ? `${label} · ` : '';
     return (
         <div className="flex gap-2 items-stretch" data-phone-input={dataField || ''}>
-            {/* Closed, only the flag shows (a small box beside the number); the native list underneath opens with the
-                names and codes, so it keeps the keyboard, the screen reader and the phone's own picker. */}
-            <div className={`${selectClassName || ''} relative shrink-0 flex items-center justify-center gap-1 focus-within:ring-2 focus-within:ring-blue-400`}
-                style={{ width: '3.75rem', paddingLeft: 0, paddingRight: 0 }} data-phone-flag={iso}>
-                <span className="text-lg leading-none" aria-hidden="true">{flagOf(iso)}</span>
-                <i className="fa-solid fa-chevron-down text-[8px] text-gray-400" aria-hidden="true"></i>
-                <select aria-label={`${name}${L.country}`} title={options.find(o => o.iso === iso)?.label} value={iso} data-phone-country=""
-                    onChange={(e) => { setIso(e.target.value); emit(e.target.value, national); }}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" aria-invalid={invalid || undefined} aria-describedby={describedBy}>
-                    {options.map(o => <option key={o.iso} value={o.iso}>{o.label}</option>)}
-                </select>
-            </div>
+            {/* Closed, only the flag shows (a small box in the number's row); open, the list searches and scrolls. */}
+            <CountrySelect compact value={iso} lang={lang} label={`${name}${L.country}`} invalid={invalid} describedBy={describedBy}
+                onChange={(next) => { setIso(next); emit(next, national); }}
+                buttonClassName={`${selectClassName || ''} shrink-0 justify-center`} buttonStyle={{ width: '4rem', paddingLeft: 0, paddingRight: 0 }} />
             <input id={id} type="tel" inputMode="tel" autoComplete="tel-national" aria-label={`${name}${L.number}`} data-field={dataField}
                 value={national} onChange={(e) => { setNational(e.target.value); emit(iso, e.target.value); }}
                 className={`${inputClassName || ''} min-w-0 flex-1`} aria-invalid={invalid || undefined} aria-describedby={describedBy} />

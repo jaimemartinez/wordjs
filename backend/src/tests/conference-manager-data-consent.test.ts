@@ -444,6 +444,12 @@ test('phones (2.33.2): E.164 on write, the conference default for national numbe
     assert.strictEqual(w.p.one(`SELECT phone FROM ${PREFIX}inscriptions WHERE id = ?`, r1.body.id).phone, '0991234567', 'read, not rewritten');
     // A phone half typed never fails the live quote.
     assert.strictEqual((await w.p.call('post', '/public/quote', { anonymous: true, body: { conference_id: w.cid, fields: { phone: '30' } } })).status, 200);
+    // The selector's flags (images: Windows has no flag emoji), a batch at a time, unknown codes left out.
+    const flags = ok(await w.p.call('get', '/public/flags?iso=CO,ec,ZZ,xx1,CO', { anonymous: true })).flags;
+    assert.deepStrictEqual(Object.keys(flags).sort(), ['CO', 'EC']);
+    assert.ok(flags.CO.startsWith('<svg') && !/<script|\son[a-z]+=/i.test(flags.CO));
+    const many = P.COUNTRIES.map((c: any) => c.iso).join(',');
+    assert.strictEqual(Object.keys(ok(await w.p.call('get', `/public/flags?iso=${many}`, { anonymous: true })).flags).length, 48, 'at most 48 per request');
     // Badge WhatsApp links follow the default once chosen.
     const links = ok(await w.p.call('post', '/badges/links', { body: { conference_id: w.cid, inscription_id: a.id } }));
     assert.strictEqual(links.country_code, '593');

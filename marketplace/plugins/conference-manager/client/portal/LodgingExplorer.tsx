@@ -92,6 +92,7 @@ import {
     type RoomStats,
 } from "./lodgingView";
 import { Badge, Button, Card, captionCls, cx, EmptyState, headingCls, inputCls, labelCls, Modal, Notice } from "./ui";
+import { Select } from "../lib/Select";
 
 /** What a drop target shows while a chip hovers it: `dragDecision`'s verdict flattened to one word. */
 type DropVerdict = 'ok' | DragRefusal;
@@ -549,9 +550,9 @@ function HotelFilters({ filters, counts, total, shown, onChange }: {
                 {genderShown && (
                 <div className="space-y-1.5" data-testid="lodging-gender-filter">
                     <label htmlFor={genderId} className={labelCls}>Ocupantes</label>
-                    <select id={genderId} className={inputCls} value={filters.gender} onChange={(e) => onChange({ gender: e.target.value as GenderFilter })}>
+                    <Select id={genderId} className={inputCls} value={filters.gender} onChange={(e) => onChange({ gender: e.target.value as GenderFilter })}>
                         {GENDER_FILTERS.map((g) => <option key={g} value={g}>{GENDER_FILTER_LABELS[g]}</option>)}
-                    </select>
+                    </Select>
                 </div>
                 )}
             </div>

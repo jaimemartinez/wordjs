@@ -31,6 +31,7 @@ import type { StaffLevel, StaffMember, StaffRole, StaffSection, StaffUser } from
 import { useTx, makeTxn } from "./MealScanner";
 import { normalizePermissions, levelRank } from "./perms";
 import { candidateBlock, memberLacksRole, USERS_ADMIN_HREF, wordjsRoleText } from "../lib/team";
+import { Select } from "../lib/Select";
 
 type Tab = 'roles' | 'members';
 const TAB_KEY = 'conference-manager:staff.tab';
@@ -519,13 +520,13 @@ function MembersTab({ roles, reloadRoles, onGoRoles }: any) {
                                         </div>
                                         <div className="flex flex-wrap items-center gap-2">
                                             <label className="sr-only" htmlFor={`staff-member-role-${m.id}`}>{tx('staff.member.role', 'Rol')}</label>
-                                            <select id={`staff-member-role-${m.id}`} className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-indigo-500 outline-none text-sm font-bold text-gray-800 disabled:opacity-50"
+                                            <Select id={`staff-member-role-${m.id}`} className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-indigo-500 outline-none text-sm font-bold text-gray-800 disabled:opacity-50"
                                                 value={String(m.role_id)} disabled={busy === m.id || noRole}
                                                 title={noRole ? tx('staff.member.no.role.locked', 'Dale primero acceso a «Conference»: el rol «Equipo de conferencia» en Usuarios, o el permiso «conference_manager_access» a su rol.') : undefined}
                                                 onChange={(e) => update(m, { role_id: Number(e.target.value) }, tx('staff.member.role.changed', 'Rol cambiado'))}>
                                                 {!roles.some((r: StaffRole) => Number(r.id) === Number(m.role_id)) && <option value={String(m.role_id)}>{m.role_name || `#${m.role_id}`}</option>}
                                                 {roles.map((r: StaffRole) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
-                                            </select>
+                                            </Select>
                                             <button type="button" className={btnGhost} disabled={busy === m.id || (noRole && !active)}
                                                 title={noRole && !active ? tx('staff.member.no.role.locked', 'Dale primero acceso a «Conference»: el rol «Equipo de conferencia» en Usuarios, o el permiso «conference_manager_access» a su rol.') : undefined}
                                                 onClick={() => update(m, { active: !active }, active ? tx('staff.member.deactivated', 'Acceso desactivado') : tx('staff.member.reactivated', 'Acceso reactivado'))}>
@@ -696,9 +697,9 @@ function AddMember({ roles, memberIds, onAdded, onGoRoles }: any) {
                         </div>
                         <div className="space-y-1">
                             <label htmlFor="staff-add-role" className={labelCls}>{tx('staff.add.role', 'Con el rol')}</label>
-                            <select id="staff-add-role" className={inputCls} value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+                            <Select id="staff-add-role" className={inputCls} value={roleId} onChange={(e) => setRoleId(e.target.value)}>
                                 {roles.map((r: StaffRole) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
-                            </select>
+                            </Select>
                         </div>
                     </div>
                     {loading && <p className="text-xs font-bold text-gray-500">{tx('loading', 'Cargando…')}</p>}

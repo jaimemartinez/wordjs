@@ -17,6 +17,7 @@ import { consentMessage, copyText, whatsappUrl } from '../../../../../marketplac
 import * as phone from '../../../../../marketplace/plugins/conference-manager/client/lib/phone';
 import { PhoneInput } from '../../../../../marketplace/plugins/conference-manager/client/lib/PhoneInput';
 import { waNumber as badgeWa } from '../../../../../marketplace/plugins/conference-manager/client/lib/badges';
+import { Select, filterItems, itemsOf } from '../../../../../marketplace/plugins/conference-manager/client/lib/Select';
 
 const CM = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager');
 const server = require(path.join(CM, 'server/consent.js'));
@@ -58,7 +59,7 @@ describe('the signed text', () => {
 });
 
 describe('no native dialogs, no required bubbles', () => {
-    for (const rel of ['client/portal/consent/ConsentPage.tsx', 'client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx', 'client/lib/consentMessage.ts', 'client/lib/PhoneInput.tsx', 'client/admin/PhoneCountrySetting.tsx']) {
+    for (const rel of ['client/portal/consent/ConsentPage.tsx', 'client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx', 'client/lib/consentMessage.ts', 'client/lib/PhoneInput.tsx', 'client/admin/PhoneCountrySetting.tsx', 'client/lib/Select.tsx', 'client/lib/CountrySelect.tsx', 'client/lib/Flag.tsx']) {
         it(rel, () => {
             const s = src(rel).replace(/^\s*(\/\/|\*).*$/gm, '');
             expect(s).not.toMatch(/\b(window\.)?(alert|confirm|prompt)\s*\(/);
@@ -142,15 +143,18 @@ describe('phones with their country (2.33.2)', () => {
         expect(phone.flagOf('CO')).toBe(String.fromCodePoint(0x1F1E8, 0x1F1F4));
     });
     it('the selector: labelled, in the screen language, the default country chosen, no required bubble', () => {
-        for (const [lang, country, colombia] of [['es', 'Indicativo de país', 'Colombia (+57)'], ['en', 'Country code', 'Colombia (+57)'], ['pt', 'Código do país', 'Colômbia (+57)']]) {
+        for (const [lang, country, colombia] of [['es', 'Indicativo de país', 'Colombia +57'], ['en', 'Country code', 'Colombia +57'], ['pt', 'Código do país', 'Colômbia +57']]) {
             const html = renderToStaticMarkup(React.createElement(PhoneInput, { value: '', onChange: () => {}, defaultCountry: 'CO', lang, label: 'Teléfono', dataField: 'phone' }));
-            expect(html).toContain(`aria-label="Teléfono · ${country}"`);
-            expect(html).toContain(`<option value="CO" selected="">${colombia}</option>`);
+            expect(html).toContain(`aria-label="Teléfono · ${country}: ${colombia}"`);
+            expect(html).toContain('aria-haspopup="listbox"');
+            expect(html).toContain('data-country-button="CO"');
+            expect(html).toContain('data-flag="CO"');
             expect(html).toContain('type="tel"');
             expect(html).not.toContain('required');
+            expect(html).not.toContain('<select');
         }
         const ec = renderToStaticMarkup(React.createElement(PhoneInput, { value: '+593991234567', onChange: () => {}, defaultCountry: 'CO' }));
-        expect(ec).toContain('<option value="EC" selected="">');
+        expect(ec).toContain('data-country-button="EC"');
         expect(ec).toContain('value="991234567"');
     });
     it('both forms use it for phone fields, and the badges WhatsApp number keeps a stored code', () => {
@@ -164,5 +168,48 @@ describe('phones with their country (2.33.2)', () => {
         expect(badgeWa('0991234567', '593')).toBe('593991234567');
         expect(badgeWa('573001234567', '57')).toBe('573001234567');
         expect(badgeWa('300 123 4567', '57')).toBe('573001234567');
+    });
+});
+
+describe('CM select (2.33.2): one styled dropdown with scroll and search for every select of the plugin', () => {
+    it('reads <option> / <optgroup> children like the browser does', () => {
+        const items = itemsOf([
+            React.createElement('option', { key: 'a', value: '' }, 'Elige…'),
+            React.createElement('optgroup', { key: 'g', label: 'Lunes' },
+                React.createElement('option', { value: 1 }, 'Desayuno'),
+                React.createElement('option', { value: 2, disabled: true }, 'Almuerzo')),
+            null, false,
+            React.createElement(React.Fragment, { key: 'f' }, React.createElement('option', null, 'Cena')),
+        ]);
+        expect(items).toEqual([
+            { value: '', label: 'Elige…', disabled: false, group: undefined },
+            { value: '1', label: 'Desayuno', disabled: false, group: 'Lunes' },
+            { value: '2', label: 'Almuerzo', disabled: true, group: 'Lunes' },
+            { value: 'Cena', label: 'Cena', disabled: false, group: undefined },
+        ]);
+    });
+    it('searches without accents, labels starting with the text first', () => {
+        const items = ['Bogotá', 'Barranquilla', 'Santa Marta', 'Cúcuta'].map(l => ({ value: l, label: l }));
+        expect(filterItems(items, 'cuc').map(i => i.value)).toEqual(['Cúcuta']);
+        expect(filterItems(items, 'ta').map(i => i.value)).toEqual(['Bogotá', 'Santa Marta', 'Cúcuta']);
+        expect(filterItems(items, '').length).toBe(4);
+    });
+    it('closed: a button that names the choice, keeps id / aria / data, never the browser’s required bubble', () => {
+        const html = renderToStaticMarkup(React.createElement(Select, { id: 'x', value: 2, onChange: () => {}, required: true, 'aria-label': 'Bus', 'data-field': 'bus' },
+            React.createElement('option', { value: 1 }, 'Uno'), React.createElement('option', { value: 2 }, 'Dos')));
+        expect(html).toMatch(/^<button type="button" id="x"/);
+        expect(html).toContain('aria-label="Bus: Dos"');
+        expect(html).toContain('data-field="bus"');
+        expect(html).toContain('aria-haspopup="listbox"');
+        expect(html).toContain('data-value="2"');
+        expect(html).toContain('>Dos</span>');
+        expect(html).not.toContain('required');
+        // A value no option has shows the first one, as the browser's select does.
+        expect(renderToStaticMarkup(React.createElement(Select, { value: 'zz', onChange: () => {} }, React.createElement('option', { value: 'a' }, 'A')))).toContain('>A</span>');
+    });
+    it('no native <select> is left in the plugin’s screens', () => {
+        const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.tsx$/.test(e.name) ? [path.join(d, e.name)] : []));
+        const left = walk(path.join(CM, 'client')).filter(f => /<select[\s>]/.test(fs.readFileSync(f, 'utf8').replace(/^\s*(\/\/|\*).*$/gm, '')));
+        expect(left.map(f => path.relative(CM, f))).toEqual([]);
     });
 });

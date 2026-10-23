@@ -29,6 +29,7 @@ import { HEALTH_FIELD, healthAnswerError, healthPayload, isHealthField } from ".
 import { DateField } from "../lib/DateField";
 import { PhoneInput } from "../lib/PhoneInput";
 import { isPhoneField } from "../lib/phone";
+import { Select } from "../lib/Select";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -557,7 +558,7 @@ function LocationPortalContent() {
                             {isConferenceLocked && <i className="fa-solid fa-lock text-[9px] text-gray-400 ml-2" title="Conferencia pre-seleccionada"></i>}
                         </>}>
                             {(id) => (
-                                <select
+                                <Select
                                     id={id}
                                     className={cx(selectCls, isConferenceLocked && 'cursor-not-allowed opacity-75')}
                                     value={selectedConference}
@@ -570,13 +571,13 @@ function LocationPortalContent() {
                                     {conferences.map(c => (
                                         <option key={c.id} value={c.id}>{c.name}</option>
                                     ))}
-                                </select>
+                                </Select>
                             )}
                         </Field>
 
                         <Field label="Localidad" error={feLogin.error('location')} errorId={feLogin.errorId('location')}>
                             {(id) => (
-                                <select
+                                <Select
                                     id={id}
                                     className={selectCls}
                                     value={selectedLocation}
@@ -589,7 +590,7 @@ function LocationPortalContent() {
                                     {locations.map(l => (
                                         <option key={l.id} value={l.id}>{l.name}</option>
                                     ))}
-                                </select>
+                                </Select>
                             )}
                         </Field>
 
@@ -851,7 +852,7 @@ function LocationPortalContent() {
                                                         {isSwitchOn(formData[field.name]) ? SWITCH_ON : SWITCH_OFF}
                                                     </button>
                                                 ) : field.type === 'select' ? (
-                                                    <select
+                                                    <Select
                                                         id={id}
                                                         required={!!field.is_required}
                                                         data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
@@ -862,7 +863,7 @@ function LocationPortalContent() {
                                                         {fieldOptions(field).map((opt: string) => (
                                                             <option key={opt} value={opt}>{opt}</option>
                                                         ))}
-                                                    </select>
+                                                    </Select>
                                                 ) : field.type === 'textarea' ? (
                                                     <textarea
                                                         id={id}
@@ -875,7 +876,7 @@ function LocationPortalContent() {
                                                     />
                                                 ) : isPhoneField(field) ? (
                                                     // 2.33.2: the country's calling code next to the number; E.164 is sent.
-                                                    <PhoneInput id={id} dataField={field.name} lang="es" invalid={fe.invalid(field.name)} describedBy={fe.describedBy(field.name)}
+                                                    <PhoneInput id={id} dataField={field.name} label={field.label} lang="es" invalid={fe.invalid(field.name)} describedBy={fe.describedBy(field.name)}
                                                         defaultCountry={(conferences.find((c) => String(c.id) === String(myLocation?.conference_id ?? selectedConference)) || {}).phone_country}
                                                         selectClassName={inputCls} inputClassName={inputCls}
                                                         value={formData[field.name] ?? ''} onChange={(v) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })} />

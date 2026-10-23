@@ -8265,6 +8265,20 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
+    // GET /public/flags?iso=CO,EC → { flags: { CO: '<svg…>' } } — the phone selector's flags (2.33.2), a batch at a
+    // time (≤ 48), from the bundled flag-icons set (server/flags.js, read on first use). Unknown codes are left out.
+    let flagSet = null;
+    http.route('get', '/public/flags', async (req, res) => {
+        try {
+            if (!flagSet) flagSet = require('./server/flags');
+            const isos = [...new Set(String((req.query || {}).iso || '').toUpperCase().split(',').map(x => x.trim()).filter(x => /^[A-Z]{2}$/.test(x)))].slice(0, 48);
+            const flags = {};
+            for (const iso of isos) if (Object.prototype.hasOwnProperty.call(flagSet, iso)) flags[iso] = flagSet[iso];
+            try { res.set({ 'Cache-Control': 'public, max-age=604800' }); } catch (e) { /* a bridge without headers */ }
+            res.json({ flags });
+        } catch (e) { sendError(res, e); }
+    });
+
     // 2. List Locations for Login (Public)
     http.route('get', '/public/locations', async (req, res) => {
         const { conference_id } = req.query;

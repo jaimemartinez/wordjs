@@ -29,6 +29,7 @@ import { BadgeActions, phoneOfRow } from "./BadgeActions";
 import { BadgeEditor } from "./BadgeEditor";
 import { TEMPLATES, fromLegacy, sampleData } from "../lib/badgeEditor";
 import { DateField } from "../lib/DateField";
+import { Select } from "../lib/Select";
 
 const card = 'bg-white rounded-3xl border border-gray-100 shadow-sm p-5 sm:p-6 space-y-4';
 const label = 'block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1.5';
@@ -226,17 +227,17 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
                                         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 12rem), 1fr))' }}>
                                             <div>
                                                 <label className={label} htmlFor="self-type">{tx('badges.self.type', 'Campo «tipo de documento»')}</label>
-                                                <select id="self-type" className={input} value={sp.type_field || ''} disabled={locked} onChange={(e) => patchSelf({ type_field: e.target.value || null })}>
+                                                <Select id="self-type" className={input} value={sp.type_field || ''} disabled={locked} onChange={(e) => patchSelf({ type_field: e.target.value || null })}>
                                                     <option value="">{tx('badges.self.auto', 'Automático')}{!sp.type_field && selfInfo.type_field ? ` (${nameOf(selfInfo.type_field)})` : ''}</option>
                                                     {selfInfo.fields.filter((f: any) => f.type === 'select').map((f: any) => <option key={f.name} value={f.name}>{f.label}</option>)}
-                                                </select>
+                                                </Select>
                                             </div>
                                             <div>
                                                 <label className={label} htmlFor="self-number">{tx('badges.self.number', 'Campo «número de documento»')}</label>
-                                                <select id="self-number" className={input} value={sp.number_field || ''} disabled={locked} onChange={(e) => patchSelf({ number_field: e.target.value || null })}>
+                                                <Select id="self-number" className={input} value={sp.number_field || ''} disabled={locked} onChange={(e) => patchSelf({ number_field: e.target.value || null })}>
                                                     <option value="">{tx('badges.self.auto', 'Automático')}{!sp.number_field && selfInfo.number_field ? ` (${nameOf(selfInfo.number_field)})` : ''}</option>
                                                     {selfInfo.fields.filter((f: any) => f.type !== 'select').map((f: any) => <option key={f.name} value={f.name}>{f.label}</option>)}
-                                                </select>
+                                                </Select>
                                             </div>
                                         </div>
                                         {!sp.number_field && !selfInfo.number_field && (
@@ -411,10 +412,10 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
                 <div className="flex flex-wrap gap-2">
                     <input type="search" className={`${input} flex-1 min-w-[12rem]`} value={q} onChange={(e) => setQ(e.target.value)}
                         placeholder={tx('badges.people.search', 'Buscar por nombre, código o localidad')} aria-label={tx('badges.people.search', 'Buscar por nombre, código o localidad')} data-badges-search="" />
-                    <select className={`${input} flex-1 min-w-[12rem]`} value={loc} onChange={(e) => setLoc(e.target.value)} aria-label={tx('badges.bulk.location', 'Localidad')} data-badges-location="">
+                    <Select className={`${input} flex-1 min-w-[12rem]`} value={loc} onChange={(e) => setLoc(e.target.value)} aria-label={tx('badges.bulk.location', 'Localidad')} data-badges-location="">
                         <option value="">{tx('badges.bulk.all', 'Todas las localidades')}</option>
                         {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
-                    </select>
+                    </Select>
                 </div>
                 {error ? (
                     <div className="py-6 text-center"><p className="text-rose-600 font-bold text-sm mb-3">{error}</p><button type="button" className={ghost} onClick={() => setAttempt((n) => n + 1)}>{tx('retry', 'Reintentar')}</button></div>

@@ -15,6 +15,7 @@ import React, { useState } from "react";
 import { browserProofEnv, prepareProof, ProofError } from "./proofImage";
 import { Button, Field, Modal, cx, inputBoldCls, inputCls, selectCls } from "./ui";
 import { useFieldErrors, FieldError } from "../lib/useFieldErrors";
+import { Select } from "../lib/Select";
 
 const API = "/api/v1/plugin/conference-manager";
 
@@ -120,9 +121,9 @@ export default function LegacyBulkPayment({ ids, methods, defaultAmount = "", au
                     <Field label="Método">
                         {(id) => (
                             <>
-                                <select id={id} className={selectCls} value={form.method} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, method: v })); }}>
+                                <Select id={id} className={selectCls} value={form.method} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, method: v })); }}>
                                     {methods.map((m) => <option key={m} value={m}>{m}</option>)}
-                                </select>
+                                </Select>
                                 {methods.length === 0 && <p className="text-xs text-rose-600 font-medium ml-1">No hay formas de pago habilitadas para esta localidad; contacta al administrador.</p>}
                             </>
                         )}

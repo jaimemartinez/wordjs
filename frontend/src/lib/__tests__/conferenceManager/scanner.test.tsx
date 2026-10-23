@@ -36,6 +36,7 @@ import {
 } from '../../../../../marketplace/plugins/conference-manager/client/admin/MealScanner';
 import { classifyRead, createReadRouter, createScanMeter, isRegCode, normalizeCode, scanLoopDelay } from '../../../../../marketplace/plugins/conference-manager/client/lib/meals';
 import { translations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
+import { itemsOf } from '../../../../../marketplace/plugins/conference-manager/client/lib/Select';
 import { encodeQr } from '../../../../../marketplace/plugins/conference-manager/client/lib/qr';
 import { BoardingScanner, boardingLines } from '../../../../../marketplace/plugins/conference-manager/client/admin/BoardingScanner';
 
@@ -427,8 +428,13 @@ describe('boarding check: the verdict in words, and the screen', () => {
         const buses = [{ id: 1, name: 'Bus 1', origin: 'Barranquilla', destination: 'Santa Marta' }, { id: 2, name: 'Bus 2' }];
         const html = renderToStaticMarkup(<I18nProvider><BoardingScanner buses={buses} busId={2} onClose={() => {}} /></I18nProvider>);
         expect(html).toContain('data-boarding-scanner=""');
-        expect(html).toMatch(/<option value="2" selected="">Bus 2<\/option>/);
-        expect(html).toContain('Bus 1 · Barranquilla → Santa Marta');
+        // CM's select (2.33.2): the chosen bus is the button's value and its text.
+        expect(html).toMatch(/data-select="" data-value="2"[^>]*><span[^>]*>Bus 2<\/span>/);
+        // The other buses are the dropdown's options (drawn when it opens): their label carries origin → destination.
+        const scannerSrc = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/admin/BoardingScanner.tsx'), 'utf8');
+        expect(scannerSrc).toContain("{b.name}{b.origin || b.destination ? ` · ${[b.origin, b.destination].filter(Boolean).join(' → ')}` : ''}</option>");
+        expect(itemsOf(buses.map((b) => React.createElement('option', { key: b.id, value: b.id }, b.name, b.origin ? ` · ${[b.origin, b.destination].join(' → ')}` : ''))).map((i: any) => i.label))
+            .toEqual(['Bus 1 · Barranquilla → Santa Marta', 'Bus 2']);
         expect(html).toContain('data-boarding-input=""');
     });
     it('every boarding text exists in es / en / pt', () => {

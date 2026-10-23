@@ -26,6 +26,7 @@ import { usePerms, ReadOnlyNotice } from "./perms";
 import { Overlay } from "./Overlay";
 import { canAutoFocus } from "../lib/overlay";
 import { BoardingScanner } from "./BoardingScanner";
+import { Select } from "../lib/Select";
 
 const money = (n: unknown) => '$' + fmtMoney(Number(n) || 0);
 const fmtWhen = (v?: string | null) => {
@@ -585,10 +586,10 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                         <>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <input className={inputCls} value={search} onChange={e => setSearch(e.target.value)} placeholder={tt('transport.add.search', 'Buscar por nombre, código o documento…')} aria-label={tt('transport.add.search', 'Buscar')} />
-                                <select className={inputCls} value={locFilter} onChange={e => setLocFilter(e.target.value)} aria-label={tt('excel.filter.location', 'Localidad')}>
+                                <Select className={inputCls} value={locFilter} onChange={e => setLocFilter(e.target.value)} aria-label={tt('excel.filter.location', 'Localidad')}>
                                     <option value="">{tt('excel.filter.all', 'Todas')}</option>
                                     {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
-                                </select>
+                                </Select>
                             </div>
                             {pick.size > free && <p className="text-xs font-bold text-rose-600">{tt('transport.add.too.many', 'Solo quedan {free} puestos.').replace('{free}', String(free))}</p>}
                             <div className="rounded-2xl border border-gray-100 divide-y divide-gray-50 max-h-96 overflow-y-auto">
@@ -683,9 +684,9 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                             <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{tt('transport.payment.new', 'Registrar pago')}</div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <input type="number" min={0} step="0.01" className={inputCls} value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} aria-label={tt('amount', 'Monto')} />
-                                <select className={inputCls} value={payForm.method} onChange={e => setPayForm({ ...payForm, method: e.target.value })} aria-label={tt('payment.methods', 'Forma de pago')}>
+                                <Select className={inputCls} value={payForm.method} onChange={e => setPayForm({ ...payForm, method: e.target.value })} aria-label={tt('payment.methods', 'Forma de pago')}>
                                     {PAYMENT_METHODS.map(m => <option key={m} value={m}>{paymentMethodLabel(tt, m)}</option>)}
-                                </select>
+                                </Select>
                                 <input className={inputCls} value={payForm.reference} onChange={e => setPayForm({ ...payForm, reference: e.target.value })} placeholder={tt('reference', 'Referencia (opcional)')} aria-label={tt('reference', 'Referencia')} />
                                 <DateField value={payForm.date} onChange={v => setPayForm({ ...payForm, date: v })} ariaLabel={tt('transport.payment.date', 'Fecha del pago')} />
                             </div>

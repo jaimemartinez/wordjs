@@ -21,6 +21,7 @@ import { conferenceApi } from "../lib/conference";
 import { dayLabel, makeTxn, mealName, useTx } from "./MealScanner";
 import { usePerms } from "./perms";
 import { GROUP_TONES, MEAL_GROUPS, groupSizeSpread, peopleFilter, turnLine } from "../lib/mealTurns";
+import { Select } from "../lib/Select";
 
 const card = 'bg-white rounded-3xl border border-gray-100 shadow-sm';
 const labelCls = 'block text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1 mb-1';
@@ -175,9 +176,9 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                     <>
                         <div className="max-w-sm">
                             <label htmlFor="cm-turns-service" className={labelCls}>{tx('turns.service', 'Comida')}</label>
-                            <select id="cm-turns-service" className={inputCls} value={serviceId ?? ''} onChange={(e) => setServiceId(Number(e.target.value))}>
+                            <Select id="cm-turns-service" className={inputCls} value={serviceId ?? ''} onChange={(e) => setServiceId(Number(e.target.value))}>
                                 {data.services.map((s) => <option key={s.id} value={s.id}>{dayLabel(s.date, language, true)} · {s.label || mealName(tx, s.meal)}</option>)}
-                            </select>
+                            </Select>
                         </div>
                         {svc && (
                             <>
@@ -283,11 +284,11 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                                             <div className="flex items-center gap-2">
                                                 <GroupBadge g={p.group} size="sm" />
                                                 {canManage ? (
-                                                    <select aria-label={tx('turns.person.group', 'Grupo de {name}', { name: p.name })} className="border-2 border-gray-100 rounded-lg px-2 py-1.5 text-xs font-bold bg-white min-h-[36px]"
+                                                    <Select aria-label={tx('turns.person.group', 'Grupo de {name}', { name: p.name })} className="border-2 border-gray-100 rounded-lg px-2 py-1.5 text-xs font-bold bg-white min-h-[36px]"
                                                         value={p.manual ? p.group : ''} disabled={busy === `p${p.id}`} onChange={(e) => setGroup(p.id, e.target.value)} data-turns-person={p.id}>
                                                         <option value="">{tx('turns.auto', 'Automático')}</option>
                                                         {MEAL_GROUPS.map((g) => <option key={g} value={g}>{tx('turns.manual.group', 'A mano: {g}', { g })}</option>)}
-                                                    </select>
+                                                    </Select>
                                                 ) : p.manual ? <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">{tx('turns.manual', 'A mano')}</span> : null}
                                             </div>
                                         </td>

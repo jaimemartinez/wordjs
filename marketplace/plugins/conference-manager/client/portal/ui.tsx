@@ -24,6 +24,7 @@ import React from "react";
 import { createPortal } from "react-dom";
 import { tidyMoneyInput } from "./feeSplit";
 import { FieldError } from "../lib/useFieldErrors";
+import { Select } from "../lib/Select";
 
 export const cx = (...parts: Array<string | false | null | undefined>): string => parts.filter(Boolean).join(" ");
 
@@ -658,9 +659,9 @@ export function Pager({ page, count, from, to, total, windowPages, size, sizes, 
                     <label className="flex items-center gap-2 text-[11px] font-bold text-gray-500">
                         Mostrar
                         {/* The name starts with the visible word «Mostrar» (WCAG 2.5.3) and says what is counted. */}
-                        <select className="min-h-11 rounded-xl border-2 border-gray-100 bg-white px-2 text-base sm:text-xs font-bold text-gray-700" value={size} onChange={(e) => onSize(Number(e.target.value))} aria-label={pagerSizeLabel(itemsLabel)}>
+                        <Select className="min-h-11 rounded-xl border-2 border-gray-100 bg-white px-2 text-base sm:text-xs font-bold text-gray-700" value={size} onChange={(e) => onSize(Number(e.target.value))} aria-label={pagerSizeLabel(itemsLabel)}>
                             {sizes.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
+                        </Select>
                     </label>
                 )}
             </div>
