@@ -721,6 +721,15 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
         await authRoutes.clearMfaCeiling(U[p]);
     };
     const refusedOnTheMerits = (r: any) => r.status === 400 && r.body.code === 'rest_mfa_invalid';
+    // An account with two-factor authentication, for a door whose step-up would otherwise let the password
+    // alone through to an action this test must not take.
+    const enrolled = async (p: string) => {
+        await User.updateMeta(U[p], mfa.META.lastStep, '-1');
+        await User.updateMeta(U[p], mfa.META.secret, totp.generateSecret());
+        await User.updateMeta(U[p], mfa.META.backup, '[]');
+        await User.updateMeta(U[p], mfa.META.enabled, '1');
+    };
+    const unenrolled = async (p: string) => { await User.updateMeta(U[p], mfa.META.enabled, '0'); };
     let grantTarget = 0;
 
     // One row per door that calls requireSudoPassword — and the rows are CHECKED AGAINST THE SOURCE
@@ -962,14 +971,14 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 200,
         },
-        // Admin → Servers (routes/cluster.ts): the password first; minting a token and removing a node then
-        // ask for the second factor (these accounts have none), and revoking reaches the gateway, which this
-        // process has no control channel to — nothing is minted, removed or revoked.
+        // Admin → Servers (routes/cluster.ts): the password first. These accounts have no 2FA, so the password
+        // is the whole re-authentication (requireStepUp) and every door reaches the gateway, which this process
+        // has no control channel to — nothing is minted, removed or revoked.
         {
             site: 'cluster.ts POST /token', name: 'POST /system/cluster/token', persona: 'doorClusterToken',
             send: (p: string, pw: string) => request(app).post(`${B}/system/cluster/token`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, role: 'backend' }),
-            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+            alsoExpect: (r: any) => r.status === 502 && r.body.code === 'cluster_gateway_unreachable',
         },
         {
             site: 'cluster.ts POST /tokens/revoke', name: 'POST /system/cluster/tokens/revoke', persona: 'doorClusterRevoke',
@@ -981,7 +990,7 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             site: 'cluster.ts POST /nodes/remove', name: 'POST /system/cluster/nodes/remove', persona: 'doorClusterRemove',
             send: (p: string, pw: string) => request(app).post(`${B}/system/cluster/nodes/remove`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, url: 'https://10.0.0.2:4000' }),
-            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+            alsoExpect: (r: any) => r.status === 502 && r.body.code === 'cluster_gateway_unreachable',
         },
         {
             site: 'cluster.ts PUT /forwards', name: 'PUT /system/cluster/forwards', persona: 'doorClusterForwards',
@@ -989,28 +998,29 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ currentPassword: pw, forwards: [] }),
             alsoExpect: (r: any) => r.status === 502 && r.body.code === 'cluster_gateway_unreachable',
         },
-        // Admin → Updates (routes/update.ts): the password first, then the second factor (none here), so
-        // nothing is downloaded, backed up or installed.
+        // Admin → Updates (routes/update.ts): the password (no 2FA on this account, so nothing more), then the
+        // updater refuses a source checkout — nothing is downloaded, backed up or installed.
         {
             site: 'update.ts POST /', name: 'POST /system/update', persona: 'doorUpdate',
             send: (p: string, pw: string) => request(app).post(`${B}/system/update`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, tag: 'v99.0.0' }),
-            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+            alsoExpect: (r: any) => r.status === 409 && r.body.code === 'update_source_checkout',
         },
-        // Turning the network on and off from the panel (Settings → Network): the password comes first,
-        // then the second factor — these accounts have none, so the right password reaches that refusal
-        // and nothing is switched.
+        // Turning the network on and off from the panel (Settings → Network): the password comes first.
+        // Enabling then meets its own requirements (no main address here); the disabling account has 2FA, so
+        // the right password reaches the missing-code refusal. Nothing is switched either way.
         {
             site: 'network.ts POST /enable', name: 'POST /network/enable', persona: 'doorNetworkEnable',
             send: (p: string, pw: string) => request(app).post(`${B}/network/enable`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, admins: [U[p]] }),
-            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+            alsoExpect: (r: any) => r.status === 409 && r.body.code === 'network_requirements_unmet',
         },
         {
             site: 'network.ts POST /disable', name: 'POST /network/disable', persona: 'doorNetworkDisable',
             send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/disable`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw })),
-            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'network_mfa_enrollment_required',
+            prepare: enrolled, cleanup: unenrolled,
+            alsoExpect: (r: any) => r.status === 403 && r.body.code === 'rest_mfa_step_up_required',
         },
         // Network administrators from the panel: the password first; an account that is not an
         // administrator of the main site is then refused, and one that is not listed is a 404.

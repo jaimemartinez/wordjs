@@ -110,6 +110,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Plugins.** Plugin admin screens can import it from `@/components/ui/DatePicker` (a new host module of
     the plugin UI kit) without any core change per plugin; see the plugin guide.
 
+### Changed
+
+- **Updates, the network switch and Admin → Servers no longer demand two-factor authentication.** Installing
+  an update, turning the network on or off, minting a join token and removing a node asked for a
+  two-factor code and refused an account without 2FA ("turn on two-factor authentication first"). They
+  now take the password alone from an account without 2FA, and the password and a current code from an
+  account with it. The panel shows the code field only then. The password is always checked first, and
+  the step-up refuses any request whose password was not verified. The audit log records which proof
+  confirmed the action (`reauth`: `password` or `password+2fa`).
+
 ### Fixed
 
 - **The settings sub-pages use the admin's form kit.** Site address, Interactions (the simple editor and

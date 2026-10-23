@@ -229,7 +229,7 @@ let running = false;
  * Start the update to `tag` (validated against the official releases: newer than this version, with a
  * bundle). Returns at once; the work goes on in the background and Admin → Updates follows it.
  */
-async function startUpdate(input: { tag: unknown; actorUserId: number | null }): Promise<{ to: string }> {
+async function startUpdate(input: { tag: unknown; actorUserId: number | null; reauth?: string }): Promise<{ to: string }> {
     const env = environment();
     if (!env.canUpdate) throw Object.assign(new Error(env.how), { code: `update_${env.reason}`, status: 409 });
     if (running || readState().state === 'running') throw Object.assign(new Error('An update is already running.'), { code: 'update_busy', status: 409 });
@@ -281,7 +281,7 @@ async function startUpdate(input: { tag: unknown; actorUserId: number | null }):
             running = false;
         }
     })();
-    try { await require('./audit').recordAudit(input.actorUserId, 'system.update.start', 'system', tag, { from: current, to: release.version }); } catch { /* recordAudit never throws */ }
+    try { await require('./audit').recordAudit(input.actorUserId, 'system.update.start', 'system', tag, { from: current, to: release.version, reauth: input.reauth || null }); } catch { /* recordAudit never throws */ }
     return { to: release.version };
 }
 

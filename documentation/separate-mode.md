@@ -367,10 +367,12 @@ network, administrators of a single site):
 - **Servers in the cluster** — every node the gateway knows, its role, the routes it serves and the
   gateway's 30-second health verdict (up, down with the last error, not checked yet).
 - **Add a server** — choose the role, pin the address the new machine will advertise and how long the
-  token lasts (1–60 minutes, 15 by default), confirm with your password and a two-factor code. The screen
+  token lasts (1–60 minutes, 15 by default), confirm with your password (and a two-factor code if your
+  account has two-factor authentication). The screen
   shows the `node-join` command to run on the new machine, with the token in it, once.
 - **Remove** — the node stops receiving traffic at once and the gateway refuses its re-registration
-  (`gateway/cluster-removed.json`) until a new join token is minted for its address. Password and code.
+  (`gateway/cluster-removed.json`) until a new join token is minted for its address. Password, and the code
+  with two-factor authentication.
 - **Revoke them all** — burns every unused join token (password).
 
 Every one of these is audited (`cluster.token.create`, `cluster.node.remove`, `cluster.tokens.revoke`, and

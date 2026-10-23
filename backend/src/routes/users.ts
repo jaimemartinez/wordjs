@@ -1066,6 +1066,16 @@ function sudoEndAttempt(rawKey: string): void {
     if (e.n === 0) _sudoInflight.delete(key); else _sudoInflight.set(key, e);
 }
 
+// Set on a request whose current password requireSudoPassword verified. requireStepUp (routes/network.ts)
+// lets an account without two-factor authentication through on its password alone, and only when this is
+// set, so no gated action can ever run with no re-authentication at all.
+const SUDO_VERIFIED = Symbol.for('wordjs.sudoPasswordVerified');
+
+/** Did requireSudoPassword verify this request's current password? */
+function sudoPasswordVerified(req: Request): boolean {
+    return Reflect.get(req, SUDO_VERIFIED) === true;
+}
+
 async function requireSudoPassword(req: Request, res: Response, currentPassword: any): Promise<boolean> {
     // The key comes from the RESOLVED session identity only. Nothing here is derived from a request
     // body, a query string or a header, which is what makes the bucket unreachable from outside.
@@ -1086,6 +1096,7 @@ async function requireSudoPassword(req: Request, res: Response, currentPassword:
         if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
         await User.authenticate(req.user.userLogin, String(currentPassword || ''));
         await sudoClearFails(userId);
+        Object.defineProperty(req, SUDO_VERIFIED, { value: true, configurable: true });
         return false;
     } catch {
         await sudoRecordFail(userId);
@@ -1958,6 +1969,7 @@ module.exports = router;
 // routes/auth.ts) run the SAME throttled sudo check instead of re-implementing it — the drift this repo
 // keeps paying for. Assigned after the export, exactly like routes/auth.ts does with its lockout helpers.
 module.exports.requireSudoPassword = requireSudoPassword;
+module.exports.sudoPasswordVerified = sudoPasswordVerified;
 // The sudo delay POLICY, exported so a test can assert the property that matters — that for EVERY
 // failure count it returns a finite, bounded wait and can never mean "refused" — across the whole
 // domain instead of the handful of counts a route-driven test could afford to reach.

@@ -316,16 +316,12 @@ export default function NetworkSettingsPage() {
         </div>
     );
 
-    const secondFactor = !setup.mfaEnrolled ? (
-        <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800" data-testid="network-setup-mfa-needed">
-            <p className="font-bold">{t("networkSetup.mfaNeededTitle")}</p>
-            <p className="mt-1">{t("networkSetup.mfaNeededHelp")}</p>
-            <Link href="/admin/account" className="mt-2 inline-flex items-center gap-2 font-bold text-amber-900 underline">{t("networkSetup.mfaNeededLink")} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i></Link>
-        </div>
-    ) : (
+    // The password always; a code too when the account has two-factor authentication (without it the
+    // password alone confirms the switch: backend routes/network.ts requireStepUp).
+    const secondFactor = (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Input label={t("network.currentPassword")} icon="fa-lock" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            <Input label={t("networkSetup.mfaCode")} icon="fa-shield-halved" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} required />
+            {setup.mfaEnrolled && <Input label={t("networkSetup.mfaCode")} icon="fa-shield-halved" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} required data-testid="network-setup-mfa-code" />}
         </div>
     );
 
@@ -376,7 +372,7 @@ export default function NetworkSettingsPage() {
                         <p className="text-sm text-gray-600">{t("networkSetup.turnOffHelp")}</p>
                         {secondFactor}
                         {errorBox}
-                        <Button type="submit" variant="danger" icon="fa-power-off" loading={busy} disabled={!setup.mfaEnrolled}>{t("networkSetup.turnOff")}</Button>
+                        <Button type="submit" variant="danger" icon="fa-power-off" loading={busy}>{t("networkSetup.turnOff")}</Button>
                     </form>
                 )}
             </Card>
@@ -440,7 +436,7 @@ export default function NetworkSettingsPage() {
                 </div>
                 {setup.ready ? secondFactor : <p className="text-sm text-gray-500">{t("networkSetup.fixFirst")}</p>}
                 {setup.ready && errorBox}
-                <Button type="submit" icon="fa-power-off" loading={busy} disabled={!setup.ready || !setup.mfaEnrolled || !chosen.length} data-testid="network-setup-enable">
+                <Button type="submit" icon="fa-power-off" loading={busy} disabled={!setup.ready || !chosen.length} data-testid="network-setup-enable">
                     {t("networkSetup.turnOn")}
                 </Button>
                 <p className="text-xs text-gray-400">{setup.restart.automatic ? t("networkSetup.restartAuto") : t("networkSetup.restartManual")}</p>

@@ -118,7 +118,7 @@ function relay(res: Response, r: { status: number; body: any }) {
  * /system/cluster/token:
  *   post:
  *     summary: Mint a single-use join token for a new backend or frontend node
- *     description: The token admits one machine into the cluster's trust, so it takes the password and a current two-factor code, an interactive session at the main address, and is audited. host pins the address the node will advertise (recommended; it also re-admits a node removed earlier at that address). ttlMinutes is 1 to 60 (15 by default). The answer carries the token once and the node-join command to run on the new machine.
+ *     description: The token admits one machine into the cluster's trust, so it takes the password (and a current two-factor code when the account has 2FA), an interactive session at the main address, and is audited. host pins the address the node will advertise (recommended; it also re-admits a node removed earlier at that address). ttlMinutes is 1 to 60 (15 by default). The answer carries the token once and the node-join command to run on the new machine.
  *     tags: [System]
  *     security:
  *       - bearerAuth: []
@@ -128,7 +128,7 @@ function relay(res: Response, r: { status: number; body: any }) {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [role, currentPassword, mfaCode]
+ *             required: [role, currentPassword]
  *             properties:
  *               role:
  *                 type: string
@@ -141,13 +141,14 @@ function relay(res: Response, r: { status: number; body: any }) {
  *                 type: string
  *               mfaCode:
  *                 type: string
+ *                 description: A current two-factor code. Required only when the account has two-factor authentication; without it the password alone confirms.
  *     responses:
  *       200:
  *         description: "{ token, role, host, expiresAt, command, readmitted }"
  *       400:
  *         description: An invalid role, host or ttl (cluster_invalid_*), or a wrong code
  *       403:
- *         description: Not an administrator, a wrong password, no two-factor authentication or no code
+ *         description: Not an administrator, a wrong password, or no code from an account with two-factor authentication
  *       409:
  *         description: A monolith (cluster_monolith) or a gateway without a cluster CA (cluster_not_initialized)
  * /system/cluster/forwards:
@@ -216,7 +217,7 @@ function relay(res: Response, r: { status: number; body: any }) {
  * /system/cluster/nodes/remove:
  *   post:
  *     summary: Take a node out of the cluster
- *     description: Every route the node serves stops receiving traffic, and the gateway refuses its re-registration until a new join token is minted for its host. Password and a current two-factor code; audited.
+ *     description: Every route the node serves stops receiving traffic, and the gateway refuses its re-registration until a new join token is minted for its host. The password (and a current two-factor code when the account has 2FA); audited.
  *     tags: [System]
  *     security:
  *       - bearerAuth: []
@@ -226,7 +227,7 @@ function relay(res: Response, r: { status: number; body: any }) {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [url, currentPassword, mfaCode]
+ *             required: [url, currentPassword]
  *             properties:
  *               url:
  *                 type: string
@@ -234,11 +235,12 @@ function relay(res: Response, r: { status: number; body: any }) {
  *                 type: string
  *               mfaCode:
  *                 type: string
+ *                 description: A current two-factor code. Required only when the account has two-factor authentication; without it the password alone confirms.
  *     responses:
  *       200:
  *         description: "{ removed, routes }"
  *       403:
- *         description: Not an administrator, a wrong password, no two-factor authentication or no code
+ *         description: Not an administrator, a wrong password, or no code from an account with two-factor authentication
  *       404:
  *         description: No registered node has that address (cluster_node_not_found)
  */
@@ -256,11 +258,11 @@ router.post('/token', accountAuthorityOnly, asyncHandler(async (req: Request, re
     const problem = tokenRequestProblem(b);
     if (problem) return res.status(400).json(problem);
     if (await requireSudoPassword(req, res, b.currentPassword)) return;
-    const mfa = await require('./network').requireStepUp(req, res);
-    if (!mfa) return;
+    const reauth = await require('./network').requireStepUp(req, res);
+    if (!reauth) return;
     const r = await gateway('POST', '/cluster/token', { role: b.role, host: b.host, ttlMinutes: b.ttlMinutes });
     if (r.status === 200) {
-        await recordAudit(req.user && req.user.id, 'cluster.token.create', 'cluster', String(r.body.role || ''), { role: r.body.role, host: r.body.host || null, expiresAt: r.body.expiresAt, mfa });
+        await recordAudit(req.user && req.user.id, 'cluster.token.create', 'cluster', String(r.body.role || ''), { role: r.body.role, host: r.body.host || null, expiresAt: r.body.expiresAt, reauth });
     }
     res.set('Cache-Control', 'no-store');
     return relay(res, r);
@@ -292,11 +294,11 @@ router.post('/nodes/remove', accountAuthorityOnly, asyncHandler(async (req: Requ
     if (deploymentMode() === 'monolith') return res.status(409).json({ code: 'cluster_monolith', error: 'This install runs as one process (the monolith); there is no other node.' });
     const b = req.body || {};
     if (await requireSudoPassword(req, res, b.currentPassword)) return;
-    const mfa = await require('./network').requireStepUp(req, res);
-    if (!mfa) return;
+    const reauth = await require('./network').requireStepUp(req, res);
+    if (!reauth) return;
     const url = typeof b.url === 'string' ? b.url.slice(0, 300) : '';
     const r = await gateway('POST', '/cluster/nodes/remove', { url });
-    if (r.status === 200) await recordAudit(req.user && req.user.id, 'cluster.node.remove', 'cluster', url, { url, routes: r.body.routes, mfa });
+    if (r.status === 200) await recordAudit(req.user && req.user.id, 'cluster.node.remove', 'cluster', url, { url, routes: r.body.routes, reauth });
     return relay(res, r);
 }));
 
