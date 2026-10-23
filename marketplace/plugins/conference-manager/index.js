@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.33.3',
+    version: '2.33.4',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -832,7 +832,7 @@ exports.init = async function (wordjs) {
     const health = healthMod.createHealth({ db, T, P, createIndex, createUniqueIndex });
     const mealPriority = createMealPriority({ db, T, P, createIndex, createUniqueIndex });
     // «Autorización de datos» (2.33.0): see server/consent.js.
-    const consent = createConsent({ db, T, P, createIndex, createUniqueIndex });
+    const consent = createConsent({ db, T, P, createIndex, createUniqueIndex, addColumnIfMissing });
     /**
      * Set-based payment recompute: ONE statement for a set of inscriptions. `where` is 'id = ?' |
      * 'id IN (?, ?, …)' | 'conference_id = ?' | '1 = 1'. amount_paid / payment_status come from VALIDATED
@@ -5660,6 +5660,8 @@ exports.init = async function (wordjs) {
         // The site's mail plugin (email:admin). Without it, or without the grant, the link is still created and the
         // coordinator sees «correo no enviado».
         mail: (msg) => wordjs.mail(msg),
+        // The site's language (WPLANG, settings:read), the default «Idioma de los correos» (2.33.4).
+        siteLang: async () => { try { return wordjs.options && wordjs.options.get ? await wordjs.options.get('WPLANG', '') : ''; } catch (e) { return ''; } },
     });
     // The health purge runs at boot and then every six hours (and when the settings are opened).
     consent.purgeDue({ force: true }).catch((e) => console.warn('[conference-manager] health purge:', e && e.message));

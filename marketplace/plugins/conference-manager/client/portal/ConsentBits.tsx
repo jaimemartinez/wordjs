@@ -11,7 +11,8 @@ import React, { useState } from "react";
 import { useToast } from "@/contexts/ToastContext";
 import { Badge, Button, Modal, Notice, labelCls } from "./ui";
 import { consentT } from "../lib/consentI18n";
-import { consentMessage, copyText, whatsappUrl } from "../lib/consentMessage";
+import { consentMessage, copyLangOf, copyText, rememberCopyLang, whatsappUrl } from "../lib/consentMessage";
+import { CopyLangPicker } from "../lib/CopyLangPicker";
 
 export type PortalConsent = {
     state: "pending" | "granted" | "revoked"; granted_at: string | null; revoked_at: string | null;
@@ -44,7 +45,15 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
     const [msg, setMsg] = useState<{ tone: "emerald" | "rose" | "amber"; text: string; link?: string } | null>(null);
     const [copied, setCopied] = useState(false);
     const { addToast } = useToast();
-    const [share, setShare] = useState<{ text: string; phone: string; copied: boolean } | null>(null);
+    // 2.33.4: the message in the e-mail language (or the last one chosen here), switchable in the dialog.
+    const [share, setShare] = useState<{ info: any; lang: string; phone: string; copied: boolean } | null>(null);
+    const shareText = share ? consentMessage(share.lang, share.info) : "";
+    const copyAgain = async () => {
+        if (!share) return;
+        const copied = await copyText(shareText);
+        if (copied) addToast(t("copy.done"), "success");
+        setShare({ ...share, copied });
+    };
     const shareMessage = async () => {
         setBusy(true); setMsg(null);
         try {
@@ -54,10 +63,10 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok) { setMsg({ tone: "rose", text: body.error || "Error" }); return; }
-            const text = consentMessage("es", body);
-            const copied = await copyText(text);
+            const lang = copyLangOf(body.email_lang);
+            const copied = await copyText(consentMessage(lang, body));
             if (copied) addToast(t("copy.done"), "success");
-            setShare({ text, phone: body.phone_wa || "", copied });
+            setShare({ info: body, lang, phone: body.phone_wa || "", copied });
             onChanged && onChanged();
         } catch { setMsg({ tone: "rose", text: "Error de conexión" }); }
         finally { setBusy(false); }
@@ -106,15 +115,17 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
                 <Modal title={share.copied ? t("copy.done") : t("copy.fallback.title")} onClose={() => setShare(null)} size="md" testId="consent-share"
                     footer={(
                         <div className="flex flex-col sm:flex-row gap-2 w-full sm:justify-end">
-                            <a href={whatsappUrl(share.text, share.phone)} target="_blank" rel="noopener noreferrer" data-consent-whatsapp=""
+                            <Button variant="outline" icon="fa-copy" onClick={copyAgain} data-consent-copy-again="">{t("copy.again")}</Button>
+                            <a href={whatsappUrl(shareText, share.phone)} target="_blank" rel="noopener noreferrer" data-consent-whatsapp=""
                                 className="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-2xl bg-emerald-600 text-white font-black uppercase tracking-widest text-[10px]">
                                 <i className="fa-brands fa-whatsapp" aria-hidden="true"></i>{t("copy.whatsapp")}
                             </a>
                             <Button variant="dark" onClick={() => setShare(null)}>{t("copy.close")}</Button>
                         </div>
                     )}>
+                    <CopyLangPicker label={t("copy.lang")} value={share.lang} onChange={(l) => { rememberCopyLang(l); setShare({ ...share, lang: l }); }} />
                     {!share.copied && <Notice tone="amber" icon="fa-hand-pointer">{t("copy.fallback.hint")}</Notice>}
-                    <textarea readOnly rows={9} value={share.text} aria-label={t("copy.fallback.title")} onFocus={(e) => e.currentTarget.select()}
+                    <textarea readOnly rows={9} value={shareText} aria-label={t("copy.fallback.title")} onFocus={(e) => e.currentTarget.select()}
                         className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 text-sm text-gray-800" data-consent-share-text="" />
                     <p className="text-xs text-gray-500">{t("copy.replaces")}</p>
                 </Modal>

@@ -20,9 +20,12 @@ import { apiGet, apiPost, apiPut } from "../../../../../frontend/src/lib/api";
 import { usePerms } from "./perms";
 import { Overlay } from "./Overlay";
 import { consentT } from "../lib/consentI18n";
-import { consentMessage, copyText, whatsappUrl } from "../lib/consentMessage";
+import { consentMessage, copyLangOf, copyText, rememberCopyLang, whatsappUrl } from "../lib/consentMessage";
+import { CopyLangPicker } from "../lib/CopyLangPicker";
+import { Select } from "../lib/Select";
 
 const BASE = "/plugin/conference-manager";
+const LANG_NAMES: Record<string, string> = { es: "Español", en: "English", pt: "Português" };
 const STATE_TONE: Record<string, string> = { pending: "bg-amber-50 text-amber-800 border-amber-200", granted: "bg-emerald-50 text-emerald-800 border-emerald-200", revoked: "bg-rose-50 text-rose-800 border-rose-200" };
 
 export default function ConsentAdmin({ conferenceId }: { conferenceId: number }) {
@@ -68,7 +71,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
         try {
             const body = { conference_id: conferenceId, enabled: !!draft.enabled, policy_url: draft.policy_url || "", policy_version: draft.policy_version, responsible: draft.responsible,
                 contact_email: draft.contact_email, text_general: draft.text_general, text_health: draft.text_health, text_image: draft.text_image,
-                purge_days: Number(draft.purge_days), link_days: Number(draft.link_days) };
+                purge_days: Number(draft.purge_days), link_days: Number(draft.link_days), email_lang: draft.email_lang || '' };
             const r = await apiPut<any>(`${BASE}/consent/settings`, body);
             setSettings(r.settings); setDraft({ ...r.settings, policy_url: r.settings.policy_url_custom });
             addToast(t("admin.saved"), "success");
@@ -76,18 +79,26 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
         } catch (e: any) { setFieldErr(e?.message || "Error"); }
         finally { setSaving(false); }
     };
-    const [share, setShare] = useState<{ name: string; text: string; phone: string; copied: boolean } | null>(null);
+    // 2.33.4: the message in the e-mail language (or the last one chosen here), switchable in the dialog.
+    const [share, setShare] = useState<{ name: string; info: any; lang: string; phone: string; copied: boolean } | null>(null);
+    const shareText = share ? consentMessage(share.lang, share.info) : '';
     const shareMessage = async (p: any) => {
         setBusyId(p.id);
         try {
             const info = await apiPost<any>(`${BASE}/consent/share`, { inscription_id: p.id });
-            const text = consentMessage(language, info);
-            const copied = await copyText(text);
+            const lang = copyLangOf(info.email_lang);
+            const copied = await copyText(consentMessage(lang, info));
             if (copied) addToast(t("copy.done"), "success");
-            setShare({ name: nameOf(p), text, phone: info.phone_wa || "", copied });
+            setShare({ name: nameOf(p), info, lang, phone: info.phone_wa || "", copied });
             load();
         } catch (e: any) { addToast(e?.message || "Error", "error"); }
         finally { setBusyId(null); }
+    };
+    const copyAgain = async () => {
+        if (!share) return;
+        const copied = await copyText(shareText);
+        if (copied) addToast(t("copy.done"), "success");
+        setShare({ ...share, copied });
     };
     const send = async (id: number) => {
         setBusyId(id);
@@ -176,6 +187,16 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                             <label className={label} htmlFor="cs-purge">{t("admin.purge")}</label>
                             <input id="cs-purge" type="number" min={0} max={3650} className={input} value={draft.purge_days} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, purge_days: e.target.value })} />
                             {settings.health_purged_at && <p className="text-[11px] text-emerald-700 mt-1">{t("admin.purge.done", { when: when(settings.health_purged_at) })}</p>}
+                        </div>
+                        <div>
+                            <label className={label} htmlFor="cs-mail-lang">{t("admin.email.lang")}</label>
+                            <Select id="cs-mail-lang" className={input} value={draft.email_lang || ""} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, email_lang: e.target.value })}>
+                                <option value="">{t("admin.email.lang.site", { lang: LANG_NAMES[settings.site_lang] || settings.site_lang })}</option>
+                                <option value="es">Español</option>
+                                <option value="en">English</option>
+                                <option value="pt">Português</option>
+                            </Select>
+                            <p className="text-[11px] text-gray-400 mt-1">{t("admin.email.lang.hint")}</p>
                         </div>
                         <div>
                             <label className={label} htmlFor="cs-days">{t("admin.link.days")}</label>
@@ -273,14 +294,18 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                 <Overlay layer={2} onBackdrop={() => setShare(null)} onEscape={() => setShare(null)}>
                     <div role="dialog" aria-modal="true" aria-labelledby="cm-share-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4" data-consent-share-dialog="">
                         <h3 id="cm-share-title" className="text-lg font-bold text-gray-900">{share.copied ? t("copy.done") : t("copy.fallback.title")} · {share.name}</h3>
+                        <CopyLangPicker label={t("copy.lang")} value={share.lang} onChange={(l) => { rememberCopyLang(l); setShare({ ...share, lang: l }); }} />
                         {!share.copied && <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2" role="status">{t("copy.fallback.hint")}</p>}
-                        <textarea readOnly rows={9} value={share.text} aria-label={t("copy.fallback.title")} onFocus={(e) => e.currentTarget.select()}
+                        <textarea readOnly rows={9} value={shareText} aria-label={t("copy.fallback.title")} onFocus={(e) => e.currentTarget.select()}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-800 font-sans" data-consent-share-text="" />
                         <p className="text-[11px] text-gray-500">{t("copy.replaces")}</p>
                         <div className="flex flex-wrap justify-end gap-2">
                             <button type="button" onClick={(e) => { const box = (e.currentTarget.closest('[role="dialog"]') as HTMLElement)?.querySelector('textarea'); if (box) { box.focus(); box.select(); } }}
                                 className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700">{t("copy.select")}</button>
-                            <a href={whatsappUrl(share.text, share.phone)} target="_blank" rel="noopener noreferrer" className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold" data-consent-whatsapp="">
+                            <button type="button" onClick={copyAgain} className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700" data-consent-copy-again="">
+                                <i className="fa-regular fa-copy mr-1" aria-hidden="true"></i>{t("copy.again")}
+                            </button>
+                            <a href={whatsappUrl(shareText, share.phone)} target="_blank" rel="noopener noreferrer" className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold" data-consent-whatsapp="">
                                 <i className="fa-brands fa-whatsapp mr-1" aria-hidden="true"></i>{t("copy.whatsapp")}
                             </a>
                             <button type="button" onClick={() => setShare(null)} className="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-bold">{t("copy.close")}</button>

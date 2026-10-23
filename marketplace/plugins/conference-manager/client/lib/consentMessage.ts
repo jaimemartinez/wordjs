@@ -49,3 +49,15 @@ export async function copyText(text: string, nav: any = typeof navigator !== 'un
         return true;
     } catch { return false; }
 }
+
+// «Copiar mensaje» in another language (2.33.4): the dialog starts in the conference's e-mail language, or in the
+// last language this staff member chose on this device.
+const COPY_LANG_KEY = 'cm-copy-lang';
+export const COPY_LANGS = ['es', 'en', 'pt'] as const;
+export function copyLangOf(defaultLang?: string | null): string {
+    try { const s = localStorage.getItem(COPY_LANG_KEY); if (s && (COPY_LANGS as readonly string[]).includes(s)) return s; } catch { /* private mode */ }
+    return (COPY_LANGS as readonly string[]).includes(String(defaultLang || '')) ? String(defaultLang) : 'es';
+}
+export function rememberCopyLang(lang: string): void {
+    try { localStorage.setItem(COPY_LANG_KEY, lang); } catch { /* private mode: this visit only */ }
+}

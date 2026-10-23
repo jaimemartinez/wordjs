@@ -509,3 +509,55 @@ test('the e-mail field is found by its label too (a custom «Correo electrónico
     assert.ok(p.mails.some((m: any) => m.to === 'ana@example.org'));
     assert.ok(f);
 });
+
+test('e-mail language (2.33.4): the site language by default, the setting when chosen; e-mails, page and copied message follow it', async () => {
+    const M = require(path.join(PLUGIN_DIR, 'server/consent-mail.js'));
+    // The templates, every language, values escaped and the signed text quoted as signed.
+    const ev = { general: 1, health: 0, image: 1, at_utc: '2030-01-01T00:00:00.000Z', text_sha256: 'abc' };
+    const d = { subject: { name: 'Ana <b>' }, representative: null, policy: { version: '1.0', url: 'https://x.example/p', sha256: 'def' }, text: 'Autorizo a …', contact: 'datos@x.example' };
+    const subjects = { es: 'Autorización registrada', en: 'Consent recorded', pt: 'Autorização registrada' } as Record<string, string>;
+    for (const l of ['es', 'en', 'pt']) {
+        const m = M.confirmationMail(l, { conference: 'Asume', ev, d });
+        assert.ok(m.subject.startsWith(subjects[l]), `${l}: ${m.subject}`);
+        assert.ok(m.text.includes('Autorizo a …'), 'the signed text stays as signed');
+        assert.ok(m.html.includes('Ana &lt;b&gt;') && !m.html.includes('Ana <b>'), 'escaped');
+        assert.ok(M.linkMail(l, { conference: 'Asume', name: 'Ana', link: 'https://x.example/l', days: 14 }).text.includes('https://x.example/l'));
+        assert.ok(M.codeMail(l, { conference: 'Asume', code: '123456' }).subject.includes('123456'));
+    }
+    assert.strictEqual(M.langOf('pt_BR'), 'pt');
+    assert.strictEqual(M.langOf('fr_FR'), null);
+
+    const w = await world();
+    const codeTo = (to: string) => [...w.p.mails].reverse().find((m: any) => m.to === to && /\d{6}/.test(m.subject));
+    // No setting, no site language: Spanish.
+    let st = ok(await w.p.call('get', `/consent/settings?conference_id=${w.cid}`)).settings;
+    assert.deepStrictEqual([st.email_lang, st.site_lang, st.mail_lang], ['', 'es', 'es']);
+    // The site's language (WPLANG) is the default.
+    w.p.setOption('WPLANG', 'en_US');
+    st = ok(await w.p.call('get', `/consent/settings?conference_id=${w.cid}`)).settings;
+    assert.deepStrictEqual([st.email_lang, st.site_lang, st.mail_lang], ['', 'en', 'en']);
+    const id1 = (await w.register({ first_name: 'Ann', email: 'ann@example.org' })).body.id as number;
+    assert.ok(w.p.mails.some((m: any) => m.to === 'ann@example.org' && m.subject.startsWith('Consent to the use of your data')));
+    const t1 = w.linkToken('ann@example.org')!;
+    assert.strictEqual(ok(await w.pub('open', { token: t1 })).view.lang, 'en');
+    ok(await w.pub('code', { token: t1 }, 'ck-ann'));
+    assert.ok(codeTo('ann@example.org').subject.startsWith('Your consent code'));
+    // The setting wins: Portuguese.
+    assert.strictEqual((await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, email_lang: 'fr' } })).status, 400);
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, email_lang: 'pt' } }));
+    const id2 = (await w.register({ first_name: 'João', email: 'joao@example.org' })).body.id as number;
+    assert.ok(w.p.mails.some((m: any) => m.to === 'joao@example.org' && m.subject.startsWith('Autorize o uso dos seus dados')));
+    const t2 = w.linkToken('joao@example.org')!;
+    assert.strictEqual(ok(await w.pub('open', { token: t2 })).view.lang, 'pt');
+    ok(await w.pub('code', { token: t2 }, 'ck-joao'));
+    const c2 = codeTo('joao@example.org');
+    assert.ok(c2.subject.startsWith('Seu código de autorização'));
+    ok(await w.pub('confirm', { token: t2, code: c2.subject.match(/(\d{6})/)[1], ...GRANT }, 'ck-joao'));
+    const done = [...w.p.mails].reverse().find((m: any) => m.to === 'joao@example.org' && /registrada/.test(m.subject));
+    assert.ok(done.subject.startsWith('Autorização registrada') && done.text.includes('[Obligatoria]'), 'Portuguese copy; the signed text as signed');
+    // The copied message follows it too.
+    assert.strictEqual(ok(await w.p.call('post', '/consent/share', { body: { inscription_id: id1 } })).email_lang, 'pt');
+    // Changing the language is not a new policy version.
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}consent_policies WHERE conference_id = ?`, w.cid).n, 1);
+    assert.ok(id2);
+});

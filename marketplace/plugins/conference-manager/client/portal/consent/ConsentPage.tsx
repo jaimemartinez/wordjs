@@ -40,9 +40,22 @@ const tokenFromHash = (): string => {
     const m = /(?:^#|&)t=([0-9a-f]{32})(?:&|$)/.exec(window.location.hash || "");
     return m ? m[1] : "";
 };
+// 2.33.4: the page starts in the conference's e-mail language (view.lang); a language the person picks here is
+// remembered on this device (and wins next time).
+const LANG_KEY = "cm-consent-lang";
+const pickedLang = (): string | null => {
+    try { const s = localStorage.getItem(LANG_KEY); return s ? consentLangOf(s) : null; } catch { return null; }
+};
 const langNow = () => {
     try { const s = localStorage.getItem("wordjs-lang"); if (s) return consentLangOf(s); } catch { /* private mode */ }
     return consentLangOf(typeof navigator !== "undefined" ? navigator.language : "es");
+};
+const LANG_NAMES: Record<string, string> = { es: "Español", en: "English", pt: "Português" };
+/** A server refusal in the page's language (its code), else the server's own words. */
+const errText = (t: (k: string, v?: any) => string, body: any, fallback: string) => {
+    const key = body && body.code ? `err.${body.code}` : "";
+    const s = key ? t(key) : "";
+    return s && s !== key ? s : (body && body.error) || fallback;
 };
 async function post(path: string, body: unknown): Promise<{ status: number; body: any }> {
     const res = await fetch(`${API}/${path}`, {
@@ -56,11 +69,16 @@ async function post(path: string, body: unknown): Promise<{ status: number; body
 export const repLine = (r: { name: string; document: string; relationship: string }) =>
     `Representante legal: ${r.name} (${r.relationship}), documento ${r.document}. Otorga estas autorizaciones en nombre de la persona inscrita, menor de edad.`;
 
-const HEALTH_LABELS_EN = { consent: "We use this only to look after you better (for example, your meal turn). Only the authorised team sees it. You may leave it unanswered.", other: "Other", otherPlaceholder: "Which one?", none: "None", declined: "I prefer not to answer" };
+const HEALTH_LABELS_EN = { consent: "We use this only to look after you better. Only the authorised team sees it. You may leave it unanswered.", other: "Other", otherPlaceholder: "Which one?", none: "None", declined: "I prefer not to answer" };
+const HEALTH_LABELS_PT = { consent: "Usaremos esta informação apenas para atendê-lo melhor. Só a equipe autorizada a vê. Você pode não responder.", other: "Outros", otherPlaceholder: "Qual?", none: "Nenhuma", declined: "Prefiro não responder" };
+const healthLabels = (lang: string) => (lang === "en" ? HEALTH_LABELS_EN : lang === "pt" ? HEALTH_LABELS_PT : HEALTH_LABELS_ES);
 
 export default function ConsentPage() {
-    const [lang] = useState(langNow);
+    const [picked, setPicked] = useState<string | null>(pickedLang);
+    const [serverLang, setServerLang] = useState<string | null>(null);
+    const lang = picked || serverLang || langNow();
     const t = useMemo(() => consentT(lang), [lang]);
+    const chooseLang = (l: string) => { setPicked(l); try { localStorage.setItem(LANG_KEY, l); } catch { /* private mode: this visit only */ } };
     const [token] = useState(tokenFromHash);
     const [state, setState] = useState<State>({ kind: "loading" });
     const [busy, setBusy] = useState(false);
@@ -82,7 +100,7 @@ export default function ConsentPage() {
         if (!token) { setState({ kind: "error", code: "link" }); return; }
         try {
             const r = await post("open", { token });
-            if (r.status === 200 && r.body.view) setState({ kind: "form", view: r.body.view });
+            if (r.status === 200 && r.body.view) { setServerLang(r.body.view.lang ? consentLangOf(r.body.view.lang) : null); setState({ kind: "form", view: r.body.view }); }
             else setState({ kind: "error", code: r.status >= 500 && r.status !== 503 ? "network" : (r.body.code || "link") });
         } catch { setState({ kind: "error", code: "network" }); }
     }, [token]);
@@ -151,7 +169,7 @@ export default function ConsentPage() {
         if (!boxes.general) e.general = t("page.general.missing");
         if (boxes.health && view.health_field) {
             const he = healthAnswerError({ is_required: 0 }, health);
-            if (he === "other") e.health = lang === "en" ? "Write which other condition." : "Escribe cuál es la otra condición.";
+            if (he === "other") e.health = t("page.health.other");
         }
         if (view.needs_email && !/^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]{2,}$/.test(email.trim())) e.email = t("page.email.missing");
         if (!forCode && !/^\d{6}$/.test(code)) e.code = t("page.code.missing");
@@ -171,8 +189,8 @@ export default function ConsentPage() {
             const r = await post("code", { token, user_agent: navigator.userAgent, ...(view.needs_email ? { email: email.trim() } : {}) });
             if (r.status === 200) { setCodeSent(true); countdown(r.body.resend_in || 60); setNote({ tone: "blue", text: t("page.code.sent", { email: r.body.email_masked || view.email_masked }) }); }
             else if (r.status === 410) setState({ kind: "error", code: r.body.code || "link" });
-            else if (r.body.field === "email") { setErrors({ email: r.body.error }); focusFirst({ email: r.body.error }); }
-            else { if (r.body.resend_in) countdown(r.body.resend_in); setNote({ tone: "rose", text: r.body.error || t("page.network") }); }
+            else if (r.body.field === "email") { const m = errText(t, r.body, t("page.email.missing")); setErrors({ email: m }); focusFirst({ email: m }); }
+            else { if (r.body.resend_in) countdown(r.body.resend_in); setNote({ tone: "rose", text: errText(t, r.body, t("page.network")) }); }
         } catch { setNote({ tone: "rose", text: t("page.network") }); }
         finally { setBusy(false); }
     };
@@ -196,11 +214,12 @@ export default function ConsentPage() {
             if (r.status === 410) { setState({ kind: "error", code: r.body.code || "link" }); return; }
             const field = r.body.field === "representative" ? "rep" : r.body.field || "";
             if (field) {
-                const msg = r.body.tries_left ? `${r.body.error} ${t("page.code.tries", { n: r.body.tries_left })}` : r.body.error;
+                const base = errText(t, r.body, t("page.network"));
+                const msg = r.body.tries_left ? `${base} ${t("page.code.tries", { n: r.body.tries_left })}` : base;
                 setErrors({ [field]: msg });
                 if (r.body.code === "code_burnt" || r.body.code === "code_expired" || r.body.code === "nocode") { setCodeSent(false); setCode(""); }
                 focusFirst({ [field]: msg });
-            } else setNote({ tone: "rose", text: r.body.error || t("page.network") });
+            } else setNote({ tone: "rose", text: errText(t, r.body, t("page.network")) });
         } catch { setNote({ tone: "rose", text: t("page.network") }); }
         finally { setBusy(false); }
     };
@@ -224,9 +243,17 @@ export default function ConsentPage() {
         <main className="min-h-dvh bg-gray-100 px-4 py-6 sm:py-10" data-consent-page="form">
             <form onSubmit={submit} noValidate className="mx-auto w-full max-w-xl space-y-4">
                 <header className="text-center space-y-2 pt-2">
+                    <div className="flex justify-end" role="group" aria-label={t("page.lang")} data-consent-lang="">
+                        {["es", "en", "pt"].map((l) => (
+                            <button key={l} type="button" lang={l} aria-pressed={lang === l} onClick={() => chooseLang(l)}
+                                className={`min-h-[36px] px-3 rounded-full text-xs font-bold ${lang === l ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-200"}`} data-consent-lang-option={l}>
+                                {LANG_NAMES[l]}
+                            </button>
+                        ))}
+                    </div>
                     <div className="w-14 h-14 shrink-0 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-2xl"><i className="fa-solid fa-file-signature" aria-hidden="true"></i></div>
                     <h1 className="text-2xl font-black text-gray-900">{t("page.title")}</h1>
-                    <p className="text-[11px] font-black uppercase tracking-widest text-gray-500">Conferencia: {view.conference}</p>
+                    <p className="text-[11px] font-black uppercase tracking-widest text-gray-500">{t("page.conference")}: {view.conference}</p>
                 </header>
 
                 <section className={card}>
@@ -236,7 +263,7 @@ export default function ConsentPage() {
                     {view.state === "granted" && <p className="text-sm text-blue-800 bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3">{t("page.already")}</p>}
                     <a href={view.policy.url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between gap-3 rounded-2xl border-2 border-gray-100 hover:border-blue-200 px-4 py-3 min-h-[52px]" data-consent-policy="">
                         <span className="min-w-0">
-                            <span className="block text-sm font-bold text-blue-700">Política de Tratamiento de Datos</span>
+                            <span className="block text-sm font-bold text-blue-700">{t("page.policy.name")}</span>
                             <span className="block text-xs text-gray-500">{t("page.policy.version", { v: view.policy.version })} · <span style={{ overflowWrap: "anywhere" }}>{view.policy.url}</span></span>
                         </span>
                         <i className="fa-solid fa-arrow-up-right-from-square text-gray-400" aria-hidden="true"></i>
@@ -293,7 +320,7 @@ export default function ConsentPage() {
                             <p className="text-sm font-bold text-gray-900">{view.health_field.label || t("page.health.title")}</p>
                             <p className="text-xs text-gray-500">{t("page.health.hint")}</p>
                             <HealthConditionsInput id="consent-health" field={view.health_field} value={health} onChange={(v) => { setHealth(v); setErrors({ ...errors, health: "" }); }}
-                                error={errors.health || null} labels={lang === "en" ? HEALTH_LABELS_EN : HEALTH_LABELS_ES} />
+                                error={errors.health || null} labels={healthLabels(lang)} />
                         </div>
                     )}
                     {box("image", view.texts.image, false)}
