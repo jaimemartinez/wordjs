@@ -90,11 +90,10 @@ describe('database TLS upgrade note', () => {
             assert.ok(section.includes(must), `the note covers ${must}`);
         }
         const changelog = fs.readFileSync(path.join(REPO, 'CHANGELOG.md'), 'utf8');
-        // [Unreleased] plus the newest release: a version bump moves the entry from the first to the second.
-        const start = changelog.indexOf('## [Unreleased]');
-        const latest = changelog.indexOf('\n## [', start + 5);
-        const recent = changelog.slice(start, changelog.indexOf('\n## [', latest + 5));
-        assert.match(recent, /Upgrade note/);
-        assert.ok(recent.includes(`database.md#${anchor}`), 'the CHANGELOG links the note');
+        // The note shipped once (2.8.0) and stays in that release's section; every later version bump moves
+        // the newest sections down, so look for the one section that carries it rather than a fixed position.
+        const sections = changelog.split(/\n(?=## \[)/);
+        const carrying = sections.find((s: string) => /Upgrade note/.test(s) && s.includes(`database.md#${anchor}`));
+        assert.ok(carrying, 'the CHANGELOG has a section with the upgrade note that links database.md#' + anchor);
     });
 });
