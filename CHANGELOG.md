@@ -8,6 +8,28 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Settings → Emails: every message the site sends is editable, and arrives in a proper HTML layout.**
+  - The core's messages (email verification, sign-up with an existing address, password reset, the account
+    email test, site address changed, comment awaiting moderation, new comment on your entry) come from one
+    registry, with their default text in English, Spanish and Portuguese. Until now they were English only.
+  - Each message is edited per language: the subject, the body with the editor's own text editing (paragraphs,
+    bold, italic, lists, links; no HTML to write) and the button text. Values such as `{site_name}`,
+    `{user_name}` and `{expires}` are inserted from chips. Every value is escaped when the message is built.
+  - The button's link (the reset or verification link) is added by the site when it sends the message, outside
+    the editable text. An edit cannot remove it, change where it points or copy its token into another field.
+    The site-address notice keeps no link at all.
+  - Saved bodies keep only paragraphs, emphasis, lists, quotes, headings and http/https/mailto links.
+  - One layout for every message: the site logo or title, the message on a card, a button in the theme's
+    primary colour (or one the administrator picks), the site address in the footer and an optional footer
+    line. It is table-based with inline styles for mail apps, and has dark-mode colours. A plain-text version
+    is generated from the same message and sent with it.
+  - The screen has a live preview of the unsaved text (desktop or mobile width, light or dark, HTML or plain
+    text), **Send a test to me** and **Reset to default**. Account messages follow the language of the person
+    who filled the form; the others follow the site language.
+  - Administrators only. Editing or resetting a sign-in or site-address message asks for the current password.
+    Every change is written to the audit log, with the message and language but never the text.
+  - Comment notification excerpts are now read with an HTML parser instead of a pattern.
+
 - **conference-manager 2.33.0: each registrant authorizes the processing of their data, and signs with a code.**
   - A new **«Autorizaciones»** tab asks every registrant of a conference for their own data processing
     consent. It is off until the administrator turns it on, and everything is set there: the policy's address

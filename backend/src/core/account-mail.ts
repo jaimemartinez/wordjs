@@ -308,14 +308,16 @@ async function sendTest(to: string): Promise<void> {
     const smtp = await readSmtp();
     if (!smtp) throw new AccountMailError('Configure the mail server first.', 409, 'account_mail_not_configured');
     if (!EMAIL_RE.test(String(to || '')) || /[\r\n]/.test(String(to))) throw new AccountMailError('Enter the address to send the test to.');
-    const siteName = String((await opts().getOption('blogname', 'WordJS')) || 'WordJS');
+    // The words come from the editable template (Settings → Emails), in the site's language.
+    const m = await require('./email-templates').renderEmail('account.mail_test', {});
     const transport = await smtpTransport(smtp);
     try {
         await transport.sendMail({
             from: smtp.fromName ? { name: smtp.fromName, address: smtp.fromAddress } : smtp.fromAddress,
             to,
-            subject: `${siteName}: account email test`,
-            text: `This is a test from ${siteName}. Password-reset and verification messages will be sent this way.`,
+            subject: m.subject,
+            text: m.text,
+            html: m.html,
         });
     } catch (e: any) {
         // The relay's answer, without credentials (nodemailer never puts the password in the message).

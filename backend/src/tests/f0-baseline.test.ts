@@ -185,6 +185,7 @@ describe('F0 live REST characterization', () => {
             dbMigration: '/api/v1/db-migration',
             contentAccess: '/api/v1/content-access',
             editor: '/api/v1/editor',
+            emailTemplates: '/api/v1/email-templates',
         });
     });
 

@@ -1483,20 +1483,14 @@ async function tellAdmins(message: string) {
                 transports: ['db', 'sse'],
             });
         }
-        const send = require('./mail-provider').sendMailFn();
-        if (typeof send === 'function') {
-            const { getOption } = require('./options');
-            const to = String((await getOption('admin_email', '')) || '').trim();
-            if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
-                const siteName = String((await getOption('blogname', 'WordJS')) || 'WordJS');
-                const text = `${message}\n\nIf you did not expect this change, sign in to your site the way you usually do and review Settings → Site address. This message contains no links on purpose.`;
-                // The one HTML escaper every transactional mail body uses.
-                const { escHtml: escape } = require('./formatting');
-                // Handed to the mail provider, not waited for: this runs inside the serial queue, and every
-                // other change (and the watcher) would otherwise wait on the mail server.
-                Promise.resolve(send({ to, subject: `${siteName}: site address changed`, text, html: `<p>${escape(text).replace(/\n\n/g, '</p><p>')}</p>` }))
-                    .catch((e: any) => warn(`could not email the administrators: ${e && e.message}`));
-            }
+        const { getOption } = require('./options');
+        const to = String((await getOption('admin_email', '')) || '').trim();
+        if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
+            // The editable template (core/email-templates, "site.address_changed") holds the words; it has
+            // no button and the layout writes the address as text. Handed to the mail provider, not waited
+            // for: this runs inside the serial queue, and every other change (and the watcher) would
+            // otherwise wait on the mail server.
+            await require('./email-templates').sendTemplated('site.address_changed', to, { values: { change: message } });
         }
     } catch (e: any) {
         warn(`could not notify the administrators: ${e && e.message}`);

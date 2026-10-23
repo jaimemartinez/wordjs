@@ -21,7 +21,6 @@
  */
 const { addAction, removeAction } = require('./hooks');
 const { getOption } = require('./options');
-const { escHtml } = require('./formatting');
 const log = require('./module-logger').moduleLogger('core/comment-notify');
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -34,17 +33,12 @@ function isOn(v: any): boolean {
     return s !== '' && s !== '0' && s !== 'false' && s !== 'off';
 }
 
-/** The comment's plain text, collapsed and capped — never its HTML. */
+/**
+ * The comment's plain text, collapsed and capped — never its HTML. Stored content is sanitized HTML; an
+ * HTML parser reads it back to text (references decoded), and the renderer escapes it again.
+ */
 function excerptOf(content: any, max = 500): string {
-    const text = String(content || '')
-        .replace(/<[^>]*>/g, ' ')
-        // Stored content is sanitized HTML: decode the references it holds back to plain text (the
-        // html part escapes it again).
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
-        .replace(/&amp;/g, '&')
-        .replace(/\s+/g, ' ')
-        .trim();
+    const text = require('./email-templates').plainText(String(content || '')).replace(/\s+/g, ' ').trim();
     return text.length > max ? text.slice(0, max - 1) + '…' : text;
 }
 
@@ -66,31 +60,27 @@ async function noticesFor(commentId: number): Promise<Notice[]> {
     const post = await Post.findById(comment.commentPostId);
     if (!post) return [];
 
-    const siteName = String((await getOption('blogname', 'WordJS')) || 'WordJS');
     const title = String(post.postTitle || '').trim() || `#${post.id}`;
     const who = String(comment.commentAuthor || '').trim() || 'Someone';
-    const excerpt = excerptOf(comment.commentContent);
     let base: string;
     try { base = String(await require('./site-address').linkBase()).replace(/\/+$/, ''); } catch { base = ''; }
-    const reviewUrl = base ? `${base}/admin/comments` : '';
-
-    const build = (subject: string, lead: string): Omit<Notice, 'to'> => {
-        const text = [lead, excerpt ? `“${excerpt}”` : '', reviewUrl ? `Review it: ${reviewUrl}` : '']
-            .filter(Boolean).join('\n\n');
-        const html =
-            `<p>${escHtml(lead)}</p>` +
-            (excerpt ? `<blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #ccc;color:#333">${escHtml(excerpt)}</blockquote>` : '') +
-            (reviewUrl ? `<p><a href="${escHtml(reviewUrl)}">Review it in the admin</a></p>` : '');
-        return { subject, text, html };
+    // The words come from the editable templates (Settings → Emails); the review link is the layout's
+    // button. With no usable link base there is nothing to point at, so no message is built.
+    if (!/^https?:\/\//.test(base)) return [];
+    const emailTemplates = require('./email-templates');
+    const build = async (id: string): Promise<Omit<Notice, 'to'>> => {
+        const m = await emailTemplates.renderEmail(id, {
+            values: { post_title: title, comment_author: who, comment_excerpt: excerptOf(comment.commentContent) },
+            actionUrl: `${base}/admin/comments`,
+        });
+        return { subject: m.subject, text: m.text, html: m.html };
     };
 
     const out: Notice[] = [];
     if (status === '0') {
         if (!isOn(await getOption('moderation_notify', 1))) return [];
         const to = String((await getOption('admin_email', '')) || '').trim();
-        if (EMAIL_RE.test(to)) {
-            out.push({ to, ...build(`[${siteName}] Please moderate: “${title}”`, `A new comment by ${who} on “${title}” is waiting for your approval.`) });
-        }
+        if (EMAIL_RE.test(to)) out.push({ to, ...(await build('comments.moderation')) });
         return out;
     }
 
@@ -103,7 +93,7 @@ async function noticesFor(commentId: number): Promise<Notice[]> {
     const ownComment = (Number(comment.userId) > 0 && Number(comment.userId) === Number(post.authorId)) ||
         String(comment.commentAuthorEmail || '').trim().toLowerCase() === to.toLowerCase();
     if (ownComment) return [];
-    out.push({ to, ...build(`[${siteName}] Comment: “${title}”`, `${who} commented on your entry “${title}”.`) });
+    out.push({ to, ...(await build('comments.new')) });
     return out;
 }
 

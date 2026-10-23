@@ -49,6 +49,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     settings: '/settings',
     siteAddress: '/site-address',
     accountMail: '/account-mail',
+    emailTemplates: '/email-templates',
     network: '/network',
     plugins: '/plugins',
     pluginRoutes: '/plugin/{slug}',
@@ -223,6 +224,9 @@ router.use('/ai', require('./ai'));
 // How password-reset and verification email is delivered (core/account-mail): admin-only, every write
 // re-authenticated and audited.
 router.use('/account-mail', require('./account-mail'));
+// Settings → Emails (core/email-templates): the words and layout of every core message. Admin-only; edits
+// of sign-in and site-integrity messages re-authenticated; every write audited.
+router.use('/email-templates', require('./email-templates'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 // Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,

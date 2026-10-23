@@ -1708,6 +1708,43 @@ export const accountMailApi = {
         apiPut<AccountMailStatus>("/account-mail/provider", { slug, allowed, currentPassword }),
 };
 
+// ── Settings → Emails ─────────────────────────────────────────────────────────────────────────────
+// Backend routes/email-templates.ts (core/email-templates). Editing a security message (sign-in mail, the
+// site-address notice) needs the current password; the button's link is never part of the text.
+export type EmailLang = "en" | "es" | "pt";
+export type EmailLocalized = Record<EmailLang, string>;
+export interface EmailTemplateSummary {
+    id: string;
+    group: "account" | "site" | "comments" | "plugin";
+    name: EmailLocalized;
+    description: EmailLocalized;
+    security: boolean;
+    hasAction: boolean;
+    noLinks: boolean;
+    source: string | null;
+    placeholders: Array<{ key: string; label: EmailLocalized }>;
+    customized: EmailLang[];
+}
+export interface EmailTemplateText { subject: string; body: string; actionLabel: string }
+export interface EmailTemplateDetail extends EmailTemplateSummary {
+    languages: Record<EmailLang, EmailTemplateText & { customized: boolean; defaults: EmailTemplateText }>;
+}
+export interface EmailLayoutSettings { accentColor: string; backgroundColor: string; showLogo: boolean; footerText: string; themeAccent?: string }
+export interface EmailRendered { subject: string; html: string; text: string; lang: EmailLang }
+export const emailTemplatesApi = {
+    list: () => apiGet<{ templates: EmailTemplateSummary[]; layout: EmailLayoutSettings; languages: EmailLang[]; siteLanguage: EmailLang }>("/email-templates"),
+    get: (id: string) => apiGet<EmailTemplateDetail>(`/email-templates/${encodeURIComponent(id)}`),
+    save: (id: string, lang: EmailLang, data: EmailTemplateText & { currentPassword?: string }) =>
+        apiPut<EmailTemplateDetail>(`/email-templates/${encodeURIComponent(id)}/${lang}`, data),
+    reset: (id: string, lang: EmailLang | undefined, currentPassword?: string) =>
+        apiPost<EmailTemplateDetail>(`/email-templates/${encodeURIComponent(id)}/reset`, { lang, currentPassword }),
+    preview: (id: string, lang: EmailLang, draft?: Partial<EmailTemplateText>, layout?: Partial<EmailLayoutSettings>) =>
+        apiPost<EmailRendered>(`/email-templates/${encodeURIComponent(id)}/preview`, { lang, draft, layout }),
+    test: (id: string, lang: EmailLang, draft?: Partial<EmailTemplateText>) =>
+        apiPost<{ sent: boolean; to: string }>(`/email-templates/${encodeURIComponent(id)}/test`, { lang, draft }),
+    saveLayout: (layout: EmailLayoutSettings) => apiPut<EmailLayoutSettings>("/email-templates/layout", layout),
+};
+
 // ── AI provider layer ──────────────────────────────────────────────────────────────────────────────
 // Backend routes/ai.ts. The provider key is write-only: settings come back with `hasKey`/`keyHint` only.
 export type AiProviderId = "" | "anthropic" | "openai-compatible";

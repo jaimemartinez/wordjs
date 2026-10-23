@@ -98,7 +98,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword', 'doorDeleteMe'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorEmailTemplateSave', 'doorEmailTemplateReset', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkAddress', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -830,6 +830,20 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             site: 'account-mail.ts PUT /provider', name: 'PUT /account-mail/provider', persona: 'doorAccountMailProvider',
             send: (p: string, pw: string) => request(app).put(`${B}/account-mail/provider`).set('Authorization', asUser(p))
                 .send({ slug: '!!', allowed: true, currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
+        },
+        // Settings → Emails (routes/email-templates.ts): a security message's edit and reset check the
+        // password BEFORE the text, so an empty subject / an unknown language are refused on the merits.
+        {
+            site: 'email-templates.ts PUT /:id/:lang', name: 'PUT /email-templates/:id/:lang', persona: 'doorEmailTemplateSave',
+            send: (p: string, pw: string) => request(app).put(`${B}/email-templates/account.password_reset/en`).set('Authorization', asUser(p))
+                .send({ subject: '', body: '<p>x</p>', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
+        },
+        {
+            site: 'email-templates.ts POST /:id/reset', name: 'POST /email-templates/:id/reset', persona: 'doorEmailTemplateReset',
+            send: (p: string, pw: string) => request(app).post(`${B}/email-templates/account.password_reset/reset`).set('Authorization', asUser(p))
+                .send({ lang: 'xx', currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
         },
         // The site-address writes (routes/site-address.ts): the password is checked BEFORE the body, so a

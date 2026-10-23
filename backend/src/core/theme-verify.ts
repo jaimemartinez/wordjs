@@ -426,4 +426,4 @@ function verifyTheme(slug: string, design: any, opts: VerifyOpts = {}): VerifyRe
   return { slug, ok: mismatches.length === 0, matches, mismatches, unmapped };
 }
 
-module.exports = { verifyTheme, normalizeColor };
+module.exports = { verifyTheme, normalizeColor, parseRootTokens };
