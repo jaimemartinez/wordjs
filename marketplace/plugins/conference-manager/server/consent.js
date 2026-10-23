@@ -29,7 +29,8 @@
  *      same version: the administrator must publish a new version, so every record proves what it accepted.
  *   5. A confirmation e-mail tells the person what they accepted, with the policy link.
  *   6. Coordinators see each person's state (pendiente / autorizada with its date / revocada) and can resend the
- *      link; the admin exports one person's evidence (a data protection authority's request).
+ *      link, or copy a message with a fresh link to send by hand (WhatsApp, 2.33.2: logged «link_shared», no
+ *      e-mail); the admin exports one person's evidence (a data protection authority's request).
  *   7. N days after the conference ends (30 by default) the health answers of the conference are deleted; the
  *      evidence stays.
  *
@@ -479,38 +480,77 @@ function createConsent(base) {
         const conf = await conferenceOf(ins.conference_id);
         const form = await formOf(ins.conference_id);
         const email = await emailOf(ins, form);
-        if (!email) throw httpError(400, 'Para pedir la autorización de datos, la persona necesita un correo electrónico válido (el de su padre, madre o representante si es menor de edad).');
+        if (!email) throw httpError(400, NO_EMAIL);
         const s = await settingsOf(ins.conference_id);
         const prior = await requestOf(ins.id);
         if (!force && prior && prior.link_sent_s && !Number(prior.mail_failed) && Date.now() - Number(prior.link_sent_s) * 1000 < LIMITS.linkResendGapMs) throw httpError(429, 'Acabamos de enviar el enlace. Espera un minuto para reenviarlo.');
-        const token = String(await D.randomToken(16));
-        const expires = nowS() + s.link_days * 86400;
-        const base = await D.siteLinkBase();
-        const link = `${base || ''}${LINK_PATH}${token}`;
+        const { token, link, expires } = await newToken(s);
         const name = (await D.personWithName(ins)).name || '';
         const sent = await mailLink(conf, email, link, name, s.link_days);
-        let requestId;
-        if (prior) {
-            // A revoked or granted person asked again keeps that state until they sign the new link.
-            await db.run(`UPDATE ${T.consentRequests} SET email = ?, token_hash = ?, token_expires_s = ?, link_sent_s = ?, mail_failed = ?, updated_s = ? WHERE id = ?`,
-                [email, sha256(token), expires, nowS(), sent ? 0 : 1, nowS(), prior.id]);
-            requestId = prior.id;
-        } else {
-            try {
-                const r = await db.run(`INSERT INTO ${T.consentRequests} (conference_id, inscription_id, email, token_hash, token_expires_s, link_sent_s, mail_failed, state, updated_s) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-                    [ins.conference_id, ins.id, email, sha256(token), expires, nowS(), sent ? 0 : 1, nowS()]);
-                requestId = r.lastID;
-            } catch (e) {
-                // A concurrent first link won the UNIQUE index: this one replaces its token.
-                const again = await requestOf(ins.id);
-                await db.run(`UPDATE ${T.consentRequests} SET email = ?, token_hash = ?, token_expires_s = ?, link_sent_s = ?, mail_failed = ?, updated_s = ? WHERE id = ?`,
-                    [email, sha256(token), expires, nowS(), sent ? 0 : 1, nowS(), again.id]);
-                requestId = again.id;
-            }
-        }
+        const requestId = await storeToken(ins, email, token, expires, { mailSent: sent });
         await append({ conference_id: ins.conference_id, inscription_id: ins.id, request_id: requestId, kind: 'link_sent', email, actor, data: { via, mail_sent: sent, link_expires_utc: isoUtc(expires * 1000) } });
         const now = await requestOf(ins.id);
         return { state: now.state, sent, link, email_masked: maskEmail(email) };
+    }
+    const NO_EMAIL = 'Para pedir la autorización de datos, la persona necesita un correo electrónico válido (el de su padre, madre o representante si es menor de edad).';
+    async function newToken(s) {
+        const token = String(await D.randomToken(16));
+        const base = await D.siteLinkBase();
+        return { token, link: `${base || ''}${LINK_PATH}${token}`, expires: nowS() + s.link_days * 86400 };
+    }
+    /**
+     * The person's live token becomes `token` (any older link stops working). `mailSent` true / false records an
+     * e-mailed link (its time and whether the mail left); undefined (a link shared by hand) leaves both alone.
+     * Returns the request id.
+     */
+    async function storeToken(ins, email, token, expires, { mailSent } = {}) {
+        const mailed = mailSent !== undefined;
+        const sets = ['email = ?', 'token_hash = ?', 'token_expires_s = ?', ...(mailed ? ['link_sent_s = ?', 'mail_failed = ?'] : []), 'updated_s = ?'];
+        const vals = [email, sha256(token), expires, ...(mailed ? [nowS(), mailSent ? 0 : 1] : []), nowS()];
+        const update = (id) => db.run(`UPDATE ${T.consentRequests} SET ${sets.join(', ')} WHERE id = ?`, [...vals, id]);
+        // A revoked or granted person asked again keeps that state until they sign the new link.
+        const prior = await requestOf(ins.id);
+        if (prior) { await update(prior.id); return Number(prior.id); }
+        try {
+            const r = await db.run(`INSERT INTO ${T.consentRequests} (conference_id, inscription_id, email, token_hash, token_expires_s, link_sent_s, mail_failed, state, updated_s) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+                [ins.conference_id, ins.id, email, sha256(token), expires, mailed ? nowS() : null, mailed && !mailSent ? 1 : 0, nowS()]);
+            return Number(r.lastID);
+        } catch (e) {
+            // A concurrent first link won the UNIQUE index: this one replaces its token.
+            const again = await requestOf(ins.id);
+            await update(again.id);
+            return Number(again.id);
+        }
+    }
+    /** The person's phone as the form has it (the field roled 'phone', typed tel, or named like a phone), or ''. */
+    async function phoneOf(ins, form) {
+        const usable = form.filter(f => D.isFieldColumn(f.name));
+        const f = usable.find(x => x.role === 'phone') || usable.find(x => x.type === 'tel' || x.type === 'phone')
+            || usable.find(x => /^(phone|telefono|tel[eé]fono|celular|movil|m[oó]vil|whatsapp)$/i.test(String(x.name)));
+        return f ? clean(ins[f.name], 40) : '';
+    }
+    /**
+     * «Copiar mensaje» (2.33.2): a NEW single-use link to send by hand (WhatsApp, …) — no e-mail leaves, the
+     * request is not marked e-mailed, and the log gets a «link_shared» row. The signature itself is unchanged: the
+     * code still goes to the person's e-mail. Returns what the message needs (the staff screen writes it in its
+     * own language).
+     */
+    async function shareLink(ins, { actor, via, httpError }) {
+        const conf = await conferenceOf(ins.conference_id);
+        const form = await formOf(ins.conference_id);
+        const email = await emailOf(ins, form);
+        if (!email) throw httpError(400, NO_EMAIL);
+        const s = await settingsOf(ins.conference_id);
+        const { token, link, expires } = await newToken(s);
+        const requestId = await storeToken(ins, email, token, expires);
+        await append({ conference_id: ins.conference_id, inscription_id: ins.id, request_id: requestId, kind: 'link_shared', email, actor, data: { via, channel: 'manual', link_expires_utc: isoUtc(expires * 1000) } });
+        const now = await requestOf(ins.id);
+        const name = (await D.personWithName(ins)).name || '';
+        return {
+            state: now.state, link, email_masked: maskEmail(email), first_name: String(name).split(' ')[0] || '',
+            conference: conf ? conf.name : '', policy_version: s.policy_version, policy_url: s.policy_url, link_days: s.link_days,
+            phone: await phoneOf(ins, form),
+        };
     }
 
     // ── one-time codes: only their salted hash, in memory ──
@@ -797,6 +837,19 @@ function createConsent(base) {
                 res.json(await issueLink(ins, { actor: actorOf(req), via: 'admin', httpError }));
             } catch (e) { sendError(res, e); }
         });
+        // POST /consent/share { inscription_id } → a new link and what the message says, for «Copiar mensaje»
+        // (inscriptions:manage). No e-mail leaves.
+        http.route('post', '/consent/share', { auth: true }, async (req, res) => {
+            if (!await allow(req, res, 'inscriptions', 'manage')) return;
+            try {
+                const id = positiveInt((req.body || {}).inscription_id);
+                const ins = id ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
+                if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+                if (!await isEnabled(ins.conference_id)) return res.status(409).json({ error: 'Esta conferencia no pide la autorización de datos.' });
+                if (ins.status === 'cancelled') return res.status(409).json({ error: 'La inscripción está cancelada.' });
+                res.json(await shareLink(ins, { actor: actorOf(req), via: 'admin', httpError }));
+            } catch (e) { sendError(res, e); }
+        });
         // POST /consent/revoke { inscription_id, general, health, image, note } — the person revoked (by mail, …):
         // a NEW row. Revoking health deletes the answers; revoking the general one revokes all (inscriptions:manage).
         http.route('post', '/consent/revoke', { auth: true }, async (req, res) => {
@@ -852,6 +905,21 @@ function createConsent(base) {
             } catch (e) { sendError(res, e); }
         });
 
+        // Portal: POST /portal/consent/share { inscription_id } — the coordinator's «Copiar mensaje» (own location).
+        http.route('post', '/portal/consent/share', async (req, res) => {
+            const location = await resolvePortalLocation(req);
+            if (!location) return res.status(401).json({ error: 'No token' });
+            try {
+                const id = positiveInt((req.body || {}).inscription_id);
+                const ins = id ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ? AND location_id = ? AND conference_id = ?`, [id, location.id, location.conference_id]) : null;
+                if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+                if (!await isEnabled(ins.conference_id)) return res.status(409).json({ error: 'Esta conferencia no pide la autorización de datos.' });
+                if (ins.status === 'cancelled') return res.status(409).json({ error: 'La inscripción está cancelada.' });
+                if (await isGranted(id)) return res.status(409).json({ error: 'Esta persona ya autorizó el tratamiento de sus datos.' });
+                res.json(await shareLink(ins, { actor: `portal:${location.name}`, via: 'portal', httpError }));
+            } catch (e) { sendError(res, e); }
+        });
+
         // Portal: POST /portal/consent/resend { inscription_id } — the coordinator's «Reenviar enlace» (own location).
         http.route('post', '/portal/consent/resend', async (req, res) => {
             const location = await resolvePortalLocation(req);
@@ -870,7 +938,7 @@ function createConsent(base) {
     }
 
     return {
-        migrate, ensureReady, install, isEnabled, settingsOf, statesOf, isGranted, healthAllowed, issueLink, purgeDue, eventsOf,
+        migrate, ensureReady, install, isEnabled, settingsOf, statesOf, isGranted, healthAllowed, issueLink, shareLink, purgeDue, eventsOf,
         MSG, LIMITS,
     };
 }

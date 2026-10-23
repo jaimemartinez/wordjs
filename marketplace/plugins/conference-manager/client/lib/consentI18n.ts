@@ -1,7 +1,8 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 /**
  * «Autorización de datos» (2.33.0) — the strings of its three screens (the person's consent page, the
- * coordinators' portal and the admin's «Autorizaciones» tab), in Spanish and English. Kept apart from lib/i18n.ts
+ * coordinators' portal and the admin's «Autorizaciones» tab), in Spanish, English and Portuguese (2.33.2), and
+ * the message «Copiar mensaje» puts on the clipboard. Kept apart from lib/i18n.ts
  * so this feature's text lives in one place. The LEGAL texts (the three authorizations) are not here: the admin
  * writes them in «Autorizaciones › Configuración», and they are shown exactly as written.
  *
@@ -9,7 +10,7 @@
  * back to Spanish; an unknown key to itself.
  */
 
-export type ConsentLang = 'es' | 'en';
+export type ConsentLang = 'es' | 'en' | 'pt';
 
 const es: Record<string, string> = {
     // the person's page
@@ -132,6 +133,20 @@ const es: Record<string, string> = {
     'admin.ip.note': 'Por privacidad, el sitio no entrega a los plugins la dirección IP: la evidencia guarda una clave derivada de ella (HMAC del servidor), que permite comprobar si una dirección dada la produjo.',
     'admin.purge.now': 'Comprobar borrado ahora',
     'admin.purge.ran': 'Comprobación hecha.',
+    // «Copiar mensaje» (2.33.2): the consent request as a message to paste (WhatsApp, …). Plain text; *x* is bold there.
+    'msg.hello': 'Hola, {name}:',
+    'msg.hello.anon': 'Hola:',
+    'msg.body': 'Para confirmar tu inscripción a *{conference}* necesitamos tu autorización para tratar tus datos personales. Lee la Política de Tratamiento de Datos (versión {version}) y da tu autorización en este enlace personal:',
+    'msg.policy': 'Política de Tratamiento de Datos, versión {version}: {url}',
+    'msg.how': 'Para firmar te enviaremos un código a tu correo ({email}). El enlace vale {days} días y se usa una sola vez.',
+    'copy.button': 'Copiar mensaje',
+    'copy.done': 'Mensaje copiado',
+    'copy.fallback.title': 'Copia el mensaje',
+    'copy.fallback.hint': 'No se pudo copiar automáticamente. Selecciona el texto y cópialo.',
+    'copy.select': 'Seleccionar todo',
+    'copy.whatsapp': 'Abrir en WhatsApp',
+    'copy.close': 'Cerrar',
+    'copy.replaces': 'Es un enlace nuevo: el que se envió antes deja de funcionar.',
 };
 
 const en: Record<string, string> = {
@@ -252,11 +267,161 @@ const en: Record<string, string> = {
     'admin.ip.note': 'For privacy, the site does not give plugins the IP address: the evidence keeps a key derived from it (the server’s HMAC), which can show whether a given address produced it.',
     'admin.purge.now': 'Check deletion now',
     'admin.purge.ran': 'Check done.',
+    'msg.hello': 'Hi {name},',
+    'msg.hello.anon': 'Hi,',
+    'msg.body': 'To confirm your registration for *{conference}* we need your consent to process your personal data. Read the Data Processing Policy (version {version}) and give your consent at this personal link:',
+    'msg.policy': 'Data Processing Policy, version {version}: {url}',
+    'msg.how': 'To sign, we will send a code to your e-mail ({email}). The link is valid for {days} days and works once.',
+    'copy.button': 'Copy message',
+    'copy.done': 'Message copied',
+    'copy.fallback.title': 'Copy the message',
+    'copy.fallback.hint': 'It could not be copied automatically. Select the text and copy it.',
+    'copy.select': 'Select all',
+    'copy.whatsapp': 'Open in WhatsApp',
+    'copy.close': 'Close',
+    'copy.replaces': 'This is a new link: the one sent before stops working.',
 };
 
-const DICTS: Record<ConsentLang, Record<string, string>> = { es, en };
+const pt: Record<string, string> = {
+    'page.title': 'Autorização de dados',
+    'page.hello': 'Olá, {name}.',
+    'page.intro': 'Para confirmar sua inscrição precisamos da sua autorização para tratar seus dados pessoais. Leia a política e marque o que autoriza.',
+    'page.intro.minor': 'A pessoa inscrita é menor de idade: a autorização é dada pelo pai, mãe ou representante legal.',
+    'page.policy': 'Ler a Política de Tratamento de Dados',
+    'page.policy.version': 'Versão {v}',
+    'page.who': 'Quem dá esta autorização?',
+    'page.who.self': 'Eu, a pessoa inscrita (maior de idade)',
+    'page.who.rep': 'Sou o pai, a mãe ou o representante legal de um menor de idade',
+    'page.rep.title': 'Representante legal',
+    'page.rep.name': 'Nome completo',
+    'page.rep.document': 'Número do documento',
+    'page.rep.relationship': 'Parentesco',
+    'page.rep.choose': 'Escolha…',
+    'page.rep.missing': 'Escreva o nome, o documento e o parentesco do representante legal.',
+    'page.boxes': 'O que você autoriza',
+    'page.required': 'Obrigatória',
+    'page.optional': 'Opcional',
+    'page.general.missing': 'Para se inscrever você deve aceitar o tratamento dos seus dados pessoais.',
+    'page.health.title': 'Seus dados de saúde',
+    'page.health.hint': 'Responda você mesmo: seu coordenador não vê estas respostas.',
+    'page.exact': 'Ver o texto exato que você assina',
+    'page.sign': 'Assine com um código',
+    'page.sign.hint': 'Enviaremos um código de 6 dígitos para {email}. Digitá-lo é a sua assinatura eletrônica.',
+    'page.code.send': 'Enviar código',
+    'page.code.resend': 'Enviar outro código',
+    'page.code.resend.in': 'Você poderá pedir outro em {s} s',
+    'page.code.sent': 'Enviamos o código para {email}. Ele vence em 10 minutos.',
+    'page.code.label': 'Código de 6 dígitos',
+    'page.code.missing': 'Digite os 6 dígitos do código.',
+    'page.code.tries': 'Restam {n} tentativas.',
+    'page.submit': 'Assinar autorização',
+    'page.done.title': 'Autorização registrada',
+    'page.done.text': 'Obrigado. Registramos sua autorização em {when}. Enviamos uma cópia para o seu e-mail.',
+    'page.done.general': 'Tratamento de dados pessoais',
+    'page.done.health': 'Dados sensíveis de saúde',
+    'page.done.image': 'Uso de imagem',
+    'page.yes': 'Sim',
+    'page.no': 'Não',
+    'page.network': 'Não foi possível conectar. Verifique sua conexão e tente de novo.',
+    'page.retry': 'Tentar de novo',
+    'page.loading': 'Carregando…',
+    'page.error.link': 'Link inválido',
+    'page.error.link.text': 'Este link não é válido ou já foi usado. Peça ao seu coordenador que envie um novo.',
+    'page.error.expired': 'Link vencido',
+    'page.error.expired.text': 'Este link venceu. Peça ao seu coordenador que envie um novo.',
+    'page.error.off': 'Não é mais necessária',
+    'page.error.off.text': 'Esta conferência não pede mais esta autorização.',
+    'page.already': 'Você já deu sua autorização. Se assinar de novo, a nova substitui a anterior.',
+    'page.footer': 'Sua assinatura fica registrada com a data, a hora e o texto exato que você aceitou.',
+    'portal.state.pending': 'Autorização pendente',
+    'portal.state.granted': 'Autorizada',
+    'portal.state.revoked': 'Revogada',
+    'portal.state.granted.at': 'Autorizada em {when}',
+    'portal.mail.failed': 'Não foi possível enviar o e-mail',
+    'portal.link.expired': 'O link venceu',
+    'portal.never.sent': 'O link ainda não foi enviado',
+    'portal.resend': 'Reenviar link',
+    'portal.send': 'Enviar link',
+    'portal.resent': 'Enviamos o link para {email}.',
+    'portal.resent.failed': 'Não foi possível enviar o e-mail. Você pode compartilhar o link: ele só funciona com o código que chega a esse e-mail.',
+    'portal.copy': 'Copiar link',
+    'portal.copied': 'Link copiado',
+    'portal.section': 'Autorização de dados',
+    'portal.hint': 'A pessoa (ou seu representante) autoriza pelo link que chega ao e-mail. Até lá a inscrição não é confirmada.',
+    'portal.registered': 'Inscrição salva. Enviamos para {email} o link para autorizar o tratamento dos dados.',
+    'portal.registered.failed': 'Inscrição salva, mas não foi possível enviar o e-mail de autorização. Reenvie pela ficha da pessoa.',
+    'admin.tab': 'Autorizações',
+    'admin.settings': 'Configuração',
+    'admin.enabled': 'Pedir a autorização de dados a cada inscrito',
+    'admin.enabled.hint': 'Cada pessoa nova recebe um link por e-mail e assina com um código. Até autorizar, a inscrição não é confirmada e ninguém vê seus dados de saúde: ela mesma os escreve.',
+    'admin.policy.url': 'Endereço da política',
+    'admin.policy.url.hint': 'Vazio = {url}',
+    'admin.policy.version': 'Versão da política',
+    'admin.responsible': 'Responsável pelo tratamento',
+    'admin.contact': 'E-mail para assuntos de dados',
+    'admin.text.general': 'Autorização geral (obrigatória)',
+    'admin.text.health': 'Dados sensíveis de saúde (opcional)',
+    'admin.text.image': 'Uso de imagem (opcional)',
+    'admin.text.hint': 'Você pode usar {responsable}, {conferencia} e {correo}. Se mudar o texto, mude também a versão.',
+    'admin.purge': 'Apagar os dados de saúde … dias depois do fim da conferência',
+    'admin.purge.done': 'Dados de saúde apagados em {when}.',
+    'admin.link.days': 'Dias de validade do link',
+    'admin.save': 'Salvar',
+    'admin.saved': 'Configuração salva',
+    'admin.people': 'Pessoas',
+    'admin.search': 'Buscar por nome',
+    'admin.col.person': 'Pessoa',
+    'admin.col.state': 'Estado',
+    'admin.col.choices': 'Autorizou',
+    'admin.col.email': 'E-mail',
+    'admin.col.actions': 'Ações',
+    'admin.kpi.pending': 'Pendentes',
+    'admin.kpi.granted': 'Autorizadas',
+    'admin.kpi.revoked': 'Revogadas',
+    'admin.kpi.failed': 'E-mail não enviado',
+    'admin.export': 'Exportar evidência',
+    'admin.export.only': 'Só um administrador do WordJS pode exportar a evidência.',
+    'admin.revoke': 'Registrar revogação',
+    'admin.revoke.title': 'Revogação de {name}',
+    'admin.revoke.hint': 'Fica como um registro novo: a autorização original não é apagada.',
+    'admin.revoke.general': 'Toda a autorização (também saúde e imagem)',
+    'admin.revoke.health': 'Só os dados de saúde (as respostas são apagadas)',
+    'admin.revoke.image': 'Só o uso de imagem',
+    'admin.revoke.note': 'Como a pessoa pediu?',
+    'admin.revoke.note.ph': 'Por exemplo: e-mail de 3 de novembro para o endereço de dados',
+    'admin.revoke.scope.missing': 'Marque qual autorização a pessoa revoga.',
+    'admin.revoke.note.missing': 'Escreva como a pessoa pediu a revogação.',
+    'admin.revoke.confirm': 'Registrar revogação',
+    'admin.revoked': 'Revogação registrada',
+    'admin.cancel': 'Cancelar',
+    'admin.off': 'Esta conferência não pede a autorização de dados. Ative-a na configuração.',
+    'admin.empty': 'Ninguém corresponde.',
+    'admin.mail.note': 'Os e-mails saem pelo plugin de e-mail do site. Se não chegarem, verifique se o plugin de e-mail está ativo e se o Conference Manager tem a permissão «E-mail».',
+    'admin.ip.note': 'Por privacidade, o site não entrega aos plugins o endereço IP: a evidência guarda uma chave derivada dele (HMAC do servidor), que permite verificar se um endereço dado a produziu.',
+    'admin.purge.now': 'Verificar exclusão agora',
+    'admin.purge.ran': 'Verificação feita.',
+    'msg.hello': 'Olá, {name}:',
+    'msg.hello.anon': 'Olá:',
+    'msg.body': 'Para confirmar sua inscrição em *{conference}* precisamos da sua autorização para tratar seus dados pessoais. Leia a Política de Tratamento de Dados (versão {version}) e autorize neste link pessoal:',
+    'msg.policy': 'Política de Tratamento de Dados, versão {version}: {url}',
+    'msg.how': 'Para assinar enviaremos um código para o seu e-mail ({email}). O link vale {days} dias e só pode ser usado uma vez.',
+    'copy.button': 'Copiar mensagem',
+    'copy.done': 'Mensagem copiada',
+    'copy.fallback.title': 'Copie a mensagem',
+    'copy.fallback.hint': 'Não foi possível copiar automaticamente. Selecione o texto e copie.',
+    'copy.select': 'Selecionar tudo',
+    'copy.whatsapp': 'Abrir no WhatsApp',
+    'copy.close': 'Fechar',
+    'copy.replaces': 'É um link novo: o enviado antes deixa de funcionar.',
+};
 
-export const consentLangOf = (raw: unknown): ConsentLang => (String(raw || '').toLowerCase().startsWith('en') ? 'en' : 'es');
+
+const DICTS: Record<ConsentLang, Record<string, string>> = { es, en, pt };
+
+export const consentLangOf = (raw: unknown): ConsentLang => {
+    const l = String(raw || '').toLowerCase();
+    return l.startsWith('en') ? 'en' : l.startsWith('pt') ? 'pt' : 'es';
+};
 
 export function consentT(lang: ConsentLang | string) {
     const d = DICTS[consentLangOf(lang)];
@@ -267,4 +432,4 @@ export function consentT(lang: ConsentLang | string) {
 }
 
 /** The keys of both languages (tests: every Spanish key has its English one). */
-export const CONSENT_KEYS = { es: Object.keys(es), en: Object.keys(en) };
+export const CONSENT_KEYS = { es: Object.keys(es), en: Object.keys(en), pt: Object.keys(pt) };

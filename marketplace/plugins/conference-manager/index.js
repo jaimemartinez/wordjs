@@ -40,7 +40,7 @@ const { docFieldsOf: selfDocFieldsOf } = require('./server/selfpage');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.33.1',
+    version: '2.33.2',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };

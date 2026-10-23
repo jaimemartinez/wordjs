@@ -6,6 +6,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **conference-manager 2.33.2: «Copiar mensaje» for the data consent request.** Next to «Enviar / Reenviar
+  enlace», in the admin's «Autorizaciones» tab and in the coordinators' person sheet, a button copies the consent
+  request as a message to paste into WhatsApp or any chat. The message carries a new personal link and the policy
+  version, in the screen's language. A dialog shows the text to copy by hand when the browser does not allow
+  copying, and offers «Abrir en WhatsApp». No e-mail is sent, the request is not marked as e-mailed, and the
+  evidence log records «link shared manually». The previous link stops working, as with a resend. Signing still
+  needs the code sent to the person's e-mail. The consent screens are now also in Portuguese.
+
 ## [2.10.0] - 2026-10-23
 
 ### Added

@@ -15,7 +15,9 @@
  *     a person form a hash chain that the export checks, and deleting the person keeps the log;
  *   - health purge N days after the conference ends, keeping the evidence;
  *   - each signature names the policy version in force (version + SHA-256 of an append-only snapshot), and a
- *     version someone signed cannot change its texts without a new version number.
+ *     version someone signed cannot change its texts without a new version number;
+ *   - «Copiar mensaje» (2.33.2): a new link to share by hand — no e-mail, not marked e-mailed, logged
+ *     «link_shared»; the old link stops working; signing still needs the e-mailed code.
  */
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
@@ -50,10 +52,10 @@ async function portal(p: Plugin, method: string, url: string, token: string, bod
 }
 
 let seq = 0;
-async function world({ enable = true } = {}) {
+async function world({ enable = true, extra = [] as string[] } = {}) {
     const p = await bootPlugin();
     const cid = ok(await p.call('post', '/create', { body: { name: 'Asume el Riesgo', slug: `dc-${++seq}`, date_start: '2030-01-10', date_end: '2030-01-12' } })).id as number;
-    for (const template of ['first_name', 'last_name', 'email', 'age', 'health']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }), template);
+    for (const template of ['first_name', 'last_name', 'email', 'age', 'health', ...extra]) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }), template);
     ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Tipo de documento', type: 'select', options: 'Cédula, Tarjeta de identidad' } }));
     ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Número de documento', type: 'text' } }));
     ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
@@ -362,4 +364,44 @@ test('each signature names the policy version in force; a signed version cannot 
     // The confirmation e-mail names it.
     const mail = [...w.p.mails].reverse().find((m: any) => m.to === 'ana.perez@example.org' && /registrada/.test(m.subject));
     assert.ok(mail.text.includes(g1.policy_sha256));
+});
+
+test('«Copiar mensaje»: a new link to share by hand — no e-mail, not marked e-mailed, logged, signing unchanged', async () => {
+    const w = await world({ extra: ['phone'] });
+    w.p.setMailFail(true);
+    const r = await w.register({ phone: '+57 300 123 4567' });
+    const id = r.body.id as number;
+    assert.strictEqual(r.body.consent.sent, false);
+    w.p.setMailFail(false);
+    const mailsBefore = w.p.mails.length;
+    const before = w.p.one(`SELECT link_sent_s, mail_failed FROM ${PREFIX}consent_requests WHERE inscription_id = ?`, id);
+    // Admin.
+    const share = ok(await w.p.call('post', '/consent/share', { body: { inscription_id: id } }));
+    assert.ok(/\/portal\/conference\/autorizacion#t=[0-9a-f]{32}$/.test(share.link), share.link);
+    assert.deepStrictEqual({ v: share.policy_version, url: share.policy_url, days: share.link_days, phone: share.phone, name: share.first_name, conf: share.conference, email: share.email_masked },
+        { v: '1.0', url: 'https://example.org/politica-de-datos', days: 14, phone: '+57 300 123 4567', name: 'Ana', conf: 'Asume el Riesgo', email: 'a***@e***.org' });
+    assert.strictEqual(w.p.mails.length, mailsBefore, 'no e-mail leaves');
+    assert.deepStrictEqual({ ...w.p.one(`SELECT link_sent_s, mail_failed FROM ${PREFIX}consent_requests WHERE inscription_id = ?`, id) }, { ...before }, 'not marked as e-mailed');
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/inscriptions', w.ptoken))[0].consent.mail_failed, true, 'the coordinator still sees the e-mail failed');
+    const shared = w.events(id).filter(e => e.kind === 'link_shared');
+    assert.strictEqual(shared.length, 1);
+    assert.deepStrictEqual({ via: JSON.parse(shared[0].data).via, channel: JSON.parse(shared[0].data).channel, actor: shared[0].actor }, { via: 'admin', channel: 'manual', actor: 'boss' });
+    // Coordinator: its own location only; the new link replaces the previous one.
+    const p2 = ok(await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: id }));
+    assert.notStrictEqual(p2.link, share.link);
+    const oldToken = share.link.split('#t=')[1], token = p2.link.split('#t=')[1];
+    assert.strictEqual((await w.pub('open', { token: oldToken })).status, 410, 'the previous link stops working');
+    assert.strictEqual(JSON.parse(w.events(id).filter(e => e.kind === 'link_shared')[1].data).via, 'portal');
+    assert.strictEqual((await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: 999 })).status, 404);
+    // Signing is unchanged: the code goes to the e-mail, and then the coordinator can no longer share.
+    ok(await w.pub('open', { token }));
+    ok(await w.pub('code', { token }));
+    assert.ok(w.lastCode(), 'the code was e-mailed');
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    assert.strictEqual((await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: id })).status, 409);
+    // Off, or without the section: refused.
+    const staff = { id: 78, role: 'conference_manager_team', userLogin: 'viewer', extra: { pluginCapabilities: ['conference_manager_access'] } };
+    assert.strictEqual((await w.p.call('post', '/consent/share', { body: { inscription_id: id }, user: staff as any })).status, 403);
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, enabled: false } }));
+    assert.strictEqual((await w.p.call('post', '/consent/share', { body: { inscription_id: id } })).status, 409);
 });
