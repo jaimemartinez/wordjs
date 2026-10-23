@@ -141,6 +141,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Updating a plugin on Windows takes seconds again, not two minutes.** Every update retired the plugin's
+  AppContainer sandbox profile with a recursive pass over each folder it could read — `node_modules`
+  included — which timed out at 120 s on large or OneDrive-synced installs, and the next start re-granted
+  the same folders recursively. An update now keeps the profile and re-grants only the plugin's own folder; code from another source (adopt,
+  reinstall) still gets a fresh start with every earlier grant removed.
+  Grants and revokes touch each folder's root and let Windows inheritance cover the rest, and a linked
+  `node_modules` is granted on its real folder. Measured on a OneDrive checkout: an update went from over
+  two minutes to 3 s, and an uninstall from a failed 120 s timeout to 11 s with every grant removed.
+  Linux and macOS are unchanged.
 - **faq 1.0.5: the FAQ keeps running without the *Add admin menu* permission.** With `admin_menu:register` off
   (on the permission screen, or in the consent dialog of an update), the plugin crashed and restarted in a loop,
   taking its pages and its block down with it. It now runs without its sidebar entry and logs why.

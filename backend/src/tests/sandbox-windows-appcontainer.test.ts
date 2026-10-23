@@ -97,6 +97,19 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         assert.match(rev, /\/remove:g/);
         assert.match(rev, /\/remove:d/);
         assert.ok(!rev.includes('/grant'), 'revoke must never grant');
+        // ROOT-ONLY (FALLOS 149): the grant's ACE is inheritable from the zone root, so removing it there
+        // propagates to every inheriting descendant. A recursive /T revoke over node_modules timed out at
+        // 120 s and made every plugin update on Windows wait two minutes. The live test below proves the
+        // descendants lose the ACE.
+        assert.ok(!/\s\/T\s/.test(rev), 'revoke must not walk the tree with /T');
+        // ...which is only complete if the grant is root-only too: a /T grant stamps an EXPLICIT ACE on every
+        // sub-folder, out of a root-only revoke's reach.
+        assert.ok(!/\s\/T\s/.test(sw.__buildIcaclsScript('rx')), 'the rx grant must be root-only (inherited ACEs below)');
+        // An earlier release's recursive grants are cleaned by the deep revoke, used only at retirement.
+        const deep = sw.__buildIcaclsScript('revoke-deep');
+        assert.match(deep, /\/remove:g "\*\$\{sid\}" \/T/);
+        assert.match(deep, /\/remove:d "\*\$\{sid\}" \/T/);
+        assert.ok(!deep.includes('/grant'), 'the deep revoke must never grant');
     });
 
     test('the child argv carries BOTH preserve-symlinks flags', () => {
@@ -184,7 +197,10 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
             assert.notStrictEqual(rx, sw.__aclCacheKey(sid, 'C:\\sites\\one', 'full'));
             assert.notStrictEqual(rx, sw.__aclCacheKey('S-1-15-2-9-8-7', 'C:\\sites\\one', 'rx'));
         });
-        assert.match(sw.__aclCacheRoot(), /WordJS[\\/]sandbox-acl-cache[\\/]v4$/);
+        // v5: rx grants became root-only (FALLOS 149); a v4 marker now means "granted recursively by an earlier
+        // release", which retirement cleans with a one-time deep revoke.
+        assert.match(sw.__aclCacheRoot(), /WordJS[\\/]sandbox-acl-cache[\\/]v5$/);
+        assert.match(sw.__aclCacheRoot('v4'), /WordJS[\\/]sandbox-acl-cache[\\/]v4$/);
     });
 
     test('the ACL cache key changes when the granted root is recreated at the same path', () => {
@@ -349,6 +365,70 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         assert.ok(!fs.existsSync(cacheMarker), 'revoke must invalidate the persistent grant marker');
         // Revoking again must also be clean, so a partial grant can always be undone.
         assert.strictEqual(await sw.revokeAppContainerAccess(sid as string, [zone]), true);
+    });
+
+    test('a root-only revoke still removes the ACE from every descendant (and a renamed-in file gets it from a root grant)', async () => {
+        assert.ok(sid);
+        const zone = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-actest-tree-'));
+        zones.push(zone);
+        const deep = path.join(zone, 'a', 'b', 'c');
+        fs.mkdirSync(deep, { recursive: true });
+        const nested = path.join(deep, 'f.txt');
+        fs.writeFileSync(nested, 'x');
+        const names = (p: string) => {
+            const { execFileSync } = require('child_process');
+            try { return String(execFileSync('icacls', [p], { encoding: 'utf8' })).includes(sid as string); }
+            catch { return false; }
+        };
+
+        assert.strictEqual(await sw.grantAppContainerAccess(sid as string, [zone], 'rx'), true);
+        assert.ok(names(nested), 'the rx grant reaches a nested file');
+        assert.strictEqual(await sw.revokeAppContainerAccess(sid as string, [zone]), true);
+        assert.ok(!names(zone), 'revoked on the root');
+        assert.ok(!names(path.join(zone, 'a')), 'revoked on an intermediate folder');
+        assert.ok(!names(nested), 'revoked on a nested file: the inherited ACE went with the root\'s');
+
+        // An update moves new code in by RENAME, which keeps the source's security descriptor. A grant
+        // of the root (what the next launch does once refreshPluginDirGrants forgot the marker) reaches it.
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-actest-stage-'));
+        zones.push(outside);
+        const staged = path.join(outside, 'moved.txt');
+        fs.writeFileSync(staged, 'y');
+        const moved = path.join(zone, 'a', 'moved.txt');
+        fs.renameSync(staged, moved);
+        assert.strictEqual(await sw.grantAppContainerAccess(sid as string, [zone], 'rx'), true);
+        assert.ok(names(moved), 'a renamed-in file is reached by the root grant');
+        assert.strictEqual(await sw.revokeAppContainerAccess(sid as string, [zone]), true);
+        assert.ok(!names(moved), 'and loses it with the root revoke');
+    });
+
+    test('a zone reached through a junction is granted and revoked on its TARGET tree', async () => {
+        // A worktree links backend/node_modules; an install may link its dependencies. A root-only icacls on
+        // the junction would change only the link object and never reach the files behind it.
+        assert.ok(sid);
+        const target = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-actest-target-'));
+        zones.push(target);
+        fs.mkdirSync(path.join(target, 'pkg'), { recursive: true });
+        const nested = path.join(target, 'pkg', 'index.js');
+        fs.writeFileSync(nested, 'x');
+        const link = path.join(os.tmpdir(), `wjs-actest-link-${process.pid}`);
+        try { fs.rmSync(link, { force: true, recursive: false }); } catch { /* */ }
+        fs.symlinkSync(target, link, 'junction');
+        const names = (p: string) => {
+            const { execFileSync } = require('child_process');
+            try { return String(execFileSync('icacls', [p], { encoding: 'utf8' })).includes(sid as string); }
+            catch { return false; }
+        };
+        try {
+            assert.strictEqual(await sw.grantAppContainerAccess(sid as string, [link], 'rx'), true);
+            assert.ok(names(nested), 'the grant reaches a file inside the junction\'s target');
+            assert.ok(sw.__aclGrantIsCached(sid as string, link, 'rx') && sw.__aclGrantIsCached(sid as string, target, 'rx'), 'one marker, whichever spelling asks');
+            assert.strictEqual(await sw.revokeAppContainerAccess(sid as string, [link]), true);
+            assert.ok(!names(nested), 'the revoke through the junction clears the target tree');
+            assert.ok(!names(target));
+        } finally {
+            try { fs.rmdirSync(link); } catch { /* */ }
+        }
     });
 
     test('a missing directory is skipped, not fatal (the --bind-try tolerance)', async () => {

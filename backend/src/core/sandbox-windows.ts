@@ -324,16 +324,35 @@ function launcherEnv(): Record<string, string> {
 // a mystery, not a sandbox. revokeAppContainerAccess() removes exactly what grant added, is idempotent,
 // and is covered by its own test.
 
-type AclMode = 'traverse' | 'rx' | 'full' | 'revoke';
+// 'revoke-deep' is the one-time cleanup of a zone granted by an earlier release, whose recursive (/T) rx
+// grant stamped an EXPLICIT ACE on every sub-folder (see the revoke below). Only retirement uses it.
+type AclMode = 'traverse' | 'rx' | 'full' | 'revoke' | 'revoke-deep';
+type GrantMode = Exclude<AclMode, 'revoke' | 'revoke-deep'>;
 function buildIcaclsScript(mode: AclMode): string {
     // The SID and the directory list travel in the environment (base64 for the list); nothing here is
     // interpolated into script text, so a path can never become PowerShell source.
     const operation = mode === 'revoke'
+        // ROOT-ONLY, no /T (FALLOS 149). Every grant now puts the SID's ACE on the zone ROOT only, as
+        // inheritable ((OI)(CI)), so everything below holds INHERITED copies, and removing the root's ACE makes
+        // Windows propagate the removal to every inheriting file and folder (proved by the live test). The /T
+        // form re-wrote each descendant's DACL and re-propagated from every directory: on backend/node_modules
+        // (~23,500 entries, one inherited ACE per plugin SID ever granted) 17 s per pass on a clean local copy,
+        // two passes, and past the 120 s timeout on a OneDrive checkout — every plugin update waited two
+        // minutes. Root-only takes ~5 s on the same tree, measured.
         ? [
-            "  $null = & icacls $d /remove:g \"*${sid}\" /T /C /Q",
+            "  $null = & icacls $d /remove:g \"*${sid}\" /C /Q",
             "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
-            "  $null = & icacls $d /remove:d \"*${sid}\" /T /C /Q",
+            "  $null = & icacls $d /remove:d \"*${sid}\" /C /Q",
         ]
+        : mode === 'revoke-deep'
+            // A zone granted by a release before this one: its rx grant used /T, which stamps an EXPLICIT
+            // (non-inherited) ACE on every sub-folder — a root-only revoke would leave those, and their
+            // descendants would keep access. Only retirement runs this, once per such zone.
+            ? [
+                "  $null = & icacls $d /remove:g \"*${sid}\" /T /C /Q",
+                "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
+                "  $null = & icacls $d /remove:d \"*${sid}\" /T /C /Q",
+            ]
         : mode === 'traverse'
             // TRAVERSE-ONLY, not (RX). The simple right RX = FILE_GENERIC_READ|FILE_GENERIC_EXECUTE, and on a
             // DIRECTORY FILE_GENERIC_READ includes FILE_LIST_DIRECTORY (0x1) — so (RX) let a plugin ENUMERATE
@@ -344,7 +363,11 @@ function buildIcaclsScript(mode: AclMode): string {
             // and deliberately NOT RD (list) or read-data. (adversarial-audit: AppContainer traverse enumerates)
             ? ["  $null = & icacls $d /grant:r \"*${sid}:(RA,REA,RC,S,X)\" /C /Q"]
             : mode === 'rx'
-                ? ["  $null = & icacls $d /grant:r \"*${sid}:(OI)(CI)(RX)\" /T /C /Q"]
+                // ROOT-ONLY, inheritable: Windows propagates it to every descendant that inherits, as
+                // INHERITED copies, so a root-only revoke takes them all back. /T stamped an explicit ACE on
+                // each sub-folder instead (17 s on node_modules versus 2.8 s, measured), which no root-only
+                // revoke can reach. It also reaches files an update moved in by rename.
+                ? ["  $null = & icacls $d /grant:r \"*${sid}:(OI)(CI)(RX)\" /C /Q"]
                 : [
                     // Remove earlier recursive Full/Modify ACEs first. The new authority is inherited
                     // from the zone root and splits containers from files: directories need X to
@@ -401,15 +424,30 @@ async function deriveAppContainerSid(name: string): Promise<string | null> {
 // Only the granted ROOT is fingerprinted, and that is enough: `(OI)(CI)` is inheritable, so files created
 // later INSIDE a still-existing root pick the ACE up on their own. It is recreation of the root itself
 // that silently drops the ACE, and the root's identity is exactly what detects that.
-const ACL_CACHE_VERSION = 'v4'; // v3 markers were keyed on the path alone, so every one of them is potentially stale
-function appContainerAclCacheRoot(): string {
+// v5: rx grants are root-only (inherited ACEs below the root). A v4 marker therefore proves a zone was granted
+// by the RECURSIVE form, with explicit ACEs on its sub-folders, which only a deep revoke removes. v3 markers
+// were keyed on the path alone, so every one of them is potentially stale.
+const ACL_CACHE_VERSION = 'v5';
+const LEGACY_DEEP_ACL_CACHE_VERSION = 'v4';
+function appContainerAclCacheRoot(version: string = ACL_CACHE_VERSION): string {
     const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-    return path.join(local, 'WordJS', 'sandbox-acl-cache', ACL_CACHE_VERSION);
+    return path.join(local, 'WordJS', 'sandbox-acl-cache', version);
 }
 
 /** null when the directory has no readable identity — an absent or unreadable path is never "already granted". */
-function appContainerAclCacheKey(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): string | null {
+/**
+ * The directory an ACE must actually go on: a junction or symlink (a worktree's linked node_modules, an
+ * install that links its dependencies) resolved to its target. A root-only grant or revoke changes the
+ * object it names — on a junction that is the link itself, and nothing propagates into the target tree (the
+ * old recursive /T form happened to follow it). Unresolvable paths are returned as given.
+ */
+function aclTarget(dir: string): string {
     const resolved = path.resolve(String(dir));
+    try { return fs.realpathSync.native(resolved); } catch { return resolved; }
+}
+
+function appContainerAclCacheKey(sid: string, dir: string, mode: GrantMode, followLinks: boolean = true): string | null {
+    const resolved = followLinks ? aclTarget(dir) : path.resolve(String(dir));
     const canonical = resolved.toLowerCase();
     let ino: bigint;
     let birthtimeMs: bigint;
@@ -428,18 +466,31 @@ function appContainerAclCacheKey(sid: string, dir: string, mode: Exclude<AclMode
         .digest('hex');
 }
 
-function aclMarkerPath(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): string | null {
-    const key = appContainerAclCacheKey(sid, dir, mode);
-    return key === null ? null : path.join(appContainerAclCacheRoot(), `${key}.ok`);
+function aclMarkerPath(sid: string, dir: string, mode: GrantMode, version: string = ACL_CACHE_VERSION, followLinks: boolean = true): string | null {
+    const key = appContainerAclCacheKey(sid, dir, mode, followLinks);
+    return key === null ? null : path.join(appContainerAclCacheRoot(version), `${key}.ok`);
 }
 
-function aclGrantIsCached(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): boolean {
+/** Both spellings an earlier release may have keyed a marker on: the target, and the path as given (a junction). */
+function legacyMarkerPaths(sid: string, dir: string, mode: GrantMode): string[] {
+    return Array.from(new Set([
+        aclMarkerPath(sid, dir, mode, LEGACY_DEEP_ACL_CACHE_VERSION, true),
+        aclMarkerPath(sid, dir, mode, LEGACY_DEEP_ACL_CACHE_VERSION, false),
+    ].filter((m): m is string => m !== null)));
+}
+
+/** Was `dir` granted to `sid` by an earlier release's recursive rx/full grant (explicit ACEs on sub-folders)? */
+function aclLegacyDeepGrant(sid: string, dir: string): boolean {
+    return (['rx', 'full'] as const).some((mode) => legacyMarkerPaths(sid, dir, mode).some((m) => fs.existsSync(m)));
+}
+
+function aclGrantIsCached(sid: string, dir: string, mode: GrantMode): boolean {
     // Exact shape only. Treating an old full grant as satisfying rx made permission reductions sticky.
     const marker = aclMarkerPath(sid, dir, mode);
     return marker !== null && fs.existsSync(marker);
 }
 
-function writeAclMarker(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): void {
+function writeAclMarker(sid: string, dir: string, mode: GrantMode): void {
     const marker = aclMarkerPath(sid, dir, mode);
     // No identity, no marker. Falling back to a path-only key is the exact bug this version removes.
     if (marker === null) return;
@@ -455,14 +506,18 @@ function writeAclMarker(sid: string, dir: string, mode: Exclude<AclMode, 'revoke
     }
 }
 
-function removeAclMarkers(sid: string, dir: string): void {
-    for (const mode of ['traverse', 'rx', 'full'] as const) {
-        // Markers for the directory's CURRENT identity. A directory that is already gone has no current
-        // identity and therefore no reachable marker: anything left in the cache is keyed on an identity
-        // that can never recur, so it is inert rather than stale. Missing is a no-op, never a throw.
-        const marker = aclMarkerPath(sid, dir, mode);
-        if (marker === null) continue;
-        try { fs.rmSync(marker, { force: true }); } catch { /* cache is optional */ }
+function removeAclMarkers(sid: string, dir: string, versions: string[] = [ACL_CACHE_VERSION]): void {
+    for (const version of versions) {
+        for (const mode of ['traverse', 'rx', 'full'] as const) {
+            // Markers for the directory's CURRENT identity. A directory that is already gone has no current
+            // identity and therefore no reachable marker: anything left in the cache is keyed on an identity
+            // that can never recur, so it is inert rather than stale. Missing is a no-op, never a throw.
+            const markers = version === LEGACY_DEEP_ACL_CACHE_VERSION ? legacyMarkerPaths(sid, dir, mode) : [aclMarkerPath(sid, dir, mode, version)];
+            for (const marker of markers) {
+                if (marker === null) continue;
+                try { fs.rmSync(marker, { force: true }); } catch { /* cache is optional */ }
+            }
+        }
     }
 }
 
@@ -513,7 +568,7 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
     if (!sid || !/^S-1-15-2-[0-9-]+$/.test(sid)) return false; // only ever an AppContainer package SID
     const list = Array.from(new Map(
         (dirs || []).filter(Boolean).map((d) => {
-            const resolved = path.resolve(String(d));
+            const resolved = aclTarget(String(d)); // the junction's target, where the ACE belongs
             return [resolved.toLowerCase(), resolved] as const;
         }),
     ).values());
@@ -533,15 +588,19 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
         // Missing optional zones remain a successful no-op and are deliberately not cached: if one appears
         // later, a subsequent launch must grant it rather than trusting a marker created before it existed.
         let pending = list.filter((d) => fs.existsSync(d));
-        if (mode !== 'revoke' && cacheAvailable) {
-            pending = pending.filter((d) => !aclGrantIsCached(sid, d, mode));
+        const revoking = mode === 'revoke' || mode === 'revoke-deep';
+        if (!revoking && cacheAvailable) {
+            pending = pending.filter((d) => !aclGrantIsCached(sid, d, mode as GrantMode));
         }
         if (pending.length === 0) return true;
 
         const r = await runPowerShellWithEnv(buildIcaclsScript(mode), {
             WJS_AC_SID: sid,
             WJS_AC_DIRS_B64: Buffer.from(pending.join('\n'), 'utf8').toString('base64'),
-        }, 120000); // icacls /T over a large node_modules tree is not fast
+        // Every operation but the deep revoke touches zone ROOTS only (Windows propagates inheritance), so
+        // 120 s is generous. The deep revoke is a one-time cleanup of an earlier release's recursive grants
+        // and walks the whole tree: on a large node_modules it needs minutes, and it runs only at retirement.
+        }, mode === 'revoke-deep' ? 600000 : 120000);
         const m = /ICACLS fail=(\d+) skip=(\d+) total=(\d+)/.exec(r.out);
         if (!m) { log.warn({ mode: logSafe(mode) }, `[Sandbox] AppContainer ${logSafe(mode)} failed to run: ${logSafe(r.out.trim().slice(0, 200))}`); return false; }
         const failed = Number(m[1]);
@@ -554,9 +613,9 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
         // What must never happen is claiming confinement on the strength of a grant that did not land —
         // which is why this returns false and probeAppContainer decides on evidence from a real child.
         if (failed > 0) log.warn({ mode: logSafe(mode), failed: logSafe(failed) }, `[Sandbox] AppContainer ${logSafe(mode)}: ${logSafe(failed)} of ${logSafe(m[3])} director${failed === 1 ? 'y' : 'ies'} could not be updated (an ACL change on a directory this account does not own — e.g. a Node runtime under Program Files — needs an elevated one-time icacls; the launch may still work, and the probe is what decides).`);
-        if (failed === 0 && mode !== 'revoke' && cacheAvailable) {
+        if (failed === 0 && !revoking && cacheAvailable) {
             for (const dir of pending) {
-                writeAclMarker(sid, dir, mode);
+                writeAclMarker(sid, dir, mode as GrantMode);
                 // The real ACE was replaced, so an alternate-shape marker is now stale.
                 for (const other of ['traverse', 'rx', 'full'] as const) {
                     if (other === mode) continue;
@@ -569,6 +628,7 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
         return failed === 0;
     } finally {
         if (mode === 'revoke') for (const dir of list) removeAclMarkers(sid, dir);
+        if (mode === 'revoke-deep') for (const dir of list) removeAclMarkers(sid, dir, [ACL_CACHE_VERSION, LEGACY_DEEP_ACL_CACHE_VERSION]);
         if (release) release();
     }
 }
@@ -1359,7 +1419,10 @@ const profileApi = {
     deriveSid: (name: string): Promise<string | null> => deriveAppContainerSid(name),
     deleteProfile: (name: string): Promise<boolean> => deleteAppContainerProfile(name),
     revoke: (sid: string, dirs: string[]): Promise<boolean> => revokeAppContainerAccess(sid, dirs),
-    grantIsCached: (sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): boolean => aclGrantIsCached(sid, dir, mode),
+    revokeDeep: (sid: string, dirs: string[]): Promise<boolean> => grantAppContainerAccess(sid, dirs, 'revoke-deep'),
+    legacyDeepGrant: (sid: string, dir: string): boolean => aclLegacyDeepGrant(sid, dir),
+    grantIsCached: (sid: string, dir: string, mode: GrantMode): boolean => aclGrantIsCached(sid, dir, mode),
+    forgetGrants: (sid: string, dir: string): void => removeAclMarkers(sid, dir, [ACL_CACHE_VERSION, LEGACY_DEEP_ACL_CACHE_VERSION]),
 };
 
 /**
@@ -1376,7 +1439,7 @@ async function retireAppContainerPlugin(appRoot: string, slug: string, siteId: n
     const sid = await profileApi.deriveSid(profile);
     if (!sid) return false;
     const zones = appContainerZones(appRoot, slug, __dirname, siteId);
-    const candidates: Array<{ dir: string; mode: Exclude<AclMode, 'revoke'> }> = [
+    const candidates: Array<{ dir: string; mode: GrantMode }> = [
         ...zones.traverse.map((dir) => ({ dir, mode: 'traverse' as const })),
         ...zones.readExec.map((dir) => ({ dir, mode: 'rx' as const })),
         // Private storage is granted rx (readable) or full (writable), depending on the plugin's grants.
@@ -1384,18 +1447,49 @@ async function retireAppContainerPlugin(appRoot: string, slug: string, siteId: n
         ...zones.write.map((dir) => ({ dir, mode: 'full' as const })),
         { dir: path.dirname(getAppContainerRuntimePath()), mode: 'rx' as const },
     ];
-    // A recursive revoke is expensive (node_modules can contain tens of thousands of entries). Only
-    // walk paths whose successful grant marker proves this SID was actually installed there. Deleting
-    // the profile still retires the SID if a crash happened in the tiny ACL-before-marker window.
-    const touched = Array.from(new Map(candidates
+    // Only revoke on paths whose successful grant marker proves this SID was actually installed there.
+    // Deleting the profile still retires the SID if a crash happened in the tiny ACL-before-marker window.
+    const unique = (dirs: string[]) => Array.from(new Map(dirs.map((d) => [path.resolve(d).toLowerCase(), path.resolve(d)] as const)).values());
+    // A zone an earlier release granted recursively carries explicit ACEs on its sub-folders: only a deep
+    // revoke removes them (once — its markers go with it). Everything granted since is root-only.
+    const legacy = unique(candidates.map(({ dir }) => dir).filter((dir) => profileApi.legacyDeepGrant(sid, dir)));
+    const legacyKeys = new Set(legacy.map((d) => d.toLowerCase()));
+    const touched = unique(candidates
         .filter(({ dir, mode }) => profileApi.grantIsCached(sid, dir, mode))
-        .map(({ dir }) => [path.resolve(dir).toLowerCase(), path.resolve(dir)] as const)).values());
+        .map(({ dir }) => dir)).filter((d) => !legacyKeys.has(d.toLowerCase()));
+    const deepRevoked = legacy.length === 0 || await profileApi.revokeDeep(sid, legacy);
     const revoked = touched.length === 0 || await profileApi.revoke(sid, touched);
     const deleted = await profileApi.deleteProfile(profile);
-    return revoked && deleted;
+    return deepRevoked && revoked && deleted;
+}
+
+/**
+ * After a plugin's code was replaced IN PLACE (an update, an adopt or a reinstall from another catalog):
+ * forget the cached grants on its own folder for the workers of `siteIds`, so their next launch grants that
+ * folder again. Nothing else is touched — the profile, the SID and every other zone are exactly what the same
+ * slug on the same site is granted again, so revoking them and re-granting them (what an update used to do
+ * through retireAppContainerPlugin) was two recursive walks of node_modules for an identical result.
+ *
+ * The own folder does need it: the update moves the new files in by RENAME, and a rename keeps the security
+ * descriptor the files had in the staging folder — without this SID's inherited ACE. The folder itself
+ * survives (only its contents are swapped), so its marker would still match and the launch would skip the
+ * grant; re-granting the folder root propagates the ACE onto the moved-in files. It is a small folder, so
+ * this costs well under a second. Returns how many workers' markers were forgotten. No-op off Windows.
+ */
+async function refreshPluginDirGrants(appRoot: string, slug: string, siteIds: number[] = [1]): Promise<number> {
+    if (profileApi.platform() !== 'win32') return 0;
+    let forgotten = 0;
+    for (const siteId of Array.from(new Set(siteIds))) {
+        const sid = await profileApi.deriveSid(appContainerProfileNameForSite(appRoot, slug, siteId));
+        if (!sid) continue;
+        profileApi.forgetGrants(sid, sandboxPaths(appRoot, slug, __dirname, siteId).own);
+        forgotten++;
+    }
+    return forgotten;
 }
 
 module.exports = {
+    refreshPluginDirGrants,
     ensureAppContainerProfile,
     deleteAppContainerProfile,
     grantAppContainerAccess,
