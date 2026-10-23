@@ -81,7 +81,7 @@ before(async () => {
         await require('../core/options').initDefaultOptions(config);
         await require('../core/roles').loadRoles();
         const db = database.getDbAsync();
-        for (const [login, role] of [['owner', 'administrator'], ['writer', 'author']]) {
+        for (const [login, role] of [['owner', 'administrator'], ['writer', 'author'], ['plain', 'administrator']]) {
             const r = await db.run(`INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`, [login, bcrypt.hashSync(PASSWORD, 10), `${login}@example.com`, login]);
             await db.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'role', ?)`, [r.lastID, role]);
             U[login] = r.lastID;
@@ -90,7 +90,8 @@ before(async () => {
     require('../core/plugins-ready').markPluginsReady();
     server = http.createServer(app);
     await new Promise<void>((resolve) => siteContext.runWithSite(null, () => server.listen(0, '127.0.0.1', resolve)));
-    for (const login of ['owner', 'writer']) {
+    // 'plain' is an administrator without two-factor authentication; 'owner' enrols below.
+    for (const login of ['owner', 'writer', 'plain']) {
         const res = await (request(server) as any).post(`${API}/auth/login`).set('Host', MAIN).set('Origin', `http://${MAIN}`).send({ username: login, password: PASSWORD });
         const cookie = ([] as string[]).concat(res.headers['set-cookie'] || []).find((c) => c.startsWith('wordjs_token='));
         tokens[login] = decodeURIComponent(String(cookie).split(';')[0].slice('wordjs_token='.length));
@@ -162,6 +163,25 @@ describe('Admin → Servers', () => {
         assert.strictEqual(rows.length, 1);
         assert.doesNotMatch(String(rows[0].detail), /SECRET/, 'the token never reaches the audit log');
         assert.match(String(rows[0].detail), /10\.0\.0\.7/);
+        assert.match(String(rows[0].detail), /"reauth":"password\+2fa"/);
+    });
+
+    test('an administrator without 2FA mints a token and removes a node with the password alone, audited as such', async () => {
+        calls.length = 0;
+        const badPw = await as('plain', 'post', `${API}/system/cluster/token`).send({ role: 'backend', currentPassword: 'nope' });
+        assert.strictEqual(badPw.status, 403);
+        assert.strictEqual(badPw.body.code, 'rest_bad_current_password');
+        const noPw = await as('plain', 'post', `${API}/system/cluster/nodes/remove`).send({ url: 'https://10.0.0.2:4000' });
+        assert.strictEqual(noPw.status, 403);
+        assert.strictEqual(calls.length, 0, 'without the password nothing reaches the gateway');
+
+        const tok = await as('plain', 'post', `${API}/system/cluster/token`).send({ role: 'frontend', currentPassword: PASSWORD });
+        assert.strictEqual(tok.status, 200, JSON.stringify(tok.body));
+        const removed = await as('plain', 'post', `${API}/system/cluster/nodes/remove`).send({ url: 'https://10.0.0.2:4000', currentPassword: PASSWORD });
+        assert.strictEqual(removed.status, 200, JSON.stringify(removed.body));
+        const minted = (await audit('cluster.token.create')).filter((r: any) => /"role":"frontend"/.test(String(r.detail)) && /"reauth":"password"/.test(String(r.detail)));
+        assert.ok(minted.length >= 1, 'the token is audited as confirmed by the password alone');
+        assert.ok((await audit('cluster.node.remove')).some((r: any) => /"reauth":"password"/.test(String(r.detail))));
     });
 
     test('an invalid join-token request is refused BEFORE the two-factor code is spent (QA X1-08)', async () => {
@@ -189,7 +209,7 @@ describe('Admin → Servers', () => {
         assert.strictEqual(missing.status, 404);
         const ok = await as('owner', 'post', `${API}/system/cluster/nodes/remove`).send({ url: 'https://10.0.0.2:4000', currentPassword: PASSWORD, mfaCode: freshCode() });
         assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
-        assert.strictEqual((await audit('cluster.node.remove')).length, 1);
+        assert.strictEqual((await audit('cluster.node.remove')).filter((r: any) => /"reauth":"password\+2fa"/.test(String(r.detail))).length, 1);
 
         const revokeBad = await as('owner', 'post', `${API}/system/cluster/tokens/revoke`).send({ currentPassword: 'nope' });
         assert.strictEqual(revokeBad.status, 403);

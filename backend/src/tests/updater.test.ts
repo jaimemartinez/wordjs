@@ -113,7 +113,7 @@ before(async () => {
         await require('../core/options').initDefaultOptions(config);
         await require('../core/roles').loadRoles();
         const db = database.getDbAsync();
-        for (const [login, role] of [['owner', 'administrator'], ['writer', 'author']]) {
+        for (const [login, role] of [['owner', 'administrator'], ['writer', 'author'], ['plain', 'administrator']]) {
             const r = await db.run(`INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`, [login, bcrypt.hashSync(PASSWORD, 10), `${login}@example.com`, login]);
             await db.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'role', ?)`, [r.lastID, role]);
             U[login] = r.lastID;
@@ -122,7 +122,8 @@ before(async () => {
     require('../core/plugins-ready').markPluginsReady();
     server = http.createServer(app);
     await new Promise<void>((resolve) => siteContext.runWithSite(null, () => server.listen(0, '127.0.0.1', resolve)));
-    for (const login of ['owner', 'writer']) {
+    // 'plain' is an administrator without two-factor authentication; 'owner' enrols below.
+    for (const login of ['owner', 'writer', 'plain']) {
         const res = await (request(server) as any).post(`${API}/auth/login`).set('Host', MAIN).set('Origin', `http://${MAIN}`).send({ username: login, password: PASSWORD });
         const cookie = ([] as string[]).concat(res.headers['set-cookie'] || []).find((c) => c.startsWith('wordjs_token='));
         tokens[login] = decodeURIComponent(String(cookie).split(';')[0].slice('wordjs_token='.length));
@@ -236,6 +237,7 @@ describe('Admin → Updates', () => {
         restart.resetForTests();
         const row = await siteContext.runWithSite(1, () => database.getDbAsync().get("SELECT detail FROM audit_log WHERE action = 'system.update.start'"));
         assert.match(String(row.detail), /2\.8\.0/);
+        assert.match(String(row.detail), /"reauth":"password\+2fa"/, 'the audit says the password and a code confirmed it');
 
         // The new version comes up: the update is done.
         current = '2.8.0';
@@ -244,11 +246,17 @@ describe('Admin → Updates', () => {
         current = '2.7.0';
     });
 
-    test('a failed CLI run puts the previous version back and says so', async () => {
+    test('a failed CLI run puts the previous version back and says so (started by an administrator without 2FA, on the password alone)', async () => {
         runs.length = 0;
         exitCodes = [1, 0];
-        const res = await as('owner', 'post', `${API}/system/update`).send({ tag: 'v2.8.0', currentPassword: PASSWORD, mfaCode: freshCode() });
-        assert.strictEqual(res.status, 202);
+        const wrongPw = await as('plain', 'post', `${API}/system/update`).send({ tag: 'v2.8.0', currentPassword: 'nope' });
+        assert.strictEqual(wrongPw.status, 403);
+        assert.strictEqual(wrongPw.body.code, 'rest_bad_current_password');
+        assert.deepStrictEqual(runs, [], 'a wrong password starts nothing');
+        const res = await as('plain', 'post', `${API}/system/update`).send({ tag: 'v2.8.0', currentPassword: PASSWORD });
+        assert.strictEqual(res.status, 202, JSON.stringify(res.body));
+        const started = await siteContext.runWithSite(1, () => database.getDbAsync().all("SELECT detail FROM audit_log WHERE action = 'system.update.start'"));
+        assert.ok(started.some((r: any) => /"reauth":"password"/.test(String(r.detail))), 'audited as confirmed by the password alone');
         await settle();
         assert.deepStrictEqual(runs, [
             ['--yes', 'create-wordjs@latest', 'upgrade', ROOT, '--yes', '--version', 'v2.8.0'],

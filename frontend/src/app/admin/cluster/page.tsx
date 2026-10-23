@@ -6,6 +6,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader, Button, Card, Checkbox, Input, Select } from "@/components/ui";
+import { useMfaEnrolled, needsStepUpCode } from "@/lib/useMfaEnrolled";
 
 /**
  * Admin → Servers (backend routes/cluster.ts → the gateway's /cluster*): the panel path for
@@ -43,6 +44,9 @@ export default function ClusterPage() {
     const [ttl, setTtl] = useState("15");
     const [password, setPassword] = useState("");
     const [code, setCode] = useState("");
+    // A code is asked only of an account with two-factor authentication; without it the password is enough.
+    const [mfaEnrolled, setMfaEnrolled] = useMfaEnrolled();
+    const stepUp = () => (mfaEnrolled ? { mfaCode: code.trim() } : {});
     const [busy, setBusy] = useState<string | null>(null);
     const [minted, setMinted] = useState<{ command: string; expiresAt: string } | null>(null);
     // The forwards being edited; null while the list shows what the gateway reported.
@@ -50,6 +54,7 @@ export default function ClusterPage() {
 
     /** A refused write, in words: a session from a secondary address says where to sign in (QA X1-06). */
     const failure = (err: any, fallback: string) => {
+        if (needsStepUpCode(err)) setMfaEnrolled(true);
         const main = accountBoundSessionAddress(err);
         if (main !== null) return main ? t("cluster.boundSession").replace("{url}", () => main) : t("cluster.boundSessionNoUrl");
         return err?.message || t(fallback);
@@ -67,7 +72,7 @@ export default function ClusterPage() {
         e.preventDefault();
         setBusy("mint");
         try {
-            const r = await apiPost<{ command: string; expiresAt: string }>("/system/cluster/token", { role, host: host.trim() || undefined, ttlMinutes: Number(ttl) || 15, currentPassword: password, mfaCode: code.trim() });
+            const r = await apiPost<{ command: string; expiresAt: string }>("/system/cluster/token", { role, host: host.trim() || undefined, ttlMinutes: Number(ttl) || 15, currentPassword: password, ...stepUp() });
             setMinted({ command: r.command, expiresAt: r.expiresAt });
             setPassword(""); setCode("");
             await load();
@@ -76,11 +81,11 @@ export default function ClusterPage() {
     };
 
     const remove = async (node: Node) => {
-        if (!password || !code.trim()) { addToast(t("cluster.needCredentials"), "error"); return; }
+        if (!password || (mfaEnrolled && !code.trim())) { addToast(t(mfaEnrolled ? "cluster.needCredentials" : "network.passwordRequired"), "error"); return; }
         if (!(await confirm(t("cluster.removeConfirm").replace("{url}", node.url), t("cluster.removeTitle"), true))) return;
         setBusy(node.url);
         try {
-            await apiPost("/system/cluster/nodes/remove", { url: node.url, currentPassword: password, mfaCode: code.trim() });
+            await apiPost("/system/cluster/nodes/remove", { url: node.url, currentPassword: password, ...stepUp() });
             addToast(t("cluster.removed").replace("{url}", node.url), "success");
             setPassword(""); setCode("");
             await load();
@@ -133,7 +138,7 @@ export default function ClusterPage() {
     const credentials = (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input label={t("network.currentPassword")} icon="fa-lock" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <Input label={t("networkSetup.mfaCode")} icon="fa-shield-halved" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
+            {mfaEnrolled && <Input label={t("networkSetup.mfaCode")} icon="fa-shield-halved" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} data-testid="cluster-mfa-code" />}
         </div>
     );
 
@@ -146,7 +151,7 @@ export default function ClusterPage() {
             </div>
         )}
         <Card variant="default" padding="lg">
-            <p className="text-sm text-gray-500 mb-4">{t("cluster.credentialsHelp")}</p>
+            <p className="text-sm text-gray-500 mb-4">{t(mfaEnrolled ? "cluster.credentialsHelp" : "cluster.credentialsHelpPassword")}</p>
             {credentials}
         </Card>
 

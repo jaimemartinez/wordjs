@@ -229,10 +229,18 @@ describe('turning the network on from the panel', () => {
         assert.strictEqual(await restartCode(), undefined, 'no restart for a refused switch');
     });
 
-    test('the password AND a fresh two-factor code are required; an account without 2FA is told to turn it on', async () => {
-        const noMfa = await as('second', 'post', `${API}/network/enable`).send({ admins: [U.second], currentPassword: PASSWORD, mfaCode: '123456' });
-        assert.strictEqual(noMfa.status, 403, JSON.stringify(noMfa.body));
-        assert.strictEqual(noMfa.body.code, 'network_mfa_enrollment_required');
+    test('the password always; a fresh two-factor code too when the account has 2FA, and the password alone when it has none', async () => {
+        // No 2FA on this account: the right password is the whole re-authentication. The request then
+        // reaches the switch's own checks (an author is not an administrator), so nothing is switched.
+        const noMfa = await as('second', 'post', `${API}/network/enable`).send({ admins: [U.writer], currentPassword: PASSWORD });
+        assert.strictEqual(noMfa.status, 400, JSON.stringify(noMfa.body));
+        assert.strictEqual(noMfa.body.code, 'network_admin_not_administrator');
+        const noMfaWrongPw = await as('second', 'post', `${API}/network/enable`).send({ admins: [U.second], currentPassword: 'nope' });
+        assert.strictEqual(noMfaWrongPw.status, 403, JSON.stringify(noMfaWrongPw.body));
+        assert.strictEqual(noMfaWrongPw.body.code, 'rest_bad_current_password');
+        const noMfaNoPw = await as('second', 'post', `${API}/network/enable`).send({ admins: [U.second] });
+        assert.strictEqual(noMfaNoPw.status, 403, JSON.stringify(noMfaNoPw.body));
+        assert.strictEqual(noMfaNoPw.body.code, 'rest_bad_current_password');
 
         const wrongPw = await as('owner', 'post', `${API}/network/enable`).send({ admins: [U.owner], currentPassword: 'nope', mfaCode: freshCode('owner') });
         assert.strictEqual(wrongPw.status, 403);
@@ -278,7 +286,7 @@ describe('turning the network on from the panel', () => {
         assert.ok(row, 'the network audit log has the switch');
         assert.strictEqual(row.actorUserId, U.owner);
         assert.match(row.detail, /"via":"panel"/);
-        assert.match(row.detail, /"mfa":"step_up"/);
+        assert.match(row.detail, /"reauth":"password\+2fa"/, 'the audit says the switch was confirmed with the password and a code');
         const siteLog = await onMain(() => database.getDbAsync().get("SELECT * FROM audit_log WHERE action = 'network.enable'"));
         assert.ok(siteLog, 'the site audit log has the switch');
         assert.strictEqual(Number(siteLog.actor_id ?? siteLog.user_id ?? siteLog.actor), U.owner);
@@ -378,13 +386,23 @@ describe('turning the network off from the panel', () => {
         await networkSites.setSiteStatus(blog.id, 'suspended', U.owner);
         await networkSites.deleteSite(blog.id, { confirmSlug: 'blog', actorUserId: U.owner });
 
-        const res = await as('owner', 'post', `${API}/network/disable`).send({ currentPassword: PASSWORD, mfaCode: freshCode('owner') });
+        // A network administrator WITHOUT two-factor authentication turns it off with the password alone
+        // (the owner, who has 2FA, needed a code above); the audit says which proof it was.
+        const promote = await as('owner', 'post', `${API}/network/admins`).send({ userId: U.second, currentPassword: PASSWORD });
+        assert.strictEqual(promote.status, 200, JSON.stringify(promote.body));
+        const wrongPw = await as('second', 'post', `${API}/network/disable`).send({ currentPassword: 'nope' });
+        assert.strictEqual(wrongPw.status, 403);
+        assert.strictEqual(wrongPw.body.code, 'rest_bad_current_password');
+        assert.strictEqual(fileConfig().multisite.enabled, true, 'a wrong password switches nothing');
+        const res = await as('second', 'post', `${API}/network/disable`).send({ currentPassword: PASSWORD });
         assert.strictEqual(res.status, 200, JSON.stringify(res.body));
         assert.strictEqual(res.body.enabled, false);
         assert.strictEqual(await restartCode(), restart.RESTART_EXIT_CODE);
         assert.strictEqual(fileConfig().multisite.enabled, false);
         assert.strictEqual(String((await network.storeGet('SELECT meta_value FROM network_meta WHERE meta_key = ?', ['network_enabled'])).meta_value), '0');
-        assert.ok((await network.auditLog(10)).some((r: any) => r.action === 'network.disabled'));
+        const offRow = (await network.auditLog(10)).find((r: any) => r.action === 'network.disabled');
+        assert.ok(offRow);
+        assert.match(offRow.detail, /"reauth":"password"/);
         assert.ok(await onMain(() => database.getDbAsync().get("SELECT 1 AS x FROM audit_log WHERE action = 'network.disable'")));
 
         await bootAs(false);
@@ -436,5 +454,19 @@ describe('restarting by itself', () => {
         assert.match(server, /WORDJS_SUPERVISED: '1'/);
         const mono = require(path.join(root, 'monolith.js'));
         assert.strictEqual(typeof mono.superviseMonolith, 'function');
+    });
+});
+
+describe('the step-up never stands alone', () => {
+    test('requireStepUp refuses a request whose password was not verified, with or without 2FA on the account', async () => {
+        const { requireStepUp } = require('../routes/network');
+        for (const login of ['second', 'owner']) {
+            const out: any = {};
+            const res: any = { status(c: number) { out.status = c; return res; }, json(b: any) { out.body = b; return res; } };
+            const proof = await onMain(() => requireStepUp({ user: { id: U[login] }, body: { mfaCode: '123456' } }, res));
+            assert.strictEqual(proof, null, login);
+            assert.strictEqual(out.status, 403, login);
+            assert.strictEqual(out.body.code, 'rest_bad_current_password', login);
+        }
     });
 });

@@ -166,7 +166,7 @@ async function writeMarker(enabled: boolean): Promise<void> {
  * Turn the network on. The caller (routes/network-setup.ts) has checked who asks, the password and the
  * second factor. Returns how the backend restarts.
  */
-async function enableNetwork(input: { adminIds: unknown; actorUserId: number; mfa: string; ip?: string }) {
+async function enableNetwork(input: { adminIds: unknown; actorUserId: number; reauth: string; ip?: string }) {
     const siteContext = require('./site-context');
     if (siteContext.multisiteEnabled()) throw codedError('network_already_enabled', 'The network is already on.', 409);
     const blocking = (await requirements()).filter((r) => r.blocking && !r.ok);
@@ -180,14 +180,14 @@ async function enableNetwork(input: { adminIds: unknown; actorUserId: number; mf
         await network.registerPrimarySite(main.url);
         for (const a of admins) await network.addNetworkAdmin(a.id, a.login);
         await writeMarker(true);
-        await network.audit('network.enabled', { actor: input.actorUserId, detail: { admins: admins.map((a) => a.login), via: 'panel', mfa: input.mfa } });
+        await network.audit('network.enabled', { actor: input.actorUserId, detail: { admins: admins.map((a) => a.login), via: 'panel', reauth: input.reauth } });
     } catch (e: any) {
         if (e && typeof e.code === 'string' && e.code.startsWith('network_')) throw e;
         log.error({ err: e }, 'the network store could not be prepared');
         throw codedError('network_store_failed', `The network's database space could not be created: ${e && e.message}`, 500);
     }
     setEnabledInConfig(true);
-    await siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => require('./audit').recordAudit(input.actorUserId, 'network.enable', 'network', 1, { admins: admins.map((a) => a.login), mfa: input.mfa }));
+    await siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => require('./audit').recordAudit(input.actorUserId, 'network.enable', 'network', 1, { admins: admins.map((a) => a.login), reauth: input.reauth }));
 
     const restart = require('./restart');
     await restart.announceClusterRestart({ multisiteEnabled: true }, 'the network was turned on');
@@ -196,7 +196,7 @@ async function enableNetwork(input: { adminIds: unknown; actorUserId: number; mf
 }
 
 /** Turn the network off: only while the main site is the only site. */
-async function disableNetwork(input: { actorUserId: number; mfa: string }) {
+async function disableNetwork(input: { actorUserId: number; reauth: string }) {
     const siteContext = require('./site-context');
     if (!siteContext.multisiteEnabled()) throw codedError('network_not_enabled', 'The network is already off.', 409);
     const network = require('./network');
@@ -205,9 +205,9 @@ async function disableNetwork(input: { actorUserId: number; mfa: string }) {
         throw codedError('network_has_sites', `The network still has ${others.length} other site${others.length === 1 ? '' : 's'}. Delete ${others.length === 1 ? 'it' : 'them'} in Admin → Network first; the network stays on while they exist.`, 409);
     }
     await writeMarker(false);
-    await network.audit('network.disabled', { actor: input.actorUserId, detail: { via: 'panel', mfa: input.mfa } });
+    await network.audit('network.disabled', { actor: input.actorUserId, detail: { via: 'panel', reauth: input.reauth } });
     setEnabledInConfig(false);
-    await siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => require('./audit').recordAudit(input.actorUserId, 'network.disable', 'network', 1, { mfa: input.mfa }));
+    await siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => require('./audit').recordAudit(input.actorUserId, 'network.disable', 'network', 1, { reauth: input.reauth }));
 
     const restart = require('./restart');
     await restart.announceClusterRestart({ multisiteEnabled: false }, 'the network was turned off');

@@ -90,7 +90,8 @@ fix it from the panel.
    [Requirements](#requirements)).
 2. **Network administrators**: tick the administrators of the main site who will run the network (you
    are ticked already). Only they see **Admin → Network**.
-3. Enter your password and a current two-factor code, and click **Turn the network on**.
+3. Enter your password — and a current two-factor code if your account has two-factor authentication — and
+   click **Turn the network on**. An account without it confirms with the password alone.
 
 WordJS records the main site as site 1 (nothing of it moves), creates the network store
 (`<data dir>/network.db` on SQLite, the `wordjs_network` schema on Postgres, the `<db.name>_network`
@@ -409,8 +410,8 @@ wrong one is `403 rest_bad_current_password`.
 |---|---|---|---|
 | `GET` | `/status` | — | `{ enabled, networkAdmin }` |
 | `GET` | `/setup` | — | `{ enabled, ready, requirements: [{ id, ok, blocking, message, fix }], administrators, mfaEnrolled, driver, otherSites, restart: { mode, automatic, bootId } }`. While multisite is off: for the main site's administrators (`403 rest_forbidden` otherwise) |
-| `POST` | `/enable` | `{ admins: [userId…], currentPassword, mfaCode }` | `{ enabled: true, admins, restart }`, then the backend restarts. Interactive session at the main address only. `403 network_mfa_enrollment_required` / `rest_mfa_step_up_required`, `400 rest_mfa_invalid`, `400 network_admins_required` / `network_admin_not_administrator`, `409 network_already_enabled` / `network_requirements_unmet` |
-| `POST` | `/disable` | `{ currentPassword, mfaCode }` | `{ enabled: false, restart }`, then the backend restarts. `409 network_has_sites` while another site exists, `409 network_not_enabled` |
+| `POST` | `/enable` | `{ admins: [userId…], currentPassword, mfaCode? }` | `{ enabled: true, admins, restart }`, then the backend restarts. Interactive session at the main address only. `mfaCode` is required only of an account with two-factor authentication (`403 rest_mfa_step_up_required`, `400 rest_mfa_invalid`); the audit records `reauth: "password"` or `"password+2fa"`. `403 rest_bad_current_password`, `400 network_admins_required` / `network_admin_not_administrator`, `409 network_already_enabled` / `network_requirements_unmet` |
+| `POST` | `/disable` | `{ currentPassword, mfaCode? }` (`mfaCode` as for `/enable`) | `{ enabled: false, restart }`, then the backend restarts. `409 network_has_sites` while another site exists, `409 network_not_enabled` |
 | `GET` | `/admins` | — | `{ administrators: [{ id, login, displayName, networkAdmin }] }` |
 | `POST` | `/admins` | `{ userId, currentPassword }` | `{ administrators }`. `400 network_admin_not_administrator` |
 | `DELETE` | `/admins/:id` | `{ currentPassword }` | `{ administrators }`. `409 network_last_admin`, `404 network_admin_not_found` |
@@ -441,8 +442,8 @@ carries `handoff: { networkAdmin, from, expiresAt }` for as long as the session 
 
 ## Turning it off
 
-**Settings → Network → Turn the network off** (network administrators), with your password and a current
-two-factor code. Allowed while the main site is the only site: delete the others in Admin → Network first.
+**Settings → Network → Turn the network off** (network administrators), with your password, and a current
+two-factor code if your account has two-factor authentication. Allowed while the main site is the only site: delete the others in Admin → Network first.
 WordJS writes the change, audits it (`network.disable`) and restarts by itself, on every node.
 
 From a terminal instead: `npm run network -- disable`, then restart the backend.
@@ -468,7 +469,7 @@ setting. What is new:
 | What you see | Why |
 |---|---|
 | `421` on a new site's address | The backend was not restarted after `npm run network -- enable` (the panel restarts it itself), or the address is not the site's main address, or (separate mode) the gateway has not received the network's addresses yet: check the backend log for "could not tell the gateway". |
-| Settings → Network does not let you turn it on | Its list says what is missing: the install is not finished, the driver is `sqlite-legacy` (use **Move to the current SQLite engine** there), the database user may not create schemas/databases (the screen shows the `GRANT` to run), the main address is not set, or your account has no two-factor authentication. The CLI refuses for the same reasons, or when a login given to `--admin` is not an administrator of the main site. |
+| Settings → Network does not let you turn it on | Its list says what is missing: the install is not finished, the driver is `sqlite-legacy` (use **Move to the current SQLite engine** there), the database user may not create schemas/databases (the screen shows the `GRANT` to run), or the main address is not set. The CLI refuses for the same reasons, or when a login given to `--admin` is not an administrator of the main site. |
 | "Restart WordJS to apply it" after a switch | WordJS was not started by something that restarts it (see [Restarting by itself](#restarting-by-itself)). Restart it once the way you started it. |
 | Creating a site fails with "could not be created" | The database user may not create the site's Postgres schema or MySQL database: grant `CREATE`, or create `wordjs_site_<id>` / `<db.name>_site_<id>` for it. |
 | A site's certificate is not served | Admin → Network shows it as installed? Then check the gateway log for "Site certificate installed"; a name must reach the gateway with SNI (any modern browser sends it). "Get certificate" fails while the address does not point at this server, or port 80 does not reach it. |

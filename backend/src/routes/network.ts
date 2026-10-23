@@ -3,7 +3,7 @@
  *
  *   GET  /network/status                 { enabled, networkAdmin } — any signed-in user of the main site
  *   GET  /network/setup                  what turning the network on needs (main-site administrators while off)
- *   POST /network/enable                 turn it on and restart (re-authenticates: password + two-factor code)
+ *   POST /network/enable                 turn it on and restart (re-authenticates: password, + a code with 2FA)
  *   POST /network/disable                turn it off and restart, while the main site is the only site (same)
  *   GET  /network/admins                 the main site's administrators, and which are network administrators
  *   POST /network/admins                 make one a network administrator (re-authenticates)
@@ -117,29 +117,29 @@ function refuseSetupCaller(req: Request, res: Response): boolean {
 }
 
 /**
- * The second factor for the switch: the account must have two-factor authentication, and the request must
- * carry a current code (`mfaCode`) even when the session signed in with one — a fresh proof, like the
- * password. Returns the assurance recorded in the audit log, or null when it has answered the request.
+ * The fresh proof behind the network switch, Admin → Updates and Admin → Servers, after the caller has
+ * checked the current password (requireSudoPassword). An account with two-factor authentication must
+ * also send a current code (`mfaCode`), even when the session signed in with one. An account without it
+ * is re-authenticated by its password alone (the owner's decision: the panel must not demand a 2FA setup
+ * first) — but only when this request's password WAS verified, so a caller that forgot the password check
+ * fails closed instead of running with no re-authentication.
+ *
+ * Returns what the reader proved, for the audit log ('password' or 'password+2fa'), or null when it has
+ * answered the request.
  */
-// `action` names what is being confirmed, for the "turn on 2FA first" message: the update and cluster
-// screens reuse this gate, and every one of them used to be told that switching the NETWORK asks for a code.
-async function requireStepUp(req: Request, res: Response, action = 'Switching the network on or off'): Promise<string | null> {
-    const mfa = require('../core/mfa');
-    if (!(await mfa.isEnabled(req.user.id))) {
-        res.status(403).json({
-            code: 'network_mfa_enrollment_required',
-            message: `Turn on two-factor authentication for your account first (Profile → Two-factor authentication). ${action} asks for a code.`,
-            data: { status: 403 },
-        });
+async function requireStepUp(req: Request, res: Response): Promise<'password' | 'password+2fa' | null> {
+    if (!require('./users').sudoPasswordVerified(req)) {
+        res.status(403).json({ code: 'rest_bad_current_password', message: 'Current password is incorrect.', data: { status: 403 } });
         return null;
     }
+    if (!(await require('../core/mfa').isEnabled(req.user.id))) return 'password';
     const code = (req.body || {}).mfaCode;
     if (typeof code !== 'string' || !code.trim()) {
         res.status(403).json({ code: 'rest_mfa_step_up_required', message: 'Enter a current authentication code from your authenticator app.', data: { status: 403 } });
         return null;
     }
     const ok = await require('./auth').verifyManagedMfaCode(req, res, code);
-    return ok ? 'step_up' : null;
+    return ok ? 'password+2fa' : null;
 }
 
 /**
@@ -163,7 +163,7 @@ async function requireStepUp(req: Request, res: Response, action = 'Switching th
  * /network/enable:
  *   post:
  *     summary: Turn the network on and restart
- *     description: Records the main site as site 1, makes the chosen administrators of the main site network administrators, sets multisite.enabled, audits it, and restarts the backend (every node). Interactive session at the main address only; re-authenticates with currentPassword and a current two-factor code.
+ *     description: Records the main site as site 1, makes the chosen administrators of the main site network administrators, sets multisite.enabled, audits it, and restarts the backend (every node). Interactive session at the main address only; re-authenticates with currentPassword, plus a current two-factor code when the account has 2FA.
  *     tags: [Network]
  *     security:
  *       - bearerAuth: []
@@ -173,7 +173,7 @@ async function requireStepUp(req: Request, res: Response, action = 'Switching th
  *         application/json:
  *           schema:
  *             type: object
- *             required: [admins, currentPassword, mfaCode]
+ *             required: [admins, currentPassword]
  *             properties:
  *               admins:
  *                 type: array
@@ -184,19 +184,20 @@ async function requireStepUp(req: Request, res: Response, action = 'Switching th
  *                 type: string
  *               mfaCode:
  *                 type: string
+ *                 description: A current two-factor code. Required only when the account has two-factor authentication; without it the password alone confirms.
  *     responses:
  *       200:
  *         description: "{ enabled: true, admins, restart } — restart is supervisor, watch or service (it restarts itself) or manual (restart it by hand)"
  *       400:
  *         description: No administrator chosen (network_admins_required), one is not an administrator of the main site (network_admin_not_administrator), or a wrong mfaCode (rest_mfa_invalid)
  *       403:
- *         description: Not an administrator, a wrong currentPassword (rest_bad_current_password), no two-factor authentication (network_mfa_enrollment_required), no code (rest_mfa_step_up_required)
+ *         description: Not an administrator, a wrong currentPassword (rest_bad_current_password), or no code from an account with two-factor authentication (rest_mfa_step_up_required)
  *       409:
  *         description: Already on (network_already_enabled), or a requirement is not met (network_requirements_unmet)
  * /network/disable:
  *   post:
  *     summary: Turn the network off and restart
- *     description: Only while the main site is the only site. Network administrators; re-authenticates with currentPassword and a current two-factor code; audited; restarts the backend (every node).
+ *     description: Only while the main site is the only site. Network administrators; re-authenticates with currentPassword, plus a current two-factor code when the account has 2FA; audited; restarts the backend (every node).
  *     tags: [Network]
  *     security:
  *       - bearerAuth: []
@@ -206,17 +207,18 @@ async function requireStepUp(req: Request, res: Response, action = 'Switching th
  *         application/json:
  *           schema:
  *             type: object
- *             required: [currentPassword, mfaCode]
+ *             required: [currentPassword]
  *             properties:
  *               currentPassword:
  *                 type: string
  *               mfaCode:
  *                 type: string
+ *                 description: A current two-factor code. Required only when the account has two-factor authentication; without it the password alone confirms.
  *     responses:
  *       200:
  *         description: "{ enabled: false, restart }"
  *       403:
- *         description: Not a network administrator, a wrong currentPassword, no two-factor authentication or no code
+ *         description: Not a network administrator, a wrong currentPassword, or no code from an account with two-factor authentication
  *       404:
  *         description: Another site of the network
  *       409:
@@ -246,10 +248,10 @@ router.post('/enable', authenticate, sessionOnly, accountAuthorityOnly, asyncHan
     if (refuseSetupCaller(req, res)) return;
     if (siteContext.multisiteEnabled()) return res.status(409).json({ code: 'network_already_enabled', message: 'The network is already on.', data: { status: 409 } });
     if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
-    const mfa = await requireStepUp(req, res);
-    if (!mfa) return;
+    const reauth = await requireStepUp(req, res);
+    if (!reauth) return;
     try {
-        const r = await require('../core/network-setup').enableNetwork({ adminIds: (req.body || {}).admins, actorUserId: Number(req.user.id), mfa });
+        const r = await require('../core/network-setup').enableNetwork({ adminIds: (req.body || {}).admins, actorUserId: Number(req.user.id), reauth });
         res.json({ enabled: true, admins: r.admins, restart: r.restart });
     } catch (e: any) {
         return sendError(res, e);
@@ -260,10 +262,10 @@ router.post('/disable', authenticate, sessionOnly, accountAuthorityOnly, asyncHa
     if (refuseSetupCaller(req, res)) return;
     if (!siteContext.multisiteEnabled()) return res.status(409).json({ code: 'network_not_enabled', message: 'The network is already off.', data: { status: 409 } });
     if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
-    const mfa = await requireStepUp(req, res);
-    if (!mfa) return;
+    const reauth = await requireStepUp(req, res);
+    if (!reauth) return;
     try {
-        const r = await require('../core/network-setup').disableNetwork({ actorUserId: Number(req.user.id), mfa });
+        const r = await require('../core/network-setup').disableNetwork({ actorUserId: Number(req.user.id), reauth });
         res.json({ enabled: false, restart: r.restart });
     } catch (e: any) {
         return sendError(res, e);

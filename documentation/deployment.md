@@ -272,7 +272,7 @@ panel first, and a command or a config edit only as the second way. The screens 
 |---|---|---|
 | **Admin → Updates** | Installs a newer release: backup, upgrade, restart, rollback ([§ Updates](#-updates)); in a container or a Kubernetes pod it says to change the image instead | `npx create-wordjs@latest upgrade` |
 | **Admin → Site Health** | Runs the install's diagnostics — versions and Node.js, writable folders and free disk, the database's answer time and engine, password-reset mail and SPF/DMARC, HTTPS and the certificate, a proxy that is not trusted, the scheduler, plugin isolation, whether WordJS can restart itself, a newer release — each with a link to the screen that fixes it | `GET /api/v1/health/site`, `GET /api/v1/health/details` |
-| **Admin → Servers** | Split and separate mode: the nodes the gateway knows with their health, join tokens for a new backend or frontend (password and a two-factor code; the screen prints the `node-join` command to run on the new machine), removing a node, revoking unused tokens ([separate-mode.md](separate-mode.md#managing-the-cluster-from-the-admin-panel)) | `npm run cluster -- token \| tokens \| revoke-tokens \| info` |
+| **Admin → Servers** | Split and separate mode: the nodes the gateway knows with their health, join tokens for a new backend or frontend (password, and a two-factor code when the account has 2FA; the screen prints the `node-join` command to run on the new machine), removing a node, revoking unused tokens ([separate-mode.md](separate-mode.md#managing-the-cluster-from-the-admin-panel)) | `npm run cluster -- token \| tokens \| revoke-tokens \| info` |
 | **Settings → Network** | Turns a network of sites on and off, picks the network administrators, and moves a `sqlite-legacy` site to `sqlite-native` ([multisite.md](multisite.md)) | `npm run network -- enable \| disable \| admins` |
 | **Settings → Site address** | The main address and the other names the site answers ([site-address.md](site-address.md)) | `npm run site` |
 | **Admin → Security** | Certificates (one name, or automatic renewal for several, with the port-80 listener for HTTP-01), and in a monolith the public port and the HTTPS switch | `PORT`, `WORDJS_HTTP`, `gateway-config.json` |
@@ -798,7 +798,7 @@ Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAS
 ## 🔄 Updates
 
 **From the admin panel:** **Admin → Updates** lists the newer releases with their notes and installs one
-with a click (password and a two-factor code): a backup, the `create-wordjs upgrade` below with
+with a click (the password, and a two-factor code when the account has two-factor authentication): a backup, the `create-wordjs upgrade` below with
 `--version <tag>`, an automatic restart, and the previous version put back if the update fails or the new
 version does not start (`backend/data/update-state.json`, read by the monolith's supervisor). It is offered
 on a release install running as the monolith under its supervisor, whose files the service account can

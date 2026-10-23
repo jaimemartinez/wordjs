@@ -6,6 +6,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader, Button, Card, Input } from "@/components/ui";
+import { useMfaEnrolled, needsStepUpCode } from "@/lib/useMfaEnrolled";
 
 /**
  * Admin → Updates (backend core/updater, routes/update.ts): is a newer WordJS out, what it changes (the
@@ -36,6 +37,8 @@ export default function UpdatePage() {
     const [data, setData] = useState<Overview | null>(null);
     const [password, setPassword] = useState("");
     const [code, setCode] = useState("");
+    // A code is asked only of an account with two-factor authentication; without it the password is enough.
+    const [mfaEnrolled, setMfaEnrolled] = useMfaEnrolled();
     const [busy, setBusy] = useState(false);
     const [following, setFollowing] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -73,11 +76,12 @@ export default function UpdatePage() {
         if (!(await confirm(t("update.confirm").replace("{from}", data!.current).replace("{to}", rel.version), t("update.confirmTitle")))) return;
         setBusy(true);
         try {
-            await apiPost("/system/update", { tag: rel.tag, currentPassword: password, mfaCode: code.trim() });
+            await apiPost("/system/update", { tag: rel.tag, currentPassword: password, ...(mfaEnrolled ? { mfaCode: code.trim() } : {}) });
             setPassword(""); setCode("");
             await load();
             follow();
         } catch (e: any) {
+            if (needsStepUpCode(e)) setMfaEnrolled(true);
             addToast(e?.message || t("update.failed"), "error");
         } finally { setBusy(false); }
     };
@@ -138,7 +142,7 @@ export default function UpdatePage() {
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <Input label={t("network.currentPassword")} icon="fa-lock" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-                        <Input label={t("networkSetup.mfaCode")} icon="fa-shield-halved" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
+                        {mfaEnrolled && <Input label={t("networkSetup.mfaCode")} icon="fa-shield-halved" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} data-testid="update-mfa-code" />}
                         <p className="md:col-span-2 text-xs text-gray-500">{t("update.howItWorks")}</p>
                     </div>
                 )}
@@ -151,7 +155,7 @@ export default function UpdatePage() {
                                     <p className="text-xs text-gray-500">{r.tag}{r.publishedAt ? ` · ${new Date(r.publishedAt).toLocaleDateString()}` : ""}{r.hasChecksum ? ` · ${t("update.verified")}` : ""} · <a href={r.url} target="_blank" rel="noopener noreferrer" className="underline">GitHub</a></p>
                                 </div>
                                 {data.environment.canUpdate && i === 0 && (
-                                    <Button icon="fa-cloud-arrow-down" loading={busy} disabled={!password || !code.trim()} onClick={() => install(r)} data-testid="update-install">
+                                    <Button icon="fa-cloud-arrow-down" loading={busy} disabled={!password || (!!mfaEnrolled && !code.trim())} onClick={() => install(r)} data-testid="update-install">
                                         {t("update.install").replace("{version}", r.version)}
                                     </Button>
                                 )}
