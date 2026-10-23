@@ -17,8 +17,8 @@ import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
 import { t as translate } from "@/lib/i18n";
-import { FaPlug, FaTrash, FaDownload, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
-import { PageHeader, Button, EmptyState } from "@/components/ui";
+import { FaPlug, FaCheck, FaExclamationTriangle, FaSlidersH, FaShieldAlt, FaBan, FaUnlock, FaPalette } from "react-icons/fa";
+import { PageHeader, Button, Checkbox, EmptyState, FileButton, IconButton, Input, SegmentedControl, UnstyledButton } from "@/components/ui";
 import FreedServicesNotice from "./FreedServicesNotice";
 import MarketplaceTab from "./MarketplaceTab";
 
@@ -187,15 +187,15 @@ export function partitionPlugins(plugins: Plugin[]): { broken: Plugin[]; healthy
 export function PackPluginButton({ plugin, packing, onPack, t = defaultLanguage }: { plugin: Plugin; packing: boolean; onPack: (plugin: Plugin) => void; t?: (key: string) => string }) {
     if (!plugin.packable) return null;
     return (
-        <button
+        <IconButton
+            size="sm"
+            variant="secondary"
+            icon={packing ? "fa-rotate fa-spin" : "fa-file-zipper"}
             onClick={() => onPack(plugin)}
             disabled={packing}
-            className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm disabled:opacity-50 disabled:cursor-wait"
             title={t('plugins.pack.title')}
-            aria-label={t('plugins.pack.ariaLabel').replace('{name}', plugin.name)}
-        >
-            {packing ? <FaSyncAlt className="text-sm animate-spin" /> : <FaFileArchive className="text-sm" />}
-        </button>
+            label={t('plugins.pack.ariaLabel').replace('{name}', plugin.name)}
+        />
     );
 }
 
@@ -227,19 +227,12 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
             </p>
 
             <div className="flex flex-wrap gap-2">
-                <button
-                    onClick={() => onReinstall(plugin)}
-                    className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-sm flex items-center gap-2"
-                >
-                    <FaStore className="text-[11px]" /> {t('plugins.broken.reinstall')}
-                </button>
-                <button
-                    onClick={() => onCleanup(plugin)}
-                    disabled={busy}
-                    className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 active:scale-95 transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
-                >
-                    <FaTrash className="text-[11px]" /> {t('plugins.broken.cleanup')}
-                </button>
+                <Button size="sm" icon="fa-store" onClick={() => onReinstall(plugin)}>
+                    {t('plugins.broken.reinstall')}
+                </Button>
+                <Button size="sm" variant="danger" icon="fa-trash" onClick={() => onCleanup(plugin)} disabled={busy}>
+                    {t('plugins.broken.cleanup')}
+                </Button>
             </div>
         </div>
     );
@@ -710,8 +703,8 @@ export default function PluginsPage() {
         }
     };
 
-    const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+    const handleUpload = async (files: File[]) => {
+        const file = files[0];
         if (!file) return;
 
         if (!file.name.endsWith('.zip')) {
@@ -739,7 +732,6 @@ export default function PluginsPage() {
             }
         } finally {
             setUploading(false);
-            e.target.value = "";
         }
     };
 
@@ -819,20 +811,12 @@ export default function PluginsPage() {
                         </div>
 
                         <div className="flex justify-end gap-3 pt-2">
-                            <button
-                                onClick={() => setPortConflictPrompt(null)}
-                                disabled={freeingPort}
-                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-50"
-                            >
+                            <Button variant="ghost" size="md" onClick={() => setPortConflictPrompt(null)} disabled={freeingPort}>
                                 {t('cancel')}
-                            </button>
-                            <button
-                                onClick={confirmFreePort}
-                                disabled={freeingPort}
-                                className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold uppercase tracking-widest rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-amber-500/20 hover:scale-102 active:scale-98"
-                            >
-                                {freeingPort ? (<><FaSyncAlt className="animate-spin" /> {t('plugins.freeport.freeing')}</>) : (<><FaUnlock /> {t('plugins.freeport.confirm')}</>)}
-                            </button>
+                            </Button>
+                            <Button size="md" icon="fa-unlock" onClick={confirmFreePort} pending={freeingPort} pendingLabel={t('plugins.freeport.freeing')}>
+                                {t('plugins.freeport.confirm')}
+                            </Button>
                         </div>
                     </div>
                 </DialogLayer>
@@ -863,20 +847,12 @@ export default function PluginsPage() {
                             <p>{t('plugins.theme.switchPrompt')}</p>
                         </div>
                         <div className="flex justify-end gap-3 pt-2">
-                            <button
-                                onClick={() => setThemeSwitchPrompt(null)}
-                                disabled={switchingTheme}
-                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-50"
-                            >
+                            <Button variant="ghost" size="md" onClick={() => setThemeSwitchPrompt(null)} disabled={switchingTheme}>
                                 {t('plugins.theme.keepCurrent')}
-                            </button>
-                            <button
-                                onClick={confirmThemeSwitch}
-                                disabled={switchingTheme}
-                                className="px-6 py-3 bg-violet-600 hover:bg-violet-700 text-white text-xs font-extrabold uppercase tracking-widest rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-violet-500/20 hover:scale-102 active:scale-98"
-                            >
-                                {switchingTheme ? (<><FaSyncAlt className="animate-spin" /> {t('plugins.theme.switching')}</>) : (<><FaPalette /> {t('plugins.theme.switchNow')}</>)}
-                            </button>
+                            </Button>
+                            <Button size="md" icon="fa-palette" onClick={confirmThemeSwitch} pending={switchingTheme} pendingLabel={t('plugins.theme.switching')}>
+                                {t('plugins.theme.switchNow')}
+                            </Button>
                         </div>
                     </div>
                 </DialogLayer>
@@ -902,54 +878,39 @@ export default function PluginsPage() {
                         </p>
 
                         <div className="mb-6 space-y-2">
-                            <label htmlFor="plugins-field-1" className="block text-[11px] font-black text-slate-400 uppercase tracking-widest">
-                                {t('users.password')}
-                            </label>
-                            <input id="plugins-field-1"
+                            <Input
+                                id="plugins-field-1"
+                                size="md"
                                 type="password"
-                                className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white focus:ring-4 focus:ring-rose-500/10 focus:border-rose-500 outline-none transition-all text-xs font-semibold placeholder-slate-400 shadow-sm"
+                                label={t('users.password')}
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 placeholder={t('users.password')}
+                                error={deleteError || undefined}
                                 autoFocus
                             />
-                            {deleteError && (
-                                <p className="text-rose-500 text-xs font-bold flex items-center gap-2 mt-1">
-                                    <FaExclamationTriangle className="text-[11px]" /> {deleteError}
-                                </p>
-                            )}
                         </div>
 
                         {/* Also drop the plugin's data/tables (rank 2). Default OFF — destructive & irreversible. */}
-                        <label className="mb-6 flex items-start gap-3 p-4 rounded-2xl border border-rose-100/40 bg-rose-50/40 cursor-pointer select-none hover:bg-rose-50/60 transition-colors shadow-sm">
-                            <input
-                                type="checkbox"
-                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500/20"
-                                checked={dropData}
-                                onChange={(e) => setDropData(e.target.checked)}
-                            />
-                            <span className="text-xs text-slate-700 leading-normal font-semibold">
-                                <span className="font-extrabold text-rose-700 block mb-0.5">{t('plugins.delete.dropData')}</span>
-                                <span className="block text-[11px] text-slate-400/90 font-medium">{t('plugins.delete.dropDataHelp')}</span>
-                            </span>
-                        </label>
+                        <Checkbox
+                            checked={dropData}
+                            onChange={(e) => setDropData(e.target.checked)}
+                            containerClassName="mb-6 p-4 rounded-2xl border border-rose-100/40 bg-rose-50/40 hover:bg-rose-50/60 transition-colors shadow-sm"
+                            label={
+                                <span className="text-xs text-slate-700 leading-normal font-semibold">
+                                    <span className="font-extrabold text-rose-700 block mb-0.5">{t('plugins.delete.dropData')}</span>
+                                    <span className="block text-[11px] text-slate-500 font-medium">{t('plugins.delete.dropDataHelp')}</span>
+                                </span>
+                            }
+                        />
 
                         <div className="flex justify-end gap-3 pt-2">
-                            <button
-                                onClick={() => setDeleteModalOpen(false)}
-                                disabled={!!deletePending}
-                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
+                            <Button variant="ghost" size="md" onClick={() => setDeleteModalOpen(false)} disabled={!!deletePending}>
                                 {t('cancel')}
-                            </button>
-                            <button
-                                onClick={confirmDelete}
-                                disabled={!password || !!deletePending}
-                                aria-busy={!!deletePending || undefined}
-                                className="px-6 py-3 bg-rose-600 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-rose-500/20 hover:shadow-rose-500/40 transition-all hover:scale-102 active:scale-98"
-                            >
+                            </Button>
+                            <Button variant="danger" size="md" onClick={confirmDelete} disabled={!password || !!deletePending} aria-busy={!!deletePending || undefined}>
                                 <PendingLabel pending={deletePending} label={t('plugins.delete.confirm')} t={t} />
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 </DialogLayer>
@@ -1005,12 +966,9 @@ export default function PluginsPage() {
                                 )}
                         </div>
                         <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-slate-100 mt-2">
-                            <button
-                                onClick={() => setRejection(null)}
-                                className="px-6 py-3 bg-slate-900 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-slate-800 shadow-lg shadow-slate-900/10 transition-all hover:scale-102 active:scale-98"
-                            >
+                            <Button size="md" onClick={() => setRejection(null)}>
                                 {t('common.close') || 'Close'}
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 </DialogLayer>
@@ -1031,9 +989,7 @@ export default function PluginsPage() {
                                     <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">{detailPlugin.slug} · v{detailPlugin.version}</p>
                                 </div>
                             </div>
-                            <button onClick={() => setDetailPlugin(null)} className="p-2 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all">
-                                <FaTimes className="text-sm" />
-                            </button>
+                            <IconButton icon="fa-xmark" label={t('common.close')} onClick={() => setDetailPlugin(null)} />
                         </div>
 
                         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar space-y-6">
@@ -1096,13 +1052,16 @@ export default function PluginsPage() {
                                                     </>
                                                 );
                                             })()}
-                                            <button
+                                            <Button
+                                                size="sm"
+                                                variant="secondary"
+                                                className="mt-1 inline-flex"
+                                                icon={restarting[detailPlugin.slug] ? 'fa-rotate fa-spin' : 'fa-rotate'}
                                                 onClick={() => handleRestart(detailPlugin)}
                                                 disabled={!!restarting[detailPlugin.slug]}
-                                                className="mt-1 inline-flex items-center gap-2 text-xs font-extrabold uppercase tracking-widest px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-all hover:scale-102 active:scale-98 shadow-sm cursor-pointer"
                                             >
-                                                <FaSyncAlt className={restarting[detailPlugin.slug] ? 'animate-spin' : ''} /> {t('plugins.runtime.reload')}
-                                            </button>
+                                                {t('plugins.runtime.reload')}
+                                            </Button>
                                         </div>
                                     ) : (
                                         <p className="text-[11px] font-semibold text-slate-400 bg-slate-50 border border-slate-100 rounded-xl p-3.5">{t('plugins.runtime.noData')}</p>
@@ -1200,24 +1159,20 @@ export default function PluginsPage() {
 
                         {/* Footer - Fixed */}
                         <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-slate-100 mt-2">
-                            <button
+                            <Button
+                                variant="ghost"
+                                size="md"
                                 onClick={() => {
                                     setPermissionModalOpen(false);
                                     setPluginToActivate(null);
                                 }}
                                 disabled={!!activatePending}
-                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                                 {t('cancel')}
-                            </button>
-                            <button
-                                onClick={confirmActivate}
-                                disabled={!!activatePending}
-                                aria-busy={!!activatePending || undefined}
-                                className="px-6 py-3 bg-blue-600 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-blue-700 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all hover:scale-102 active:scale-98 disabled:opacity-70 disabled:cursor-wait disabled:hover:scale-100"
-                            >
+                            </Button>
+                            <Button size="md" onClick={confirmActivate} disabled={!!activatePending} aria-busy={!!activatePending || undefined}>
                                 <PendingLabel pending={activatePending} label={t('plugins.confirm.activate')} t={t} />
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 </DialogLayer>
@@ -1261,7 +1216,7 @@ export default function PluginsPage() {
                                                 reason and the declared roles under them — across the whole row on a phone
                                                 (PERMISSION_DETAILS_CLASS). In one column beside the switch they stopped ~75 px
                                                 short of the card's edge on an iPhone. */}
-                                            <button
+                                            <UnstyledButton
                                                 onClick={() => { if (!beyondCeiling) toggleGrant(token); }}
                                                 disabled={beyondCeiling}
                                                 role="switch"
@@ -1286,17 +1241,17 @@ export default function PluginsPage() {
                                                     {reason && <span className="block text-xs text-slate-600 font-semibold leading-relaxed mt-1.5 italic"><span className={REASON_LABEL_CLASS}>{isUndeclared(permsModalPlugin, token) ? t('plugins.permission.wordjsNote') : t('plugins.permission.pluginSays')} </span>{reason}</span>}
                                                     {token === ROLES_TOKEN && <DeclaredRolesList roles={permsModalPlugin.roles} heading={t('plugins.declaredRoles')} state={rolesHeldState(permsModalPlugin, 'permissions')} capabilitiesLabel={t('plugins.declaredRoles.capabilities')} heldTemplate={t('plugins.declaredRoles.held')} heldGrantedTemplate={t('plugins.declaredRoles.heldGranted')} heldStaysOffTemplate={t('plugins.declaredRoles.heldStaysOff')} />}
                                                 </span>
-                                            </button>
+                                            </UnstyledButton>
                                         </div>
                                     );
                                 })}
                             </div>
                         </div>
                         <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-slate-100 mt-2">
-                            <button onClick={() => setPermsModalPlugin(null)} className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all">{t('cancel')}</button>
-                            <button onClick={savePermissions} disabled={savingPerms} className="px-6 py-3 bg-blue-600 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-blue-700 disabled:opacity-50 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all hover:scale-102 active:scale-98">
-                                {savingPerms ? t('plugins.permissions.saving') : t('plugins.permissions.save')}
-                            </button>
+                            <Button variant="ghost" size="md" onClick={() => setPermsModalPlugin(null)}>{t('cancel')}</Button>
+                            <Button size="md" onClick={savePermissions} pending={savingPerms} pendingLabel={t('plugins.permissions.saving')}>
+                                {t('plugins.permissions.save')}
+                            </Button>
                         </div>
                     </div>
                 </DialogLayer>
@@ -1309,23 +1264,9 @@ export default function PluginsPage() {
                     subtitle={t('plugins.extend.functionality')}
                     icon="fa-plug"
                     actions={codeLocked ? undefined : (
-                        <div className="relative">
-                            <Button
-                                icon={uploading ? "fa-spinner fa-spin" : "fa-upload"}
-                                loading={uploading}
-                                onClick={() => document.getElementById('plugin-upload-input')?.click()}
-                            >
-                                {uploading ? t('plugins.installing') : t('plugins.upload')}
-                            </Button>
-                            <input
-                                id="plugin-upload-input"
-                                type="file"
-                                accept=".zip"
-                                className="hidden"
-                                onChange={handleUpload}
-                                disabled={uploading}
-                            />
-                        </div>
+                        <FileButton icon="fa-upload" accept=".zip" onFiles={handleUpload} pending={uploading} pendingLabel={t('plugins.installing')}>
+                            {t('plugins.upload')}
+                        </FileButton>
                     )}
                 />
                 {siteScoped && (
@@ -1338,20 +1279,16 @@ export default function PluginsPage() {
             </div>
 
             {/* Installed | Marketplace tabs */}
-            <div className="relative z-10 inline-flex p-1 bg-slate-200/50 backdrop-blur-md rounded-2xl border border-slate-200/40 mb-8 shadow-sm">
-                <button
-                    onClick={() => setTab('installed')}
-                    className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${tab === 'installed' ? 'bg-white text-slate-900 shadow-md border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
-                >
-                    <FaPlug className="text-xs" /> {t('plugins.tab.installed')}
-                </button>
-                {!codeLocked && <button
-                    onClick={() => setTab('marketplace')}
-                    className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${tab === 'marketplace' ? 'bg-white text-slate-900 shadow-md border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
-                >
-                    <FaStore className="text-xs" /> {t('plugins.tab.marketplace')}
-                </button>}
-            </div>
+            <SegmentedControl
+                className="relative z-10 mb-8"
+                aria-label={t('plugins.title')}
+                value={tab}
+                onChange={setTab}
+                options={[
+                    { value: 'installed', icon: 'fa-plug', label: t('plugins.tab.installed') },
+                    ...(codeLocked ? [] : [{ value: 'marketplace' as const, icon: 'fa-store', label: t('plugins.tab.marketplace') }]),
+                ]}
+            />
 
             {/* Marketplace view */}
             {tab === 'marketplace' && (
@@ -1364,27 +1301,21 @@ export default function PluginsPage() {
             {tab === 'installed' && !loading && plugins.length > 0 && (
                 <div className="relative z-10 mb-8 flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between">
                     <div className="relative flex-1 max-w-md">
-                        <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs" />
-                        <input
-                            type="text"
+                        <Input
+                            size="md"
+                            icon="fa-magnifying-glass"
                             value={searchInput}
                             onChange={(e) => setSearchInput(e.target.value)}
                             placeholder={t('plugins.marketplace.search')}
                             aria-label={t('plugins.marketplace.search')}
-                            className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-md focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-xs font-semibold placeholder-slate-400 shadow-sm"
                         />
                     </div>
-                    <div className="flex p-1 bg-slate-200/40 backdrop-blur-md rounded-2xl border border-slate-200/30 shadow-sm">
-                        {(['all', 'active', 'inactive'] as const).map((f) => (
-                            <button
-                                key={f}
-                                onClick={() => setStatusFilter(f)}
-                                className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 ${statusFilter === f ? 'bg-white text-slate-900 shadow-sm border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
-                            >
-                                {t(`plugins.filter.${f}`)}
-                            </button>
-                        ))}
-                    </div>
+                    <SegmentedControl
+                        aria-label={t('plugins.filter.label')}
+                        value={statusFilter}
+                        onChange={setStatusFilter}
+                        options={(['all', 'active', 'inactive'] as const).map((f) => ({ value: f, label: t(`plugins.filter.${f}`) }))}
+                    />
                 </div>
             )}
 
@@ -1442,31 +1373,12 @@ export default function PluginsPage() {
                                         <FaPlug className="text-lg" />
                                     </div>
                                     <div className="flex gap-1.5 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-all duration-300 translate-y-0 [@media(hover:hover)]:translate-y-1 group-hover:translate-y-0 focus-within:translate-y-0">
-                                        <button
-                                            onClick={() => setDetailPlugin(plugin)}
-                                            className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm"
-                                            title={t('plugins.details')}
-                                        >
-                                            <FaInfoCircle className="text-sm" />
-                                        </button>
+                                        <IconButton size="sm" variant="secondary" icon="fa-circle-info" label={t('plugins.details')} onClick={() => setDetailPlugin(plugin)} />
                                         {!codeLocked && <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} t={t} />}
                                         {!plugin.active && !codeLocked && (
                                             <>
-                                                <button
-                                                    onClick={() => pluginsApi.download(plugin.slug)}
-                                                    className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm"
-                                                    title={t('plugins.downloadSource')}
-                                                >
-                                                    <FaDownload className="text-sm" />
-                                                </button>
-                                                <button
-                                                    onClick={() => initiateDelete(plugin)}
-                                                    disabled={!!pendingAction[plugin.slug]}
-                                                    className="p-2 rounded-xl bg-rose-50 border border-rose-100 text-rose-500 hover:bg-rose-100 hover:border-rose-200 hover:scale-105 active:scale-95 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
-                                                    title={t('plugins.delete.title')}
-                                                >
-                                                    <FaTrash className="text-sm" />
-                                                </button>
+                                                <IconButton size="sm" variant="secondary" icon="fa-download" label={t('plugins.downloadSource')} onClick={() => pluginsApi.download(plugin.slug)} />
+                                                <IconButton size="sm" variant="danger" icon="fa-trash" label={t('plugins.delete.title')} onClick={() => initiateDelete(plugin)} disabled={!!pendingAction[plugin.slug]} />
                                             </>
                                         )}
                                     </div>
@@ -1512,25 +1424,21 @@ export default function PluginsPage() {
                                                     )}
                                                 </div>
                                             </div>
-                                            <button
+                                            <IconButton
+                                                size="sm"
+                                                icon={restarting[plugin.slug] ? 'fa-rotate fa-spin' : 'fa-rotate'}
+                                                label={t('plugins.runtime.restartTitle')}
                                                 onClick={() => handleRestart(plugin)}
                                                 disabled={!!restarting[plugin.slug]}
-                                                title={t('plugins.runtime.restartTitle')}
-                                                className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-200/60 hover:text-slate-700 disabled:opacity-50 transition-all hover:scale-105 active:scale-95 border border-transparent hover:border-slate-200/50 shadow-sm"
-                                            >
-                                                <FaSyncAlt className={`text-[11px] ${restarting[plugin.slug] ? 'animate-spin' : ''}`} />
-                                            </button>
+                                            />
                                         </div>
                                         {(isCrashLooping || isRefused || isStopped) && plugin.runtime?.lastError && (
                                             <p className="text-[11px] text-red-600 bg-red-50/50 border border-red-100 rounded-lg p-2 mt-2 font-mono break-words line-clamp-2" title={plugin.runtime.lastError}>{plugin.runtime.lastError}</p>
                                         )}
                                         {isRefused && (
-                                            <button
-                                                onClick={() => setDetailPlugin(plugin)}
-                                                className="mt-2 text-[11px] font-extrabold uppercase tracking-wider text-rose-700 hover:underline"
-                                            >
+                                            <Button variant="link" className="mt-2 text-[11px] font-extrabold uppercase tracking-wider" onClick={() => setDetailPlugin(plugin)}>
                                                 {t('plugins.runtime.whyRefused')}
-                                            </button>
+                                            </Button>
                                         )}
                                     </div>
                                 )}
@@ -1561,28 +1469,26 @@ export default function PluginsPage() {
                                         <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">
                                             v{plugin.version}
                                         </span>
-                                        {!(siteScoped && !plugin.offered) && <button
-                                            onClick={() => openPermissions(plugin)}
-                                            title={t('plugins.permissions.manageHint')}
-                                            className="text-[11px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-blue-50 hover:text-blue-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95"
-                                        >
-                                            <FaSlidersH className="text-[11px]" /> {t('plugins.permissions.manage')}
-                                        </button>}
+                                        {!(siteScoped && !plugin.offered) && <Button size="sm" variant="secondary" icon="fa-sliders" title={t('plugins.permissions.manageHint')} onClick={() => openPermissions(plugin)}>
+                                            {t('plugins.permissions.manage')}
+                                        </Button>}
                                         {plugin.hasTheme && (
-                                            <button
+                                            <Button
+                                                size="sm"
+                                                variant="secondary"
                                                 onClick={() => handleInstallTheme(plugin)}
                                                 disabled={plugin.themeInstalled || !!installingTheme[plugin.slug]}
                                                 title={plugin.themeInstalled
                                                     ? t('plugins.theme.alreadyInstalledHint')
                                                     : t('plugins.theme.installHint')}
-                                                className="text-[11px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-violet-50 hover:text-violet-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100 disabled:hover:bg-slate-50 disabled:hover:text-slate-500"
+                                                icon={installingTheme[plugin.slug] ? 'fa-rotate fa-spin' : plugin.themeInstalled ? 'fa-check' : 'fa-palette'}
                                             >
                                                 {installingTheme[plugin.slug]
-                                                    ? (<><FaSyncAlt className="text-[11px] animate-spin" /> {t('plugins.theme.installing')}</>)
+                                                    ? t('plugins.theme.installing')
                                                     : plugin.themeInstalled
-                                                        ? (<><FaCheck className="text-[11px]" /> {t('plugins.theme.installed')}</>)
-                                                        : (<><FaPalette className="text-[11px]" /> {t('plugins.theme.install')}</>)}
-                                            </button>
+                                                        ? t('plugins.theme.installed')
+                                                        : t('plugins.theme.install')}
+                                            </Button>
                                         )}
                                     </div>
 

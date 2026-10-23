@@ -6,6 +6,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import DeclaredRolesList, { ROLES_TOKEN, type HeldState } from "./DeclaredRolesList";
 import BreakableToken, { TOKEN_WRAP_CLASS } from "./BreakableToken";
 import type { ActivationGrant } from "./grantState";
+import { Switch } from "@/components/ui";
 
 export const RISK_CLASSES: Record<PermissionRisk, string> = {
     low: 'bg-emerald-50/60 text-emerald-700 border-emerald-200/50 hover:bg-emerald-50 transition-colors',
@@ -118,17 +119,13 @@ export function PermissionRow({ token, reason, platformNote = false, roles, role
                 )}
             </div>
             {onToggleDeclined && (
-                <button
-                    type="button"
-                    role="switch"
-                    aria-checked={!declined}
+                <Switch
+                    checked={!declined}
                     aria-label={`${meta.label} (${token})`}
-                    onClick={onToggleDeclined}
+                    onChange={() => onToggleDeclined()}
                     data-activation-toggle={token}
-                    className={`ml-auto relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-300 mt-0.5 ${declined ? 'bg-slate-300' : 'bg-blue-600'}`}
-                >
-                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${declined ? 'translate-x-1' : 'translate-x-6'} shadow-sm`} />
-                </button>
+                    containerClassName="ml-auto mt-0.5 shrink-0"
+                />
             )}
         </div>
     );

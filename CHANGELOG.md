@@ -90,6 +90,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Plugins and Security use the admin's form kit.** Admin → Plugins (the cards, the marketplace and every
+  plugin dialog) and Admin → Security (gateway, two-factor policy, automatic renewal, certificates, server
+  settings) now use `@/components/ui`:
+  - the plugin cards' icon actions (details, pack, download, delete, restart) had only a tooltip and no
+    accessible name; they are named `IconButton`s;
+  - the installed / marketplace tabs, the status filter and the marketplace categories are named
+    `SegmentedControl`s (one tab stop, arrow keys);
+  - the new catalog-source field had no name at all; it is a named URL field;
+  - the delete dialog's password error sits under the field and is announced;
+  - the certificate key and certificate files are chosen with a `FileButton`, and «Validation method» no
+    longer labels the private-key input;
+  - the server panel's proxy and log-level menus are the kit `Select`;
+  - every form's submit is explicit.
+  A new check holds it: every form in a file fully on the kit must have an explicit submit. These files leave
+  the form kit's allowlist (687 → 619 raw controls left).
 - **Dates follow the site time zone.** A comment, a post, an edit and the starter content stored their local date with the server's clock instead of the site time zone (Settings → General), so on a host in another zone a comment written just after midnight UTC was dated the day before the post it answers. The local date is now built from the site time zone on any host, and the public pages read the UTC moment whenever the site zone is known, so comments stored before this change show the right day too.
 - **A new Text block's sample text is replaced when you start typing.** It is selected when editing starts, instead of the caret landing after it and publishing «Write here...» in front of what was typed. Text an author wrote is untouched.
 - **Ctrl/⌘+K inside a Text block adds a link.** With text selected while editing, the shortcut opened the command palette instead of the link popover. It now opens the link popover; outside a text being edited it still opens the palette.

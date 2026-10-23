@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { Button, Input, Select } from "@/components/ui";
 
 /**
  * Security → Server: the reverse-proxy trust and the log level, which used to need an edit of
@@ -77,44 +78,55 @@ export default function ServerSettingsPanel() {
 
     if (!data) return <p className="text-sm text-gray-500">{message?.text || t("loading")}</p>;
 
-    const input = "w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-gray-800";
     return (
         <form onSubmit={save} className="space-y-6" data-testid="server-settings">
             <div className="space-y-2">
-                <label htmlFor="server-trust" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t("server.trust.label")}</label>
-                <select id="server-trust" value={choice} onChange={(e) => setChoice(e.target.value)} className={input}>
-                    {PRESETS.map((p) => <option key={p.value} value={p.value}>{t(p.key)}</option>)}
-                </select>
+                <Select
+                    id="server-trust"
+                    label={t("server.trust.label")}
+                    value={choice}
+                    onChange={setChoice}
+                    options={PRESETS.map((p) => ({ value: p.value, label: t(p.key) }))}
+                    help={t("server.trust.help")}
+                />
                 {choice === "custom" && (
-                    <input aria-label={t("server.trust.custom")} value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="10.0.0.0/8, 192.168.1.5" className={`${input} font-mono`} />
+                    <Input size="md" aria-label={t("server.trust.custom")} value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="10.0.0.0/8, 192.168.1.5" className="font-mono" />
                 )}
-                <p className="text-xs text-gray-500">{t("server.trust.help")}</p>
                 {data.trustProxy.appliesToGateway && <p className="text-xs text-amber-700">{t("server.trust.split")}</p>}
                 {data.trustProxy.fromEnvironment && <p className="text-xs text-amber-700">{t("server.trust.env")}</p>}
             </div>
-            <div className="space-y-2">
-                <label htmlFor="server-log-level" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t("server.log.label")}</label>
-                <select id="server-log-level" value={level} onChange={(e) => setLevel(e.target.value)} className={input} disabled={data.logLevel.fromEnvironment}>
-                    <option value="">{t("server.log.default")}</option>
-                    <option value="error">error</option>
-                    <option value="warn">warn</option>
-                    <option value="info">info</option>
-                    <option value="debug">debug</option>
-                </select>
-                <p className="text-xs text-gray-500">{data.logLevel.fromEnvironment ? t("server.log.env").replace("{level}", data.logLevel.inForce) : t("server.log.help")}</p>
-            </div>
-            <div className="space-y-2 md:w-80">
-                <label htmlFor="server-password" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t("network.currentPassword")}</label>
-                <input id="server-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={input} required />
-            </div>
+            <Select
+                id="server-log-level"
+                label={t("server.log.label")}
+                value={level}
+                onChange={setLevel}
+                disabled={data.logLevel.fromEnvironment}
+                options={[
+                    { value: "", label: t("server.log.default") },
+                    ...["error", "warn", "info", "debug"].map((l) => ({ value: l, label: l })),
+                ]}
+                help={data.logLevel.fromEnvironment ? t("server.log.env").replace("{level}", data.logLevel.inForce) : t("server.log.help")}
+            />
+            <Input
+                id="server-password"
+                size="md"
+                type="password"
+                revealable
+                label={t("network.currentPassword")}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                containerClassName="md:w-80"
+                required
+            />
             {message && (
                 <p role={message.kind === "error" ? "alert" : "status"} className={`text-sm ${message.kind === "error" ? "text-red-600" : "text-emerald-700"}`}>{message.text}</p>
             )}
             <div className="flex items-center justify-between gap-4 flex-wrap">
                 <p className="text-xs text-gray-400">{t("server.restartNote")}</p>
-                <button type="submit" disabled={busy} className="bg-gray-900 text-white font-bold px-6 py-3 rounded-xl disabled:opacity-50">
-                    {busy ? <i className="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i> : t("server.save")}
-                </button>
+                <Button type="submit" size="md" pending={busy}>
+                    {t("server.save")}
+                </Button>
             </div>
         </form>
     );

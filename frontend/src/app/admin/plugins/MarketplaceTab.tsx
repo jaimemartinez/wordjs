@@ -15,9 +15,9 @@ import { permMeta } from "@/lib/permissionMeta";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
 import { t as translate } from "@/lib/i18n";
-import { FaSearch, FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaTrash, FaPlus, FaShieldAlt, FaCodeBranch, FaQuestionCircle } from "react-icons/fa";
+import { FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaShieldAlt, FaCodeBranch, FaQuestionCircle } from "react-icons/fa";
 import type { IconType } from "react-icons";
-import { Button, EmptyState } from "@/components/ui";
+import { Button, EmptyState, IconButton, Input, SegmentedControl } from "@/components/ui";
 
 const permToken = (p: { scope: string; access?: string }) =>
     p.scope === 'network' ? 'network' : `${p.scope}:${p.access || 'read'}`;
@@ -301,44 +301,31 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
             {/* Toolbar */}
             <div className="flex flex-col md:flex-row md:items-center gap-4 mb-8">
                 <div className="relative flex-1 max-w-md md:min-w-[14rem]">
-                    <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs" />
-                    <input
-                        type="text"
+                    <Input
+                        size="md"
+                        icon="fa-magnifying-glass"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder={t("plugins.marketplace.search")}
                         aria-label={t("plugins.marketplace.search")}
-                        className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-md focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-xs font-semibold placeholder-slate-400 shadow-sm"
                     />
                 </div>
-                <div className="flex p-1 bg-slate-200/40 backdrop-blur-md rounded-2xl border border-slate-200/30 shadow-sm items-center gap-1 flex-wrap">
-                    {categories.map((c) => (
-                        <button
-                            key={c}
-                            onClick={() => setCategory(c)}
-                            className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 ${category === c ? "bg-white text-slate-900 shadow-sm border border-slate-100/50" : "text-slate-500 hover:text-slate-800"}`}
-                        >
-                            {c === "all" ? t("plugins.marketplace.all") : categoryLabel(c, t)}
-                        </button>
-                    ))}
-                </div>
+                <SegmentedControl
+                    className="flex-wrap"
+                    aria-label={t("plugins.marketplace.category")}
+                    value={category}
+                    onChange={setCategory}
+                    options={categories.map((c) => ({ value: c, label: c === "all" ? t("plugins.marketplace.all") : categoryLabel(c, t) }))}
+                />
                 <div className="flex items-center gap-2 ml-auto">
-                    <button
+                    <IconButton
+                        variant="secondary"
+                        icon="fa-gear"
+                        label={t("plugins.marketplace.configureSources")}
+                        aria-pressed={showSources}
                         onClick={() => (showSources ? setShowSources(false) : openSources())}
-                        title={t("plugins.marketplace.configureSources")}
-                        aria-label={t("plugins.marketplace.configureSources")}
-                        className={`w-10 h-10 shrink-0 flex items-center justify-center rounded-2xl border transition-all shadow-sm hover:scale-105 active:scale-95 ${showSources ? "bg-blue-50 border-blue-200 text-blue-600" : "bg-white border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300"}`}
-                    >
-                        <FaCog className="text-xs" />
-                    </button>
-                    <button
-                        onClick={() => load(true)}
-                        title={t("plugins.marketplace.refresh")}
-                        aria-label={t("plugins.marketplace.refresh")}
-                        className="w-10 h-10 shrink-0 flex items-center justify-center rounded-2xl bg-white border border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300 hover:scale-105 active:scale-95 transition-all shadow-sm"
-                    >
-                        <FaSyncAlt className="text-xs" />
-                    </button>
+                    />
+                    <IconButton variant="secondary" icon="fa-rotate" label={t("plugins.marketplace.refresh")} onClick={() => load(true)} />
                 </div>
             </div>
 
@@ -348,7 +335,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                 <div className="mb-8 bg-white/70 backdrop-blur-md border border-slate-200/60 rounded-[24px] p-6 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
                     <div className="flex items-center justify-between mb-2">
                         <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2"><FaCog className="text-blue-500 text-xs" /> {t("plugins.marketplace.sourcesTitle")}</h3>
-                        <button onClick={() => setShowSources(false)} className="text-slate-400 hover:text-slate-700 text-[11px] font-bold uppercase tracking-wider">{t("plugins.marketplace.close")}</button>
+                        <Button variant="ghost" size="sm" onClick={() => setShowSources(false)}>{t("plugins.marketplace.close")}</Button>
                     </div>
                     <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
                         {t("plugins.marketplace.sourcesHelp")}
@@ -364,24 +351,28 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                     {st && (st.ok
                                         ? <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">{st.count ?? 0}</span>
                                         : <span title={st.error} className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 shrink-0">error</span>)}
-                                    <button onClick={() => removeSource(u)} title={t("plugins.marketplace.remove")} aria-label={t("plugins.marketplace.remove")} className="text-slate-300 hover:text-rose-500 text-[11px] px-1 shrink-0"><FaTrash /></button>
+                                    <IconButton size="sm" variant="danger" icon="fa-trash" label={t("plugins.marketplace.remove")} onClick={() => removeSource(u)} />
                                 </div>
                             );
                         })}
                         {srcList.length === 0 && <div className="text-[11px] text-slate-400 italic px-1">{t("plugins.marketplace.noSources")}</div>}
                     </div>
                     <div className="flex items-center gap-2 mb-4">
-                        <input
+                        <Input
+                            size="sm"
+                            type="url"
+                            containerClassName="flex-1"
+                            className="font-mono"
+                            aria-label={t("plugins.marketplace.newSource")}
                             value={newSrc}
                             onChange={(e) => setNewSrc(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSource(); } }}
                             placeholder="https://mi-marketplace.com/catalog"
-                            className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-[11px] font-mono outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
                         />
-                        <Button onClick={addSource} className="shrink-0"><FaPlus className="mr-1.5 text-[11px]" /> {t("plugins.marketplace.add")}</Button>
+                        <Button onClick={addSource} className="shrink-0" icon="fa-plus">{t("plugins.marketplace.add")}</Button>
                     </div>
                     <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
-                        <button onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50">{t("plugins.marketplace.resetDefault")}</button>
+                        <Button variant="link" onClick={resetSources} disabled={savingSrc}>{t("plugins.marketplace.resetDefault")}</Button>
                         <Button onClick={() => saveSources()} disabled={savingSrc}>{savingSrc ? t("plugins.marketplace.saving") : t("plugins.marketplace.saveSources")}</Button>
                     </div>
                 </div>
@@ -500,7 +491,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             </>
                         )}
                         <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-100">
-                            <button onClick={() => setConfirmEntry(null)} className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all">{t("plugins.marketplace.cancel")}</button>
+                            <Button variant="ghost" size="md" onClick={() => setConfirmEntry(null)}>{t("plugins.marketplace.cancel")}</Button>
                             <Button onClick={() => doInstall(confirmEntry)}><FaDownload className="mr-2 text-xs" /> {confirmEntry.installed && confirmEntry.updateAvailable ? fill(t("plugins.marketplace.updateTo"), { version: confirmEntry.version }) : t("plugins.marketplace.install")}</Button>
                         </div>
                     </div>

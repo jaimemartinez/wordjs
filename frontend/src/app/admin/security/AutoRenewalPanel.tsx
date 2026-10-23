@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { Button, Checkbox, Input } from "@/components/ui";
 
 /**
  * One translated sentence with styled parts in it: `{name}` in the text is replaced by parts[name]. Each
@@ -152,58 +153,57 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
 
             {/* Settings */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                    <label htmlFor="autorenew-field-1" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('ssl.auto.accountEmail')}</label>
-                    <input id="autorenew-field-1"
-                        type="email"
-                        value={cfg.email}
-                        onChange={e => setCfg({ ...cfg, email: e.target.value })}
-                        placeholder="you@example.com"
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all text-gray-800"
-                    />
-                    <p className="text-xs text-gray-500 ml-1">{t('ssl.auto.accountEmailHint')}</p>
-                </div>
-                <div className="space-y-2">
-                    <label htmlFor="autorenew-field-2" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('ssl.auto.renewBefore')}</label>
-                    <input id="autorenew-field-2"
-                        type="number" min={1} max={89}
-                        value={cfg.renewBeforeDays}
-                        onChange={e => setCfg({ ...cfg, renewBeforeDays: Number(e.target.value) })}
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all font-mono text-gray-800"
-                    />
-                    <p className="text-xs text-gray-500 ml-1">{t('ssl.auto.renewBeforeHint')}</p>
-                </div>
-                <div className="space-y-2 md:col-span-2">
-                    <label htmlFor="autorenew-field-3" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('ssl.auto.domains')}</label>
-                    <input id="autorenew-field-3"
-                        type="text"
-                        value={domainsText}
-                        onChange={e => setDomainsText(e.target.value)}
-                        placeholder="example.com, www.example.com"
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all text-gray-800"
-                    />
-                    <p className="text-xs text-gray-500 ml-1">{t('ssl.auto.domainsHint')}</p>
-                </div>
-                <div className="space-y-2">
-                    <label htmlFor="acme-http01-port" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('ssl.auto.port80')}</label>
-                    <input
-                        id="acme-http01-port"
-                        type="number" min={1} max={65535}
-                        value={cfg.http01Port ?? ''}
-                        onChange={e => setCfg({ ...cfg, http01Port: e.target.value === '' ? null : Number(e.target.value) })}
-                        placeholder={t('ssl.auto.port80Off')}
-                        data-testid="acme-http01-port"
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all font-mono text-gray-800"
-                    />
-                    <p className="text-xs text-gray-500 ml-1">{t('ssl.auto.port80Hint')}</p>
-                </div>
+                <Input
+                    id="autorenew-field-1"
+                    size="md"
+                    label={t('ssl.auto.accountEmail')}
+                    help={t('ssl.auto.accountEmailHint')}
+                    type="email"
+                    value={cfg.email}
+                    onChange={e => setCfg({ ...cfg, email: e.target.value })}
+                    placeholder="you@example.com"
+                />
+                <Input
+                    id="autorenew-field-2"
+                    size="md"
+                    label={t('ssl.auto.renewBefore')}
+                    help={t('ssl.auto.renewBeforeHint')}
+                    type="number" min={1} max={89}
+                    value={cfg.renewBeforeDays}
+                    onChange={e => setCfg({ ...cfg, renewBeforeDays: Number(e.target.value) })}
+                    className="font-mono"
+                />
+                <Input
+                    id="autorenew-field-3"
+                    size="md"
+                    label={t('ssl.auto.domains')}
+                    help={t('ssl.auto.domainsHint')}
+                    type="text"
+                    value={domainsText}
+                    onChange={e => setDomainsText(e.target.value)}
+                    placeholder="example.com, www.example.com"
+                    containerClassName="md:col-span-2"
+                />
+                <Input
+                    id="acme-http01-port"
+                    size="md"
+                    label={t('ssl.auto.port80')}
+                    help={t('ssl.auto.port80Hint')}
+                    type="number" min={1} max={65535}
+                    value={cfg.http01Port ?? ''}
+                    onChange={e => setCfg({ ...cfg, http01Port: e.target.value === '' ? null : Number(e.target.value) })}
+                    placeholder={t('ssl.auto.port80Off')}
+                    data-testid="acme-http01-port"
+                    className="font-mono"
+                />
             </div>
 
             {/* Staging */}
-            <label className="flex items-center gap-3 text-sm text-gray-700 cursor-pointer select-none">
-                <input type="checkbox" checked={cfg.staging} onChange={e => setCfg({ ...cfg, staging: e.target.checked })} className="w-4 h-4 accent-amber-500" />
-                {t('ssl.auto.stagingBefore')} <span className="font-semibold">{t('ssl.auto.stagingWord')}</span> {t('ssl.auto.stagingAfter')}
-            </label>
+            <Checkbox
+                checked={cfg.staging}
+                onChange={e => setCfg({ ...cfg, staging: e.target.checked })}
+                label={<span className="font-normal text-gray-700">{t('ssl.auto.stagingBefore')} <span className="font-semibold">{t('ssl.auto.stagingWord')}</span> {t('ssl.auto.stagingAfter')}</span>}
+            />
 
             {/* HTTP-01 reachability note */}
             <div className="flex items-start gap-3 p-4 bg-blue-50/60 rounded-xl border border-blue-100 text-sm text-blue-800">
@@ -221,23 +221,12 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
             </div>
 
             <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-gray-100">
-                <button
-                    type="button"
-                    onClick={renewNow}
-                    disabled={renewing}
-                    className="bg-white border border-amber-300 text-amber-700 font-bold px-6 py-3 rounded-xl transition-all hover:bg-amber-50 disabled:opacity-50"
-                >
-                    {renewing ? <span className="flex items-center gap-2"><i className="fa-solid fa-circle-notch fa-spin"></i> {t('ssl.auto.renewing')}</span>
-                        : <span className="flex items-center gap-2"><i className="fa-solid fa-bolt"></i> {t('ssl.auto.renewNow')}</span>}
-                </button>
-                <button
-                    type="submit"
-                    disabled={saving}
-                    className="bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white font-bold px-8 py-3 rounded-xl transition-all shadow-lg shadow-amber-200 hover:-translate-y-0.5"
-                >
-                    {saving ? <span className="flex items-center gap-2"><i className="fa-solid fa-circle-notch fa-spin"></i> {t('ssl.auto.saving')}</span>
-                        : <span className="flex items-center gap-2"><i className="fa-solid fa-floppy-disk"></i> {t('ssl.auto.save')}</span>}
-                </button>
+                <Button variant="secondary" size="md" icon="fa-bolt" onClick={renewNow} pending={renewing} pendingLabel={t('ssl.auto.renewing')}>
+                    {t('ssl.auto.renewNow')}
+                </Button>
+                <Button type="submit" size="md" icon="fa-floppy-disk" pending={saving} pendingLabel={t('ssl.auto.saving')}>
+                    {t('ssl.auto.save')}
+                </Button>
             </div>
         </form>
     );

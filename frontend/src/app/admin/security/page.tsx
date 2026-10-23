@@ -1,7 +1,7 @@
 "use client";
 
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader } from "@/components/ui";
+import { Button, Checkbox, Input, PageHeader, UnstyledButton } from "@/components/ui";
 import Link from "next/link";
 import SSLCertManager from "./SSLCertManager";
 import AutoRenewalPanel from "./AutoRenewalPanel";
@@ -247,7 +247,7 @@ function GatewayConfigForm() {
                 <div>
                     <h3 className="font-bold text-lg mb-1">{t('security.gateway.loadError')}</h3>
                     <p className="text-sm opacity-90">{config.error}</p>
-                    <button onClick={() => window.location.reload()} className="text-sm font-bold underline mt-3 hover:text-red-800">{t('security.gateway.retry')}</button>
+                    <Button variant="link" className="mt-3" onClick={() => window.location.reload()}>{t('security.gateway.retry')}</Button>
                 </div>
             </div>
         );
@@ -348,10 +348,9 @@ function GatewayConfigForm() {
                     <div className="text-sm text-amber-900 space-y-3">
                         <p>{t(notice)}</p>
                         {needsCertificate && (
-                            <button type="button" onClick={generateSelfSigned} disabled={generating} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold">
-                                <i className={`fa-solid ${generating ? 'fa-circle-notch fa-spin' : 'fa-certificate'}`}></i>
+                            <Button size="md" icon="fa-certificate" onClick={generateSelfSigned} pending={generating}>
                                 {t('security.gateway.generateSelfSigned')}
-                            </button>
+                            </Button>
                         )}
                     </div>
                 </div>
@@ -405,19 +404,17 @@ function GatewayConfigForm() {
             )}
 
             <div className="space-y-3">
-                <label htmlFor="security-gateway-port" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('security.gateway.port')}</label>
-                <div className="relative">
-                    <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-bold">:</span>
-                    <input id="security-gateway-port"
-                        type="number"
-                        disabled={pinnedPort}
-                        value={config.gatewayPort ?? 3000}
-                        onChange={e => setConfig({ ...config, gatewayPort: e.target.value })}
-                        className="w-full pl-8 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-mono text-gray-800"
-                        placeholder="3000"
-                    />
-                </div>
-                <p className="text-xs text-gray-500 ml-1">{t(pinnedPort ? 'security.monolith.portPinned' : monolith ? 'security.monolith.portHint' : 'security.gateway.portHint')}</p>
+                <Input
+                    id="security-gateway-port"
+                    type="number"
+                    label={t('security.gateway.port')}
+                    help={t(pinnedPort ? 'security.monolith.portPinned' : monolith ? 'security.monolith.portHint' : 'security.gateway.portHint')}
+                    disabled={pinnedPort}
+                    value={config.gatewayPort ?? 3000}
+                    onChange={e => setConfig({ ...config, gatewayPort: e.target.value })}
+                    className="font-mono"
+                    placeholder="3000"
+                />
             </div>
 
             <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-center justify-between gap-6 group hover:bg-emerald-100/50 transition-all cursor-pointer shadow-sm" aria-disabled={pinnedTls} onClick={() => { if (!pinnedTls) setConfig({ ...config, sslEnabled: !config.sslEnabled }); }}>
@@ -440,21 +437,9 @@ function GatewayConfigForm() {
             </div>
 
             <div className="md:col-span-2 flex justify-end pt-4 border-t border-gray-100">
-                <button
-                    type="submit"
-                    disabled={saving}
-                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-lg px-10 py-4 rounded-xl transition-all shadow-xl shadow-indigo-200 hover:shadow-2xl transform hover:-translate-y-1 active:translate-y-0"
-                >
-                    {saving ? (
-                        <span className="flex items-center gap-2">
-                            <i className="fa-solid fa-circle-notch fa-spin"></i> {t('settings.saving')}
-                        </span>
-                    ) : (
-                        <span className="flex items-center gap-2">
-                            <i className="fa-solid fa-floppy-disk"></i> {t('security.gateway.save')}
-                        </span>
-                    )}
-                </button>
+                <Button type="submit" size="lg" icon="fa-floppy-disk" pending={saving} pendingLabel={t('settings.saving')}>
+                    {t('security.gateway.save')}
+                </Button>
             </div>
         </form>
     );
@@ -544,8 +529,7 @@ function MfaPolicyForm() {
                 {Object.entries(roles).map(([slug, role]) => {
                     const on = required.includes(slug);
                     return (
-                        <button
-                            type="button"
+                        <UnstyledButton
                             key={slug}
                             onClick={() => toggle(slug)}
                             aria-pressed={on}
@@ -555,29 +539,21 @@ function MfaPolicyForm() {
                         >
                             <span>
                                 <span className="block font-bold text-gray-800">{role.name || slug}</span>
-                                <span className="block text-[11px] font-mono text-gray-400">{slug}</span>
+                                <span className="block text-[11px] font-mono text-gray-500">{slug}</span>
                             </span>
-                            <i className={`fa-solid ${on ? "fa-circle-check text-emerald-500" : "fa-circle text-gray-300"} text-lg`}></i>
-                        </button>
+                            <i className={`fa-solid ${on ? "fa-circle-check text-emerald-500" : "fa-circle text-gray-400"} text-lg`} aria-hidden="true"></i>
+                        </UnstyledButton>
                     );
                 })}
             </div>
 
-            <label className="flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-200 bg-white/40 cursor-pointer">
-                <input
-                    type="checkbox"
-                    checked={enforceForApiTokens}
-                    onChange={(e) => setEnforceForApiTokens(e.target.checked)}
-                    className="mt-0.5 w-4 h-4 accent-emerald-600"
-                />
-                <span>
-                    <span className="block font-bold text-gray-800">{t('security.mfa.enforceTokens')}</span>
-                    <span className="block text-[11px] text-gray-400 mt-0.5">
-                        {t('security.mfa.enforceTokensHelpBefore')} <code>Bearer wjt_…</code>{" "}
-                        {t('security.mfa.enforceTokensHelpAfter')}
-                    </span>
-                </span>
-            </label>
+            <Checkbox
+                checked={enforceForApiTokens}
+                onChange={(e) => setEnforceForApiTokens(e.target.checked)}
+                containerClassName="px-4 py-3 rounded-2xl border-2 border-gray-200 bg-white/40"
+                label={t('security.mfa.enforceTokens')}
+                help={<>{t('security.mfa.enforceTokensHelpBefore')} <code>Bearer wjt_…</code>{" "}{t('security.mfa.enforceTokensHelpAfter')}</>}
+            />
 
             {tokensExempt && (
                 <div
@@ -605,24 +581,21 @@ function MfaPolicyForm() {
             )}
 
             <div className="flex flex-wrap items-end gap-4">
-                <div>
-                    <label htmlFor="security-mfa-grace-days" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('security.mfa.graceDays')}</label>
-                    <input id="security-mfa-grace-days"
-                        type="number"
-                        min={0}
-                        value={graceDays}
-                        onChange={(e) => setGraceDays(Math.max(0, Number(e.target.value)))}
-                        className="w-40 px-4 py-3 bg-white/60 border-2 border-gray-200 rounded-2xl focus:ring-4 focus:ring-emerald-100 focus:border-emerald-500 outline-none font-bold"
-                    />
-                    <p className="text-[11px] text-gray-400 mt-1.5">{t('security.mfa.graceHint')}</p>
-                </div>
-                <button
-                    onClick={save}
-                    disabled={saving}
-                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-500/25 transition-all disabled:opacity-50"
-                >
-                    {saving ? t('common.saving') : t('security.mfa.save')}
-                </button>
+                <Input
+                    id="security-mfa-grace-days"
+                    size="md"
+                    type="number"
+                    min={0}
+                    label={t('security.mfa.graceDays')}
+                    help={t('security.mfa.graceHint')}
+                    value={graceDays}
+                    onChange={(e) => setGraceDays(Math.max(0, Number(e.target.value)))}
+                    containerClassName="w-40"
+                    className="font-bold"
+                />
+                <Button size="md" onClick={save} pending={saving} pendingLabel={t('common.saving')}>
+                    {t('security.mfa.save')}
+                </Button>
             </div>
 
             {selfAtRisk && (
