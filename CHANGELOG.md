@@ -41,6 +41,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   panel opens next to its field, above it only when there is no room below, and appears over dialogs. It works
   with the keyboard (arrows, Enter, Escape, typing to jump) and a screen reader.
 
+### Fixed
+
+- **conference-manager 2.33.3: «Copiar mensaje» works for people with no e-mail on file.** It used to refuse with
+  «se requiere un correo válido». The message is now copied anyway, and the consent page asks the person for their
+  e-mail. The signing code goes there, and the e-mail is kept as verified in the evidence (noted as typed on the
+  page) and fills their empty e-mail field. The e-mail field is also recognized by its label («Correo», «Correo
+  electrónico», «E-mail»), not only by the «Email» template.
+
 ## [2.10.0] - 2026-10-23
 
 ### Added

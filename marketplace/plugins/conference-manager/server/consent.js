@@ -95,7 +95,19 @@ const MSG = {
     rep: 'Escribe el nombre, el documento y el parentesco del representante legal.',
     mail: 'No se pudo enviar el correo. Inténtalo más tarde.',
     unavailable: 'Esta página no está disponible todavía.',
+    emailBad: 'Escribe un correo válido: allí te enviaremos el código para firmar.',
 };
+
+/**
+ * The e-mail field of a form: the one roled 'email', else named «email», else typed email, else (2.33.3) the first
+ * non-select field whose label speaks of a mail («Correo», «Correo electrónico», «E-mail», «Email»).
+ */
+function emailFieldIn(form, isFieldColumn) {
+    const usable = (form || []).filter(f => f && isFieldColumn(f.name));
+    const label = (f) => String(f.label || f.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return usable.find(f => f.role === 'email') || usable.find(f => f.name === 'email') || usable.find(f => f.type === 'email')
+        || usable.find(f => f.type !== 'select' && /(^|\b)(correo|e-?mail)(\b|$)/.test(label(f))) || null;
+}
 
 /** «jaime@gmail.com» → «j***@g***.com» (the UI never shows an e-mail whole). */
 function maskEmail(email) {
@@ -383,8 +395,7 @@ function createConsent(base) {
     }
     /** The e-mail field of a form: the one roled 'email', else named «email», else the first of type email. */
     function emailFieldOf(form) {
-        const usable = form.filter(f => D.isFieldColumn(f.name));
-        return usable.find(f => f.role === 'email') || usable.find(f => f.name === 'email') || usable.find(f => f.type === 'email') || null;
+        return emailFieldIn(form, D.isFieldColumn);
     }
     async function emailOf(ins, form) {
         const f = emailFieldOf(form || await formOf(ins.conference_id));
@@ -536,19 +547,20 @@ function createConsent(base) {
      * code still goes to the person's e-mail. Returns what the message needs (the staff screen writes it in its
      * own language).
      */
-    async function shareLink(ins, { actor, via, httpError }) {
+    async function shareLink(ins, { actor, via }) {
         const conf = await conferenceOf(ins.conference_id);
         const form = await formOf(ins.conference_id);
+        // 2.33.3: a person with no e-mail on file can still get the link: the consent page asks for one, and the code
+        // goes there (the evidence says the e-mail was typed on the page).
         const email = await emailOf(ins, form);
-        if (!email) throw httpError(400, NO_EMAIL);
         const s = await settingsOf(ins.conference_id);
         const { token, link, expires } = await newToken(s);
-        const requestId = await storeToken(ins, email, token, expires);
-        await append({ conference_id: ins.conference_id, inscription_id: ins.id, request_id: requestId, kind: 'link_shared', email, actor, data: { via, channel: 'manual', link_expires_utc: isoUtc(expires * 1000) } });
+        const requestId = await storeToken(ins, email || null, token, expires);
+        await append({ conference_id: ins.conference_id, inscription_id: ins.id, request_id: requestId, kind: 'link_shared', email: email || null, actor, data: { via, channel: 'manual', link_expires_utc: isoUtc(expires * 1000), email_on_file: !!email } });
         const now = await requestOf(ins.id);
         const name = (await D.personWithName(ins)).name || '';
         return {
-            state: now.state, link, email_masked: maskEmail(email), first_name: String(name).split(' ')[0] || '',
+            state: now.state, link, email_masked: email ? maskEmail(email) : '', first_name: String(name).split(' ')[0] || '',
             conference: conf ? conf.name : '', policy_version: s.policy_version, policy_url: s.policy_url, link_days: s.link_days,
             phone: await phoneOf(ins, form),
             // The number wa.me wants: its stored country code, or the conference's default for an older national one.
@@ -597,7 +609,9 @@ function createConsent(base) {
             view: {
                 conference: conf ? conf.name : '',
                 first_name: String(name).split(' ')[0] || '',
-                email_masked: maskEmail(req.email),
+                email_masked: req.email ? maskEmail(req.email) : '',
+                // 2.33.3: no e-mail on file — the page asks for one, and the code is sent there.
+                needs_email: !req.email,
                 minor, // true / false by «Edad»; null = the person says
                 policy: { url: s.policy_url, version: s.policy_version },
                 responsible: s.responsible || '',
@@ -708,17 +722,21 @@ function createConsent(base) {
                 const list = (sends.get(id) || []).filter(x => now - x < 60 * 60 * 1000);
                 if (list.length && now - list[list.length - 1] < LIMITS.resendGapMs) return res.status(429).json({ error: MSG.wait, code: 'wait', resend_in: Math.ceil((LIMITS.resendGapMs - (now - list[list.length - 1])) / 1000) });
                 if (list.length >= LIMITS.sendsPerHour) return refuse(res, 'throttled');
+                // The e-mail on file; without one (2.33.3), the one the person types on the page.
+                const typed = String((req.body || {}).email == null ? '' : (req.body || {}).email).trim().toLowerCase();
+                const email = t.req.email || typed;
+                if (!t.req.email && !EMAIL_RE.test(typed)) return res.status(400).json({ error: MSG.emailBad, code: 'email', field: 'email' });
                 const code = String(await D.randomInt(0, 1000000)).padStart(6, '0');
                 const salt = String(await D.randomToken(8));
                 const conf = await conferenceOf(t.ins.conference_id);
-                const ok = await mailCode(conf, t.req.email, code);
+                const ok = await mailCode(conf, email, code);
                 if (!ok) return res.status(502).json({ error: MSG.mail, code: 'mail' });
                 list.push(now);
                 trim(sends); sends.set(id, list);
-                trim(codes); codes.set(id, { hash: codeHash(code, salt), salt, expiresAt: now + LIMITS.codeTtlMs, tries: 0, sentAt: now });
-                await append({ conference_id: t.ins.conference_id, inscription_id: t.ins.id, request_id: id, kind: 'otp_sent', email: t.req.email,
-                    client_key: clientOf(req), user_agent: uaOf(req, req.body), data: { expires_utc: isoUtc(now + LIMITS.codeTtlMs) } });
-                res.json({ sent: true, email_masked: maskEmail(t.req.email), expires_in: LIMITS.codeTtlMs / 1000, resend_in: LIMITS.resendGapMs / 1000 });
+                trim(codes); codes.set(id, { hash: codeHash(code, salt), salt, expiresAt: now + LIMITS.codeTtlMs, tries: 0, sentAt: now, email, typed: !t.req.email });
+                await append({ conference_id: t.ins.conference_id, inscription_id: t.ins.id, request_id: id, kind: 'otp_sent', email,
+                    client_key: clientOf(req), user_agent: uaOf(req, req.body), data: { expires_utc: isoUtc(now + LIMITS.codeTtlMs), email_source: t.req.email ? 'on_file' : 'typed_on_page' } });
+                res.json({ sent: true, email_masked: maskEmail(email), expires_in: LIMITS.codeTtlMs / 1000, resend_in: LIMITS.resendGapMs / 1000 });
             } catch (e) { send(res, e); }
         });
 
@@ -760,19 +778,21 @@ function createConsent(base) {
                 codes.delete(id); // single use
                 const verifiedMs = Date.now();
                 const client_key = clientOf(req), user_agent = uaOf(req, body), client_tz = clean(body.client_tz, 64) || null;
-                await append({ conference_id: t.ins.conference_id, inscription_id: t.ins.id, request_id: id, kind: 'otp_verified', email: t.req.email, client_key, user_agent, client_tz,
+                const email = c.email || t.req.email;
+                await append({ conference_id: t.ins.conference_id, inscription_id: t.ins.id, request_id: id, kind: 'otp_verified', email, client_key, user_agent, client_tz,
                     data: { otp_sent_utc: isoUtc(c.sentAt), tries: c.tries + 1 } });
                 // The evidence.
                 const p = await pageOf(t.req, t.ins, representative);
                 const text = p.view.text;
                 const policy = await policySnapshot(t.ins.conference_id, p.s);
                 const ev = await append({
-                    conference_id: t.ins.conference_id, inscription_id: t.ins.id, request_id: id, kind: 'granted', email: t.req.email,
+                    conference_id: t.ins.conference_id, inscription_id: t.ins.id, request_id: id, kind: 'granted', email,
                     client_key, user_agent, client_tz, policy_version: p.s.policy_version, policy_sha256: policy.sha256, text_sha256: sha256(text),
                     general: true, health: wantsHealth, image: wantsImage,
                     data: {
                         subject: await identityOf(t.ins, p.form),
-                        verified_email: t.req.email,
+                        verified_email: email,
+                        email_source: c.typed ? 'typed_on_page' : 'on_file',
                         minor, representative,
                         policy: { url: p.s.policy_url, version: p.s.policy_version, sha256: policy.sha256, snapshot_id: policy.id },
                         text, contact: p.s.contact_email || null, responsible: p.s.responsible || null,
@@ -781,12 +801,17 @@ function createConsent(base) {
                     },
                 });
                 // The single-use link is spent; the state follows the log.
-                await db.run(`UPDATE ${T.consentRequests} SET token_hash = NULL, state = 'granted', general = 1, health = ?, image = ?, granted_s = ?, revoked_s = NULL, updated_s = ? WHERE id = ?`,
-                    [wantsHealth ? 1 : 0, wantsImage ? 1 : 0, ev.at_s, nowS(), id]);
+                await db.run(`UPDATE ${T.consentRequests} SET token_hash = NULL, email = ?, state = 'granted', general = 1, health = ?, image = ?, granted_s = ?, revoked_s = NULL, updated_s = ? WHERE id = ?`,
+                    [email, wantsHealth ? 1 : 0, wantsImage ? 1 : 0, ev.at_s, nowS(), id]);
+                // An e-mail typed on the page (2.33.3) also fills the person's e-mail field, when the form has one and it is empty.
+                if (c.typed) {
+                    const f = emailFieldOf(p.form);
+                    if (f) await db.run(`UPDATE ${T.inscriptions} SET ${f.name} = ? WHERE id = ? AND (${f.name} IS NULL OR ${f.name} = '')`, [email, t.ins.id]);
+                }
                 // Health: only with its box; without it nothing is kept.
                 if (wantsHealth && healthAnswer !== undefined) await D.health.save(t.ins.conference_id, t.ins.id, healthAnswer);
                 if (!wantsHealth) await D.health.clearInscription(t.ins.id);
-                await mailConfirmation(p.conf, t.req.email, ev);
+                await mailConfirmation(p.conf, email, ev);
                 res.json({ state: 'granted', granted_at: ev.at_utc, choices: { general: true, health: wantsHealth, image: wantsImage } });
             } catch (e) { send(res, e); }
         });
@@ -946,4 +971,4 @@ function createConsent(base) {
     };
 }
 
-module.exports = { createConsent, maskEmail, shownText, rowHashOf, policyHashOf, DEFAULTS, RELATIONSHIPS, LIMITS };
+module.exports = { createConsent, emailFieldIn, maskEmail, shownText, rowHashOf, policyHashOf, DEFAULTS, RELATIONSHIPS, LIMITS };
