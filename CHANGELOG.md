@@ -43,6 +43,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   [IF NOT EXISTS]` now get exactly the translation a `CREATE TABLE` column gets. In conference-manager this
   brings back fee payments ("fee payments migration did not complete") and the lodging dates on PostgreSQL.
   A type keyword inside a quoted default (`DEFAULT 'DATETIME'`) is no longer rewritten either.
+- **Form fields show their edge before you click them.** The admin's fields rested on decorative greys, about
+  1.1–1.5:1 against their card: Settings, Users, Posts, Media, Menus, Security, My account, Verso's inspector,
+  and every plugin screen built on the same classes. The sign-in, password-reset, install and migration
+  screens and the public site's forms did the same. Fields were invisible until focused. The base styles now
+  give every text field, select and textarea a resting border of at least 3:1 (WCAG 1.4.11):
+  - **Admin and system screens:** one colour, 3.4–3.8:1 on white and grey cards.
+  - **Verso:** the editor's own outline colour, in both light and dark mode.
+  - **Public site and plugin UI kit:** the field's own text colour at 60%, so it also reads inside dark
+    sections. A theme can still set `--wjs-form-input-border-color`; Circuito's own search field border (1.3:1 on its dark field) is now 3.5:1.
+  - **Focus:** a field keeps its own focus border and ring. One with no focus border of its own, such as
+    the Verso inspector's fields, now takes the focus colour instead of dropping back to its faint grey.
+
+  A focused field keeps its own colour and ring, and an invalid or deliberately coloured one keeps its colour.
 - **A second menu with the same name can be created again.** Since term slugs became unique in the database,
   creating a menu whose name another menu already had answered an error; menus now take their slug the way
   terms do, so the second one gets `-2`, and a slug never starts or ends with a stray dash.

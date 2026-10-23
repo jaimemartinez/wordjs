@@ -656,7 +656,11 @@ textarea { resize: vertical; }
   color: var(--wjs-color-text-main);
   background-color: var(--wjs-bg-canvas);
   background-clip: padding-box;
-  border: var(--wjs-border-width) solid var(--wjs-border-subtle);
+  /* A control's edge must read at rest (WCAG 1.4.11, 3:1): --wjs-border-subtle is a decorative hairline
+   * (1.2:1 on white), so a field was invisible until focused. The default is the control's own text colour
+   * at 60% — about 4:1 on a light surface and 6:1 on a dark one, wherever the form sits. A theme still sets
+   * its own with --wjs-form-input-border-color. */
+  border: var(--wjs-border-width) solid var(--wjs-form-input-border-color, color-mix(in srgb, currentColor 60%, transparent));
   border-radius: var(--wjs-radius);
   transition: border-color var(--wjs-transition), box-shadow var(--wjs-transition);
   appearance: none;
@@ -2444,7 +2448,7 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
   font-weight: var(--wjs-search-input-weight, inherit);
   background: var(--wjs-search-input-bg, var(--wjs-bg-surface));
   color: var(--wjs-search-input-color, var(--wjs-color-text-main));
-  border: var(--wjs-search-input-border-width, 1px) solid var(--wjs-search-input-border-color, var(--wjs-border-subtle));
+  border: var(--wjs-search-input-border-width, 1px) solid var(--wjs-search-input-border-color, color-mix(in srgb, currentColor 60%, transparent));
   border-radius: var(--wjs-search-input-radius, var(--wjs-radius));
   box-shadow: var(--wjs-search-input-shadow, none);
 }
@@ -2785,7 +2789,7 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
   background: var(--wjs-form-input-bg, var(--wjs-search-input-bg, var(--wjs-bg-surface, var(--wjs-card-bg, #fff))));
   border: var(--wjs-form-input-border,
     var(--wjs-search-input-border-width, 1px) solid
-    var(--wjs-form-input-border-color, var(--wjs-search-input-border-color, var(--wjs-border-subtle, var(--wjs-outline-variant, rgba(0, 0, 0, 0.18))))));
+    var(--wjs-form-input-border-color, var(--wjs-search-input-border-color, color-mix(in srgb, currentColor 60%, transparent))));
   border-radius: var(--wjs-form-input-radius, var(--wjs-search-input-radius, 8px));
   padding: var(--wjs-form-input-pad, var(--wjs-search-input-pad, 10px 12px));
   box-shadow: var(--wjs-form-input-shadow, var(--wjs-search-input-shadow, none));

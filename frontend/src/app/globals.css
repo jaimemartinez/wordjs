@@ -200,3 +200,23 @@ body {
 .animate-in {
   animation: fade-in 0.4s ease-out, zoom-in 0.4s ease-out, slide-in-bottom 0.4s ease-out;
 }
+/* Form controls show their edge at rest on the system screens (sign-in, register, password reset,
+ * email confirmation, install, migration — the wrappers marked data-wjs-system-screen): WCAG 1.4.11, 3:1
+ * for a component's boundary (FALLOS 130). Their fields used border-gray-300, 1.5:1 on white. Same rule
+ * and colour as the admin (app/admin/admin-globals.css); a focused or invalid field keeps its own colour.
+ * The public site is not touched here: theme forms take their border from wordjs-ui.css. */
+:where([data-wjs-system-screen]) :is(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="submit"], [type="button"], [type="reset"], [type="image"]),
+    select,
+    textarea
+  ):not(:focus, [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
+  border-color: #7c8594;
+}
+/* …and a focused field with no focus border of its own takes the focus blue instead of dropping back to grey. */
+:where([data-wjs-system-screen]) :is(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="submit"], [type="button"], [type="reset"], [type="image"]),
+    select,
+    textarea
+  ):focus:not([class*="focus:border-"], [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
+  border-color: #2563eb;
+}
