@@ -243,6 +243,9 @@ class Media {
             storage: offloaded ? 's3' : 'local',
             // Edited in the media library and different from the uploaded file (Restore original applies).
             edited: !!(versions && versions.original && versions.original.file && versions.original.file !== (attachedFile || metadata.file)),
+            // The media-library folder it is in (core/media-folders); 0 = in no folder. Organisation only:
+            // the file's path and URL do not depend on it.
+            folder: Number(allMeta['_wjs_media_folder']) || 0,
             mediaDetails: {
                 width: metadata.width || 0,
                 height: metadata.height || 0,

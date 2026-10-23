@@ -1129,13 +1129,26 @@ class Post {
             metaValue,
             mimeType,
             categories,
-            tags
+            tags,
+            mediaFolder
         } = options;
 
         const col = alias ? `${alias}.` : '';
         const joins: string[] = [];
         const conditions: string[] = [];
         const params: any[] = [];
+
+        // MEDIA FOLDERS (core/media-folders): the files of one folder, or (0) the files in no folder. A
+        // subquery rather than a join, so findAll() and count() select the same rows on every engine.
+        if (mediaFolder !== undefined && mediaFolder !== null) {
+            const inFolder = `SELECT post_id FROM post_meta WHERE meta_key = '_wjs_media_folder'`;
+            if (Number(mediaFolder) > 0) {
+                conditions.push(`${col}id IN (${inFolder} AND meta_value = ?)`);
+                params.push(String(Number(mediaFolder)));
+            } else {
+                conditions.push(`${col}id NOT IN (${inFolder})`);
+            }
+        }
 
         // Meta query join (only meaningful when selecting rows via an alias)
         if (metaKey && alias) {

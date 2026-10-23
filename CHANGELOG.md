@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Folders in the media library.** Admin → Media has a folder tree beside the library (a panel on phones): create, rename and nest folders, browse them (the address keeps the folder), upload straight into the current one, and move files by dragging them onto a folder or with *Move to…* — one file from its details, or many at once. Deleting a folder asks where its files and subfolders go; no file is ever deleted with it or left in a folder that no longer exists. The editor's media picker browses by folder too. Folders are organisation only: moving a file never changes its URL, so content that links to it keeps working. Anyone who uploads can create folders and move the files they may edit; renaming and deleting folders is for editors. (`GET`/`POST /api/v1/media/folders`, `PUT`/`DELETE /api/v1/media/folders/:id`, `POST /api/v1/media/folders/move`, `?folder=` on `GET /api/v1/media` and on uploads.)
+
 ### Fixed
 
 - **Plugin screens use the WordJS dialogs instead of the browser's pop-ups.** Every delete, cancel, revoke

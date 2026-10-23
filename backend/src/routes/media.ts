@@ -148,7 +148,7 @@ router.param('id', requireRouteId({ code: 'rest_post_invalid_id', message: 'Inva
  * `orderByMap[String(orderby)]` misses the same way and silently falls back to post_date.
  */
 const MEDIA_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
-    'page', 'per_page', 'search', 'mime_type', 'orderby', 'order', 'visibility',
+    'page', 'per_page', 'search', 'mime_type', 'orderby', 'order', 'visibility', 'folder',
 ]);
 
 // Ensure uploads directory exists (the main site's; another site's root is created with the site and
@@ -290,6 +290,11 @@ function singleUpload(req: Request, res: Response, next: (err?: unknown) => void
  *         schema:
  *           type: string
  *           enum: [all, public, private]
+ *       - in: query
+ *         name: folder
+ *         description: A media folder's id (its files only, not its subfolders'), 0 for the files in no folder, or absent / `all` for the whole library.
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
  *         description: List of media files
@@ -312,8 +317,19 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         mime_type,
         orderby = 'date',
         order = 'desc',
-        visibility: rawVisibility
+        visibility: rawVisibility,
+        folder: rawFolder
     } = req.query;
+
+    // MEDIA FOLDERS: absent = the whole library (as always); 0 = the files in no folder; N = folder N's files.
+    let mediaFolder: number | undefined;
+    if (rawFolder !== undefined && rawFolder !== '' && rawFolder !== 'all') {
+        const parsed = require('../core/media-folders').folderIdParam(rawFolder);
+        if (parsed === null) {
+            return res.status(400).json({ code: 'rest_invalid_param', message: 'folder must be a folder id, 0 or all.', data: { status: 400 } });
+        }
+        mediaFolder = parsed;
+    }
 
     // PRIVATE MEDIA. Only a caller who may upload can ever be shown a private item, and then only the
     // ones they could edit (their own, or anyone's with edit_others_posts) — filtered below. Everybody
@@ -376,6 +392,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         mimeType: mime_type,
         visibility,
         attachmentViewer,
+        mediaFolder,
         limit,
         offset,
         orderBy: orderByMap[String(orderby)] || 'post_date',
@@ -388,7 +405,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // exactly the oracle described above, and the query already counted the visible set.
     const visibleMedia = await filterVisibleMediaItems(req.user, media);
 
-    const total = await Media.count({ search, mimeType: mime_type, visibility, attachmentViewer });
+    const total = await Media.count({ search, mimeType: mime_type, visibility, attachmentViewer, mediaFolder });
     const totalPages = Math.ceil(total / limit);
 
     // String() is what res.set() already did to these numbers internally; spelling it out satisfies
@@ -397,6 +414,244 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     res.set('X-WP-TotalPages', String(totalPages));
 
     res.json(visibleMedia);
+}));
+
+// ── Folders (core/media-folders): organisation only — a file's path and URL never change ─────────────
+
+const mediaFolders = () => require('../core/media-folders');
+
+/** Answer a MediaFolderError as its status and code; anything else goes to the error handler. */
+function folderErrorAnswer(res: Response, err: any): boolean {
+    if (err instanceof mediaFolders().MediaFolderError) {
+        res.status(err.status).json({ code: err.code, message: err.message, data: { status: err.status } });
+        return true;
+    }
+    return false;
+}
+
+/** A folder id from the path: a positive integer. */
+function folderPathId(req: Request): number | null {
+    const id = mediaFolders().folderIdParam(req.params.folderId);
+    return id ? id : null;
+}
+
+/**
+ * May this caller move media item `mediaId`? Exactly the rule of PUT /media/:id (mediaWriteRefusal): the
+ * refusal's code, or null when they may.
+ */
+async function mediaMoveRefusal(req: Request, mediaId: number): Promise<string | null> {
+    const refusal = await mediaWriteRefusal(req, mediaId);
+    return refusal ? String(refusal.body.code) : null;
+}
+
+/**
+ * @swagger
+ * /media/folders:
+ *   get:
+ *     summary: The media library's folders
+ *     description: >-
+ *       Every folder with its parent and how many files this caller may see in it (public files, their own
+ *       private ones, and any private one with edit_others_posts), plus how many of those files are in no
+ *       folder. Folders are organisation only - moving a file never changes its path or URL. Needs upload_files.
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ folders: [{ id, name, parent, count }], unfiled, total }"
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Missing upload_files
+ *   post:
+ *     summary: Create a folder
+ *     description: Needs upload_files. The name is unique among the folders that share the parent (ignoring case).
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:
+ *                 type: string
+ *               parent:
+ *                 type: integer
+ *                 description: The folder it goes in; 0 or absent for the top level.
+ *     responses:
+ *       201:
+ *         description: "{ id, name, parent, count }"
+ *       400:
+ *         description: An invalid name or parent (rest_invalid_param, rest_media_folder_invalid, rest_media_folder_limit)
+ *       409:
+ *         description: A folder with that name is already there (rest_media_folder_exists)
+ */
+router.get('/folders', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const result = await mediaFolders().listFolders({ id: req.user.id, canSeeAllPrivate: req.user.can('edit_others_posts') });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+}));
+
+router.post('/folders', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const b = req.body || {};
+    try {
+        const folder = await mediaFolders().createFolder(b.name, b.parent);
+        await recordAudit(req.user.id, 'media.folder.create', 'media_folder', folder.id, { parent: folder.parent });
+        res.status(201).json(folder);
+    } catch (err: any) {
+        if (!folderErrorAnswer(res, err)) throw err;
+    }
+}));
+
+/**
+ * @swagger
+ * /media/folders/move:
+ *   post:
+ *     summary: Move media items into a folder (or out of every folder)
+ *     description: >-
+ *       Each item is moved only if the caller may edit it (the rule of PUT /media/{id}); the others are listed
+ *       in `refused` and left where they are. The files themselves are not touched, so their URLs stay the same.
+ *       At most 500 items per request.
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *               folder:
+ *                 type: integer
+ *                 description: The folder; 0 or absent takes the items out of every folder.
+ *     responses:
+ *       200:
+ *         description: "{ moved: [id], refused: [{ id, code }], folder }"
+ *       400:
+ *         description: Invalid ids or folder (rest_invalid_param, rest_media_folder_invalid)
+ */
+router.post('/folders/move', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const folder = mediaFolders().folderIdParam(b.folder);
+    if (folder === null || !(await mediaFolders().exists(folder))) {
+        return res.status(400).json({ code: 'rest_media_folder_invalid', message: 'No such folder.', data: { status: 400 } });
+    }
+    const ids = Array.isArray(b.ids) ? b.ids : null;
+    if (!ids || !ids.length || ids.length > 500 || !ids.every((v: unknown) => /^[1-9][0-9]{0,9}$/.test(String(v)))) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'ids is a list of 1 to 500 media ids.', data: { status: 400, params: ['ids'] } });
+    }
+    const moved: number[] = [];
+    const refused: Array<{ id: number; code: string }> = [];
+    for (const id of [...new Set(ids.map(Number))] as number[]) {
+        const refusal = await mediaMoveRefusal(req, id);
+        if (refusal) { refused.push({ id, code: refusal }); continue; }
+        await mediaFolders().setFolder(id, folder);
+        moved.push(id);
+    }
+    if (moved.length) await recordAudit(req.user.id, 'media.move', 'media_folder', folder, { count: moved.length });
+    res.json({ moved, refused, folder });
+}));
+
+/**
+ * @swagger
+ * /media/folders/{folderId}:
+ *   put:
+ *     summary: Rename a folder or move it inside another one
+ *     description: Needs upload_files and edit_others_posts (folders are shared by everyone who uploads). A folder cannot go inside itself or one of its own folders.
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: folderId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               parent:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: "{ id, name, parent }"
+ *       400:
+ *         description: An invalid name or parent (rest_invalid_param, rest_media_folder_invalid, rest_media_folder_cycle)
+ *       403:
+ *         description: Missing upload_files or edit_others_posts
+ *       404:
+ *         description: No such folder (rest_media_folder_not_found)
+ *       409:
+ *         description: A folder with that name is already there (rest_media_folder_exists)
+ *   delete:
+ *     summary: Delete a folder, moving what it holds
+ *     description: >-
+ *       Its files and subfolders go into `moveTo` first (a folder, or 0 for no folder; the deleted folder's
+ *       parent when absent), which may not be the folder itself or one below it. No file is deleted and none is
+ *       left in a folder that no longer exists. Needs upload_files and edit_others_posts.
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: folderId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: moveTo
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: "{ deleted: true, movedFiles, movedFolders, moveTo }"
+ *       400:
+ *         description: An invalid destination (rest_media_folder_invalid, rest_media_folder_cycle)
+ *       403:
+ *         description: Missing upload_files or edit_others_posts
+ *       404:
+ *         description: No such folder (rest_media_folder_not_found)
+ */
+router.put('/folders/:folderId', authenticate, can('upload_files'), can('edit_others_posts'), asyncHandler(async (req: Request, res: Response) => {
+    const id = folderPathId(req);
+    if (!id) return res.status(404).json({ code: 'rest_media_folder_not_found', message: 'No such folder.', data: { status: 404 } });
+    const b = req.body || {};
+    try {
+        const folder = await mediaFolders().updateFolder(id, { name: b.name, parent: b.parent });
+        await recordAudit(req.user.id, 'media.folder.update', 'media_folder', id, { renamed: b.name !== undefined, parent: b.parent !== undefined ? folder.parent : undefined });
+        res.json(folder);
+    } catch (err: any) {
+        if (!folderErrorAnswer(res, err)) throw err;
+    }
+}));
+
+router.delete('/folders/:folderId', authenticate, can('upload_files'), can('edit_others_posts'), asyncHandler(async (req: Request, res: Response) => {
+    const id = folderPathId(req);
+    if (!id) return res.status(404).json({ code: 'rest_media_folder_not_found', message: 'No such folder.', data: { status: 404 } });
+    requireScalarQuery(req.query, ['moveTo']);
+    try {
+        const result = await mediaFolders().deleteFolder(id, req.query.moveTo === undefined ? undefined : req.query.moveTo);
+        await recordAudit(req.user.id, 'media.folder.delete', 'media_folder', id, { moveTo: result.moveTo, movedFiles: result.movedFiles, movedFolders: result.movedFolders });
+        res.json({ deleted: true, ...result });
+    } catch (err: any) {
+        if (!folderErrorAnswer(res, err)) throw err;
+    }
 }));
 
 /**
@@ -525,6 +780,9 @@ router.get('/:id/file', authenticate, asyncHandler(async (req: Request, res: Res
  *                 type: string
  *                 enum: [public, private]
  *                 description: '`private` stores the file outside the public uploads tree and hides the item from every public listing. May also be sent as the `visibility` query parameter, which is preferred (it is known before the file is streamed to disk).'
+ *               folder:
+ *                 type: integer
+ *                 description: The media folder the item goes in (organisation only - the path is the same). May also be sent as the `folder` query parameter.
  *     responses:
  *       201:
  *         description: Media uploaded
@@ -552,6 +810,15 @@ router.post('/', authenticate, can('upload_files'), singleUpload, asyncHandler(a
     // MULTISITE STORAGE QUOTA (core/site-upload-quota): a site other than site 1 may be capped by the
     // network administrator. Checked before any processing, against the bytes that arrived; a refused
     // upload leaves nothing behind. No quota (site 1, a single site, none set) costs no query.
+    // MEDIA FOLDERS: the folder it goes in (query or form field), checked before anything is kept.
+    const mediaFolders = require('../core/media-folders');
+    const rawFolder = req.query && req.query.folder !== undefined ? req.query.folder : (req.body && req.body.folder);
+    const uploadFolder = mediaFolders.folderIdParam(Array.isArray(rawFolder) ? null : rawFolder);
+    if (uploadFolder === null || !(await mediaFolders.exists(uploadFolder))) {
+        discardUploadedFile(uploaded.path);
+        return res.status(400).json({ code: 'rest_media_folder_invalid', message: 'No such folder.', data: { status: 400 } });
+    }
+
     const quotaCheck = await require('../core/site-upload-quota').checkUploadFits(uploaded.size);
     if (!quotaCheck.ok) {
         discardUploadedFile(uploaded.path);
@@ -757,6 +1024,11 @@ router.post('/', authenticate, can('upload_files'), singleUpload, asyncHandler(a
         caption,
         alt
     });
+
+    if (uploadFolder && media && media.id) {
+        await mediaFolders.setFolder(media.id, uploadFolder);
+        media.folder = uploadFolder;
+    }
 
     require('../core/site-upload-quota').invalidateUsage();
     await recordAudit(req.user.id, 'media.upload', 'media', media && media.id, {

@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { mediaApi, settingsApi, type MediaUsage } from "@/lib/api";
+import { mediaApi, settingsApi, type MediaUsage, type MediaFolder } from "@/lib/api";
+import { useOptionalAuth } from "@/contexts/AuthContext";
+import MediaFolderPanel, { MoveToFolderDialog } from "./MediaFolderPanel";
+import { MEDIA_DRAG_TYPE, encodeDraggedIds, folderPath, folderQuery, parseFolderParam, type FolderSelection } from "@/lib/mediaFolders";
 import { deleteMessage, mediaTypeIcon } from "@/lib/mediaUsage";
 import { uploadSequentially, type UploadFailure } from "@/lib/uploadQueue";
 import { useI18n } from "@/contexts/I18nContext";
@@ -86,11 +89,16 @@ function MediaDetailModal({
     onClose,
     onRequestDelete,
     onSaved,
+    folderName,
+    onRequestMove,
 }: {
     item: EditableMediaItem;
     onClose: () => void;
     onRequestDelete: (id: number) => void;
     onSaved: (updated: EditableMediaItem) => void;
+    /** The folder the file is in, by name ("" = in no folder). */
+    folderName: string;
+    onRequestMove: (id: number) => void;
 }) {
     const { t } = useI18n();
     const { addToast } = useToast();
@@ -299,6 +307,15 @@ function MediaDetailModal({
                             {saving ? t('common.saving') : t('media.saveChanges')}
                         </Button>
                         <button
+                            type="button"
+                            onClick={() => onRequestMove(item.id)}
+                            className="w-full py-4 px-6 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded-2xl transition-all font-bold flex items-center justify-center gap-3 group border border-gray-200 hover:border-gray-300"
+                        >
+                            <i className="fa-solid fa-folder-tree text-amber-500" aria-hidden="true"></i>
+                            <span className="truncate">{t('media.folders.moveTo')}</span>
+                            <span className="text-xs font-medium text-gray-500 truncate">({folderName || t('media.folders.unfiled')})</span>
+                        </button>
+                        <button
                             onClick={copyUrl}
                             className="w-full py-4 px-6 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded-2xl transition-all font-bold flex items-center justify-center gap-3 group border border-gray-200 hover:border-gray-300"
                         >
@@ -353,6 +370,57 @@ export default function MediaPage() {
     const [refreshKey, setRefreshKey] = useState(0);
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
     const [previewItem, setPreviewItem] = useState<EditableMediaItem | null>(null);
+
+    // FOLDERS (organisation only — moving a file never changes its URL). The current folder is kept in the
+    // address (?folder=) so a reload or a shared link opens the same place.
+    const auth = useOptionalAuth();
+    const canManageFolders = !!auth?.can?.('edit_others_posts');
+    const [folders, setFolders] = useState<MediaFolder[]>([]);
+    const [folderCounts, setFolderCounts] = useState({ unfiled: 0, total: 0 });
+    const [folderSel, setFolderSel] = useState<FolderSelection>("all");
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const [moveIds, setMoveIds] = useState<number[] | null>(null);
+    useEffect(() => {
+        setFolderSel(parseFolderParam(new URLSearchParams(window.location.search).get("folder")));
+    }, []);
+    const chooseFolder = (s: FolderSelection) => {
+        setFolderSel(s);
+        setPage(1);
+        setSelectedIds(new Set());
+        const url = new URL(window.location.href);
+        if (s === "all") url.searchParams.delete("folder"); else url.searchParams.set("folder", String(s));
+        window.history.replaceState(null, "", url.toString());
+    };
+    const loadFolders = useCallback(async () => {
+        try {
+            const res = await mediaApi.folders();
+            setFolders(res.folders);
+            setFolderCounts({ unfiled: res.unfiled, total: res.total });
+        } catch { /* the library still works without the tree */ }
+    }, []);
+    useEffect(() => { loadFolders(); }, [loadFolders]);
+    const currentFolderName = typeof folderSel === "number" && folderSel > 0 ? (folders.find((f) => f.id === folderSel)?.name || "") : "";
+    const folderNameOf = (id: number | undefined) => (id ? folders.find((f) => f.id === id)?.name || "" : "");
+
+    const moveItems = async (ids: number[], folder: number) => {
+        try {
+            const res = await mediaApi.moveToFolder(ids, folder);
+            const name = folder ? folderNameOf(folder) : t('media.folders.unfiled');
+            if (res.moved.length) addToast(t('media.folders.moved').replace('{n}', String(res.moved.length)).replace('{name}', name), "success");
+            if (res.refused.length) addToast(t('media.folders.movedRefused').replace('{n}', String(res.refused.length)), "error");
+            setSelectedIds(new Set());
+            setRefreshKey((k) => k + 1);
+            loadFolders();
+        } catch (error) {
+            addToast(error instanceof Error && error.message ? error.message : t('common.error'), "error");
+        }
+    };
+    const toggleSelected = (id: number) => setSelectedIds((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    const dragStart = (e: React.DragEvent, id: number) => {
+        const ids = selectedIds.has(id) ? [...selectedIds] : [id];
+        e.dataTransfer.setData(MEDIA_DRAG_TYPE, encodeDraggedIds(ids));
+        e.dataTransfer.effectAllowed = "move";
+    };
     // A real <button> nested in a <label> swallows the click and never forwards it to the file input
     // (HTML: an interactive descendant cancels the label's activation behaviour), so the picker never
     // opened. Trigger the hidden input explicitly instead.
@@ -373,7 +441,7 @@ export default function MediaPage() {
     const loadMedia = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: LIBRARY_PAGE_SIZE, search, mimeType, visibility: visibility || undefined }));
+            const res = await mediaApi.listPaged({ ...buildMediaQuery({ page, perPage: LIBRARY_PAGE_SIZE, search, mimeType, visibility: visibility || undefined }), folder: folderQuery(folderSel) });
             setMedia(res.data);
             setTotal(res.total);
             setTotalPages(res.totalPages);
@@ -388,7 +456,7 @@ export default function MediaPage() {
             setLoading(false);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, search, mimeType, visibility, refreshKey]);
+    }, [page, search, mimeType, visibility, refreshKey, folderSel]);
 
     useEffect(() => { loadMedia(); }, [loadMedia]);
 
@@ -424,7 +492,7 @@ export default function MediaPage() {
                 }
                 const formData = new FormData();
                 formData.append("file", file);
-                return mediaApi.uploadWithProgress(formData, onPercent, { visibility });
+                return mediaApi.uploadWithProgress(formData, onPercent, { visibility, folder: typeof folderSel === "number" ? folderSel : undefined });
             }, (p) => {
                 setUploadProgress(p.percent);
                 setUploadStep(p.total > 1 ? { index: p.index, total: p.total } : null);
@@ -433,6 +501,7 @@ export default function MediaPage() {
                 // The uploads land newest-first on page 1, so go there and refetch.
                 setPage(1);
                 setRefreshKey((k) => k + 1);
+                loadFolders();
                 addToast(result.uploaded === 1 ? t('media.upload.success') : t('media.upload.successMany').replace('{n}', String(result.uploaded)), "success");
             }
             if (result.failed.length) {
@@ -455,6 +524,7 @@ export default function MediaPage() {
     // Drag and Drop
     const [isDragging, setIsDragging] = useState(false);
     const onDragOver = useCallback((e: React.DragEvent) => {
+        if (e.dataTransfer.types.includes(MEDIA_DRAG_TYPE)) return; // a card on its way to a folder
         e.preventDefault();
         setIsDragging(true);
     }, []);
@@ -465,12 +535,13 @@ export default function MediaPage() {
         setIsDragging(false);
     }, []);
     const onDrop = useCallback((e: React.DragEvent) => {
+        if (e.dataTransfer.types.includes(MEDIA_DRAG_TYPE)) return;
         e.preventDefault();
         setIsDragging(false);
         handleFileUpload(e.dataTransfer.files);
         // Re-bound when "upload as private" or the size limit changes, so a drop uses the current values.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [uploadPrivate, uploadLimitBytes]);
+    }, [uploadPrivate, uploadLimitBytes, folderSel]);
 
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
     const [mediaToDelete, setMediaToDelete] = useState<number | null>(null);
@@ -496,6 +567,7 @@ export default function MediaPage() {
             await mediaApi.delete(mediaToDelete);
             if (previewItem?.id === mediaToDelete) setPreviewItem(null);
             setDeleteModalOpen(false);
+            loadFolders();
             // Refetch instead of splicing locally: with paging, removing a row must pull the next
             // page's first item up, and the total must come from the server.
             setRefreshKey((k) => k + 1);
@@ -535,10 +607,26 @@ export default function MediaPage() {
                     item={previewItem}
                     onClose={() => setPreviewItem(null)}
                     onSaved={handleSaved}
+                    folderName={folderNameOf(previewItem.folder)}
+                    onRequestMove={(id) => setMoveIds([id])}
                     onRequestDelete={(id) => {
                         setPreviewItem(null);
                         setMediaToDelete(id);
                         setDeleteModalOpen(true);
+                    }}
+                />
+            )}
+
+            {moveIds && (
+                <MoveToFolderDialog
+                    folders={folders}
+                    count={moveIds.length}
+                    initial={moveIds.length === 1 ? (media.find((m) => m.id === moveIds[0])?.folder || 0) : (typeof folderSel === "number" ? folderSel : 0)}
+                    onClose={() => setMoveIds(null)}
+                    onMove={async (folder) => {
+                        await moveItems(moveIds, folder);
+                        setMoveIds(null);
+                        setPreviewItem(null);
                     }}
                 />
             )}
@@ -677,10 +765,77 @@ export default function MediaPage() {
                 </div>
             )}
 
+            <div className="flex-1 pb-20 lg:flex lg:gap-8 lg:items-start">
+            {/* Folders: beside the library on large screens, a panel that opens on small ones. */}
+            <div className="hidden lg:block lg:w-64 shrink-0 lg:sticky lg:top-4">
+                <MediaFolderPanel
+                    folders={folders} unfiled={folderCounts.unfiled} total={folderCounts.total}
+                    selected={folderSel} onSelect={chooseFolder} canManage={canManageFolders}
+                    onCreate={async (name, parent) => { await mediaApi.createFolder(name, parent); addToast(t('media.folders.created'), "success"); await loadFolders(); }}
+                    onUpdate={async (id, data) => { await mediaApi.updateFolder(id, data); addToast(t('media.folders.saved'), "success"); await loadFolders(); }}
+                    onDelete={async (id, moveTo) => {
+                        const r = await mediaApi.deleteFolder(id, moveTo);
+                        addToast(t('media.folders.deleted').replace('{n}', String(r.movedFiles)), "success");
+                        if (folderSel === id) chooseFolder(moveTo || 0);
+                        await loadFolders();
+                        setRefreshKey((k) => k + 1);
+                    }}
+                    onDropItems={moveItems}
+                />
+            </div>
+            <details className="lg:hidden mb-4 bg-white rounded-2xl border-2 border-gray-50 shadow-sm" data-testid="media-folders-mobile">
+                <summary className="min-h-11 px-4 flex items-center gap-2 text-sm font-bold text-gray-700 cursor-pointer">
+                    <i className="fa-solid fa-folder-tree text-amber-500" aria-hidden="true"></i>
+                    {t('media.folders.title')}: <span className="truncate">{folderSel === "all" ? t('media.folders.all') : folderSel === 0 ? t('media.folders.unfiled') : currentFolderName}</span>
+                </summary>
+                <div className="p-2">
+                    <MediaFolderPanel
+                        folders={folders} unfiled={folderCounts.unfiled} total={folderCounts.total}
+                        selected={folderSel} onSelect={chooseFolder} canManage={canManageFolders}
+                        onCreate={async (name, parent) => { await mediaApi.createFolder(name, parent); addToast(t('media.folders.created'), "success"); await loadFolders(); }}
+                        onUpdate={async (id, data) => { await mediaApi.updateFolder(id, data); addToast(t('media.folders.saved'), "success"); await loadFolders(); }}
+                        onDelete={async (id, moveTo) => {
+                            const r = await mediaApi.deleteFolder(id, moveTo);
+                            addToast(t('media.folders.deleted').replace('{n}', String(r.movedFiles)), "success");
+                            if (folderSel === id) chooseFolder(moveTo || 0);
+                            await loadFolders();
+                            setRefreshKey((k) => k + 1);
+                        }}
+                        onDropItems={moveItems}
+                    />
+                </div>
+            </details>
+
             {/* Content Area */}
-            <div className="flex-1 pb-20">
+            <div className="flex-1 min-w-0">
+                {/* Where we are, and where an upload goes. */}
+                {typeof folderSel === "number" && (
+                    <nav aria-label={t('media.folders.path')} className="mb-4 flex flex-wrap items-center gap-1 text-sm font-bold text-gray-600" data-testid="media-folder-path">
+                        <button type="button" className="min-h-9 px-2 rounded-lg hover:bg-white" onClick={() => chooseFolder("all")}>{t('media.folders.all')}</button>
+                        {folderSel === 0 ? (
+                            <><i className="fa-solid fa-chevron-right text-[10px] text-gray-400" aria-hidden="true"></i><span className="px-2">{t('media.folders.unfiled')}</span></>
+                        ) : folderPath(folders, folderSel).map((f, i, all) => (
+                            <span key={f.id} className="flex items-center gap-1">
+                                <i className="fa-solid fa-chevron-right text-[10px] text-gray-400" aria-hidden="true"></i>
+                                {i === all.length - 1
+                                    ? <span className="px-2" aria-current="page">{f.name}</span>
+                                    : <button type="button" className="min-h-9 px-2 rounded-lg hover:bg-white" onClick={() => chooseFolder(f.id)}>{f.name}</button>}
+                            </span>
+                        ))}
+                        {folderSel !== 0 && currentFolderName && <span className="ml-2 text-xs font-medium text-gray-500">{t('media.folders.uploadInto').replace('{name}', currentFolderName)}</span>}
+                    </nav>
+                )}
+
+                {/* Bulk: move what is selected. */}
+                {selectedIds.size > 0 && (
+                    <div role="region" aria-label={t('media.folders.selection')} className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl bg-blue-50 border border-blue-100 px-4 py-2" data-testid="media-bulk-bar">
+                        <span className="text-sm font-bold text-blue-800">{t('media.folders.selected').replace('{n}', String(selectedIds.size))}</span>
+                        <Button icon="fa-folder-tree" onClick={() => setMoveIds([...selectedIds])}>{t('media.folders.moveTo')}</Button>
+                        <button type="button" className="min-h-11 px-3 text-sm font-bold text-blue-700 hover:underline" onClick={() => setSelectedIds(new Set())}>{t('media.folders.clearSelection')}</button>
+                    </div>
+                )}
                 {loading ? (
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6" role="status" aria-label={t('loading')}>
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6" role="status" aria-label={t('loading')}>
                         {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
                             <div key={i} className="aspect-square bg-white rounded-3xl md:rounded-[32px] animate-pulse border-2 border-gray-100"></div>
                         ))}
@@ -699,10 +854,13 @@ export default function MediaPage() {
                         )}
                     />
                 ) : viewMode === 'grid' ? (
-                    <ul className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-6" aria-label={t('media.title')}>
+                    <ul className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6" aria-label={t('media.title')}>
                         {media.map((item) => (
                             <li
                                 key={item.id}
+                                draggable
+                                onDragStart={(e) => dragStart(e, item.id)}
+                                data-media-id={item.id}
                                 className="group relative bg-white border-2 border-gray-50 rounded-3xl md:rounded-[32px] overflow-hidden shadow-lg shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:border-blue-100 transition-all duration-500 focus-within:ring-2 focus-within:ring-blue-400"
                             >
                                 {/* The whole card opens the file's details: one real button, so it is reachable by keyboard. */}
@@ -729,6 +887,11 @@ export default function MediaPage() {
                                         {item.mimeType.startsWith('image/') && !item.alt && <div className="mt-2"><MissingAltBadge /></div>}
                                     </div>
                                 </button>
+                                {/* Select it (for «Move to…»): always visible where nothing can hover, and once anything is selected. */}
+                                <label className={`absolute top-2 left-2 w-11 h-11 shrink-0 bg-white/95 rounded-2xl shadow-xl flex items-center justify-center cursor-pointer transition-opacity duration-300 ${selectedIds.size ? "opacity-100" : "opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
+                                    <input type="checkbox" className="h-5 w-5" checked={selectedIds.has(item.id)} onChange={() => toggleSelected(item.id)}
+                                        aria-label={t('media.folders.select').replace('{name}', item.title)} />
+                                </label>
                                 {/* Delete sits on the image corner: always visible where nothing can hover. */}
                                 <button
                                     type="button"
@@ -747,6 +910,12 @@ export default function MediaPage() {
                         <DataTable
                             rows={media}
                             rowKey={(item) => item.id}
+                            selection={{
+                                selected: selectedIds,
+                                onToggle: (id) => toggleSelected(id as number),
+                                onToggleAll: () => setSelectedIds((s) => (media.every((m) => s.has(m.id)) ? new Set() : new Set(media.map((m) => m.id)))),
+                                allLabel: t('media.folders.selectAll'),
+                            }}
                             caption={t('media.title')}
                             rowLabel={(item) => item.title}
                             actionsLabel={t('common.actions')}
@@ -789,6 +958,7 @@ export default function MediaPage() {
                             ]}
                             actions={(item) => [
                                 { key: "details", label: t('media.details'), icon: "fa-pen-to-square", onClick: () => setPreviewItem(item), tone: "primary" },
+                                { key: "move", label: t('media.folders.moveTo'), icon: "fa-folder-tree", onClick: () => setMoveIds([item.id]), menu: true },
                                 { key: "delete", label: t('common.delete'), icon: "fa-trash-can", onClick: () => { setMediaToDelete(item.id); setDeleteModalOpen(true); }, tone: "danger" },
                             ]}
                         />
@@ -808,6 +978,7 @@ export default function MediaPage() {
                         />
                     </div>
                 )}
+            </div>
             </div>
         </div>
     );
