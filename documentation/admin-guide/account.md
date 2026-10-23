@@ -59,8 +59,8 @@ Things that can stop an email change:
 - **This email address cannot be used.** («Esta dirección de correo no se puede usar.»): another account uses it,
   or it is not a valid address.
 - An address on the site's own mail domain can only be given by an administrator.
-- If an administrator turned on a **Professional mail account** for you (the Mail Server plugin), your primary
-  address is that mailbox and only an administrator can change it.
+- If an administrator gave your account a service that sets your email (a plugin's switch under **Plugin access
+  for this account**, such as a mailbox on the site's domain), only an administrator can change that address.
 
 Changing the recovery address cancels any password-reset link already sent to the old one.
 

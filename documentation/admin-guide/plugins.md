@@ -85,8 +85,8 @@ not a problem with the plugin.
 
 ## Deactivating
 
-**Deactivate** («Desactivar») asks first: everything the plugin runs stops (its pages, its blocks, its services; a
-mail server stops receiving mail), and its data is kept. While it works the button reads **Deactivating…**.
+**Deactivate** («Desactivar») asks first: everything the plugin runs stops (its pages, its blocks, its services),
+and its data is kept. While it works the button reads **Deactivating…**.
 
 ## Deleting
 

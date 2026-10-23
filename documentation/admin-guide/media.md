@@ -110,8 +110,7 @@ leaves them without a featured image.
 ### Private files
 
 A private file is stored outside the public folder: it has no public address and never appears in public
-listings. Only editors and administrators, or a plugin you allowed (paid downloads, for example), can deliver
-it. If the file was public before, its old address may remain in caches or browsers for a while.
+listings. Only editors and administrators, or a plugin you granted that permission, can deliver it. If the file was public before, its old address may remain in caches or browsers for a while.
 
 ## Editing an image
 

@@ -110,7 +110,7 @@ content. The old page's address now opens this editor on the footer.
 
 ## Good to know
 
-- **Restore** (in the toolbar once you have saved) deletes this site's version: the site goes back to
+- **Restore built-in** (in the toolbar once you have saved) deletes this site's version: the site goes back to
   the theme's header or footer, or to the built-in one.
 - Saved changes reach the public site in about two seconds.
 - In a network of sites, each site has its own header, footer and social profiles.
@@ -118,12 +118,13 @@ content. The old page's address now opens this editor on the footer.
   [themes.md](../themes.md#composable-chrome-chromejson) for the blocks and settings they can use.
 
 ---
-*Tested on 2026-10-20 on a fresh install of the development branch that introduced this editor
-(Windows 11, monolith dev mode), in a browser at 1440, 820 and 390 pixels wide. Covered: the Two rows
+*Tested on 2026-10-20 on a fresh install of the development branch that introduced this editor, released
+in WordJS 2.8.0 (Windows 11, monolith dev mode), in a browser at 1440, 820 and 390 pixels wide. Covered: the Two rows
 header and Four columns footer applied from Templates and saved; the device previews; undo and redo;
 the public site at the three widths (top bar hidden on phones, menu button and side panel with Esc,
 footer in four, two and one columns); a legacy footer (text, copyright, two social links) converted
 with Convert and shown on the site with the same content, and the theme-footer case offering Add
-them; Restore; a `javascript:` link refused with the plain-language message above; a transparent
+them; Restore built-in; a `javascript:` link refused with the plain-language message above; a transparent
 header with light text over a page opening with a Hero block, turning solid on scroll; the editor
-itself at 375, 768, 1024 and 1440 pixels (tab bar and sheets, templates and social profiles dialogs).*
+itself at 375, 768, 1024 and 1440 pixels (tab bar and sheets, templates and social profiles dialogs).
+The labels, badges, templates and messages were checked again on 2026-10-23 with WordJS 2.9.*

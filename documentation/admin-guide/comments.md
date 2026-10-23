@@ -53,5 +53,5 @@ In [Settings → Reading & Discussion](settings.md#reading--discussion), **Comme
   author of the post, unless they wrote the comment themselves.
 
 The emails are sent only when the comment arrives: approving a held comment later sends nothing. They need a
-mail plugin (such as Mail Server, see [Tutorial 16](../tutorials/16-send-email-from-your-site.md)); without one,
+plugin that sends mail for the site; without one,
 the settings say **No mail plugin is active on this site, so no notification will be sent.**

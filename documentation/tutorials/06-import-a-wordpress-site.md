@@ -37,8 +37,10 @@ reads the file and shows what it found before changing anything. For the sample:
   - **Link to the old site** — creates the media entries but keeps loading the files from the old
     site, so they break if it goes away.
   - **Skip attachments** — imports no media, for when you copy `wp-content/uploads` across by hand.
-- **Allow http:// sources** — only if the old site has no HTTPS. Private and loopback addresses stay
-  refused either way.
+- **Allow http:// sources** — only if the old site has no HTTPS.
+- **Allow downloads from this site's private address** (with **Download the files**) — for a WordPress on
+  your local network, an intranet or a staging server. Only the site the file was exported from is
+  allowed; every other private, loopback or cloud-metadata address stays refused.
 
 Posts whose WordPress author is not found are assigned to the administrator running the import.
 
@@ -63,7 +65,8 @@ matched, not duplicated, and an attachment that already downloaded is never fetc
 | `/how-we-brew-a-pour-over` | The post, its original date (*March 2, 2024*) and author (María), the image served from `/uploads/2024/03/beans.png`, and the imported comment with its own date (*March 3, 2024*) |
 | `/friday-roast-schedule` | The second post |
 | `/wholesale` | The page |
-| `/category/brewing`, `/tag/pour-over`, `/author/maria` | The archives, listing the imported posts |
+| `/category/brewing`, `/tag/pour-over` | The archives, listing the imported posts |
+| `/author/user-<id>` | María's author archive. WordJS never puts a sign-in name in a public address, so the archive uses her user number (shown in **Users**). |
 
 ## Good to know
 
@@ -80,4 +83,7 @@ with the sample file:
 - the analysis counts in step 2;
 - the import with the default options and the summary in step 4;
 - the public URLs in step 5: the image downloaded and served locally, the post's featured image set to
-  the imported attachment, and the post and comment dates kept from the export.*
+  the imported attachment, and the post and comment dates kept from the export.
+
+Walked again on 2026-10-23 with WordJS 2.9 and the sample file: the same counts, summary and URLs, plus the
+private-address option and the author archive address.*

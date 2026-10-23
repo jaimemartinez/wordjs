@@ -34,8 +34,8 @@ the canvas, selected, and its properties open on the right:
 
 1. **Title:** `Coffee roasted down the street`
 2. **Subtitle:** `Small batches, roasted every Friday since 2019.`
-3. Under **Buttons**, open **Buttons 1** and set **Text** to `See this week's beans` and **URL** to
-   `/about`.
+3. Under **Buttons**, open **Buttons 1**: set **Text** to `See this week's beans`, and type `/about` in
+   the link field (it starts as `#`; the magnifier next to it picks one of your pages instead).
 
 The canvas updates as you type. The same panel sets a background image (**Select from Media**), the
 overlay strength and the hero's height.
@@ -60,7 +60,8 @@ Each block's toolbar also has **Move up/down**, **Duplicate** and **Delete**. Un
 
 ## 4. Preview and publish
 
-- The **Preview** button (the eye) opens the page on the live site. Drafts stay private to you.
+- **Preview** in the top bar opens the page on the live site (the ▶ button beside it only replays the
+  entrance animations). Drafts stay private to you.
 - To publish, set the status to **Publish** and click **Save**.
 
 The page is now public at `/our-story`. From then on, edits show **Unpublished changes**, and the main

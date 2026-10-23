@@ -120,7 +120,5 @@ These have their own sidebar entries:
 - **Built-in transport (SMTP relay)**: **Mail server**, **Port**, **Security** (STARTTLS, TLS or None), **Username**,
   **Password**, **From address** and **From name**. Saving asks for **Your password**. **Send test** sends a test
   message to the address you type.
-- **Mail provider plugin**: a mail plugin (such as Mail Server) can send these links only if you press **Allow for
+- **Mail provider plugin**: a plugin that sends mail can send these links only if you press **Allow for
   account email**.
-
-[Tutorial 16](../tutorials/16-send-email-from-your-site.md) walks through it.

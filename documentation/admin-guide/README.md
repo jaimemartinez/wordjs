@@ -50,6 +50,8 @@ wrong under the field. If you ever see a browser pop-up while using the admin, i
 | [Settings](settings.md) | General (including **Week starts on**), Reading & Discussion, Writing & comments, Media, Performance & Cache (Redis) |
 | [Plugins](plugins.md) | Installing from the Marketplace or a ZIP, permissions, activating, deactivating and deleting |
 | [Site address and HTTPS](site-address-and-https.md) | The certificate form, **Automatic Certificate Renewal** for several names, the HTTPS switch, Site address |
-| [Conference Manager](conference-manager.md) | The plugin's admin screens: the **Needs lodging** field, fee payments, meals and badges |
+
+This guide covers WordJS itself. Each plugin adds its own screens; what the official plugins do is in the
+[plugins reference](../plugins-reference.md).
 
 The visual editor itself has its own tutorial: [Your first page with the Verso editor](../tutorials/05-your-first-page-with-verso.md).

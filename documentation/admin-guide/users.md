@@ -29,9 +29,9 @@ form:
 6. **Password** for a new user; when editing, **New Password (leave blank to keep current)**. At least 8
    characters.
 
-Plugins can add switches under **Plugin access for this account**. With the Mail Server plugin, for example,
-**Professional mail account** gives the user a mailbox: their email becomes `<username>@<your mail domain>` and
-only an administrator can change it. Turning it off gives the email field back.
+Plugins can add switches under **Plugin access for this account**, shown only when an active plugin offers one
+(a mailbox on the site's domain, for example). A switch that sets the user's email makes the **Email** field
+read-only while it is on; only an administrator can change that address.
 
 Press **Save User** («Guardar usuario»).
 
@@ -41,7 +41,7 @@ turns it off for them (after a confirmation), for example when they lost their p
 ### Editing your own row
 
 When you edit **your own** user from this list and change your email, your recovery email or your password, or
-turn on a switch that changes your email (such as **Professional mail account**), the form adds a **Current
+turn on a plugin switch that changes your email, the form adds a **Current
 Password** field: type your password to save. A wrong one says **Current password is incorrect.** Editing other
 users never asks for it.
 
