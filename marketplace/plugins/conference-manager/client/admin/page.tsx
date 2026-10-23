@@ -44,6 +44,8 @@ import { useTx } from "./MealScanner";
 // Form fields (2.16.0): templates for the base fields, what a deletion switches off, rules on deleted fields.
 import { fieldDependents, isOrphanFeeRule, isSwitchOn, LODGING_FIELD, missingRuleFields, moveItem, publishRefusal, SWITCH_OFF, SWITCH_ON, templateStates, TEMPLATE_OPEN_CLASS, TEMPLATE_DONE_CLASS, TEMPLATE_DESC_CLASS } from "../lib/fields";
 import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
+import { HealthConditionsInput } from "../lib/HealthConditionsInput";
+import { HEALTH_FIELD, healthAnswerError, healthAnswerText, healthPayload, isHealthField, sameHealthAnswer } from "../lib/health";
 // Inscription tables + «Pagos de cuotas» (2.18.0): browser-side search / filters / paging, the person sheet
 // (⋮), split fee payments.
 import {
@@ -994,6 +996,8 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
     const { addToast } = useToast();
     // The registration codes reach the browser only with Inscripciones › ver: no barcode option without them.
     const canBarcode = usePerms().can('inscriptions');
+    // «Condiciones de salud» (2.32.0): a column only for Datos de salud › ver (the rows carry it only then).
+    const canHealth = usePerms().can('health');
     const storeKey = `cm:excel:${conferenceId}`;
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [people, setPeople] = useState<Inscription[]>([]);
@@ -1010,7 +1014,7 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
 
     useEffect(() => {
         let alive = true;
-        Promise.all([conferenceApi.getFields(conferenceId), conferenceApi.getInscriptions(conferenceId), conferenceApi.getLocations(conferenceId), conferenceApi.getBuses(conferenceId).catch(() => [])])
+        Promise.all([conferenceApi.getFields(conferenceId, { health: canHealth }), conferenceApi.getInscriptions(conferenceId), conferenceApi.getLocations(conferenceId), conferenceApi.getBuses(conferenceId).catch(() => [])])
             .then(([f, p, l, b]) => {
                 if (!alive) return;
                 setFields(f); setPeople(p); setLocs(l.locations || []); setTransport(transportByPerson((b || []) as any));
@@ -1192,6 +1196,10 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
     const canPayManage = perms.can('payments', 'manage');
     const canAssign = perms.can('lodging', 'manage');
     const canExcel = perms.can('reports');
+    // «Condiciones de salud» (2.32.0): Datos de salud › ver shows the field (list, sheet, form); › gestionar edits it.
+    const canHealthView = perms.can('health');
+    const canHealthWrite = perms.can('health', 'manage');
+    const [healthForm, setHealthForm] = useState<{ value: any; original: any; error: string | null; loading: boolean }>({ value: null, original: null, error: null, loading: false });
     const [barcodeFor, setBarcodeFor] = useState<Inscription | null>(null);
     // «Escarapela» (2.19.0): the person whose badge actions are open.
     const [badgeFor, setBadgeFor] = useState<Inscription | null>(null);
@@ -1252,7 +1260,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
         try {
             const [rows, fieldsData, locData] = await Promise.all([
                 conferenceApi.getInscriptions(conferenceId),
-                conferenceApi.getFields(conferenceId),
+                conferenceApi.getFields(conferenceId, { health: canHealthView }),
                 conferenceApi.getLocations(conferenceId).catch(() => null),
             ]);
             setInscriptions(Array.isArray(rows) ? rows : []);
@@ -1331,6 +1339,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
         setEditId(null);
         setFormOriginal(null);
         setFormData({});
+        setHealthForm({ value: null, original: null, error: null, loading: false });
         setShowAddModal(true);
     };
     // Dynamic (custom) field values are flattened onto formData so the same form renders them; the location
@@ -1341,6 +1350,13 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
         setFormOriginal(seed);
         setFormData(seed);
         setShowAddModal(true);
+        // The structured answer (the roster row only carries it as text).
+        setHealthForm({ value: null, original: null, error: null, loading: canHealthView && fields.some(isHealthField) });
+        if (canHealthView && fields.some(isHealthField)) {
+            conferenceApi.getInscriptionHealth(person.id)
+                .then((r) => setHealthForm({ value: r.answer || null, original: r.answer || null, error: null, loading: false }))
+                .catch((e: any) => setHealthForm({ value: null, original: null, error: e?.message || tx('health.load.error', 'No se pudo cargar la respuesta de salud.'), loading: false }));
+        }
     };
     const closeForm = () => { setShowAddModal(false); setEditId(null); setFormOriginal(null); };
     // Escape: an untouched form closes; one with changes asks first — on 0d390616 Escape did nothing here, and
@@ -1353,10 +1369,23 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!conferenceId) return;
+        // «Condiciones de salud»: its errors are said under the field (never a browser bubble).
+        const healthField = canHealthWrite ? fields.find(isHealthField) : null;
+        if (healthField) {
+            if (healthForm.loading) return;
+            const err = healthAnswerError(healthField, healthForm.value);
+            if (err) {
+                setHealthForm((h) => ({ ...h, error: err === 'other' ? tx('health.error.other', 'Escribe cuál es la otra condición.') : tx('health.error.required', 'Marca al menos una opción (o «Prefiero no responder»).') }));
+                return;
+            }
+        }
         setSaving(true);
         try {
             // Only defined form fields + location_id/notes/status travel; never the row's derived columns.
             const payload = buildInscriptionPayload(fields, formData, editId ? formOriginal : null);
+            if (healthField && (!editId || !sameHealthAnswer(healthPayload(healthField, healthForm.value), healthPayload(healthField, healthForm.original)))) {
+                payload[HEALTH_FIELD] = healthPayload(healthField, healthForm.value);
+            }
             if (editId) {
                 const result = await conferenceApi.updateInscription(editId, payload);
                 // Moving someone out of (or, with their bed, into) a submitted / validated arrangement, or
@@ -1615,11 +1644,35 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                     {fields.map(field => (
-                                        <div key={field.id} className={field.type === 'notes' || field.type === 'textarea' ? 'md:col-span-2' : ''}>
+                                        <div key={field.id} className={field.type === 'notes' || field.type === 'textarea' || isHealthField(field) ? 'md:col-span-2' : ''}>
                                             <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1 mb-1.5">
                                                 {field.label} {field.is_required ? <span className="text-rose-500">*</span> : ''}
                                             </label>
-                                            {field.type === 'switch' ? (
+                                            {isHealthField(field) ? (
+                                                // «Condiciones de salud» (2.32.0): only Datos de salud › ver gets this field at all.
+                                                healthForm.loading ? (
+                                                    <p className="text-sm text-gray-500 px-1"><i className="fa-solid fa-spinner fa-spin mr-2" aria-hidden="true"></i>{tx('loading', 'Cargando…')}</p>
+                                                ) : canHealthWrite ? (
+                                                    <HealthConditionsInput
+                                                        id={`cm-health-${editId || 'new'}`}
+                                                        field={field}
+                                                        value={healthForm.value}
+                                                        onChange={(v) => setHealthForm((h) => ({ ...h, value: v, error: null }))}
+                                                        error={healthForm.error}
+                                                        labels={{
+                                                            consent: tx('health.consent', 'Usaremos esta información solo para atenderte mejor (por ejemplo, el turno de comida). Solo la ve el equipo autorizado. Puedes no responder.'),
+                                                            other: tx('health.other', 'Otros'), otherPlaceholder: tx('health.other.placeholder', '¿Cuál?'),
+                                                            none: tx('health.none', 'Ninguna'), declined: tx('health.declined', 'Prefiero no responder'),
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm text-gray-800" data-health-readonly="">
+                                                        {healthAnswerText(healthForm.value) || '—'}
+                                                        <p className="mt-1 text-[11px] text-gray-500">{tx('health.readonly', 'Para cambiarla hace falta el permiso «Datos de salud › gestionar».')}</p>
+                                                        {healthForm.error && <p role="alert" className="mt-1 text-xs font-semibold text-rose-600">{healthForm.error}</p>}
+                                                    </div>
+                                                )
+                                            ) : field.type === 'switch' ? (
                                                 // A Sí / No switch (2.31.0 — «Requiere hospedaje»). Blank reads as «Sí».
                                                 <button
                                                     type="button"
@@ -3425,14 +3478,16 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
         { value: 'number', label: t('type.number'), icon: 'fa-hashtag', color: 'text-indigo-500', bg: 'bg-indigo-50' },
         { value: 'select', label: t('type.select'), icon: 'fa-list-ul', color: 'text-purple-500', bg: 'bg-purple-50' },
         { value: 'date', label: t('type.date'), icon: 'fa-calendar-day', color: 'text-orange-500', bg: 'bg-orange-50' },
-        { value: 'switch', label: tx('type.switch', 'Sí / No (interruptor)'), icon: 'fa-toggle-on', color: 'text-emerald-500', bg: 'bg-emerald-50' }
+        { value: 'switch', label: tx('type.switch', 'Sí / No (interruptor)'), icon: 'fa-toggle-on', color: 'text-emerald-500', bg: 'bg-emerald-50' },
+        // 2.32.0: only through its template (never offered in the type menu below).
+        { value: 'health', label: tx('type.health', 'Condiciones de salud'), icon: 'fa-notes-medical', color: 'text-rose-500', bg: 'bg-rose-50' }
     ];
 
     const loadData = async () => {
         setLoading(true);
         try {
             const [fieldsData, locData, feeData, ruleData] = await Promise.all([
-                conferenceApi.getFields(conferenceId),
+                conferenceApi.getFields(conferenceId, { health: true }),
                 conferenceApi.getLocations(conferenceId),
                 conferenceApi.getFeeRules(conferenceId).catch(() => []),
                 conferenceApi.getAssignmentRules(conferenceId, { all: true }).catch(() => []),
@@ -3804,6 +3859,13 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                         <i className="fa-solid fa-chevron-down text-[10px]"></i>
                                                     </div>
                                                 </div>
+                                            ) : f.type === 'health' ? (
+                                                <div className="space-y-1.5 text-xs font-medium text-gray-400 italic">
+                                                    {[...String(f.options || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 3), tx('health.other', 'Otros')].map(o => (
+                                                        <div key={o} className="flex items-center gap-2"><span className="w-3.5 h-3.5 rounded border-2 border-gray-200" aria-hidden="true"></span>{o}</div>
+                                                    ))}
+                                                    <p className="text-[10px] not-italic text-gray-400"><i className="fa-solid fa-lock mr-1" aria-hidden="true"></i>{tx('health.preview.note', 'Datos sensibles: solo los ve quien tiene «Datos de salud».')}</p>
+                                                </div>
                                             ) : f.type === 'switch' ? (
                                                 <div className="flex items-center gap-3 p-1 text-xs font-medium text-gray-400 italic">
                                                     <span className="relative inline-block w-11 h-6 rounded-full bg-blue-600/60" aria-hidden="true"><span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow translate-x-5"></span></span>
@@ -3916,8 +3978,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{t('field.type')}</label>
                                         <button
                                             type="button"
-                                            disabled={formData.name === LODGING_FIELD}
-                                            title={formData.name === LODGING_FIELD ? tx('field.lodging.type.fixed', 'El campo «Requiere hospedaje» siempre es un interruptor Sí / No.') : undefined}
+                                            disabled={formData.name === LODGING_FIELD || formData.type === 'health'}
+                                            title={formData.name === LODGING_FIELD ? tx('field.lodging.type.fixed', 'El campo «Requiere hospedaje» siempre es un interruptor Sí / No.') : formData.type === 'health' ? tx('field.health.type.fixed', 'El campo «Condiciones de salud» no cambia de tipo.') : undefined}
                                             onClick={() => setOpenSelect(openSelect === 'type' ? null : 'type')}
                                             className={`w-full flex items-center justify-between border-2 rounded-xl px-4 py-3 transition-all outline-none font-medium ${openSelect === 'type' ? 'bg-white border-blue-500 ring-4 ring-blue-500/10' : 'bg-gray-50/30 border-gray-100 hover:border-gray-200'}`}
                                         >
@@ -3939,7 +4001,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 
                                         {openSelect === 'type' && (
                                             <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-100 rounded-2xl shadow-xl z-50 p-2 animate-in slide-in-from-top-2 duration-200 overflow-hidden">
-                                                {FIELD_TYPES.map(type => (
+                                                {FIELD_TYPES.filter(type => type.value !== 'health').map(type => (
                                                     <button
                                                         key={type.value}
                                                         type="button"
@@ -4058,6 +4120,20 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         </span>
                                     </label>
                                 </div>
+
+                                {formData.type === 'health' && (
+                                    <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-300" data-health-options-editor="">
+                                        <label htmlFor="cm-health-options" className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{tx('field.health.options', 'Condiciones que se ofrecen')}</label>
+                                        <textarea
+                                            id="cm-health-options"
+                                            rows={4}
+                                            className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm resize-y"
+                                            value={formData.options}
+                                            onChange={e => setFormData({ ...formData, options: e.target.value })}
+                                        />
+                                        <p className="text-[10px] text-gray-500 px-1">{tx('field.health.options.hint', 'Separa las condiciones por comas. «Otros» (con texto), «Ninguna» y «Prefiero no responder» se añaden solos. El peso de cada una para los turnos de comida se ajusta en Alimentación › Turnos.')}</p>
+                                    </div>
+                                )}
 
                                 {formData.type === 'select' && (
                                     <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-300">

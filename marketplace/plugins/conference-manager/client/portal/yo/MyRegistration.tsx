@@ -15,11 +15,13 @@ import { BadgeCard, type DisplayList } from "../badge/BadgeCard";
 import { OsmMap } from "./OsmMap";
 import { BusAlerts, dropPushSubscription, type Bus } from "./BusAlerts";
 
-type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null };
+type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null; turn_start?: string; turn_end?: string };
 type View = {
     name: string; conference: string; location: string | null; code: string;
     answers: { label: string; value: string }[];
     meals: { delivered: Meal[]; pending: Meal[] };
+    /** 2.32.0: their meal group (A–F), or null when the conference has none. */
+    meal_group?: string | null;
     lodging: { hotel: string; room: string; address: string | null; lat: number | null; lng: number | null } | null;
     badge: { badge: DisplayList; plate: string | null; images?: Record<string, string> } | null;
     transport?: Bus[];
@@ -283,6 +285,15 @@ export default function MyRegistrationPage() {
 
                 <section className={section} data-self-meals="">
                     <h2 className={h2}><i className="fa-solid fa-utensils" aria-hidden="true"></i>Mis comidas</h2>
+                    {view.meal_group && (
+                        <div className="flex items-center gap-3 rounded-2xl bg-blue-50 border border-blue-100 px-3 py-2.5" data-self-meal-group="">
+                            <span className="w-10 h-10 shrink-0 rounded-xl bg-blue-600 text-white flex items-center justify-center text-lg font-black" aria-hidden="true">{view.meal_group}</span>
+                            <div className="min-w-0">
+                                <p className="text-sm font-black text-gray-900">Grupo {view.meal_group}</p>
+                                <p className="text-xs text-gray-600">Acércate a la hora de tu grupo: así nadie espera de pie.</p>
+                            </div>
+                        </div>
+                    )}
                     {!view.meals.delivered.length && !view.meals.pending.length && <p className="text-sm text-gray-500">No tienes comidas asignadas.</p>}
                     {view.meals.delivered.length > 0 && (
                         <ul className="space-y-2" aria-label="Entregadas">
@@ -304,7 +315,10 @@ export default function MyRegistrationPage() {
                                 {view.meals.pending.map((m, i) => (
                                     <li key={`p${i}`} className="flex items-start gap-3 rounded-2xl bg-gray-50 border border-gray-100 px-3 py-2.5" data-meal-pending="">
                                         <i className="fa-regular fa-clock text-gray-400 mt-0.5" aria-hidden="true"></i>
-                                        <p className="text-sm text-gray-800"><span className="font-black">{mealName(m)}</span> · {dayLabel(m.date)}{m.start_time ? ` · ${m.start_time}${m.end_time ? `–${m.end_time}` : ""}` : ""}</p>
+                                        <div className="min-w-0">
+                                            <p className="text-sm text-gray-800"><span className="font-black">{mealName(m)}</span> · {dayLabel(m.date)}{m.start_time ? ` · ${m.start_time}${m.end_time ? `–${m.end_time}` : ""}` : ""}</p>
+                                            {m.turn_start && <p className="text-xs font-bold text-blue-700" data-meal-turn="">Tu turno: {m.turn_start}{m.turn_end && m.turn_end !== m.turn_start ? `–${m.turn_end}` : ""}</p>}
+                                        </div>
                                     </li>
                                 ))}
                             </ul>

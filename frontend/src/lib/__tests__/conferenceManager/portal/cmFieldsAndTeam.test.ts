@@ -82,7 +82,7 @@ describe("field templates (lib/fields.ts)", () => {
         const src = read("index.js");
         const block = src.slice(src.indexOf("const FIELD_TEMPLATES = Object.freeze({"), src.indexOf("});", src.indexOf("const FIELD_TEMPLATES = Object.freeze({")));
         const server = [...block.matchAll(/^\s+([a-z_]+): \{ name: '([a-z_]+)'/gm)].map(m => [m[1], m[2]]);
-        expect(server.length).toBe(7);
+        expect(server.length).toBe(9); // 2.32.0: + age, health
         expect(FIELD_TEMPLATES.map(t => [t.key, t.name])).toEqual(server);
         expect(server.some(([k]) => k === "location")).toBe(false);
     });
@@ -94,7 +94,7 @@ describe("field templates (lib/fields.ts)", () => {
             { name: "f_x", label: "Talla" },
         ];
         const states = Object.fromEntries(templateStates(fields).map(s => [s.template.key, s.existing?.label ?? null]));
-        expect(states).toEqual({ first_name: "Nombre", last_name: null, email: null, phone: "Celular", gender: null, family_group: null, lodging: null });
+        expect(states).toEqual({ first_name: "Nombre", last_name: null, email: null, phone: "Celular", gender: null, family_group: null, lodging: null, age: null, health: null });
         expect(templateStates([]).every(s => !s.existing)).toBe(true);
         expect(templateField(null, FIELD_TEMPLATES[0])).toBeUndefined();
     });

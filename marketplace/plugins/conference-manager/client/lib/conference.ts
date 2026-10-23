@@ -3,6 +3,7 @@ import { api, apiGet, apiPost, apiPut, apiDelete } from "../../../../../frontend
 import type { MealService } from "./meals";
 import type { FeeView, PersonPart, Transfer } from "./feePayments";
 import type { LodgingAdjusted } from "./lodgingView";
+import { isHealthField, type HealthAnswer } from "./health";
 
 export interface Conference {
     id: number;
@@ -176,7 +177,8 @@ export function buildInscriptionPayload(
     const changed = (key: string) => !original || !(key in original) || formData[key] !== original[key];
     const payload: Record<string, any> = {};
     for (const f of fields) {
-        if (!f.name || INSCRIPTION_READONLY_KEYS.includes(f.name)) continue;
+        // «Condiciones de salud» (2.32.0) travels as its own object, added by the form (never as a string).
+        if (!f.name || INSCRIPTION_READONLY_KEYS.includes(f.name) || isHealthField(f)) continue;
         if (!(f.name in formData) || !changed(f.name)) continue;
         const v = formData[f.name];
         payload[f.name] = v === undefined || v === null ? '' : String(v);
@@ -568,7 +570,7 @@ export type MealDeliveryRow = {
 export type StaffLevel = 'none' | 'view' | 'manage';
 export type StaffSection =
     | 'dashboard' | 'inscriptions' | 'payments' | 'locations' | 'lodging' | 'transport'
-    | 'accounting' | 'meals' | 'meals_delivery' | 'badges' | 'reports' | 'settings';
+    | 'accounting' | 'meals' | 'meals_delivery' | 'badges' | 'health' | 'reports' | 'settings';
 export type StaffPermissions = Record<StaffSection, StaffLevel>;
 /** Every section with the levels it accepts, in display order (mirrors the server's list). */
 export const STAFF_SECTIONS: { key: StaffSection; levels: StaffLevel[] }[] = [
@@ -582,6 +584,8 @@ export const STAFF_SECTIONS: { key: StaffSection; levels: StaffLevel[] }[] = [
     { key: 'meals', levels: ['none', 'view', 'manage'] },
     { key: 'meals_delivery', levels: ['none', 'manage'] },
     { key: 'badges', levels: ['none', 'view', 'manage'] },
+    // «Datos de salud» (2.32.0): the answers to «Condiciones de salud» (special-category data).
+    { key: 'health', levels: ['none', 'view', 'manage'] },
     { key: 'reports', levels: ['none', 'view'] },
     { key: 'settings', levels: ['none', 'view', 'manage'] },
 ];
@@ -749,7 +753,18 @@ export const conferenceApi = {
     resetAssignments: (conferenceId: number) => apiPost<{ success: boolean; skipped_frozen?: { location_id: number; name: string }[] }>('/plugin/conference-manager/assignment/reset', { conference_id: conferenceId }),
 
     // Fields
-    getFields: (conferenceId: number) => apiGet<ConferenceField[]>(`/plugin/conference-manager/fields?conference_id=${conferenceId}`),
+    // «Condiciones de salud» (2.32.0) is left out unless asked for (`health: true`): its answers are not a column, so
+    // a list, a picker or a rule must never offer it. The form builder and the inscription form (with
+    // Datos de salud › ver) ask for it.
+    getFields: (conferenceId: number, opts: { health?: boolean } = {}) => apiGet<ConferenceField[]>(`/plugin/conference-manager/fields?conference_id=${conferenceId}`)
+        .then((list) => (opts.health || !Array.isArray(list) ? list : list.filter((f) => !isHealthField(f)))),
+    /** 2.32.0: one person's answer to «Condiciones de salud» (Datos de salud › ver). */
+    getInscriptionHealth: (id: number) => apiGet<{ field: { name: string; label: string } | null; answer: HealthAnswer | null }>(`/plugin/conference-manager/inscriptions/${id}/health`),
+    /** 2.32.0: «Turnos de comida». */
+    getMealPriority: (conferenceId: number) => apiGet<any>(`/plugin/conference-manager/meals/priority?conference_id=${conferenceId}`),
+    saveMealPriorityConfig: (conferenceId: number, data: Record<string, unknown>) => apiPut<any>('/plugin/conference-manager/meals/priority/config', { conference_id: conferenceId, ...data }),
+    freezeMealGroups: (conferenceId: number, unfreeze = false) => apiPost<any>('/plugin/conference-manager/meals/priority/freeze', { conference_id: conferenceId, ...(unfreeze ? { unfreeze: true } : {}) }),
+    setMealGroup: (inscriptionId: number, group: string | null) => apiPut<any>(`/plugin/conference-manager/meals/priority/people/${inscriptionId}`, { group }),
     saveField: (data: Partial<ConferenceField>) => apiPost('/plugin/conference-manager/fields', data),
     /** 2.16.0: add a base field from its template (lib/fields.ts FIELD_TEMPLATES). 409 = the form already has it. */
     addFieldTemplate: (conferenceId: number, template: string, label?: string) =>

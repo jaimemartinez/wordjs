@@ -63,10 +63,11 @@ export const isSwitchOn = (v: unknown): boolean => String(v ?? '').trim().toLowe
 
 /**
  * Seed values for a fresh form: number → `''` (NOT `0` — the server treats `''` as missing for a
- * required field, `0` is a real value), select → its first option, switch → «Sí», everything else `''`.
+ * required field, `0` is a real value), select → its first option, switch → «Sí», «Condiciones de salud»
+ * (2.32.0) → null (not answered; its value is an object, sent as is), everything else `''`.
  */
-export const initialFormValues = (fields: PortalField[]): Record<string, string> =>
-    Object.fromEntries(fields.map((f) => [f.name, f.type === 'select' ? (fieldOptions(f)[0] || '') : f.type === 'switch' ? SWITCH_ON : '']));
+export const initialFormValues = (fields: PortalField[]): Record<string, any> =>
+    Object.fromEntries(fields.map((f) => [f.name, f.type === 'select' ? (fieldOptions(f)[0] || '') : f.type === 'switch' ? SWITCH_ON : f.type === 'health' ? null : '']));
 
 /** Every input value travels as the raw string; the server canonicalises ("30.0" → "30"). Never `Number()`. */
 export const inputToFormValue = (_f: PortalField, raw: string): string => raw;

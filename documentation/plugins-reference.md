@@ -184,7 +184,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.31.1
+**ID:** `conference-manager` | **Version:** 2.32.0
 
 Complex business logic for managing church conferences.
 
@@ -201,6 +201,18 @@ Complex business logic for managing church conferences.
         location's run, «Sugerir reparto»), is not counted as «sin habitación», and `POST /inscriptions/:id/assign`
         and `POST /portal/lodging/assign` refuse to place them (400); switching an attendee to «No» frees the bed
         they held. A blank answer, or a form without the field, means the attendee needs lodging.
+        «Edad» (2.32.0, template `age`, column `age`) is a `number` field that accepts whole years from 0 to 120.
+        «Condiciones de salud» (2.32.0, template `health`, type `health`) is a multiple-choice field: the
+        conditions in its options, «Otros» with free text, and «Ninguna» / «Prefiero no responder». Its value is
+        `{ conditions: string[], other: string, answer: 'list' | 'none' | 'declined' }`, or `null` to clear it.
+        This is special-category health data, so it is handled apart from the other fields. The answers live in
+        their own table and never in a column of the inscriptions table. The field's name is reserved, so no
+        list, export, badge, meals card, rule or quote reads it. Only the staff section «Datos de salud» opens
+        it: `health:view` adds the answer as text to roster rows and to the CSV/Excel export, and reads
+        `GET /inscriptions/:id/health`; `health:manage` writes it from the admin (403 otherwise). A coordinator
+        answers it while registering in the portal, which never reads an answer back. The form shows a consent
+        line, and errors appear under the field. Deleting the field, or the person, deletes the answers. A
+        price rule on it is refused.
         Every field can be edited and deleted while the form is unpublished (a published form stays locked),
         and every feature works without the base fields: names fall back to the other form fields fit for a
         name — never a unique field (an ID document), a contact (email, phone) or notes — or the attendee's
@@ -211,6 +223,24 @@ Complex business logic for managing church conferences.
         rules on it keep applying. A form with no field cannot be published (`400 form_empty`). On a phone
         the field list's actions are visible without hover, with ↑ / ↓ to reorder (drag and drop needs a
         mouse).
+    *   **Meal turns** («Alimentación › Turnos», 2.32.0): every participant gets a meal group A–F. The
+        priority score is `S = min(100, E(age) + H)`. `E` is 40 for ages 0–2, 30 for 3–5, 15 for 6–11, 20 for
+        60–69, 35 for 70–79 and 50 for 80 or more. `H = min(60, w1 + w2/2 + w3/4 …)`, where each condition's
+        weight is editable per conference and «Prefiero no responder» counts 0. Sex never counts on its own:
+        «Embarazo» and «Lactancia» are conditions the person marks. The six groups have nearly the same size:
+        units (a family with at most `companions_max` companions per priority member, default 4; everyone else
+        alone) are sorted by score, ties broken by a stable hash, and a unit at position `s` with `z` people out
+        of `N` goes to group `⌊6 (s + z/2) / N⌋`. Each service calls the groups in order; the trailing groups
+        made only of people with 0 points alternate day by day. A group lasts `n / (0.85 · lines · plates per
+        minute)` minutes, where `n` is the people of the group entitled to that service. «Fijar grupos»
+        (`POST /meals/priority/freeze`) stores every letter so printed badges stay right; a later registrant
+        joins the smallest group whose stored scores span theirs. `PUT /meals/priority/people/:id { group }`
+        sets a manual group (kept by every recalculation). `GET /meals/priority` returns letters, counts and
+        times to `meals:view`, and scores only to `health:view`. `PUT /meals/priority/config` (`meals:manage`)
+        sets `enabled`, the weights, the pace and the companions. While it is off (the default) no letter
+        leaves the page. Once on, the badge token `@meal_group` prints the letter, «Mi inscripción» shows the
+        group and each meal's turn, and the meal scanner's cards show the letter without ever blocking a
+        delivery.
     *   **Fee rules** (`/fee-rules`): the base fee plus ordered `set`/`add` rules matched against form values, in
         integer cents. `POST /public/quote` returns the fee for a set of values (the portal shows it live while
         registering); `POST /reprice` re-applies the current rules to every inscription of a conference.

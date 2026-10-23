@@ -213,6 +213,14 @@ function createSelfPage(base) {
             }
         }
         const meals = await D.mealsOf(ins);
+        // 2.32.0: their meal group and, on each meal still to come, their group's turn (never a score or a reason).
+        const mg = D.mealGroupOf ? await D.mealGroupOf(ins) : null;
+        if (mg) {
+            for (const m of meals.pending) {
+                const s = mg.services.find(x => x.date === m.date && x.meal === m.meal);
+                if (s && s.start) { m.turn_start = s.start; m.turn_end = s.end; }
+            }
+        }
         const badge = await D.badges.selfBadge(ins, conf, cfg);
         // 2.27.0: their buses, each with its boarding state and last notices, and the key to turn notices on.
         const transport = D.transportOf ? await D.transportOf(ins) : [];
@@ -224,6 +232,7 @@ function createSelfPage(base) {
             code: ins.reg_code || '',
             answers,
             meals,
+            meal_group: mg ? mg.group : null,
             lodging,
             badge,
             transport,
