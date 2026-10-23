@@ -7,6 +7,7 @@ import BreakableToken, { TOKEN_WRAP_CLASS } from "./BreakableToken";
 import { PermissionRow, RiskBadge, RISK_CLASSES, TOKEN_CLASS, REASON_LABEL_CLASS, PERMISSION_TOGGLE_CLASS, PERMISSION_DETAILS_CLASS } from "./PermissionRow";
 import { activationGrant, activationLeavesSomeOff, ceilingAllows, rolesHeldState } from "./grantState";
 import DialogLayer from "@/components/DialogLayer";
+import { PendingLabel, PluginToggleButton, type PluginPendingAction } from "./PluginActionButtons";
 import { permMeta } from "@/lib/permissionMeta";
 import { reloadActivePlugins } from "@/lib/plugins";
 import { deepLinkedPlugin, withoutPermissionsDeepLink } from "@/lib/pluginPermissionsLink";
@@ -16,7 +17,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
 import { t as translate } from "@/lib/i18n";
-import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
+import { FaPlug, FaTrash, FaDownload, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import FreedServicesNotice from "./FreedServicesNotice";
 import MarketplaceTab from "./MarketplaceTab";
@@ -258,6 +259,11 @@ export default function PluginsPage() {
     const codeLocked = siteScoped || mainSiteNonNetworkAdmin;
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
+    // A lifecycle action still waiting for the server, per plugin slug (PluginActionButtons.tsx): its
+    // buttons show it and stay disabled, so a slow activation cannot be clicked twice.
+    const [pendingAction, setPendingAction] = useState<Record<string, PluginPendingAction>>({});
+    const startPending = (slug: string, action: PluginPendingAction) => setPendingAction((m) => ({ ...m, [slug]: action }));
+    const endPending = (slug: string) => setPendingAction((m) => { const next = { ...m }; delete next[slug]; return next; });
     const { refreshMenus } = useMenu();
 
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -462,11 +468,13 @@ export default function PluginsPage() {
     };
 
     const togglePlugin = async (plugin: Plugin) => {
+        if (pendingAction[plugin.slug]) return;
         try {
             if (plugin.active) {
                 // Deactivating stops everything the plugin runs (its pages, blocks, listeners — a mail
                 // server stops receiving mail), so it is confirmed like the other lifecycle actions.
                 if (!(await confirm(t('plugins.deactivate.confirm').replace('{name}', plugin.name), t('plugins.deactivate.confirmTitle').replace('{name}', plugin.name), true))) return;
+                startPending(plugin.slug, 'deactivating');
                 await pluginsApi.deactivate(plugin.slug);
                 loadPlugins();
                 refreshMenus();
@@ -485,13 +493,16 @@ export default function PluginsPage() {
         } catch (error: any) {
             console.error("Failed to toggle plugin:", error);
             addToast(t('plugins.status.changeFailed') + ": " + (error.message || t('plugins.broken.unknownError')), "error");
+        } finally {
+            if (plugin.active) endPending(plugin.slug);
         }
     };
 
     const confirmActivate = async () => {
-        if (!pluginToActivate) return;
+        if (!pluginToActivate || pendingAction[pluginToActivate.slug]) return;
         const plugin = pluginToActivate;
         const name = plugin.name;
+        startPending(plugin.slug, 'activating');
         try {
             // Requests switched off in the dialog: record the administrator's decision first, so activation
             // starts the plugin with exactly those grants (the server only seeds when nobody has decided).
@@ -548,6 +559,8 @@ export default function PluginsPage() {
                 // Persistent toast (duration: 0) so user can read the security error
                 addToast(t('plugins.activation.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error", 0);
             }
+        } finally {
+            endPending(plugin.slug);
         }
     };
 
@@ -739,8 +752,9 @@ export default function PluginsPage() {
     };
 
     const confirmDelete = async () => {
-        if (!pluginToDelete || !password) return;
-
+        if (!pluginToDelete || !password || pendingAction[pluginToDelete.slug]) return;
+        const slug = pluginToDelete.slug;
+        startPending(slug, 'deleting');
         try {
             const res = await pluginsApi.delete(pluginToDelete.slug, password, dropData);
             setDeleteModalOpen(false);
@@ -756,8 +770,14 @@ export default function PluginsPage() {
         } catch (error: any) {
             console.error("Failed to delete plugin:", error);
             setDeleteError(error.message || t('plugins.delete.failed'));
+        } finally {
+            endPending(slug);
         }
     };
+
+    // The pending action of the plugin each dialog is about.
+    const activatePending = pluginToActivate ? pendingAction[pluginToActivate.slug] : undefined;
+    const deletePending = pluginToDelete ? pendingAction[pluginToDelete.slug] : undefined;
 
     return (
         <div className="h-full p-8 relative overflow-y-auto custom-scrollbar">
@@ -917,16 +937,18 @@ export default function PluginsPage() {
                         <div className="flex justify-end gap-3 pt-2">
                             <button
                                 onClick={() => setDeleteModalOpen(false)}
-                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all"
+                                disabled={!!deletePending}
+                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                                 {t('cancel')}
                             </button>
                             <button
                                 onClick={confirmDelete}
-                                disabled={!password}
+                                disabled={!password || !!deletePending}
+                                aria-busy={!!deletePending || undefined}
                                 className="px-6 py-3 bg-rose-600 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-rose-500/20 hover:shadow-rose-500/40 transition-all hover:scale-102 active:scale-98"
                             >
-                                {t('plugins.delete.confirm')}
+                                <PendingLabel pending={deletePending} label={t('plugins.delete.confirm')} t={t} />
                             </button>
                         </div>
                     </div>
@@ -1183,15 +1205,18 @@ export default function PluginsPage() {
                                     setPermissionModalOpen(false);
                                     setPluginToActivate(null);
                                 }}
-                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all"
+                                disabled={!!activatePending}
+                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                                 {t('cancel')}
                             </button>
                             <button
                                 onClick={confirmActivate}
-                                className="px-6 py-3 bg-blue-600 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-blue-700 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all hover:scale-102 active:scale-98"
+                                disabled={!!activatePending}
+                                aria-busy={!!activatePending || undefined}
+                                className="px-6 py-3 bg-blue-600 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-blue-700 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all hover:scale-102 active:scale-98 disabled:opacity-70 disabled:cursor-wait disabled:hover:scale-100"
                             >
-                                {t('plugins.confirm.activate')}
+                                <PendingLabel pending={activatePending} label={t('plugins.confirm.activate')} t={t} />
                             </button>
                         </div>
                     </div>
@@ -1436,7 +1461,8 @@ export default function PluginsPage() {
                                                 </button>
                                                 <button
                                                     onClick={() => initiateDelete(plugin)}
-                                                    className="p-2 rounded-xl bg-rose-50 border border-rose-100 text-rose-500 hover:bg-rose-100 hover:border-rose-200 hover:scale-105 active:scale-95 transition-all shadow-sm"
+                                                    disabled={!!pendingAction[plugin.slug]}
+                                                    className="p-2 rounded-xl bg-rose-50 border border-rose-100 text-rose-500 hover:bg-rose-100 hover:border-rose-200 hover:scale-105 active:scale-95 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
                                                     title={t('plugins.delete.title')}
                                                 >
                                                     <FaTrash className="text-sm" />
@@ -1569,25 +1595,12 @@ export default function PluginsPage() {
                                             {t('plugins.network.notOffered')}
                                         </span>
                                     ) : (
-                                    <button
+                                    <PluginToggleButton
+                                        active={!!plugin.active}
+                                        pending={pendingAction[plugin.slug]}
                                         onClick={() => togglePlugin(plugin)}
-                                        className={`
-                                            ml-auto shrink-0 px-4 py-2 rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 shadow-sm hover:scale-105 active:scale-95
-                                            ${plugin.active
-                                                ? 'bg-rose-50 text-rose-600 border border-rose-200/40 hover:bg-rose-600 hover:text-white hover:shadow-lg hover:shadow-rose-500/20'
-                                                : 'bg-emerald-50 text-emerald-600 border border-emerald-200/40 hover:bg-emerald-600 hover:text-white hover:shadow-lg hover:shadow-emerald-500/20'}
-                                        `}
-                                    >
-                                        {plugin.active ? (
-                                            <>
-                                                <FaPowerOff className="text-[11px]" /> {t('plugins.deactivate')}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <FaCheck className="text-[11px]" /> {t('plugins.activate')}
-                                            </>
-                                        )}
-                                    </button>
+                                        t={t}
+                                    />
                                     )}
                                 </div>
                             </div>

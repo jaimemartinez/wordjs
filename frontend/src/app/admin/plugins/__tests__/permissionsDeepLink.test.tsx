@@ -101,6 +101,7 @@ vi.mock("@/contexts/AuthContext", () => ({ useOptionalAuth: () => null }));
 vi.mock("../MarketplaceTab", () => ({ default: () => null }));
 
 import PluginsPage from "../page";
+import { PluginToggleButton } from "../PluginActionButtons";
 
 /**
  * The permissions dialog's own copy — present in the markup only while the dialog is open. The dialog is
@@ -206,6 +207,11 @@ function findButton(node: unknown, label: string): { onClick?: () => unknown } |
     if (!React.isValidElement(node)) return null;
     const props = node.props as { children?: unknown; onClick?: () => unknown };
     if (node.type === "button" && textOf(props.children).includes(label)) return props;
+    // The card's Activate/Deactivate button is a component (PluginActionButtons): its label is its state.
+    if (node.type === PluginToggleButton) {
+        const toggle = node.props as { active: boolean; t: (key: string) => string; onClick: () => unknown };
+        return toggle.t(toggle.active ? "plugins.deactivate" : "plugins.activate").includes(label) ? toggle : null;
+    }
     return findButton(props.children, label);
 }
 
