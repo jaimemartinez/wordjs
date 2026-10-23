@@ -270,7 +270,7 @@ panel first, and a command or a config edit only as the second way. The screens 
 
 | Screen | What it does | The second way |
 |---|---|---|
-| **Admin → Updates** | Installs a newer release: backup, upgrade, restart, rollback ([§ Updates](#-updates)) | `npx create-wordjs@latest upgrade` |
+| **Admin → Updates** | Installs a newer release: backup, upgrade, restart, rollback ([§ Updates](#-updates)); in a container or a Kubernetes pod it says to change the image instead | `npx create-wordjs@latest upgrade` |
 | **Admin → Site Health** | Runs the install's diagnostics — versions and Node.js, writable folders and free disk, the database's answer time and engine, password-reset mail and SPF/DMARC, HTTPS and the certificate, a proxy that is not trusted, the scheduler, plugin isolation, whether WordJS can restart itself, a newer release — each with a link to the screen that fixes it | `GET /api/v1/health/site`, `GET /api/v1/health/details` |
 | **Admin → Servers** | Split and separate mode: the nodes the gateway knows with their health, join tokens for a new backend or frontend (password and a two-factor code; the screen prints the `node-join` command to run on the new machine), removing a node, revoking unused tokens ([separate-mode.md](separate-mode.md#managing-the-cluster-from-the-admin-panel)) | `npm run cluster -- token \| tokens \| revoke-tokens \| info` |
 | **Settings → Network** | Turns a network of sites on and off, picks the network administrators, and moves a `sqlite-legacy` site to `sqlite-native` ([multisite.md](multisite.md)) | `npm run network -- enable \| disable \| admins` |

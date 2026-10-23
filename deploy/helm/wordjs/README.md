@@ -84,7 +84,9 @@ Both PVCs survive `helm uninstall` on purpose — the data volume carries the da
 ## Upgrading
 
 On Kubernetes, update WordJS by changing the image tag: what is written to a container's own filesystem
-does not outlive the pod. Build and push the new release's image, then point the release at it:
+does not outlive the pod. **Admin → Updates** recognises the pod and gives this instruction instead of an
+update button. Build and push the new
+release's image, then point the release at it:
 
 ```bash
 docker build -t <registry>/wordjs:2.9.0 . && docker push <registry>/wordjs:2.9.0
