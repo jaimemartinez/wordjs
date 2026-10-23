@@ -16,6 +16,10 @@
  *   qr     { bg (a white rounded panel behind) } — square; ALWAYS exactly one: it is what the meal scanner reads
  *          (the «Mi inscripción» link with the code, or the bare code).
  *
+ * STICKER (2.36.0). The same model with layout 'sticker' and `size: { w, h }` in mm (STICKER_MM bounds, 62 × 100 —
+ * a Brother QL roll — by default) is the label a sticker printer prints to stick on the physical badge. A sticker
+ * may have no QR (a small label has no room for one); it keeps at most one.
+ *
  * DISPLAY LIST. layoutDesign() turns a design + one person's data into the items the three renderers draw as
  * they are (rect / ellipse / line / image / text / qr, all in mm, each with its own rotation and opacity),
  * with every text already measured, wrapped, shrunk and placed — so the PDF, the page and the designer agree.
@@ -28,6 +32,9 @@ const { familyOf, faceOf } = require('./badge-font');
 
 const CARD = { w: 85.6, h: 54 };
 const LAYOUTS = ['horizontal', 'vertical'];
+const STICKER = 'sticker';
+const STICKER_MM = { min: 15, max: 220 };
+const STICKER_DEFAULT = { w: 62, h: 100 };
 const TYPES = new Set(['text', 'shape', 'line', 'image', 'qr']);
 const MAX_ELEMENTS = 60;
 const MAX_TEXT = 400;
@@ -52,7 +59,13 @@ const color = (v, d) => {
 };
 const colorOrNull = (v) => (v === null || v === '' || v === 'none' ? null : color(v, null));
 const pick = (v, allowed, d) => (allowed.includes(v) ? v : d);
-const cardOf = (layout) => (layout === 'vertical' ? { w: CARD.h, h: CARD.w } : { w: CARD.w, h: CARD.h });
+/** A sticker's size, bounded (mm, two decimals). */
+const stickerSize = (s) => ({
+    w: r2(num(s && s.w, STICKER_MM.min, STICKER_MM.max, STICKER_DEFAULT.w)),
+    h: r2(num(s && s.h, STICKER_MM.min, STICKER_MM.max, STICKER_DEFAULT.h)),
+});
+const cardOf = (layout, size) => (layout === STICKER ? stickerSize(size)
+    : layout === 'vertical' ? { w: CARD.h, h: CARD.w } : { w: CARD.w, h: CARD.h });
 
 /** The data keys a design's texts use (without the braces). */
 function tokensOf(text) {
@@ -68,8 +81,9 @@ function tokensOf(text) {
  */
 function normalizeDesignV2(src, opts = {}) {
     const d = src && typeof src === 'object' ? src : {};
-    const layout = pick(d.layout, LAYOUTS, 'horizontal');
-    const card = cardOf(layout);
+    const layout = d.layout === STICKER ? STICKER : pick(d.layout, LAYOUTS, 'horizontal');
+    const size = layout === STICKER ? stickerSize(d.size) : null;
+    const card = cardOf(layout, size);
     const elements = [];
     const ids = new Set();
     let qrSeen = false;
@@ -123,11 +137,11 @@ function normalizeDesignV2(src, opts = {}) {
         }
         if (el) elements.push(el);
     }
-    if (!qrSeen) {
+    if (!qrSeen && layout !== STICKER) {
         const side = 22;
         elements.push({ id: ids.has('qr') ? `qr${elements.length}` : 'qr', type: 'qr', x: r2(card.w - side - 3.5), y: r2(card.h - side - 3.5), w: side, h: side, rot: 0, op: 1, bg: true });
     }
-    return { version: 2, layout, background: color(d.background, '#ffffff'), elements };
+    return { version: 2, layout, ...(size ? { size } : {}), background: color(d.background, '#ffffff'), elements };
 }
 
 // ── layout ───────────────────────────────────────────────────────────────────────────────────────
@@ -228,7 +242,7 @@ function placeImage(el, iw, ih) {
  */
 function layoutDesign(design, ctx) {
     const d = design;
-    const card = cardOf(d.layout);
+    const card = cardOf(d.layout, d.size);
     const items = [];
     const faces = new Set();
     const images = new Set();
@@ -297,4 +311,4 @@ const assetsOfDesign = (d) => [...new Set((d && d.elements || []).filter(e => e.
 /** A design's data keys (the tokens of its texts). */
 const keysOfDesign = (d) => [...new Set((d && d.elements || []).filter(e => e.type === 'text').flatMap(e => tokensOf(e.text)))];
 
-module.exports = { normalizeDesignV2, layoutDesign, resolveText, tokensOf, assetsOfDesign, keysOfDesign, cardOf, CARD, LAYOUTS, MAX_ELEMENTS, MAX_TEXT, PT_MM };
+module.exports = { normalizeDesignV2, layoutDesign, resolveText, tokensOf, assetsOfDesign, keysOfDesign, cardOf, stickerSize, CARD, LAYOUTS, STICKER, STICKER_MM, STICKER_DEFAULT, MAX_ELEMENTS, MAX_TEXT, PT_MM };

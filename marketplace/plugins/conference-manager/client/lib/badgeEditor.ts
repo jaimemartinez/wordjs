@@ -152,6 +152,88 @@ export const TEMPLATES = [
     },
 ];
 
+// ── stickers (2.36.0) ──
+/**
+ * The label sizes offered for «Sticker para imprimir» (mm, as designed: width × height). Brother QL's 62 mm roll
+ * cut at 100 mm is the default; any other size is typed in mm («Personalizado»).
+ */
+export const STICKER_PRESETS: { id: string; w: number; h: number; label: string }[] = [
+    { id: '62x100', w: 62, h: 100, label: '62 × 100 mm' },
+    { id: '62x29', w: 62, h: 29, label: '62 × 29 mm' },
+    { id: '100x50', w: 100, h: 50, label: '100 × 50 mm' },
+    { id: '4x6', w: 101.6, h: 152.4, label: '4 × 6 in' },
+    { id: '2x1', w: 50.8, h: 25.4, label: '2 × 1 in' },
+];
+export const STICKER_MM = { min: 15, max: 220 };
+export const presetOf = (size: { w: number; h: number } | null | undefined) =>
+    (size && STICKER_PRESETS.find(p => (p.w === size.w && p.h === size.h) || (p.w === size.h && p.h === size.w))) || null;
+
+/**
+ * The design moved to another label size: every element keeps its place and proportion on the label (x and widths
+ * scale with the width, y and heights with the height), texts by the smaller of the two, the QR stays square.
+ */
+export function scaleDesign(d: any, size: { w: number; h: number }) {
+    const from = cardOf(d.layout, d.size);
+    const sx = size.w / from.w, sy = size.h / from.h, k = Math.min(sx, sy);
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const elements = (d.elements || []).map((e: any) => {
+        if (e.type === 'qr') {
+            const side = r2(Math.max(14, Math.min(e.w * k, size.w, size.h)));
+            const cx = (e.x + e.w / 2) * sx, cy = (e.y + e.h / 2) * sy;
+            return { ...e, w: side, h: side, x: r2(cx - side / 2), y: r2(cy - side / 2) };
+        }
+        const out = { ...e, x: r2(e.x * sx), y: r2(e.y * sy), w: r2(e.w * sx), h: r2(e.h * sy) };
+        if (e.type === 'text') out.size = r2(Math.max(3, e.size * k));
+        if (e.type === 'line' || (e.type === 'shape' && e.sw)) out.sw = r2(e.sw * k);
+        return out;
+    });
+    return normalizeDesignV2({ ...d, size: { w: size.w, h: size.h }, elements });
+}
+
+const S = (size: { w: number; h: number }, elements: any[]) => ({ version: 2, layout: 'sticker', size, background: '#ffffff', elements });
+/**
+ * Sticker starting points, each drawn for a tall (62 × 100 mm) or a wide (62 × 29 mm) label and scaled to the label
+ * in use; `wide` says which. Black on white: label printers are thermal.
+ */
+export const STICKER_TEMPLATES = [
+    {
+        id: 'st-classic', name: 'Nombre, grupo y QR', make: () => S({ w: 62, h: 100 }, [
+            text(3, 4, 56, 22, '{{@name}}', 'montserrat', 20, '#000000', { bold: true, align: 'center', valign: 'middle', lh: 1.1 }),
+            text(3, 27, 56, 8, '{{@location}}', 'montserrat', 11, '#000000', { align: 'center', valign: 'middle', upper: true, ls: 0.5 }),
+            { ...text(11, 37, 40, 33, '{{@meal_group}}', 'montserrat', 72, '#000000', { bold: true, align: 'center', valign: 'middle' }), name: 'Grupo de comida' },
+            qr(19, 73, 24, false),
+        ]),
+    },
+    {
+        id: 'st-group', name: 'Grupo grande', make: () => S({ w: 62, h: 100 }, [
+            { ...text(4, 3, 54, 52, '{{@meal_group}}', 'montserrat', 150, '#000000', { bold: true, align: 'center', valign: 'middle' }), name: 'Grupo de comida' },
+            line(6, 58, 50, '#000000', 0.6),
+            text(3, 61, 56, 20, '{{@name}}', 'montserrat', 18, '#000000', { bold: true, align: 'center', valign: 'middle', lh: 1.1 }),
+            text(3, 83, 56, 8, '{{@location}}', 'montserrat', 11, '#000000', { align: 'center', valign: 'middle', upper: true, ls: 0.5 }),
+        ]),
+    },
+    {
+        id: 'st-band', name: 'Franja con el grupo', make: () => S({ w: 62, h: 100 }, [
+            rect(0, 0, 62, 30, '#000000'),
+            { ...text(3, 1, 56, 28, '{{@meal_group}}', 'montserrat', 64, '#ffffff', { bold: true, align: 'center', valign: 'middle' }), name: 'Grupo de comida' },
+            text(3, 33, 56, 20, '{{@name}}', 'montserrat', 18, '#000000', { bold: true, align: 'center', valign: 'middle', lh: 1.1 }),
+            text(3, 54, 56, 8, '{{@location}}', 'montserrat', 11, '#000000', { align: 'center', valign: 'middle', upper: true, ls: 0.5 }),
+            qr(20, 70, 22, false),
+        ]),
+    },
+    {
+        id: 'st-wide', name: 'Etiqueta ancha', wide: true, make: () => S({ w: 62, h: 29 }, [
+            text(2.5, 2, 39, 14, '{{@name}}', 'montserrat', 15, '#000000', { bold: true, valign: 'middle', lh: 1.05 }),
+            text(2.5, 17, 39, 9, '{{@location}}', 'montserrat', 9, '#000000', { valign: 'middle', upper: true, ls: 0.4 }),
+            { ...line(29.5, 14.5, 25, '#000000', 0.5), rot: 90 },
+            { ...text(44, 1.5, 16, 26, '{{@meal_group}}', 'montserrat', 56, '#000000', { bold: true, align: 'center', valign: 'middle' }), name: 'Grupo de comida' },
+        ]),
+    },
+];
+/** The starting point that fits a label's shape: the wide one for a wide label, else the first tall one. */
+export const stickerTemplateFor = (size: { w: number; h: number }) =>
+    STICKER_TEMPLATES.find(t => !!(t as any).wide === (size.w > size.h * 1.3)) || STICKER_TEMPLATES[0];
+
 /**
  * A pre-2.29 design (orientation, colours, panel, title, chosen fields, background and logo images) as a
  * free-form one that looks the same; `images` = { bg, logo } image ids already uploaded (or null).

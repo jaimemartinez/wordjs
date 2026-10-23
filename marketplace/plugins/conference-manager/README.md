@@ -118,3 +118,17 @@ must still be valid, and a field you marked as required stays required.
   sheet.
 - **Duplicates.** Without an e-mail, the same name plus the same ID document number or phone is refused as a
   duplicate. Write the person's e-mail to tell two people apart.
+
+## Printable stickers (2.36.0)
+
+*Escarapelas › Diseño › Sticker para imprimir* designs the label a sticker printer prints for the physical badge.
+Print it from *Personas* (one person, the search shown, a locality or everyone). The PDF has one label per page,
+each exactly the label's size.
+
+In the print window:
+- choose the sticker printer;
+- choose the label size it has loaded (the same as the design);
+- set **Márgenes: ninguno** and **Escala: 100 %** (or «Tamaño real»).
+
+Label printers print in black, so design in black and white. The meal group letter appears once «Turnos de
+comida» is on and groups are assigned; a person without a group shows nothing there.
