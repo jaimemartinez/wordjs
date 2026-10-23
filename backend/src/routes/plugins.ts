@@ -1066,9 +1066,19 @@ async function runPluginUpdate(
         //    options, account capabilities and private storage, as "delete with data" does.
         const declaredCapabilities = Array.isArray(oldManifest && oldManifest.accountCapabilities)
             ? oldManifest.accountCapabilities.map((c: any) => String(c && c.slug || '')).filter(Boolean) : [];
+        //    The Windows sandbox profile: a plain update (the same source's code) keeps it — the plugin keeps
+        //    its slug, so its next launch is granted exactly the same zones, and only its own folder is
+        //    re-granted after the swap below. An adopt or a reinstall brings code of ANOTHER provenance: the
+        //    profile is retired on every site as an uninstall does, so that code starts from no ACE at all and
+        //    is granted only what its launch grants (a root-only revoke takes seconds).
+        const retireSandbox = takeover;
         await core.uninstallPluginData(slug, keepData
-            ? { dropTables: false, keepGrants: true }
-            : { dropTables: true, keepGrants: true, accountCapabilities: declaredCapabilities });
+            ? { dropTables: false, keepGrants: true, retireSandbox }
+            : { dropTables: true, keepGrants: true, accountCapabilities: declaredCapabilities, retireSandbox });
+        if (retireSandbox) {
+            try { await core.retireOnSecondarySites(slug); }
+            catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] the sandbox profiles of the other sites could not be retired`); }
+        }
 
         // 4. SWAP the validated staged code in. The preserved data/ always wins over a data/ the zip
         //    ships (only a plugin that had none receives the zip's). manifest.json goes LAST: until it
@@ -1082,6 +1092,10 @@ async function runPluginUpdate(
         }
         // The swap rewrote the manifest from outside the sandbox — drop io-guard's cached declaration.
         try { require('../core/io-guard').forgetDeclaredPermissions(slug); } catch { /* io-guard optional */ }
+        // Windows: the new files came in by rename, keeping the staging folder's security descriptor, so
+        // the plugin's own folder is granted again at the next launch of every site's worker (no-op elsewhere).
+        try { await require('../core/sandbox-windows').refreshPluginDirGrants(path.resolve(PLUGINS_DIR, '..'), slug, core.pluginWorkerSiteIds()); }
+        catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] the sandbox grants of its folder could not be refreshed`); }
 
         // 5. Adopt the STORED grants + egress BEFORE reactivating — they are baked into the isolate at
         //    spawn time. A database error here is thrown (and rolls back): nothing starts on a guess.

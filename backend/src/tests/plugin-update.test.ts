@@ -616,4 +616,43 @@ describe('plugin in-place update', () => {
         assert.strictEqual(m(null, S2, OFFICIAL), 'reinstall');
         assert.strictEqual(m({ source: S1, catalogId: SLUG, version: null }, OFFICIAL, OFFICIAL), 'reinstall', 'a plugin bound to a private source is never silently moved to the official one');
     });
+
+    // ── The Windows sandbox profile across an update (FALLOS 149) ────────────────────────────────────────
+    // A plain update keeps the AppContainer profile (same slug, same zones; only the plugin folder is
+    // re-granted). Code of another provenance — an adopt or a reinstall from another source — gets the
+    // profile retired on every site first, as an uninstall does, so it inherits no ACE of the old one.
+    async function sandboxCallsDuring(run: () => Promise<any>) {
+        const core = require('../core/plugins');
+        const seen: { retireSandbox: boolean[]; secondary: number } = { retireSandbox: [], secondary: 0 };
+        const realUninstall = core.uninstallPluginData;
+        const realSecondary = core.retireOnSecondarySites;
+        core.uninstallPluginData = (slug: string, o: any = {}) => { seen.retireSandbox.push(o.retireSandbox !== false); return realUninstall(slug, { ...o, retireSandbox: false }); };
+        core.retireOnSecondarySites = async () => { seen.secondary++; return []; };
+        try { return { result: await run(), seen }; } finally { core.uninstallPluginData = realUninstall; core.retireOnSecondarySites = realSecondary; }
+    }
+
+    it('a plain same-source update keeps the sandbox profile', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: ['database:write'], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        const { result, seen } = await sandboxCallsDuring(() => runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), { source: S1, catalogId: SLUG, version: '2.0.0' }));
+        assert.strictEqual(result.ok, true, result.body && result.body.error);
+        assert.deepStrictEqual(seen.retireSandbox, [false], 'not retired');
+        assert.strictEqual(seen.secondary, 0);
+    });
+
+    it('a reinstall from another source (and an adopt) retires the profile on every site first', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: ['database:write'], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        const re = await sandboxCallsDuring(() => runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), { source: S2, catalogId: SLUG, version: '2.0.0' },
+            { via: 'reinstall', officialSource: OFFICIAL, grants: [], keepData: true, confirmedSourceChange: true }));
+        assert.strictEqual(re.result.ok, true, re.result.body && re.result.body.error);
+        assert.deepStrictEqual(re.seen.retireSandbox, [true], 'retired, as an uninstall does');
+        assert.strictEqual(re.seen.secondary, 1, 'and on the other sites');
+
+        cleanupSlug();
+        await updateOption('plugin_origins', {});
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: ['database:write'] });
+        const ad = await sandboxCallsDuring(() => runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), { source: OFFICIAL, catalogId: SLUG, version: '2.0.0' },
+            { via: 'adopt', officialSource: OFFICIAL, grants: [] }));
+        assert.strictEqual(ad.result.ok, true, ad.result.body && ad.result.body.error);
+        assert.deepStrictEqual(ad.seen.retireSandbox, [true]);
+    });
 });

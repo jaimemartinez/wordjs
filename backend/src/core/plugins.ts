@@ -3295,7 +3295,25 @@ async function purgePluginSiteData(slug: string, accountCapabilities: string[], 
     return out;
 }
 
-async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false, networkWide = false, accountCapabilities = [] }: { dropTables?: boolean; keepGrants?: boolean; networkWide?: boolean; accountCapabilities?: string[] } = {}) {
+/**
+ * The site ids a plugin's workers run on: the main site, plus every other site of the network when multisite
+ * is enabled (suspended ones too). Never throws — a network that cannot be listed yields the main site alone.
+ */
+function pluginWorkerSiteIds(): number[] {
+    const ids = [siteContext.PRIMARY_SITE_ID];
+    if (!siteContext.multisiteEnabled()) return ids;
+    try { ids.push(...require('./network').listSites().map((s: any) => Number(s.id)).filter((id: number) => id !== siteContext.PRIMARY_SITE_ID)); }
+    catch (e: any) { log.warn({ err: e }, '[plugins] could not list the network\'s sites'); }
+    return ids;
+}
+
+/**
+ * `retireSandbox: false` — the in-place UPDATE (runPluginUpdate): the plugin stays, under the same slug and
+ * so the same AppContainer profile and zones, and its next launch is granted exactly what retiring would
+ * revoke. Skipping it is what keeps an update from walking node_modules twice on Windows (FALLOS 149); the
+ * update re-grants the plugin's own folder instead (sandbox-windows refreshPluginDirGrants).
+ */
+async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false, networkWide = false, accountCapabilities = [], retireSandbox = true }: { dropTables?: boolean; keepGrants?: boolean; networkWide?: boolean; accountCapabilities?: string[]; retireSandbox?: boolean } = {}) {
     const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; tablesKept?: string[]; appContainerRetired: boolean; appContainerRetiredSites: number[]; optionsRemoved?: string[]; accountCapabilitiesRevoked?: number; storageRemoved?: string[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false, appContainerRetiredSites: [] };
     if (!keepGrants) {
         try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
@@ -3329,7 +3347,7 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
     catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] db role drop failed`); }
-    if (process.platform === 'win32') {
+    if (process.platform === 'win32' && retireSandbox) {
         try {
             const appRoot = path.resolve(__dirname, '..', '..');
             result.appContainerRetired = await require('./sandbox-windows').retireAppContainerPlugin(appRoot, slug);
@@ -3361,6 +3379,7 @@ module.exports = {
     clearOrphanNotice,
     ORPHAN_NOTICE_PREFIX,
     uninstallPluginData,
+    pluginWorkerSiteIds,
     activatePlugin,
     deactivatePlugin,
     loadActivePlugins,
