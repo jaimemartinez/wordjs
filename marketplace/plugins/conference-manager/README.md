@@ -128,8 +128,9 @@ must still be valid, and a field you marked as required stays required.
 ## Printable stickers (2.36.0)
 
 *Escarapelas › Diseño › Sticker para imprimir* designs the label a sticker printer prints for the physical badge.
-Print it from *Personas* (one person, the search shown, a locality or everyone). The PDF has one label per page,
-each exactly the label's size.
+Print it from *Personas › Imprimir stickers* (2.36.3). Choose everyone, one locality, or the people you tick
+(search, then tick; one person is one tick). The dialog shows how many will print before you print. Each person's
+own button prints just theirs. The PDF has one label per page, each exactly the label's size.
 
 In the print window:
 - choose the sticker printer;

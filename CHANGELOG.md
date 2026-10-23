@@ -19,6 +19,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     the uploaded photo instead. A wide screen shows the sheet next to the list; a phone switches between «Hoja» and
     «Lista».
 
+### Fixed
+
+- **conference-manager 2.36.3: the admin's PDF buttons open the file again, and «Imprimir stickers» asks what to print.**
+  - **The fix.** Since 2.30.0 every PDF button of the admin opened a page that said «Esta página no existe» instead
+    of the file: the sticker buttons, and also the badge PDF of a person, «PDF para imprimir (hoja Carta)» and «PDF
+    una por página». The admin still used the conference portal's old file address. It now uses the core's portal
+    file route, `/portal/conference/file`, as the portal's own pages already did. A test pins the admin's address to
+    that route.
+  - **Choose what to print.** «Personas › Imprimir stickers» opens one dialog: everyone, one locality, or the
+    people you tick, with a search and «Marcar los que se ven» (one person is one tick). It shows how many stickers
+    will print, at what label size, before printing. It starts on what the list shows: the search's people already
+    ticked, else the chosen locality, else everyone. Each person's own sticker button is unchanged.
+
 ## [2.11.0] - 2026-10-23
 
 ### Added

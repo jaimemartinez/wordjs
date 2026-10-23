@@ -35,6 +35,7 @@ import { BadgeEditor } from "./BadgeEditor";
 import { TEMPLATES, fromLegacy, sampleData } from "../lib/badgeEditor";
 import { DateField } from "../lib/DateField";
 import { Select } from "../lib/Select";
+import { StickerPrint } from "./StickerPrint";
 
 const card = 'bg-white rounded-3xl border border-gray-100 shadow-sm p-5 sm:p-6 space-y-4';
 const label = 'block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1.5';
@@ -196,7 +197,7 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
                     <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3 mb-3 space-y-1" data-badges-sticker-help="">
                         <p className="font-bold text-gray-800">{tx('badges.sticker.help.title', 'Una etiqueta por persona, del tamaño exacto de tu rollo de stickers.')}</p>
                         <p>{tx('badges.sticker.help.size', 'Escoge el tamaño de la etiqueta arriba del diseño (o «Personalizado» en mm). Las impresoras de stickers imprimen en negro: diseña en blanco y negro.')}</p>
-                        <p>{tx('badges.sticker.help.print', 'Para imprimir: «Personas» › «Stickers para imprimir» (o el botón de cada persona). En la ventana de impresión escoge la impresora de stickers y el tamaño de la etiqueta, «Márgenes: ninguno» y «Escala: 100 %» (o «Tamaño real»).')}</p>
+                        <p>{tx('badges.sticker.help.print', 'Para imprimir: «Personas» › «Imprimir stickers» (o el botón de cada persona). En la ventana de impresión escoge la impresora de stickers y el tamaño de la etiqueta, «Márgenes: ninguno» y «Escala: 100 %» (o «Tamaño real»).')}</p>
                     </div>
                 )}
                 <div style={target === 'badge' ? undefined : { display: 'none' }}>
@@ -505,7 +506,9 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
             </div>
 
             <BulkTools conferenceId={conferenceId} conference={conference} tx={tx} addToast={addToast} loc={loc} locName={locName}
-                placeOf={placeOf} onLinks={mergeLinks} shownIds={q.trim() ? shown.map((x: any) => Number(x.r.id)) : null} />
+                placeOf={placeOf} onLinks={mergeLinks} shownIds={q.trim() ? shown.map((x: any) => Number(x.r.id)) : null}
+                everyone={(people || []).map((r: any) => ({ id: Number(r.id), name: personDisplayName(r, fields), place: placeOf(r), loc: String(rawLocationId(r) ?? ''), code: r.reg_code || '' }))}
+                locations={locations} stickerSize={cfg && cfg.sticker && cfg.sticker.size} />
 
             {open && (
                 <BadgeActions person={open} name={personDisplayName(open, fields)} fields={fields} conferenceId={conferenceId}
@@ -517,8 +520,10 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
 }
 
 /** Everyone's links and PDFs at once: the location chosen in the person list, or the whole conference. */
-function BulkTools({ conferenceId, conference, tx, addToast, loc, locName, placeOf, onLinks, shownIds }: any) {
+function BulkTools({ conferenceId, conference, tx, addToast, loc, locName, placeOf, onLinks, shownIds, everyone, locations, stickerSize }: any) {
     const [busy, setBusy] = useState('');
+    // 2.36.3: «Imprimir stickers» — the dialog where the scope is chosen (everyone, a locality, the people ticked).
+    const [stickers, setStickers] = useState(false);
     const [count, setCount] = useState<number | null>(null);
     // What could not be copied (no clipboard): shown to copy by hand.
     const [manual, setManual] = useState<string | null>(null);
@@ -584,13 +589,16 @@ function BulkTools({ conferenceId, conference, tx, addToast, loc, locName, place
                     onClick={() => run('single', () => openBadgeFileFrom(async () => (await badgesApi.ticket(conferenceId, scope(), 'single')).d))}>
                     <i className={`fa-solid ${busy === 'single' ? 'fa-spinner animate-spin' : 'fa-file-pdf'}`}></i>{tx('badges.bulk.single', 'PDF una por página')}
                 </button>
-                {/* 2.36.0: the printable stickers — the people the list shows (a search), else the locality or everyone. */}
-                <button type="button" className={`${ghost} sm:col-span-2`} disabled={!!busy || (shownIds && !shownIds.length)} data-bulk="sticker"
-                    onClick={() => run('sticker', () => openBadgeFileFrom(async () => (await badgesApi.ticket(conferenceId, shownIds ? { inscription_ids: shownIds } : scope(), 'sticker')).d))}>
-                    <i className={`fa-solid ${busy === 'sticker' ? 'fa-spinner animate-spin' : 'fa-note-sticky'}`}></i>
-                    {shownIds ? tx('badges.bulk.sticker.shown', 'Stickers para imprimir ({n} de la búsqueda)').replace('{n}', String(shownIds.length)) : tx('badges.bulk.sticker', 'Stickers para imprimir')}
+                {/* The printable stickers (2.36.3): one dialog where the scope is chosen, starting on what the list shows. */}
+                <button type="button" className={`${ghost} sm:col-span-2`} disabled={!!busy} data-bulk="sticker" onClick={() => setStickers(true)}>
+                    <i className="fa-solid fa-note-sticky"></i>{tx('badges.bulk.sticker', 'Imprimir stickers')}
                 </button>
             </div>
+            {stickers && (
+                <StickerPrint conferenceId={conferenceId} people={everyone || []} locations={locations || []} tx={tx} addToast={addToast} size={stickerSize}
+                    initial={shownIds ? { scope: 'pick', picked: shownIds } : loc ? { scope: 'loc', loc: String(loc) } : { scope: 'all' }}
+                    onClose={() => setStickers(false)} />
+            )}
             {count != null && <p className="text-[11px] font-bold text-emerald-700" data-bulk-count={count}>{tx('badges.bulk.count', '{n} enlaces listos').replace('{n}', String(count))}</p>}
             {manual != null && (
                 <div className="space-y-2" data-bulk-manual="">

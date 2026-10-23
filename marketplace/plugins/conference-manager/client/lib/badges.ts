@@ -66,8 +66,12 @@ export const badgeUrl = (token: string, origin?: string): string =>
  */
 export const linkUrl = (l: { token: string; self?: string | null }, origin?: string): string =>
     l.self ? `${origin || (typeof window !== 'undefined' ? window.location.origin : '')}${l.self}` : badgeUrl(l.token, origin);
-/** The core portal's file route for a ticket. */
-export const badgeFileUrl = (d: string): string => `/portal/conference/badge/file?d=${encodeURIComponent(d)}`;
+/**
+ * The core portal's file route for a ticket: /portal/<the portal's slug>/file (app/portal/[slug]/file). 2.36.3: it
+ * was still the pre-2.30 /portal/conference/badge/file, which the portal page answers «no existe», so every PDF
+ * button of the admin (badge, sheet, stickers) opened that page instead of the file.
+ */
+export const badgeFileUrl = (d: string): string => `/portal/conference/file?d=${encodeURIComponent(d)}`;
 
 /**
  * The address links are sent with: the site's public address (Ajustes › siteurl), else this page's origin — an
