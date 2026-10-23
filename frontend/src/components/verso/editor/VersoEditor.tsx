@@ -46,6 +46,7 @@
  * RenderSubtree escalado en PatternsPanel). El cotejo pantalla-a-pantalla queda para el gate de
  * navegador del orquestador.
  */
+import { DateTimePicker } from "@/components/ui/DatePicker";
 import "@/components/editor-theme.css";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
@@ -1201,20 +1202,23 @@ export default function VersoEditor({
                             Publicar. El `min` sólo se impone al PROGRAMAR — una entrada publicada
                             tiene por fuerza una fecha pasada y marcarla inválida sería absurdo. */}
                         {onStatusChange && shouldShowPostDateField({ canSchedule: !!onScheduleDateChange, status, scheduleDate }) && (
-                            <input
-                                type="datetime-local"
+                            // The admin's own calendar (components/ui/DatePicker), in the editor's palette; the value
+                            // stays the datetime-local string the save path already sends.
+                            <div className="hidden xl:block w-[188px]">
+                            <DateTimePicker
                                 value={scheduleDate}
                                 min={status === SCHEDULED_STATUS ? toLocalInputValue(new Date()) : undefined}
-                                onChange={(e) => onScheduleDateChange!(e.target.value)}
+                                onChange={(v) => onScheduleDateChange!(v)}
+                                clearable={false}
                                 title={status === SCHEDULED_STATUS
                                     ? trStr("Fecha y hora de publicación programada", language)
                                     : trStr("Fecha de publicación de la entrada", language)}
-                                aria-label={status === SCHEDULED_STATUS
+                                ariaLabel={status === SCHEDULED_STATUS
                                     ? trStr("Fecha y hora de publicación programada", language)
                                     : trStr("Fecha de publicación de la entrada", language)}
-                                className="hidden xl:block h-9 px-2.5 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[11px] text-[var(--ed-on-surface)]"
-                                style={{ colorScheme: "light dark" }}
+                                className="h-9 px-2.5 py-0 rounded-lg text-[11px]"
                             />
+                            </div>
                         )}
 
                         {previewSlug && (
@@ -1274,13 +1278,15 @@ export default function VersoEditor({
                                             {status === SCHEDULED_STATUS
                                                 ? trStr("Fecha y hora de publicación programada", language)
                                                 : trStr("Fecha de publicación de la entrada", language)}
-                                            <input
-                                                type="datetime-local"
+                                            <DateTimePicker
                                                 value={scheduleDate}
                                                 min={status === SCHEDULED_STATUS ? toLocalInputValue(new Date()) : undefined}
-                                                onChange={(e) => onScheduleDateChange!(e.target.value)}
-                                                className="h-11 px-3 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[13px] font-normal text-[var(--ed-on-surface)]"
-                                                style={{ colorScheme: "light dark" }}
+                                                onChange={(v) => onScheduleDateChange!(v)}
+                                                clearable={false}
+                                                ariaLabel={status === SCHEDULED_STATUS
+                                                    ? trStr("Fecha y hora de publicación programada", language)
+                                                    : trStr("Fecha de publicación de la entrada", language)}
+                                                className="h-11 px-3 py-0 rounded-lg text-[13px] font-normal"
                                             />
                                         </label>
                                     )}

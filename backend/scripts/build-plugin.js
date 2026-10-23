@@ -168,6 +168,8 @@ async function buildPlugin(slug) {
         'contexts/ModalContext', 'contexts/I18nContext', 'contexts/ToastContext', 'contexts/AuthContext',
         'components/MediaPickerModal',
         'components/ui/StatCard', 'components/ui/PageHeader', 'components/ui/Card', 'components/ui/ActionCard',
+        // The admin's own calendar (DatePicker / DateTimePicker): plugins replace their native date inputs with it.
+        'components/ui/DatePicker',
     ];
     const REACT_GLOBALS = {
         'react': ['WordJS.React', ['useState', 'useEffect', 'useMemo', 'useCallback', 'useRef', 'useContext', 'useReducer', 'useLayoutEffect', 'useImperativeHandle', 'useTransition', 'useDeferredValue', 'useId', 'useSyncExternalStore', 'createContext', 'createElement', 'cloneElement', 'isValidElement', 'Children', 'Fragment', 'StrictMode', 'Suspense', 'memo', 'forwardRef', 'lazy', 'startTransition', 'Component', 'PureComponent']],

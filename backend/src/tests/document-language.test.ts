@@ -191,6 +191,23 @@ describe('site language + text direction (settings contract)', () => {
         assert.strictEqual(await optionValue('site_text_direction'), 'ltr');
     });
 
+    // The calendars' first day of the week (admin date picker), now editable in Settings → General.
+    it('start_of_week: 0–6 only, public, and a bad value is refused without being stored', async () => {
+        for (const value of [0, '6', 1, '']) {
+            const res = await asAdmin(request(app).put('/api/v1/settings/start_of_week')).send({ value });
+            assert.strictEqual(res.status, 200, `${JSON.stringify(value)} must be accepted, got ${res.status}`);
+        }
+        await asAdmin(request(app).put('/api/v1/settings/start_of_week')).send({ value: 0 });
+        const before = await optionValue('start_of_week');
+        for (const value of [7, -1, '1.5', 'monday', '01', ' 1', {}, [1]]) {
+            const res = await asAdmin(request(app).put('/api/v1/settings/start_of_week')).send({ value });
+            assert.strictEqual(res.status, 400, `${JSON.stringify(value)} must be rejected, got ${res.status}`);
+            assert.strictEqual(await optionValue('start_of_week'), before);
+        }
+        const pub = await request(app).get('/api/v1/settings');
+        assert.ok(Object.prototype.hasOwnProperty.call(pub.body, 'start_of_week'), 'start_of_week must be public');
+    });
+
     it('still refuses an anonymous or non-admin write of either key', async () => {
         for (const key of ['WPLANG', 'site_text_direction']) {
             const res = await request(app).put(`/api/v1/settings/${key}`).send({ value: 'ltr' });

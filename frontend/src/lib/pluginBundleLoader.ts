@@ -35,6 +35,7 @@ import * as h_statCard from '@/components/ui/StatCard';
 import * as h_pageHeader from '@/components/ui/PageHeader';
 import * as h_card from '@/components/ui/Card';
 import * as h_actionCard from '@/components/ui/ActionCard';
+import * as h_datePicker from '@/components/ui/DatePicker';
 
 const HOST_MODULES: Record<string, unknown> = {
     'lib/api': h_api,
@@ -57,6 +58,9 @@ const HOST_MODULES: Record<string, unknown> = {
     'components/ui/PageHeader': h_pageHeader,
     'components/ui/Card': h_card,
     'components/ui/ActionCard': h_actionCard,
+    // The admin's own calendar: a plugin's date fields look and behave like the core's (es/en/pt,
+    // the site's first day of the week, the editor's palette when opened inside Verso).
+    'components/ui/DatePicker': h_datePicker,
 };
 
 // ============================================

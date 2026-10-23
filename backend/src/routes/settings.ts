@@ -35,8 +35,9 @@ const PUBLIC_SETTINGS = [
     'timezone_string',
     'date_format',
     'time_format',
+    'start_of_week',        // first day of the week of the admin's calendars (components/ui/DatePicker)
     'posts_per_page',
-    'page_for_posts',       // the page that lists the posts when the front page is a static page
+    'page_for_posts',      // the page that lists the posts when the front page is a static page
     'site_logo',
     'homepage_id',
     'footer_text',
@@ -76,9 +77,9 @@ const ALL_SETTINGS = [
     ...PUBLIC_SETTINGS,
     'admin_email', // SECURITY: Admin-only access
     'default_category',
-    // (default_post_format, the two pingback switches, permalink_structure and start_of_week are gone: no
-    // code ever read them, so writing them changed nothing. WordJS has no post formats or pingbacks, and
-    // its addresses are always /<slug>.)
+    // (default_post_format, the two pingback switches and permalink_structure are gone: no code ever read
+    // them, so writing them changed nothing. WordJS has no post formats or pingbacks, and its addresses are
+    // always /<slug>. start_of_week stays: the admin's calendars read it — public, above.)
     'show_on_front',
     'page_on_front',
     'posts_per_rss',        // items in the RSS / Atom / JSON feeds (core/feeds)
@@ -486,6 +487,13 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
         return null;
     },
     // The site's time zone (IANA name, e.g. "Europe/Madrid"): the public site prints dates in it.
+    // The first day of the week of every calendar the admin shows (components/ui/DatePicker): 0 = Sunday
+    // … 6 = Saturday, WordPress's meaning. Now editable in Settings → General, so it gets a closed shape.
+    start_of_week: (v: any) => {
+        if (v === '' || v === null || v === undefined) return null; // unset → Monday (the default option)
+        const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d$/.test(v) ? Number(v) : NaN;
+        return Number.isInteger(n) && n >= 0 && n <= 6 ? null : 'start_of_week must be a day number from 0 (Sunday) to 6 (Saturday).';
+    },
     timezone_string: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // unset → UTC
         if (typeof v !== 'string' || v.length > 64) return 'timezone_string must be an IANA time zone like "Europe/Madrid".';

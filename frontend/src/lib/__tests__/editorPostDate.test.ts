@@ -57,8 +57,10 @@ describe("VersoEditor pinta el input POR ese predicado", () => {
             fileURLToPath(new URL("../../components/verso/editor/VersoEditor.tsx", import.meta.url)),
             "utf8",
         );
-        const gate = src.match(/\{onStatusChange &&[^\n]*\n?[^\n]*<input\s+type="datetime-local"/);
-        expect(gate, "no se encontró el input datetime-local del editor").not.toBeNull();
+        // El campo es el calendario propio (components/ui/DatePicker), no ya <input type="datetime-local">;
+        // entre el gate y él puede haber un comentario y el contenedor que lo oculta bajo xl.
+        const gate = src.match(/\{onStatusChange &&[^\n]*\n(?:[^\n]*\n){0,5}?[^\n]*<DateTimePicker\b/);
+        expect(gate, "no se encontró el campo de fecha del editor").not.toBeNull();
         expect(gate![0]).toContain("shouldShowPostDateField");
         expect(gate![0]).not.toContain('status === "future"');
     });

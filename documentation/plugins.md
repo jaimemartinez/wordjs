@@ -337,7 +337,7 @@ The output is deterministic — rebuilding unchanged sources gives the same byte
 ### 🛑 Critical: The React Singleton
 WordJS is highly sophisticated about how it handles React. 
 - **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).
-- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/lib/sanitize`, `@/lib/csrf`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, and the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any **other** `@/*` import — or a relative path into `frontend/src/` — is a **build error** naming the module (`Plugin imports host module "…" which is not exposed to plugin bundles`), not an external. `next/*` imports are left as plain externals, which a runtime-loaded bundle cannot resolve, so do not rely on them (read `window.location` instead of `next/navigation`, §10.6).
+- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/lib/sanitize`, `@/lib/csrf`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components, and the `DatePicker` calendar) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any **other** `@/*` import — or a relative path into `frontend/src/` — is a **build error** naming the module (`Plugin imports host module "…" which is not exposed to plugin bundles`), not an external. `next/*` imports are left as plain externals, which a runtime-loaded bundle cannot resolve, so do not rely on them (read `window.location` instead of `next/navigation`, §10.6).
 - **Runtime Injection:** WordJS injects its own unified React instance into the plugin bundle at runtime. **Never try to bundle React yourself.**
 
 ---
@@ -516,10 +516,26 @@ Avoid raw `div` containers for main content. Use the `Card` component, which han
 ### Clean Layouts
 *   Use `bg-gray-50/50` for page backgrounds.
 *   Use `p-8 md:p-12` for page padding.
-*   Only four host UI components are exposed to plugin bundles — `PageHeader`, `Card`, `StatCard` and
-    `ActionCard` (the `HOST_MODULES` list in §4). `Input`, `Select` and the rest of `@/components/ui`
-    are host-only; importing one fails the build, so style your own controls with the same Tailwind
-    classes instead.
+*   Five host UI modules are exposed to plugin bundles — `PageHeader`, `Card`, `StatCard`,
+    `ActionCard` and `DatePicker` (the `HOST_MODULES` list in §4). `Input`, `Select` and the rest of
+    `@/components/ui` are host-only; importing one fails the build, so style your own controls with the
+    same Tailwind classes instead.
+*   **Dates: use the admin's calendar, not `<input type="date">`.** The native input draws the browser's
+    own calendar (different per browser and OS, in the browser's language, deaf to the admin palette and
+    to the editor's dark mode). Import it one file at a time like the other host components:
+
+    ```tsx
+    import { DatePicker, DateTimePicker } from "@/components/ui/DatePicker";
+
+    <label htmlFor="ends">Ends</label>
+    <DatePicker id="ends" value={endsOn} onChange={setEndsOn} min={startsOn} />          // "YYYY-MM-DD"
+    <DateTimePicker ariaLabel="Opens at" value={opensAt} onChange={setOpensAt} />        // "YYYY-MM-DDTHH:mm"
+    ```
+
+    The values are exactly the native inputs' strings, so replacing an input changes nothing you store
+    or send. The calendar speaks the admin language (es/en/pt), starts the week on the site's
+    `start_of_week` (Settings → General), and supports min/max, Today/Clear, keyboard navigation and a
+    bottom sheet on phones. Rebuild the plugin bundle after switching.
 
 ---
 
