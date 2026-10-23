@@ -34,10 +34,13 @@ const pack = require('./server/lodging-pack');
 // «Condiciones de salud» and «Turnos de comida» (2.32.0).
 const healthMod = require('./server/health');
 const { createMealPriority } = require('./server/meal-priority');
+// «Autorización de datos» (2.33.0): each person's consent, signed with a code sent to their e-mail.
+const { createConsent } = require('./server/consent');
+const { docFieldsOf: selfDocFieldsOf } = require('./server/selfpage');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.32.0',
+    version: '2.33.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -816,6 +819,8 @@ exports.init = async function (wordjs) {
     // «Condiciones de salud» and «Turnos de comida» (2.32.0): see server/health.js and server/meal-priority.js.
     const health = healthMod.createHealth({ db, T, P, createIndex, createUniqueIndex });
     const mealPriority = createMealPriority({ db, T, P, createIndex, createUniqueIndex });
+    // «Autorización de datos» (2.33.0): see server/consent.js.
+    const consent = createConsent({ db, T, P, createIndex, createUniqueIndex });
     /**
      * Set-based payment recompute: ONE statement for a set of inscriptions. `where` is 'id = ?' |
      * 'id IN (?, ?, …)' | 'conference_id = ?' | '1 = 1'. amount_paid / payment_status come from VALIDATED
@@ -1028,6 +1033,11 @@ exports.init = async function (wordjs) {
         await mealPriority.migrate();
     } catch (e) {
         console.warn('[conference-manager] health / meal groups migration failed:', e.message);
+    }
+    try {
+        await consent.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] data consent migration failed — consent links are unavailable until it succeeds:', e.message);
     }
 
     // ── one-time data hygiene (idempotent, safe to run every boot) ───────────────────────────────
@@ -1953,21 +1963,34 @@ exports.init = async function (wordjs) {
     // (answer undefined = the key was absent; null = clear). A caller who may not write it and sends it gets 403;
     // `creating` makes a required field required (an edit only refuses clearing it). The portal may always answer
     // (it registers the person, and never reads an answer back).
-    async function healthFromBody(conferenceId, body, { mayWrite, creating }) {
+    async function healthFromBody(conferenceId, body, { mayWrite, creating, inscriptionId = null }) {
         const field = await health.fieldOf(conferenceId);
         if (!field) return { field: null, answer: undefined };
         const has = !!body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, HEALTH_FIELD);
         if (has && !mayWrite) throw httpError(403, 'No tienes permiso para registrar datos de salud.');
         const answer = has ? healthMod.parseAnswer(field, body[HEALTH_FIELD], httpError) : undefined;
+        // «Autorización de datos» (2.33.0): while the conference asks for it, a health answer exists only with the
+        // person's own health authorization — they write it on their consent page; clearing one is always allowed.
+        if (answer && !await consent.healthAllowed(conferenceId, inscriptionId)) {
+            throw httpError(409, 'Esta conferencia pide la autorización de datos: los datos de salud los escribe la persona en su enlace de autorización, y solo si autorizó su tratamiento.');
+        }
+        if (await consent.isEnabled(conferenceId)) return { field, answer };
         if (mayWrite && Number(field.is_required) && ((creating && !answer) || (!creating && answer === null))) {
             throw httpError(400, `El campo «${field.label || 'Condiciones de salud'}» es obligatorio.`);
         }
         return { field, answer };
     }
+    // «Autorización de datos» (2.33.0): while the conference asks for it, only the answers of people whose health
+    // authorization is live are shown (one given before the setting was turned on stays hidden until they authorize).
+    async function consentedHealth(conferenceId, answers) {
+        if (!await consent.isEnabled(conferenceId)) return answers;
+        const states = await consent.statesOf(conferenceId, [...answers.keys()]);
+        return new Map([...answers].filter(([id]) => { const st = states.get(id); return st && st.state === 'granted' && st.health; }));
+    }
     // Roster rows of ONE conference + the health answer as text, for health:view only (and only when the form has it).
     async function withHealthText(rows, conferenceId, perms) {
         if (!rows.length || !canSeeHealth(perms) || !await health.fieldOf(conferenceId)) return rows;
-        const answers = await health.answersOf(rows.map(r => r.id));
+        const answers = await consentedHealth(conferenceId, await health.answersOf(rows.map(r => r.id)));
         return rows.map(r => ({ ...r, [HEALTH_FIELD]: healthMod.answerText(answers.get(Number(r.id))) }));
     }
 
@@ -2976,6 +2999,8 @@ exports.init = async function (wordjs) {
             Object.assign(values, canonicalFieldValues(confFields, fieldValues));
             assertRequired(confFields, values, false);
             const healthIn = await healthFromBody(confId, fieldValues, { mayWrite: canWriteHealth(perms), creating: true });
+            const consentOn = await consent.isEnabled(confId);
+            if (consentOn) await assertConsentEmail(confId, values);
 
             // The admin explicitly PICKS the location (unlike the portal, which forces the coordinator's
             // own). It's an operational column, not a form field: `location_id` (preferred) or the
@@ -3007,7 +3032,8 @@ exports.init = async function (wordjs) {
             );
             const result = loc ? await takeSeat(loc, insert) : await insert();
             if (healthIn.answer) await health.save(confId, result.lastID, healthIn.answer);
-            res.json({ success: true, id: result.lastID });
+            const consentOut = consentOn ? await askConsent(result.lastID, actorOf(req), 'admin') : undefined;
+            res.json({ success: true, id: result.lastID, ...(consentOut ? { consent: consentOut } : {}) });
         } catch (e) { sendError(res, e); }
     });
 
@@ -5220,7 +5246,7 @@ exports.init = async function (wordjs) {
             const vals = canonicalFieldValues(confFields, fieldValues);
             assertRequired(confFields, vals, true);
             await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
-            const healthIn = await healthFromBody(existing.conference_id, fieldValues, { mayWrite: canWriteHealth(perms), creating: false });
+            const healthIn = await healthFromBody(existing.conference_id, fieldValues, { mayWrite: canWriteHealth(perms), creating: false, inscriptionId: id });
 
             const sets = [], params = [];
             for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
@@ -5230,6 +5256,10 @@ exports.init = async function (wordjs) {
                 // insert default, 'active' is what the admin's toggle writes; anything else is a typo or a probe.
                 const st = fieldValues.status == null ? null : String(fieldValues.status);
                 if (st !== null && !INSCRIPTION_STATUSES.has(st)) return res.status(400).json({ error: 'Estado de inscripción inválido.' });
+                // «Autorización de datos» (2.33.0): nobody is confirmed before they authorize the processing of their data.
+                if (st === 'active' && existing.status !== 'active' && await consent.isEnabled(existing.conference_id) && !await consent.isGranted(id)) {
+                    return res.status(409).json({ error: 'Esta persona aún no autoriza el tratamiento de sus datos: la inscripción se confirma cuando lo haga (Autorizaciones › Reenviar enlace).', code: 'consent_pending' });
+                }
                 sets.push('status = ?'); params.push(st);
                 newStatus = st;
             }
@@ -5414,6 +5444,8 @@ exports.init = async function (wordjs) {
                     await db.run(`DELETE FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [req.params.id]);
                     await db.run(`DELETE FROM ${T.mealOverrides} WHERE inscription_id = ?`, [req.params.id]);
                     await health.clearInscription(req.params.id);
+                    // 2.33.0: the consent link goes with the person; their evidence (consent_events) stays.
+                    await db.run(`DELETE FROM ${T.consentRequests} WHERE inscription_id = ?`, [req.params.id]);
                     await db.run(`DELETE FROM ${T.mealGroups} WHERE inscription_id = ?`, [req.params.id]);
                     return gone;
                 });
@@ -5596,6 +5628,46 @@ exports.init = async function (wordjs) {
         onSessionEnd: (id) => push.dropSession(id),
     });
     push.install({ http, allow, positiveInt, sendError, actorOf, siteLinkBase, selfPage, selfMessages: selfPage.MSG });
+    // «Autorización de datos» (2.33.0).
+    consent.install({
+        http, allow, positiveInt, sendError, httpError, actorOf, resolvePortalLocation, siteLinkBase, personWithName, isFieldColumn, health,
+        docFieldsOf: (form) => selfDocFieldsOf(form, null, isFieldColumn),
+        parseHealthAnswer: healthMod.parseAnswer,
+        randomToken: (n) => wordjs.crypto.randomToken(n),
+        randomInt: (lo, hi) => wordjs.crypto.randomInt(lo, hi),
+        // The site's mail plugin (email:admin). Without it, or without the grant, the link is still created and the
+        // coordinator sees «correo no enviado».
+        mail: (msg) => wordjs.mail(msg),
+    });
+    // The health purge runs at boot and then every six hours (and when the settings are opened).
+    consent.purgeDue({ force: true }).catch((e) => console.warn('[conference-manager] health purge:', e && e.message));
+    if (typeof setInterval === 'function') {
+        const purgeTimer = setInterval(() => { consent.purgeDue({ force: true }).catch(() => {}); }, 6 * 60 * 60 * 1000);
+        if (purgeTimer && typeof purgeTimer.unref === 'function') purgeTimer.unref();
+    }
+    // Registering someone while consent is asked: they need an e-mail (a parent's for a minor), checked before the insert…
+    const CONSENT_EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]{2,}$/;
+    async function assertConsentEmail(conferenceId, values) {
+        const form = await db.all(`SELECT name, label, type, role FROM ${T.fields} WHERE conference_id = ?`, [conferenceId]);
+        const usable = form.filter(f => isFieldColumn(f.name));
+        const f = usable.find(x => x.role === 'email') || usable.find(x => x.name === 'email') || usable.find(x => x.type === 'email');
+        const v = f ? String(values[f.name] == null ? '' : values[f.name]).trim() : '';
+        if (!CONSENT_EMAIL_RE.test(v)) {
+            throw httpError(400, f ? `Escribe un correo válido en «${f.label || f.name}»: allí llega el enlace para que la persona (o su padre, madre o representante) autorice el tratamiento de sus datos.`
+                : 'Esta conferencia pide la autorización de datos: añade al formulario el campo «Email» (Campos › Añadir campo) para poder enviar el enlace.');
+        }
+    }
+    // …and get the link right after it (a mail failure never undoes the registration).
+    async function askConsent(inscriptionId, actor, via) {
+        try {
+            const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [inscriptionId]);
+            const r = await consent.issueLink(ins, { actor, via, httpError, force: true });
+            return { state: r.state, sent: r.sent, email_masked: r.email_masked };
+        } catch (e) {
+            console.warn('[conference-manager] consent link not created:', e && e.message);
+            return { state: 'pending', sent: false, email_masked: '' };
+        }
+    }
     // «Turnos de comida» (2.32.0). Group writes are read-then-write: serialised in this process.
     let priorityLock = Promise.resolve();
     const withPriorityLock = (fn) => {
@@ -8199,8 +8271,10 @@ exports.init = async function (wordjs) {
             // `role` and `is_unique` let the coordinators' portal name people the way the admin does (the
             // fields tagged Nombre / Apellido; never an ID document as a name).
             const list = await db.all(`SELECT name, label, type, options, is_required, width, is_group, role, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
-            // The health field travels as a definition (the portal asks it on registration, write-only).
-            res.json(list.filter(f => isFieldColumn(f.name) || f.name === healthMod.FIELD));
+            // The health field travels as a definition (the portal asks it on registration, write-only) — except while
+            // the conference asks for «Autorización de datos» (2.33.0): then the person answers it on their consent page.
+            const healthInPortal = !await consent.isEnabled(conference_id);
+            res.json(list.filter(f => isFieldColumn(f.name) || (healthInPortal && f.name === healthMod.FIELD)));
         } catch (e) { sendError(res, e); }
     });
 
@@ -8302,7 +8376,14 @@ exports.init = async function (wordjs) {
             const list = await db.all(`SELECT ${cols.map(c => `i.${c}`).join(', ')}, ${fees.personSum('pending', 'i.id')} AS pending_amount,`
                 + ` ${fees.personSum('returned', 'i.id')} AS returned_amount, CASE WHEN i.status = 'cancelled' THEN 1 ELSE 0 END AS cancelled`
                 + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? ORDER BY i.first_name, i.id`, [location.id, location.conference_id]);
-            res.json(list.map(r => ({ ...r, pending_amount: roundMoney(r.pending_amount), returned_amount: roundMoney(r.returned_amount), cancelled: !!Number(r.cancelled) })));
+            // «Autorización de datos» (2.33.0): each person's state (pending / granted with its time / revoked), while asked.
+            const consentStates = await consent.isEnabled(location.conference_id) ? await consent.statesOf(location.conference_id, list.map(r => r.id)) : null;
+            const consentOf = (id) => {
+                const st = consentStates.get(Number(id));
+                return st ? { state: st.state, granted_at: st.granted_at, revoked_at: st.revoked_at, email_masked: st.email_masked, mail_failed: st.mail_failed, link_expired: st.link_expired }
+                    : { state: 'pending', granted_at: null, revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, never_sent: true };
+            };
+            res.json(list.map(r => ({ ...r, pending_amount: roundMoney(r.pending_amount), returned_amount: roundMoney(r.returned_amount), cancelled: !!Number(r.cancelled), ...(consentStates ? { consent: consentOf(r.id) } : {}) })));
         } catch (e) { sendError(res, e); }
     });
 
@@ -8383,6 +8464,8 @@ exports.init = async function (wordjs) {
             Object.assign(values, canonicalFieldValues(confFields, fieldValues));
             // «Condiciones de salud» (2.32.0): the coordinator answers it while registering — write-only.
             const healthIn = await healthFromBody(conference_id, fieldValues, { mayWrite: true, creating: true });
+            const consentOn = await consent.isEnabled(conference_id);
+            if (consentOn) await assertConsentEmail(conference_id, values);
 
             // Enforce required fields SERVER-SIDE — is_required was only advisory on the public form, so a
             // client could omit a field that drives pricing and under-quote total_due (audit MEDIUM).
@@ -8409,7 +8492,8 @@ exports.init = async function (wordjs) {
                 Object.values(values)
             ));
             if (healthIn.answer) await health.save(conference_id, result.lastID, healthIn.answer);
-            res.json({ success: true, id: result.lastID });
+            const consentOut = consentOn ? await askConsent(result.lastID, `portal:${location.name}`, 'portal') : undefined;
+            res.json({ success: true, id: result.lastID, ...(consentOut ? { consent: consentOut } : {}) });
         } catch (e) { sendError(res, e); }
     });
 

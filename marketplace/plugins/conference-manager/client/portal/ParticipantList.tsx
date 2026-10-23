@@ -27,6 +27,7 @@ import {
     rowHaystack, selectAllCapped, selectPage, toggleId, writePageSize, type PayFilter, type PayState, type PortalPerson, type RosterFilter,
 } from "./participants";
 import { fieldDisplayValue } from "./lodgingView";
+import { ConsentChip } from "./ConsentBits";
 import { Badge, Button, CheckboxLabel, EmptyState, MoreButton, Pager, cx, thCls, thWrapCls, touchTextCls, type BadgeTone } from "./ui";
 
 export const PAY_STATE_TONE: Record<PayState, BadgeTone> = { cancelled: "gray", paid: "emerald", partial: "amber", unpaid: "rose" };
@@ -253,6 +254,7 @@ export default function ParticipantList({ people, fields, onOpen, openId = null,
                                         <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                                             <PayCell person={p} compact />
                                             <MoneyChips person={p} />
+                                            <ConsentChip consent={p.consent} />
                                         </span>
                                     </button>
                                     <MoreButton name={name} id={id} expanded={openId === id} onClick={() => onOpen(id)} />
@@ -305,6 +307,7 @@ export default function ParticipantList({ people, fields, onOpen, openId = null,
                                                 <div className="flex flex-col gap-1 items-start">
                                                     <PayCell person={p} compact />
                                                     <MoneyChips person={p} />
+                                                    <ConsentChip consent={p.consent} />
                                                 </div>
                                             </td>
                                             <td className="pr-3 py-2 text-right"><MoreButton name={name} id={id} expanded={openId === id} onClick={() => onOpen(id)} /></td>

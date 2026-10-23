@@ -1,0 +1,292 @@
+// @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
+"use client";
+
+/**
+ * «Autorizaciones» (conference-manager 2.33.0) — the admin's tab for each registrant's data processing consent:
+ *   - Configuración (settings:manage): ask for it or not, the policy's address and version, the controller and
+ *     its e-mail, the three authorization texts, the link's validity and the health purge delay;
+ *   - Personas (inscriptions:view): each person's state, what they authorized and when; «Enviar / Reenviar
+ *     enlace» and «Registrar revocación» (inscriptions:manage, a NEW log row); «Exportar evidencia» (WordJS
+ *     administrators: the person's whole log, chain-checked, as a JSON file for a data protection request).
+ * Every message is in place (a notice or a field error) or a host toast; the revocation is an in-app dialog.
+ */
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
+import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
+import { apiGet, apiPost, apiPut } from "../../../../../frontend/src/lib/api";
+import { usePerms } from "./perms";
+import { Overlay } from "./Overlay";
+import { consentT } from "../lib/consentI18n";
+
+const BASE = "/plugin/conference-manager";
+const STATE_TONE: Record<string, string> = { pending: "bg-amber-50 text-amber-800 border-amber-200", granted: "bg-emerald-50 text-emerald-800 border-emerald-200", revoked: "bg-rose-50 text-rose-800 border-rose-200" };
+
+export default function ConsentAdmin({ conferenceId }: { conferenceId: number }) {
+    const { language } = useI18n();
+    const t = useMemo(() => consentT(language), [language]);
+    const { addToast } = useToast();
+    const perms = usePerms();
+    const canSettings = perms.can("settings", "manage");
+    const canManage = perms.can("inscriptions", "manage");
+    const [settings, setSettings] = useState<any>(null);
+    const [draft, setDraft] = useState<any>(null);
+    const [defaults, setDefaults] = useState<any>(null);
+    const [people, setPeople] = useState<any[]>([]);
+    const [states, setStates] = useState<Record<string, any>>({});
+    const [enabled, setEnabled] = useState(false);
+    const [q, setQ] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [fieldErr, setFieldErr] = useState<string | null>(null);
+    const [revoke, setRevoke] = useState<any>(null);
+    const [busyId, setBusyId] = useState<number | null>(null);
+
+    const when = (iso: string | null) => {
+        if (!iso) return "";
+        try { return new Intl.DateTimeFormat(language || "es", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso)); } catch { return iso; }
+    };
+    const load = useCallback(async () => {
+        try {
+            const [s, st, list] = await Promise.all([
+                perms.can("settings") ? apiGet<any>(`${BASE}/consent/settings?conference_id=${conferenceId}`) : Promise.resolve(null),
+                apiGet<any>(`${BASE}/consent/states?conference_id=${conferenceId}`),
+                apiGet<any[]>(`${BASE}/inscriptions?conference_id=${conferenceId}`),
+            ]);
+            if (s) { setSettings(s.settings); setDraft({ ...s.settings, policy_url: s.settings.policy_url_custom }); setDefaults(s.defaults); }
+            setStates(st.states || {});
+            setEnabled(!!st.enabled);
+            setPeople(Array.isArray(list) ? list : []);
+        } catch (e: any) { addToast(e?.message || "Error", "error"); }
+    }, [conferenceId]);
+    useEffect(() => { load(); }, [load]);
+
+    const save = async () => {
+        setSaving(true); setFieldErr(null);
+        try {
+            const body = { conference_id: conferenceId, enabled: !!draft.enabled, policy_url: draft.policy_url || "", policy_version: draft.policy_version, responsible: draft.responsible,
+                contact_email: draft.contact_email, text_general: draft.text_general, text_health: draft.text_health, text_image: draft.text_image,
+                purge_days: Number(draft.purge_days), link_days: Number(draft.link_days) };
+            const r = await apiPut<any>(`${BASE}/consent/settings`, body);
+            setSettings(r.settings); setDraft({ ...r.settings, policy_url: r.settings.policy_url_custom });
+            addToast(t("admin.saved"), "success");
+            load();
+        } catch (e: any) { setFieldErr(e?.message || "Error"); }
+        finally { setSaving(false); }
+    };
+    const send = async (id: number) => {
+        setBusyId(id);
+        try {
+            const r = await apiPost<any>(`${BASE}/consent/send`, { inscription_id: id });
+            addToast(r.sent ? t("portal.resent", { email: r.email_masked }) : t("portal.resent.failed"), r.sent ? "success" : "warning");
+            load();
+        } catch (e: any) { addToast(e?.message || "Error", "error"); }
+        finally { setBusyId(null); }
+    };
+    const exportOne = async (p: any) => {
+        setBusyId(p.id);
+        try {
+            const r = await apiGet<any>(`${BASE}/consent/evidence/${p.id}`);
+            const blob = new Blob([JSON.stringify(r, null, 2)], { type: "application/json" });
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = `autorizacion-${p.id}-${String(nameOf(p)).normalize("NFD").replace(/[^\w]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "persona"}.json`;
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        } catch (e: any) { addToast(e?.message || "Error", "error"); }
+        finally { setBusyId(null); }
+    };
+    const nameOf = (p: any) => [p.first_name, p.last_name].filter((x) => x && String(x).trim()).join(" ") || `#${p.id}`;
+
+    const rows = useMemo(() => {
+        const n = (s: string) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+        const needle = n(q.trim());
+        return people.filter((p) => p.status !== "cancelled" && (!needle || n(nameOf(p)).includes(needle)));
+    }, [people, q]);
+    const counts = useMemo(() => {
+        const c = { pending: 0, granted: 0, revoked: 0, failed: 0 };
+        for (const p of people) {
+            if (p.status === "cancelled") continue;
+            const st = states[p.id];
+            const k = st ? st.state : "pending";
+            c[k] = (c[k] || 0) + 1;
+            if (st && st.mail_failed && k === "pending") c.failed++;
+        }
+        return c;
+    }, [people, states]);
+
+    const input = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-500 outline-none";
+    const label = "block text-xs font-bold text-gray-600 mb-1";
+
+    return (
+        <div className="space-y-6" data-consent-admin="">
+            {draft && (
+                <section className="rounded-xl border border-gray-200 p-5 space-y-4" data-consent-settings="">
+                    <h2 className="text-lg font-bold text-gray-900">{t("admin.settings")}</h2>
+                    <label className="flex items-start gap-3 cursor-pointer">
+                        <input type="checkbox" className="mt-1 w-5 h-5 accent-blue-600" checked={!!draft.enabled} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} data-consent-enabled="" />
+                        <span>
+                            <span className="block text-sm font-bold text-gray-900">{t("admin.enabled")}</span>
+                            <span className="block text-xs text-gray-500">{t("admin.enabled.hint")}</span>
+                        </span>
+                    </label>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                            <label className={label} htmlFor="cs-url">{t("admin.policy.url")}</label>
+                            <input id="cs-url" className={input} value={draft.policy_url || ""} disabled={!canSettings} placeholder={settings.policy_url} onChange={(e) => setDraft({ ...draft, policy_url: e.target.value })} />
+                            {!draft.policy_url && <p className="text-[11px] text-gray-400 mt-1">{t("admin.policy.url.hint", { url: settings.policy_url_custom ? (defaults?.policy_path || "/politica-de-datos") : settings.policy_url })}</p>}
+                        </div>
+                        <div>
+                            <label className={label} htmlFor="cs-ver">{t("admin.policy.version")}</label>
+                            <input id="cs-ver" className={input} value={draft.policy_version || ""} disabled={!canSettings} maxLength={40} onChange={(e) => setDraft({ ...draft, policy_version: e.target.value })} />
+                        </div>
+                        <div>
+                            <label className={label} htmlFor="cs-resp">{t("admin.responsible")}</label>
+                            <input id="cs-resp" className={input} value={draft.responsible || ""} disabled={!canSettings} maxLength={200} onChange={(e) => setDraft({ ...draft, responsible: e.target.value })} />
+                        </div>
+                        <div>
+                            <label className={label} htmlFor="cs-mail">{t("admin.contact")}</label>
+                            <input id="cs-mail" type="text" inputMode="email" className={input} value={draft.contact_email || ""} disabled={!canSettings} maxLength={254} onChange={(e) => setDraft({ ...draft, contact_email: e.target.value })} />
+                        </div>
+                    </div>
+                    {(["general", "health", "image"] as const).map((k) => (
+                        <div key={k}>
+                            <label className={label} htmlFor={`cs-${k}`}>{t(`admin.text.${k}`)}</label>
+                            <textarea id={`cs-${k}`} rows={3} className={input} value={draft[`text_${k}`] || ""} disabled={!canSettings} maxLength={4000} onChange={(e) => setDraft({ ...draft, [`text_${k}`]: e.target.value })} />
+                        </div>
+                    ))}
+                    <p className="text-[11px] text-gray-500">{t("admin.text.hint")}</p>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                            <label className={label} htmlFor="cs-purge">{t("admin.purge")}</label>
+                            <input id="cs-purge" type="number" min={0} max={3650} className={input} value={draft.purge_days} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, purge_days: e.target.value })} />
+                            {settings.health_purged_at && <p className="text-[11px] text-emerald-700 mt-1">{t("admin.purge.done", { when: when(settings.health_purged_at) })}</p>}
+                        </div>
+                        <div>
+                            <label className={label} htmlFor="cs-days">{t("admin.link.days")}</label>
+                            <input id="cs-days" type="number" min={1} max={90} className={input} value={draft.link_days} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, link_days: e.target.value })} />
+                        </div>
+                    </div>
+                    {fieldErr && <p className="text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2" role="alert">{fieldErr}</p>}
+                    <div className="text-[11px] text-gray-500 space-y-1">
+                        <p><i className="fa-solid fa-envelope mr-1" aria-hidden="true"></i>{t("admin.mail.note")}</p>
+                        <p><i className="fa-solid fa-network-wired mr-1" aria-hidden="true"></i>{t("admin.ip.note")}</p>
+                    </div>
+                    {canSettings && (
+                        <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={save} disabled={saving} className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold disabled:opacity-60" data-consent-save="">{saving ? "…" : t("admin.save")}</button>
+                            <button type="button" onClick={async () => { try { await apiPost(`${BASE}/consent/purge`, {}); addToast(t("admin.purge.ran"), "success"); load(); } catch (e: any) { addToast(e?.message || "Error", "error"); } }}
+                                className="px-4 py-2 rounded-lg border border-gray-200 text-gray-700 text-sm font-semibold">{t("admin.purge.now")}</button>
+                        </div>
+                    )}
+                </section>
+            )}
+
+            <section className="space-y-3" data-consent-people="">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="text-lg font-bold text-gray-900">{t("admin.people")}</h2>
+                    <input className={`${input} max-w-xs`} placeholder={t("admin.search")} aria-label={t("admin.search")} value={q} onChange={(e) => setQ(e.target.value)} />
+                </div>
+                {!enabled && <p className="text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">{t("admin.off")}</p>}
+                {enabled && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {(["pending", "granted", "revoked", "failed"] as const).map((k) => (
+                            <div key={k} className="rounded-xl border border-gray-100 bg-gray-50/50 px-4 py-3" data-consent-kpi={k}>
+                                <div className="text-[10px] font-black uppercase tracking-widest text-gray-500">{t(`admin.kpi.${k}`)}</div>
+                                <div className="text-2xl font-black text-gray-900 tabular-nums">{counts[k]}</div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+                <div className="overflow-x-auto border border-gray-100 rounded-xl">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 text-[10px] font-black uppercase tracking-widest text-gray-500">
+                            <tr><th className="px-4 py-3">{t("admin.col.person")}</th><th className="px-4 py-3">{t("admin.col.state")}</th><th className="px-4 py-3">{t("admin.col.choices")}</th><th className="px-4 py-3">{t("admin.col.email")}</th><th className="px-4 py-3 text-right">{t("admin.col.actions")}</th></tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                            {rows.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-gray-400">{t("admin.empty")}</td></tr>}
+                            {rows.map((p) => {
+                                const st = states[p.id];
+                                const state = st ? st.state : "pending";
+                                return (
+                                    <tr key={p.id} data-consent-row={p.id}>
+                                        <td className="px-4 py-3 font-semibold text-gray-900">{nameOf(p)}</td>
+                                        <td className="px-4 py-3">
+                                            <span className={`inline-block border rounded-full px-2 py-0.5 text-[11px] font-bold ${STATE_TONE[state]}`} data-consent-state={state}>
+                                                {state === "granted" ? t("portal.state.granted") : state === "revoked" ? t("portal.state.revoked") : t("portal.state.pending")}
+                                            </span>
+                                            <div className="text-[11px] text-gray-500 mt-1">
+                                                {state === "granted" ? when(st.granted_at) : state === "revoked" ? when(st.revoked_at) : !st ? t("portal.never.sent") : st.mail_failed ? t("portal.mail.failed") : st.link_expired ? t("portal.link.expired") : ""}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-xs text-gray-600">
+                                            {st && state !== "pending" ? [st.general && t("page.done.general"), st.health && t("page.done.health"), st.image && t("page.done.image")].filter(Boolean).join(" · ") || "—" : "—"}
+                                        </td>
+                                        <td className="px-4 py-3 text-xs text-gray-500">{st ? st.email_masked : ""}</td>
+                                        <td className="px-4 py-3">
+                                            <div className="flex flex-wrap justify-end gap-2">
+                                                {enabled && canManage && state !== "granted" && (
+                                                    <button type="button" disabled={busyId === p.id} onClick={() => send(p.id)} className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50" data-consent-send={p.id}>
+                                                        {st ? t("portal.resend") : t("portal.send")}
+                                                    </button>
+                                                )}
+                                                {canManage && state === "granted" && (
+                                                    <button type="button" onClick={() => setRevoke({ p, general: false, health: false, image: false, note: "", err: {} })} className="px-3 py-1.5 rounded-lg border border-rose-200 text-xs font-semibold text-rose-700 hover:bg-rose-50" data-consent-revoke={p.id}>{t("admin.revoke")}</button>
+                                                )}
+                                                {st ? (
+                                                    <button type="button" disabled={!perms.isAdmin || busyId === p.id} title={perms.isAdmin ? undefined : t("admin.export.only")} onClick={() => exportOne(p)}
+                                                        className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50" data-consent-export={p.id}>
+                                                        <i className="fa-solid fa-file-export mr-1" aria-hidden="true"></i>{t("admin.export")}
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            {revoke && (
+                <Overlay layer={2} onBackdrop={() => setRevoke(null)} onEscape={() => setRevoke(null)}>
+                    <div role="dialog" aria-modal="true" aria-labelledby="cr-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4" data-consent-revoke-dialog="">
+                        <h3 id="cr-title" className="text-lg font-bold text-gray-900">{t("admin.revoke.title", { name: nameOf(revoke.p) })}</h3>
+                        <p className="text-xs text-gray-500">{t("admin.revoke.hint")}</p>
+                        <div className="space-y-2">
+                            {(["general", "health", "image"] as const).map((k) => (
+                                <label key={k} className="flex items-start gap-2 text-sm text-gray-800">
+                                    <input type="checkbox" className="mt-1 w-4 h-4 accent-rose-600" checked={revoke[k] || (k !== "general" && revoke.general)} disabled={k !== "general" && revoke.general}
+                                        onChange={(e) => setRevoke({ ...revoke, [k]: e.target.checked, err: { ...revoke.err, scope: "" } })} />
+                                    <span>{t(`admin.revoke.${k}`)}</span>
+                                </label>
+                            ))}
+                            {revoke.err.scope && <p className="text-xs font-semibold text-rose-600" role="alert">{revoke.err.scope}</p>}
+                        </div>
+                        <div>
+                            <label className={label} htmlFor="cr-note">{t("admin.revoke.note")}</label>
+                            <textarea id="cr-note" rows={2} className={`${input} ${revoke.err.note ? "border-rose-300" : ""}`} placeholder={t("admin.revoke.note.ph")} value={revoke.note} maxLength={500}
+                                onChange={(e) => setRevoke({ ...revoke, note: e.target.value, err: { ...revoke.err, note: "" } })} />
+                            {revoke.err.note && <p className="text-xs font-semibold text-rose-600 mt-1" role="alert">{revoke.err.note}</p>}
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <button type="button" onClick={() => setRevoke(null)} className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700">{t("admin.cancel")}</button>
+                            <button type="button" disabled={revoke.busy} className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-bold disabled:opacity-60" data-consent-revoke-confirm=""
+                                onClick={async () => {
+                                    const err: any = {};
+                                    if (!revoke.general && !revoke.health && !revoke.image) err.scope = t("admin.revoke.scope.missing");
+                                    if (!revoke.note.trim()) err.note = t("admin.revoke.note.missing");
+                                    if (Object.keys(err).length) { setRevoke({ ...revoke, err }); return; }
+                                    setRevoke({ ...revoke, busy: true });
+                                    try {
+                                        await apiPost(`${BASE}/consent/revoke`, { inscription_id: revoke.p.id, general: revoke.general, health: revoke.health, image: revoke.image, note: revoke.note });
+                                        addToast(t("admin.revoked"), "success");
+                                        setRevoke(null); load();
+                                    } catch (e: any) { setRevoke({ ...revoke, busy: false, err: { note: e?.message || "Error" } }); }
+                                }}>{t("admin.revoke.confirm")}</button>
+                        </div>
+                    </div>
+                </Overlay>
+            )}
+        </div>
+    );
+}

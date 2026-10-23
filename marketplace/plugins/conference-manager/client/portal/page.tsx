@@ -10,6 +10,8 @@
  *   /portal/conference/yo#c=<code>  «Mi inscripción», a registrant's own page behind their badge's QR
  *                                   (yo/MyRegistration; installable, with its bus notices by Web Push — sw.js)
  *   /portal/conference/badge#t=<t>  a shared badge link (badge/BadgePage), which leads to «Mi inscripción»
+ *   /portal/conference/autorizacion#t=<t>  a registrant's data processing consent, signed with an e-mailed code
+ *                                   (consent/ConsentPage, 2.33.0)
  *
  * The core serves, beside it, /portal/conference/file?d= (a badge PDF ticket → its bytes), /sw.js and the web
  * app manifest of «Mi inscripción»; the <head> of each sub-page comes from the manifest's portalPage.pages.
@@ -18,6 +20,7 @@ import React from "react";
 import CoordinatorPortal from "./CoordinatorPortal";
 import MyRegistrationPage from "./yo/MyRegistration";
 import BadgeLinkPage from "./badge/BadgePage";
+import ConsentPage from "./consent/ConsentPage";
 import PortalFrame from "./PortalFrame";
 
 type Props = { slug: string; path: string[] };
@@ -37,6 +40,7 @@ function pageOf(path: string[]) {
     if (!path.length) return <CoordinatorPortal />;
     if (path.length === 1 && path[0] === "yo") return <MyRegistrationPage />;
     if (path.length === 1 && path[0] === "badge") return <BadgeLinkPage />;
+    if (path.length === 1 && path[0] === "autorizacion") return <ConsentPage />;
     return <NotFound />;
 }
 
