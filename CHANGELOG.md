@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-10-23
+
 ### Added
 
 - **Image editing in the media library.** Rotate, flip, crop (free or a fixed ratio, by mouse, touch or keyboard) and scale down an image, then *Restore original* at any time. The edit is saved as a new file with its own sizes; the earlier files stay, so pages that already show them keep working (`POST /api/v1/media/:id/edit`, `POST /api/v1/media/:id/restore-original`).
