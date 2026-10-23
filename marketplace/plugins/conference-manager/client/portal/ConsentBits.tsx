@@ -23,6 +23,8 @@ export type PortalConsent = {
     email_masked: string; mail_failed: boolean; link_expired: boolean; never_sent?: boolean;
     /** 2.34.0: a verbal health authorization waiting for its written confirmation (late after the conference's days). */
     verbal_health?: boolean; verbal_overdue?: boolean;
+    /** 2.35.0: no e-mail on file — the link is shared with «Copiar mensaje», or the person signs on paper. */
+    no_email?: boolean;
 };
 
 const t = consentT("es");
@@ -103,7 +105,7 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
     };
     const status = consent.state === "granted" ? t("portal.state.granted.at", { when: dateOf(consent.granted_at) })
         : consent.state === "revoked" ? `${t("portal.state.revoked")} · ${dateOf(consent.revoked_at)}`
-        : consent.never_sent ? t("portal.never.sent") : consent.mail_failed ? t("portal.mail.failed") : consent.link_expired ? t("portal.link.expired") : "";
+        : consent.no_email ? "" : consent.never_sent ? t("portal.never.sent") : consent.mail_failed ? t("portal.mail.failed") : consent.link_expired ? t("portal.link.expired") : "";
     return (
         <section className="space-y-3" aria-labelledby={`consent-${inscriptionId}`} data-sheet-section="autorizacion">
             <h4 id={`consent-${inscriptionId}`} className={labelCls}>{t("portal.section")}</h4>
@@ -113,13 +115,18 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
                     {status && <span className="text-sm font-bold text-gray-700" data-consent-status="">{status}</span>}
                 </div>
                 {consent.email_masked && <p className="text-xs text-gray-500">{consent.email_masked}</p>}
-                {consent.state !== "granted" && <p className="text-xs text-gray-600">{t("portal.hint")}</p>}
+                {consent.no_email && !consent.email_masked && (
+                    <p className="text-xs text-gray-600" data-consent-noemail=""><Badge tone="gray" size="xs" icon="fa-envelope-open">{t("noemail.badge")}</Badge> {t("noemail.hint")}</p>
+                )}
+                {consent.state !== "granted" && !consent.no_email && <p className="text-xs text-gray-600">{t("portal.hint")}</p>}
             </div>
             {consent.state !== "granted" && (
                 <div className="flex flex-col sm:flex-row gap-2">
-                    <Button variant="outline" icon="fa-paper-plane" onClick={resend} disabled={busy} data-action="consent-resend">
-                        {busy ? "Enviando…" : consent.never_sent ? t("portal.send") : t("portal.resend")}
-                    </Button>
+                    {!consent.no_email && (
+                        <Button variant="outline" icon="fa-paper-plane" onClick={resend} disabled={busy} data-action="consent-resend">
+                            {busy ? "Enviando…" : consent.never_sent ? t("portal.send") : t("portal.resend")}
+                        </Button>
+                    )}
                     <Button variant="outline" icon="fa-copy" onClick={shareMessage} disabled={busy} data-action="consent-copy">{t("copy.button")}</Button>
                 </div>
             )}

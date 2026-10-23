@@ -240,6 +240,10 @@ const es: Record<string, string> = {
     'admin.filter.verbal': 'Solo autorizaciones verbales sin confirmar',
     'admin.verbal.days': 'Días para confirmar por escrito una autorización verbal',
     'admin.verbal.days.hint': 'Pasado este plazo sin firma, la persona queda marcada para hacerle seguimiento; sus datos no se borran.',
+    // registering without an e-mail (2.35.0)
+    'portal.registered.noemail': 'Inscripción guardada, sin correo: comparte el enlace con «Copiar mensaje» o usa la hoja en papel.',
+    'noemail.badge': 'Sin correo',
+    'noemail.hint': 'No hay a dónde enviar el enlace: usa «Copiar mensaje» (la persona escribe su correo en la página) o la hoja en papel.',
 };
 
 const en: Record<string, string> = {
@@ -466,6 +470,10 @@ const en: Record<string, string> = {
     'admin.filter.verbal': 'Only unconfirmed verbal consents',
     'admin.verbal.days': 'Days to confirm a verbal consent in writing',
     'admin.verbal.days.hint': 'After this time without a signature, the person is flagged for follow-up; their data are not deleted.',
+    // registering without an e-mail (2.35.0)
+    'portal.registered.noemail': 'Registration saved, without an e-mail: share the link with «Copy message» or use the paper sheet.',
+    'noemail.badge': 'No e-mail',
+    'noemail.hint': 'There is nowhere to e-mail the link: use «Copy message» (the person types their e-mail on the page) or the paper sheet.',
 };
 
 const pt: Record<string, string> = {
@@ -692,6 +700,10 @@ const pt: Record<string, string> = {
     'admin.filter.verbal': 'Só autorizações verbais sem confirmar',
     'admin.verbal.days': 'Dias para confirmar por escrito uma autorização verbal',
     'admin.verbal.days.hint': 'Passado esse prazo sem assinatura, a pessoa fica marcada para acompanhamento; seus dados não são excluídos.',
+    // registering without an e-mail (2.35.0)
+    'portal.registered.noemail': 'Inscrição salva, sem e-mail: compartilhe o link com «Copiar mensagem» ou use a folha em papel.',
+    'noemail.badge': 'Sem e-mail',
+    'noemail.hint': 'Não há para onde enviar o link: use «Copiar mensagem» (a pessoa escreve o e-mail na página) ou a folha em papel.',
 };
 
 

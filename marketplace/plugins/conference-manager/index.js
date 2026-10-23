@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.34.0',
+    version: '2.35.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -3057,6 +3057,7 @@ exports.init = async function (wordjs) {
             // Duplicate guard: every field flagged "no duplicates" must be unique within the conference
             // (generic — the admin can mark any field, e.g. a document number or an email, as unique).
             await assertUnique(confFields, values, { conference_id: confId });
+            await assertNoEmailDuplicate(confId, values, { conference_id: confId });
 
             const keys = Object.keys(values);
             const insert = () => db.run(
@@ -5684,17 +5685,41 @@ exports.init = async function (wordjs) {
         const purgeTimer = setInterval(() => { consent.purgeDue({ force: true }).catch(() => {}); }, 6 * 60 * 60 * 1000);
         if (purgeTimer && typeof purgeTimer.unref === 'function') purgeTimer.unref();
     }
-    // Registering someone while consent is asked: they need an e-mail (a parent's for a minor), checked before the insert…
+    // Registering someone while consent is asked: an e-mail written in the form must be a valid one (the link goes
+    // there). Since 2.35.0 it may be left empty — a walk-in signs on paper, or gets the link by «Copiar mensaje»
+    // and types an e-mail on the consent page. Checked before the insert…
     const CONSENT_EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]{2,}$/;
     async function assertConsentEmail(conferenceId, values) {
         const form = await db.all(`SELECT name, label, type, role FROM ${T.fields} WHERE conference_id = ?`, [conferenceId]);
         // The same field the consent module reads (role, name, type, or a label like «Correo», 2.33.3).
         const f = emailFieldIn(form, isFieldColumn);
         const v = f ? String(values[f.name] == null ? '' : values[f.name]).trim() : '';
-        if (!CONSENT_EMAIL_RE.test(v)) {
-            throw httpError(400, f ? `Escribe un correo válido en «${f.label || f.name}»: allí llega el enlace para que la persona (o su padre, madre o representante) autorice el tratamiento de sus datos.`
-                : 'Esta conferencia pide la autorización de datos: añade al formulario el campo «Email» (Campos › Añadir campo) para poder enviar el enlace.');
+        if (v && !CONSENT_EMAIL_RE.test(v)) {
+            throw httpError(400, `Escribe un correo válido en «${f.label || f.name}» (o déjalo vacío): allí llega el enlace para que la persona (o su padre, madre o representante) autorice el tratamiento de sus datos.`);
         }
+    }
+    /**
+     * Without an e-mail (2.35.0) the duplicate guard falls back to the person: the same name (accents and case aside)
+     * and the same ID document number or phone in the conference (the portal: in the coordinator's own location, like
+     * the other duplicate checks) is the same registration. Only when the form has an e-mail field left empty.
+     */
+    const personKey = (s) => String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    async function assertNoEmailDuplicate(conferenceId, values, scope) {
+        const form = await db.all(FIELD_COLUMNS_SQL, [conferenceId]);
+        const emailField = emailFieldIn(form, isFieldColumn);
+        if (!emailField || String(values[emailField.name] == null ? '' : values[emailField.name]).trim()) return;
+        const name = personKey(`${values.first_name || ''} ${values.last_name || ''}`);
+        if (!name) return;
+        const doc = selfDocFieldsOf(form, null, isFieldColumn).number;
+        const usable = form.filter(f => isFieldColumn(f.name));
+        const phone = usable.find(f => f.role === 'phone') || usable.find(f => f.type === 'tel' || f.type === 'phone');
+        const keys = [doc, phone].filter(f => f && String(values[f.name] == null ? '' : values[f.name]).trim());
+        if (!keys.length) return;
+        let sql = `SELECT id, first_name, last_name FROM ${T.inscriptions} WHERE conference_id = ? AND (status IS NULL OR status <> 'cancelled') AND (${keys.map(f => `${f.name} = ?`).join(' OR ')})`;
+        const params = [conferenceId, ...keys.map(f => values[f.name])];
+        if (scope.location_id != null) { sql += ' AND location_id = ?'; params.push(scope.location_id); }
+        const same = (await db.all(sql, params)).find(r => personKey(`${r.first_name || ''} ${r.last_name || ''}`) === name);
+        if (same) throw httpError(409, `Ya hay una inscripción con el mismo nombre y ${keys.map(f => `«${f.label || f.name}»`).join(' o ')}. Si es otra persona, escribe su correo para distinguirla.`);
     }
     // A health answer staff entered (2.34.0): the verbal authorization it rests on, and who entered or changed it.
     async function consentHealthEntered(inscriptionId, actor, via, healthIn) {
@@ -5707,6 +5732,8 @@ exports.init = async function (wordjs) {
     async function askConsent(inscriptionId, actor, via) {
         try {
             const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [inscriptionId]);
+            // No e-mail (2.35.0): nothing to send; the screens offer «Copiar mensaje» and the paper sheet.
+            if (!await consent.hasEmail(ins)) return { state: 'pending', sent: false, email_masked: '', no_email: true };
             const r = await consent.issueLink(ins, { actor, via, httpError, force: true });
             return { state: r.state, sent: r.sent, email_masked: r.email_masked };
         } catch (e) {
@@ -8435,19 +8462,22 @@ exports.init = async function (wordjs) {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
-            const fields = await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [location.conference_id]);
+            const fields = await db.all(`SELECT name, label, type, role FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [location.conference_id]);
             const cols = [...new Set([...PORTAL_BASE_COLS, ...fields.map(f => f.name).filter(isFieldColumn)])];
+            const emailField = emailFieldIn(fields, isFieldColumn);
             const list = await db.all(`SELECT ${cols.map(c => `i.${c}`).join(', ')}, ${fees.personSum('pending', 'i.id')} AS pending_amount,`
                 + ` ${fees.personSum('returned', 'i.id')} AS returned_amount, CASE WHEN i.status = 'cancelled' THEN 1 ELSE 0 END AS cancelled`
                 + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? ORDER BY i.first_name, i.id`, [location.id, location.conference_id]);
             // «Autorización de datos» (2.33.0): each person's state (pending / granted with its time / revoked), while asked.
             const consentStates = await consent.isEnabled(location.conference_id) ? await consent.statesOf(location.conference_id, list.map(r => r.id)) : null;
-            const consentOf = (id) => {
-                const st = consentStates.get(Number(id));
-                return st ? { state: st.state, granted_at: st.granted_at, revoked_at: st.revoked_at, email_masked: st.email_masked, mail_failed: st.mail_failed, link_expired: st.link_expired, verbal_health: st.verbal_health, verbal_overdue: st.verbal_overdue }
-                    : { state: 'pending', granted_at: null, revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, never_sent: true };
+            // 2.35.0: «sin correo» — nobody to e-mail the link to (the coordinator copies the message or uses paper).
+            const noEmail = (r) => !emailField || !CONSENT_EMAIL_RE.test(String(r[emailField.name] == null ? '' : r[emailField.name]).trim());
+            const consentOf = (r) => {
+                const st = consentStates.get(Number(r.id));
+                return st ? { state: st.state, granted_at: st.granted_at, revoked_at: st.revoked_at, email_masked: st.email_masked, mail_failed: st.mail_failed, link_expired: st.link_expired, verbal_health: st.verbal_health, verbal_overdue: st.verbal_overdue, no_email: noEmail(r) }
+                    : { state: 'pending', granted_at: null, revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, never_sent: true, no_email: noEmail(r) };
             };
-            res.json(list.map(r => ({ ...r, pending_amount: roundMoney(r.pending_amount), returned_amount: roundMoney(r.returned_amount), cancelled: !!Number(r.cancelled), ...(consentStates ? { consent: consentOf(r.id) } : {}) })));
+            res.json(list.map(r => ({ ...r, pending_amount: roundMoney(r.pending_amount), returned_amount: roundMoney(r.returned_amount), cancelled: !!Number(r.cancelled), ...(consentStates ? { consent: consentOf(r) } : {}) })));
         } catch (e) { sendError(res, e); }
     });
 
@@ -8540,6 +8570,7 @@ exports.init = async function (wordjs) {
             // OWN location. A conference-wide check turned the 409 into a cross-location probe oracle (a
             // coordinator could enumerate registrations in locations they don't manage) (audit LOW).
             await assertUnique(confFields, values, { conference_id, location_id: location.id });
+            await assertNoEmailDuplicate(conference_id, values, { location_id: location.id });
 
             // first_name / last_name are NOT NULL — default to '' (no 'Sin Nombre' placeholder).
             if (values.first_name == null) values.first_name = '';

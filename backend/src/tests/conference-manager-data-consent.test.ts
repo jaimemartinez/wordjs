@@ -84,12 +84,12 @@ async function world({ enable = true, extra = [] as string[] } = {}) {
 
 const GRANT = { general: true, health: true, image: false, client_tz: 'America/Bogota', user_agent: 'Mozilla/5.0 (Test)' };
 
-test('with consent on, a portal registration needs an e-mail, stays pending and cannot be confirmed; health needs the verbal tick', async () => {
+test('with consent on, a portal registration checks a written e-mail, stays pending and cannot be confirmed; health needs the verbal tick', async () => {
     const w = await world();
     // 2.34.0: the portal gets the health field, marked as needing the person's verbal authorization.
     const fields = ok(await w.p.call('get', `/public/fields?conference_id=${w.cid}`, { anonymous: true }));
     assert.strictEqual(fields.find((f: any) => f.name === 'health_conditions').verbal_consent, true);
-    assert.strictEqual((await w.register({ email: '' })).status, 400, 'an e-mail is required');
+    assert.strictEqual((await w.register({ email: 'no-es-correo' })).status, 400, 'an e-mail written must be valid');
     const noTick = await w.register({ health_conditions: { answer: 'none' } });
     assert.strictEqual(noTick.status, 400, 'no health without the verbal tick');
     assert.strictEqual(noTick.body.field, 'health_verbal_consent');
@@ -681,4 +681,46 @@ test('verbal: never confirmed within the days is flagged, not deleted; the admin
     ok(await w.p.call('post', '/consent/purge', { body: {} }));
     assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers`).n, 0);
     assert.strictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id].verbal_health, false);
+});
+
+// ── 2.35.0: registering without an e-mail ──
+test('without an e-mail: the registration is saved, flagged «sin correo», and every e-mail path degrades cleanly', async () => {
+    const w = await world();
+    const mailsBefore = w.p.mails.length;
+    const r = ok(await w.register({ email: '' }));
+    assert.deepStrictEqual(r.consent, { state: 'pending', sent: false, email_masked: '', no_email: true });
+    assert.strictEqual(w.p.mails.length, mailsBefore, 'nothing to e-mail');
+    const id = r.id as number;
+    // The coordinator and the admin see «sin correo».
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/inscriptions', w.ptoken))[0].consent.no_email, true);
+    assert.deepStrictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).no_email, [id]);
+    // «Reenviar enlace» has nowhere to go (a clear 400), «Copiar mensaje» works, and the page asks for the e-mail.
+    assert.strictEqual((await portal(w.p, 'post', '/portal/consent/resend', w.ptoken, { inscription_id: id })).status, 400);
+    const share = ok(await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: id }));
+    assert.strictEqual(share.email_masked, '');
+    const token = String(share.link.match(/#t=([0-9a-f]{32})/)[1]);
+    assert.strictEqual(ok(await w.pub('open', { token })).view.needs_email, true);
+    ok(await w.pub('code', { token, email: 'ana.nueva@example.org' }));
+    ok(await w.pub('confirm', { token, code: w.lastCode('ana.nueva@example.org'), ...GRANT }));
+    assert.deepStrictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).no_email, [], 'the typed e-mail fills the form');
+    // The CSV export carries the person (an empty e-mail column before, the typed one now).
+    const csv = ok(await w.p.call('get', `/inscriptions/export?conference_id=${w.cid}`)).csv as string;
+    assert.ok(csv.includes('Ana') && csv.includes('ana.nueva@example.org'));
+    // A written e-mail must still be a valid one.
+    assert.strictEqual((await w.register({ first_name: 'Beto', email: 'no-es-correo' })).status, 400);
+});
+
+test('without an e-mail, the duplicate guard falls back to the name plus the ID document or the phone', async () => {
+    const w = await world();
+    ok(await w.register({ email: '' }));
+    const dup = await w.register({ email: '', first_name: 'ANA', last_name: 'Perez' }); // same person, other spelling
+    assert.strictEqual(dup.status, 409, JSON.stringify(dup.body));
+    assert.ok(/mismo nombre/.test(dup.body.error));
+    // Another person with the same name but another document is fine; so is the same one with an e-mail.
+    const docCol = (w.p.q(`SELECT name FROM ${PREFIX}fields WHERE conference_id = ? AND label = 'Número de documento'`, w.cid) as any[])[0].name;
+    ok(await w.register({ email: '', [docCol]: '9.999.999' }));
+    ok(await w.register({ email: 'ana.otra@example.org' }));
+    // Cancelled registrations do not count.
+    w.p.exec(`UPDATE ${PREFIX}inscriptions SET status = 'cancelled' WHERE conference_id = ? AND ${docCol} = '1.234.567'`, w.cid);
+    ok(await w.register({ email: '' }));
 });

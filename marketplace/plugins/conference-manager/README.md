@@ -107,3 +107,14 @@ voluntario». Without the tick the answer is not saved.
 
 A verbal authorization has to be provable. The written confirmation is that proof, so ask for it promptly.
 Whether a verbal authorization meets your obligations is for your own policy and your lawyer to decide.
+
+## Registering without an e-mail (2.35.0)
+
+A conference that asks for «Autorización de datos» no longer needs an e-mail to register someone. A written e-mail
+must still be valid, and a field you marked as required stays required.
+
+- **Nothing is sent.** Without an e-mail the person shows «Sin correo» and «Reenviar enlace» is hidden for them. Ask
+  for the authorization with «Copiar mensaje» (the person types their e-mail on the consent page) or on the paper
+  sheet.
+- **Duplicates.** Without an e-mail, the same name plus the same ID document number or phone is refused as a
+  duplicate. Write the person's e-mail to tell two people apart.

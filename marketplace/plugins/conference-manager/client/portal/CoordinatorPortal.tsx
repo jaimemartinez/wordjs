@@ -492,7 +492,8 @@ function LocationPortalContent() {
                 // «Autorización de datos» (2.33.0): say where the consent link went (or that it did not).
                 const made = await res.json().catch(() => ({}));
                 const ct = consentT('es');
-                if (made && made.consent) addToast(made.consent.sent ? ct('portal.registered', { email: made.consent.email_masked }) : ct('portal.registered.failed'), made.consent.sent ? 'success' : 'warning');
+                if (made && made.consent && made.consent.no_email) addToast(ct('portal.registered.noemail'), 'success');
+                else if (made && made.consent) addToast(made.consent.sent ? ct('portal.registered', { email: made.consent.email_masked }) : ct('portal.registered.failed'), made.consent.sent ? 'success' : 'warning');
                 else addToast('Inscripción creada correctamente', 'success');
                 setView('list');
                 // Reset form with initials
