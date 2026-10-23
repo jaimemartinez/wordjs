@@ -27,6 +27,7 @@ import { browserProofEnv, dataUrlBytes, pickSequence, prepareProof, ProofError, 
 import { normalizeSearch } from "./lodgingView";
 import { familyChips, type FamilyGroup } from "./participants";
 import { Badge, Button, Field, MoneyInput, Modal, Notice, SPLIT_COLUMN_REM, SegmentedControl, SheetNotice, cx, inputCls, labelCls, touchTextCls } from "./ui";
+import { DateField } from "../lib/DateField";
 
 export type RegisterSheetProps = {
     draft: FeeDraft;
@@ -197,7 +198,7 @@ export default function RegisterPaymentSheet(props: RegisterSheetProps) {
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <Field label="Fecha del pago">
-                        {(fid) => <input id={fid} type="date" className={cx(inputCls, "min-w-0 min-h-12 appearance-none")} value={draft.paidOn} max={todayMax()} onChange={(e) => set({ paidOn: e.target.value })} />}
+                        {(fid) => <DateField id={fid} value={draft.paidOn} max={todayMax()} clearable={false} onChange={(v) => set({ paidOn: v })} />}
                     </Field>
                     <Field label={draft.method === "Transferencia" ? "Referencia de la transferencia" : "Referencia (opcional)"}>
                         {(fid) => <input id={fid} className={inputCls} maxLength={100} value={draft.reference} onChange={(e) => set({ reference: e.target.value })} placeholder={draft.method === "Transferencia" ? "Número de operación" : "Número de recibo"} autoComplete="off" />}

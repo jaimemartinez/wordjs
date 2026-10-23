@@ -630,7 +630,9 @@ describe("the «Registrar pago» sheet", () => {
         const html = render(draftFor([1, 2], { method: "Efectivo", mode: "manual", manual: { 1: "500", 2: "250" } }, v));
         expect(html).toMatch(/<input[^>]*inputMode="decimal"[^>]*class="[^"]*text-xl/);
         expect(html).toMatch(/<input[^>]*inputMode="decimal"[^>]*class="[^"]*text-base sm:text-sm/);
-        expect(html).toMatch(/<input[^>]*type="date"[^>]*class="[^"]*text-base sm:text-sm[^"]*"[^>]*value="\d{4}-\d{2}-\d{2}"/);
+        // 2.33.1: the host's calendar (a button, no keyboard, so no zoom) carries today's date.
+        expect(html).not.toMatch(/<input[^>]*type="date"/);
+        expect(html).toMatch(/<button[^>]*data-date-picker="date"[^>]*data-value="\d{4}-\d{2}-\d{2}"/);
     });
     it("server refusals show on the person's row and above the button", () => {
         const html = render(draftFor([1], { method: "Efectivo" }, v), { error: "Sin conexión. Tus datos siguen aquí.", personErrors: { 1: "Supera lo que falta: máximo $1,00." } });

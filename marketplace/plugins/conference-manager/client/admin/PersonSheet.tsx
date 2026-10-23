@@ -46,6 +46,7 @@ import { Overlay, useShortTouch } from "./Overlay";
 import { InfoRow, SoftWrap } from "./RosterBits";
 import { BalanceChips, PayPill, StatusPill, factsOf, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
+import { paymentMethodLabel, shownFieldValue } from "../lib/labels";
 
 const btn = 'min-h-[44px] px-4 rounded-2xl font-black text-[11px] uppercase tracking-widest inline-flex items-center justify-center gap-2 disabled:opacity-50';
 const ghost = `${btn} bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-400`;
@@ -79,7 +80,7 @@ export function PersonPayments({ parts, onOpen, tx, full = true }: any) {
                                     shared ? <span className="font-bold text-gray-500">{tx('fees.person.of.total', 'de {total}', { total: money(toCents(p.transfer.amount)) })}</span> : null,
                                     shared ? <span className="font-bold text-gray-500">{tx('fees.person.shared.with', 'compartido con {n}', { n: p.transfer.people - 1 })}</span> : null])}
                             </span>
-                            <span className="flex flex-wrap gap-x-1 text-[11px] font-bold text-gray-500" data-pay-facts="when">{factsOf([fmtDay(p.date), p.method || null], full && p.reference ? p.reference : null)}</span>
+                            <span className="flex flex-wrap gap-x-1 text-[11px] font-bold text-gray-500" data-pay-facts="when">{factsOf([fmtDay(p.date), p.method ? paymentMethodLabel(tx, p.method) : null], full && p.reference ? p.reference : null)}</span>
                         </span>
                         {p.status && <StatusPill status={p.status} />}
                     </>
@@ -240,7 +241,7 @@ export function PersonSheet({
                             {facts.map((f) => (
                                 <InfoRow key={f.name} label={f.label}>
                                     {!f.value ? <span className="text-gray-400" data-empty="">—</span>
-                                        : f.href ? <a href={f.href} className="text-blue-700 underline break-words" data-mail=""><SoftWrap text={f.value} /></a> : f.value}
+                                        : f.href ? <a href={f.href} className="text-blue-700 underline break-words" data-mail=""><SoftWrap text={f.value} /></a> : shownFieldValue(tx, (fields || []).find((x) => x && x.name === f.name), f.value)}
                                 </InfoRow>
                             ))}
                         </dl>

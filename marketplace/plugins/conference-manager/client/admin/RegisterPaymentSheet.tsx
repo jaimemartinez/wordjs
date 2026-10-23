@@ -25,6 +25,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { PAYMENT_METHODS, feePaymentsApi } from "../lib/conference";
+import { DateField } from "../lib/DateField";
+import { paymentMethodLabel } from "../lib/labels";
 import { LAYER, revealFocused } from "../lib/overlay";
 import { MAX_PARTS, centsToInput, parseMoneyInput, splitEqual, tidyMoneyInput, toCents } from "../lib/feeSplit";
 import { buildFeeBody, checkDraft, chosenPersonLine, draftIsDirty, expectedOf, feeErrorText, localDay, manualOnSwitch, maxPaidOn, newClientKey, partAfterKind, proofRequired, RELOAD_CODES, sumMismatchText } from "../lib/feePayments";
@@ -338,13 +340,12 @@ export function RegisterPaymentSheet({ mode = 'create', conferenceId, options, l
                         <div>
                             <span className={labelCls}>{tx('payment.method', 'Forma de pago')}</span>
                             <SegmentedControl variant="radio" label={tx('payment.method', 'Forma de pago')} value={draft.method} onChange={(m) => set({ method: m })}
-                                options={methodList.map((m) => ({ key: m, label: m }))} />
+                                options={methodList.map((m) => ({ key: m, label: paymentMethodLabel(tx, m) }))} />
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
                                 <label htmlFor="fee-date" className={labelCls}>{tx('fees.register.date', 'Fecha del pago')}</label>
-                                <input id="fee-date" type="date" value={draft.paidOn} max={maxPaidOn()} onChange={(e) => set({ paidOn: e.target.value })} className={inputCls}
-                                    data-field="fee_date" aria-invalid={fe.invalid('fee_date')} aria-describedby={fe.describedBy('fee_date')} />
+                                <DateField id="fee-date" value={draft.paidOn} max={maxPaidOn()} clearable={false} onChange={(v) => set({ paidOn: v })} dataField="fee_date" />
                                 <FieldError message={fe.error('fee_date')} id={fe.errorId('fee_date')} />
                             </div>
                             {(isTransfer || draft.reference) && (

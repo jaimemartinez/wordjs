@@ -26,6 +26,7 @@ import { useFieldErrors } from "../lib/useFieldErrors";
 import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Notice, Spinner, captionCls, captionWideCls, cx, headingCls, inputBoldCls, inputCls, selectCls } from "./ui";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
 import { HEALTH_FIELD, healthAnswerError, healthPayload, isHealthField } from "../lib/health";
+import { DateField } from "../lib/DateField";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -870,6 +871,10 @@ function LocationPortalContent() {
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     />
+                                                ) : field.type === 'date' ? (
+                                                    // The host's calendar (2.33.1) instead of the browser's.
+                                                    <DateField id={id} dataField={field.name} required={!!field.is_required}
+                                                        value={formData[field.name] ?? ''} onChange={(v) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })} />
                                                 ) : (
                                                     <input
                                                         id={id}

@@ -42,6 +42,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, PAYMENT_METHODS, fmtMoney } from "../lib/conference";
+import { DateField } from "../lib/DateField";
+import { paymentMethodLabel } from "../lib/labels";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { displayName, exportFilename } from "../lib/exports";
 import { feeLineTitle, filterLedger, summarizeLedger, buildLedgerWorkbook, ledgerDay, linePeople } from "../lib/accounting";
@@ -235,8 +237,8 @@ export default function AccountingPage({ conferenceId, slug, onOpenFees }: { con
 
             {/* Filters */}
             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5" data-ledger-filters="">
-                <div className="space-y-1"><label htmlFor="acc-from" className={labelCls}>{t('accounting.from') || 'Desde'}</label><input id="acc-from" type="date" className={inputCls} value={filter.from} onChange={e => setFilter({ ...filter, from: e.target.value })} /></div>
-                <div className="space-y-1"><label htmlFor="acc-to" className={labelCls}>{t('accounting.to') || 'Hasta'}</label><input id="acc-to" type="date" className={inputCls} value={filter.to} onChange={e => setFilter({ ...filter, to: e.target.value })} /></div>
+                <div className="space-y-1"><label htmlFor="acc-from" className={labelCls}>{t('accounting.from') || 'Desde'}</label><DateField id="acc-from" value={filter.from} max={filter.to || undefined} onChange={v => setFilter({ ...filter, from: v })} /></div>
+                <div className="space-y-1"><label htmlFor="acc-to" className={labelCls}>{t('accounting.to') || 'Hasta'}</label><DateField id="acc-to" value={filter.to} min={filter.from || undefined} onChange={v => setFilter({ ...filter, to: v })} /></div>
                 <div className="space-y-1"><label htmlFor="acc-kind" className={labelCls}>{t('accounting.kind') || 'Tipo'}</label>
                     <select id="acc-kind" className={inputCls} value={filter.kind} onChange={e => setFilter({ ...filter, kind: e.target.value })}>
                         <option value="">{t('excel.filter.all') || 'Todas'}</option><option value="income">{t('accounting.income') || 'Ingresos'}</option><option value="expense">{t('accounting.expense') || 'Egresos'}</option>
@@ -309,11 +311,11 @@ export default function AccountingPage({ conferenceId, slug, onOpenFees }: { con
                                                     {factsOf([lineSource(e), shared ? peopleLabel(who.map((id) => ({ inscription_id: id })), (id) => names.get(id) || `#${id}`) : who.length === 1 ? (names.get(who[0]) || '#' + who[0]) : null], e.reference || null, { long: true })}
                                                 </div>
                                                 {/* Categoría · Forma de pago here when their columns do not fit (LEDGER_CSS). */}
-                                                {(e.category || e.method) && <span className="text-xs font-medium text-gray-600" data-ledger-inline-meta="">{factsOf([e.category || null, e.method || null], null, { long: true })}</span>}
+                                                {(e.category || e.method) && <span className="text-xs font-medium text-gray-600" data-ledger-inline-meta="">{factsOf([e.category || null, e.method ? paymentMethodLabel(tx, e.method) : null], null, { long: true })}</span>}
                                                 {(() => { const note = readonlyNote(e, canSeePayment); return note ? <span className="mt-0.5 flex items-center gap-1.5 text-[11px] font-bold text-gray-600" data-ledger-readonly={e.source}><i className="fa-solid fa-lock text-gray-500" aria-hidden="true"></i>{tx(note.key, note.fallback)}</span> : null; })()}
                                             </td>
                                             <td className="px-4 py-3 text-xs font-medium text-gray-600 break-words" data-cell="category">{e.category || '—'}</td>
-                                            <td className="px-4 py-3 text-xs font-medium text-gray-600 break-words" data-cell="method">{e.method || '—'}</td>
+                                            <td className="px-4 py-3 text-xs font-medium text-gray-600 break-words" data-cell="method">{e.method ? paymentMethodLabel(tx, e.method) : '—'}</td>
                                             <td className={`px-4 py-3 text-right font-black whitespace-nowrap ${e.kind === 'income' ? 'text-emerald-600' : 'text-rose-600'}`} data-cell="amount">{e.kind === 'income' ? '+' : '−'}{money(e.amount)}</td>
                                             <td className="px-4 py-3 text-right whitespace-nowrap" data-cell="actions">
                                                 {e.readonly && e.transfer_id != null && canSeePayment ? (
@@ -392,7 +394,7 @@ export default function AccountingPage({ conferenceId, slug, onOpenFees }: { con
                                 <div className="space-y-1.5"><label htmlFor="acc-amount" className={labelCls}>{t('accounting.amount') || 'Monto'} *</label>
                                     <input id="acc-amount" type="number" min={0} step="0.01" className={inputCls} value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
                                 <div className="space-y-1.5"><label htmlFor="acc-date" className={labelCls}>{t('accounting.date') || 'Fecha'} *</label>
-                                    <input id="acc-date" type="date" className={inputCls} value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+                                    <DateField id="acc-date" value={form.date} clearable={false} onChange={v => setForm({ ...form, date: v })} /></div>
                             </div>
                             <div className="space-y-1.5"><label htmlFor="acc-category" className={labelCls}>{t('accounting.category') || 'Categoría'}</label>
                                 <input id="acc-category" list="acc-categories" className={inputCls} value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder={t('accounting.category.placeholder') || 'Elige o escribe una categoría'} />
@@ -400,7 +402,7 @@ export default function AccountingPage({ conferenceId, slug, onOpenFees }: { con
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1.5"><label htmlFor="acc-method" className={labelCls}>{tx('payment.method', 'Forma de pago')}</label>
                                     <select id="acc-method" className={inputCls} value={form.method} onChange={e => setForm({ ...form, method: e.target.value })}>
-                                        <option value="">—</option>{PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                                        <option value="">—</option>{PAYMENT_METHODS.map(m => <option key={m} value={m}>{paymentMethodLabel(tx, m)}</option>)}
                                     </select></div>
                                 <div className="space-y-1.5"><label htmlFor="acc-ref" className={labelCls}>{t('reference') || 'Referencia (opcional)'}</label>
                                     <input id="acc-ref" className={inputCls} value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} /></div>

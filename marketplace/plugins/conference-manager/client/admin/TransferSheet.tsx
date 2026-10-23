@@ -42,6 +42,7 @@ import { Overlay, useShortTouch } from "./Overlay";
 import { ProofThumb, forgetProof } from "./ProofViewer";
 import { StatusPill, SumState, Spinner, factsOf, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
+import { paymentMethodLabel } from "../lib/labels";
 
 /** The people of a payment (to refresh their rows after an action). */
 const idsOf = (t: any): number[] => (t && Array.isArray(t.allocations) ? t.allocations.map((a) => Number(a.inscription_id)) : []);
@@ -280,7 +281,7 @@ export function TransferPanel({ id, canManage, onChanged, onEdit, onDuplicate, q
     const extrasInBody = !inline && shortTouch;
     const headExtras = (
         <>
-            <p className="flex flex-wrap gap-x-1 text-sm font-black text-gray-900" data-cm-head-extra="" data-transfer-facts="">{factsOf([<span className="tabular-nums">{money(toCents(t.amount))}</span>, t.method || '—', fmtDay(t.paid_on)], t.reference ? tx('fees.ref', 'Ref. {ref}', { ref: t.reference }) : null)}</p>
+            <p className="flex flex-wrap gap-x-1 text-sm font-black text-gray-900" data-cm-head-extra="" data-transfer-facts="">{factsOf([<span className="tabular-nums">{money(toCents(t.amount))}</span>, t.method ? paymentMethodLabel(tx, t.method) : '—', fmtDay(t.paid_on)], t.reference ? tx('fees.ref', 'Ref. {ref}', { ref: t.reference }) : null)}</p>
             <p className="flex flex-wrap gap-x-1 text-xs font-bold text-gray-600" data-cm-head-extra="" data-transfer-recorded="">
                 {factsOf([<><i className="fa-solid fa-location-dot mr-1" aria-hidden="true"></i>{t.mixed ? tx('fees.location.mixed', 'Varias localidades') : (t.location || tx('no.location', 'Sin localidad'))}</>,
                     tx('fees.recorded', 'Registrado por {who} el {at}', { who, at: fmtStamp(t.submitted_at || t.created_at, true) })], null, { long: true })}

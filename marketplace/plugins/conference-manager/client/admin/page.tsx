@@ -46,7 +46,9 @@ import { useTx } from "./MealScanner";
 // Form fields (2.16.0): templates for the base fields, what a deletion switches off, rules on deleted fields.
 import { fieldDependents, isOrphanFeeRule, isSwitchOn, LODGING_FIELD, missingRuleFields, moveItem, publishRefusal, SWITCH_OFF, SWITCH_ON, templateStates, TEMPLATE_OPEN_CLASS, TEMPLATE_DONE_CLASS, TEMPLATE_DESC_CLASS } from "../lib/fields";
 import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
+import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
+import { DateField } from "../lib/DateField";
 import { HEALTH_FIELD, healthAnswerError, healthAnswerText, healthPayload, isHealthField, sameHealthAnswer } from "../lib/health";
 // Inscription tables + «Pagos de cuotas» (2.18.0): browser-side search / filters / paging, the person sheet
 // (⋮), split fee payments.
@@ -671,23 +673,15 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                 <div className="space-y-2">
                                     <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('conference.start.date')}</label>
                                     <div className="relative">
-                                        <input
-                                            type="datetime-local"
-                                            className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-base sm:text-sm min-w-0 appearance-none"
-                                            value={newConference.date_start}
-                                            onChange={(e) => setNewConference({ ...newConference, date_start: e.target.value })}
-                                        />
+                                        <DateField withTime ariaLabel={t('conference.start.date')} value={newConference.date_start}
+                                            onChange={(v) => setNewConference({ ...newConference, date_start: v })} />
                                     </div>
                                 </div>
                                 <div className="space-y-2">
                                     <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('conference.end.date')}</label>
                                     <div className="relative">
-                                        <input
-                                            type="datetime-local"
-                                            className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-base sm:text-sm min-w-0 appearance-none"
-                                            value={newConference.date_end}
-                                            onChange={(e) => setNewConference({ ...newConference, date_end: e.target.value })}
-                                        />
+                                        <DateField withTime ariaLabel={t('conference.end.date')} value={newConference.date_end} min={newConference.date_start || undefined}
+                                            onChange={(v) => setNewConference({ ...newConference, date_end: v })} />
                                     </div>
                                 </div>
                             </div>
@@ -1692,7 +1686,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                     <span className={`relative inline-block w-11 h-6 rounded-full transition-colors ${isSwitchOn(formData[field.name]) ? 'bg-blue-600' : 'bg-gray-300'}`} aria-hidden="true">
                                                         <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${isSwitchOn(formData[field.name]) ? 'translate-x-5' : ''}`}></span>
                                                     </span>
-                                                    {isSwitchOn(formData[field.name]) ? SWITCH_ON : SWITCH_OFF}
+                                                    {switchLabel(tx, isSwitchOn(formData[field.name]))}
                                                 </button>
                                             ) : field.type === 'select' ? (
                                                 <select
@@ -1708,14 +1702,8 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                     ))}
                                                 </select>
                                             ) : field.type === 'date' ? (
-                                                <input
-                                                    data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
-                                                    type="date"
-                                                    required={!!field.is_required}
-                                                    className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                                    value={formData[field.name] ?? ''}
-                                                    onChange={e => handleFormChange(field.name, e.target.value)}
-                                                />
+                                                <DateField dataField={field.name} required={!!field.is_required} ariaLabel={field.label}
+                                                    value={formData[field.name] ?? ''} onChange={v => handleFormChange(field.name, v)} />
                                             ) : field.type === 'textarea' || field.type === 'notes' ? (
                                                 <textarea
                                                     data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
@@ -3758,17 +3746,17 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     <div className="min-w-0">
                                         <div className="font-black text-gray-900 italic tracking-tight break-words">{field.label}</div>
                                         <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                                            <span className="text-[10px] text-blue-600 font-bold uppercase bg-blue-50 px-2 py-0.5 rounded shadow-sm">{field.type}</span>
+                                            <span className="text-[10px] text-blue-600 font-bold uppercase bg-blue-50 px-2 py-0.5 rounded shadow-sm">{FIELD_TYPES.find(ft => ft.value === field.type)?.label || field.type}</span>
                                             {field.is_required ? (
-                                                <span className="text-[10px] text-rose-500 font-bold uppercase bg-rose-50 px-2 py-0.5 rounded shadow-sm">Obligatorio</span>
+                                                <span className="text-[10px] text-rose-500 font-bold uppercase bg-rose-50 px-2 py-0.5 rounded shadow-sm">{tx('field.required.yes', 'Obligatorio')}</span>
                                             ) : (
-                                                <span className="text-[10px] text-gray-400 font-bold uppercase bg-gray-50 px-2 py-0.5 rounded">Opcional</span>
+                                                <span className="text-[10px] text-gray-400 font-bold uppercase bg-gray-50 px-2 py-0.5 rounded">{tx('field.required.no', 'Opcional')}</span>
                                             )}
                                             {field.is_group ? (
-                                                <span className="text-[10px] text-indigo-600 font-bold uppercase bg-indigo-50 px-2 py-0.5 rounded shadow-sm"><i className="fa-solid fa-people-group mr-1"></i>Agrupación</span>
+                                                <span className="text-[10px] text-indigo-600 font-bold uppercase bg-indigo-50 px-2 py-0.5 rounded shadow-sm"><i className="fa-solid fa-people-group mr-1"></i>{tx('field.badge.group', 'Agrupación')}</span>
                                             ) : null}
                                             {field.is_unique ? (
-                                                <span className="text-[10px] text-amber-600 font-bold uppercase bg-amber-50 px-2 py-0.5 rounded shadow-sm"><i className="fa-solid fa-fingerprint mr-1"></i>Único</span>
+                                                <span className="text-[10px] text-amber-600 font-bold uppercase bg-amber-50 px-2 py-0.5 rounded shadow-sm"><i className="fa-solid fa-fingerprint mr-1"></i>{tx('field.badge.unique', 'Único')}</span>
                                             ) : null}
                                         </div>
                                     </div>
@@ -3875,7 +3863,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             ) : f.type === 'switch' ? (
                                                 <div className="flex items-center gap-3 p-1 text-xs font-medium text-gray-400 italic">
                                                     <span className="relative inline-block w-11 h-6 rounded-full bg-blue-600/60" aria-hidden="true"><span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow translate-x-5"></span></span>
-                                                    {SWITCH_ON}
+                                                    {switchLabel(tx, true)}
                                                 </div>
                                             ) : (
                                                 <div className="w-full border-2 border-gray-100 rounded-2xl p-3 bg-gray-50/30 text-xs font-medium text-gray-400 italic">
@@ -3906,8 +3894,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-gray-100 animate-in zoom-in-95 duration-200 relative my-auto overflow-visible">
                             <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                                 <div>
-                                    <h3 className="font-bold text-xl text-gray-900">{formData.id ? 'Editar Campo' : 'Nuevo Campo'}</h3>
-                                    <p className="text-xs text-gray-500 mt-0.5">Configura las propiedades de este campo personalizado</p>
+                                    <h3 className="font-bold text-xl text-gray-900">{formData.id ? tx('edit.field', 'Editar Campo') : tx('add.field', 'Nuevo Campo')}</h3>
+                                    <p className="text-xs text-gray-500 mt-0.5">{tx('field.dialog.subtitle', 'Configura las propiedades de este campo personalizado')}</p>
                                 </div>
                                 <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-gray-700 transition-colors p-2 hover:bg-gray-100 rounded-lg" aria-label={tx('close', 'Cerrar')}>
                                     <i className="fa-solid fa-xmark text-lg"></i>
@@ -3963,7 +3951,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-gray-900 placeholder:text-gray-500 font-medium"
                                             value={formData.label}
                                             onChange={e => setFormData({ ...formData, label: e.target.value })}
-                                            placeholder="Ej: ¿Cuál es su talle de camisa?"
+                                            placeholder={tx('field.label.placeholder', 'Ej: ¿Cuál es su talle de camisa?')}
                                         />
                                     </div>
                                     <FieldError message={fe.error('field_label')} id={fe.errorId('field_label')} />
@@ -3971,7 +3959,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 
                                 {formData.id && (
                                     <div className="space-y-1.5 opacity-60">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">ID del Sistema</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{tx('field.system.id', 'ID del Sistema')}</label>
                                         <div className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100">
                                             <i className="fa-solid fa-code text-xs text-gray-400"></i>
                                             <span className="text-xs font-mono text-gray-500">{formData.name}</span>
@@ -4037,7 +4025,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                 <div className={`w-6 h-6 shrink-0 rounded-lg ${formData.is_required ? 'bg-rose-50' : 'bg-emerald-50'} flex items-center justify-center`}>
                                                     <i className={`fa-solid ${formData.is_required ? 'fa-asterisk text-rose-500' : 'fa-check text-emerald-500'} text-[10px]`}></i>
                                                 </div>
-                                                <span className="text-gray-900">{formData.is_required ? 'Obligatorio' : 'Opcional'}</span>
+                                                <span className="text-gray-900">{formData.is_required ? tx('field.required.yes', 'Obligatorio') : tx('field.required.no', 'Opcional')}</span>
                                             </div>
                                             <i className={`fa-solid fa-chevron-down text-xs text-gray-400 transition-transform ${openSelect === 'required' ? 'rotate-180' : ''}`}></i>
                                         </button>
@@ -4052,7 +4040,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                     <div className="w-8 h-8 shrink-0 rounded-xl bg-rose-50 flex items-center justify-center">
                                                         <i className="fa-solid fa-asterisk text-xs text-rose-500"></i>
                                                     </div>
-                                                    <div className="font-bold text-sm">Obligatorio</div>
+                                                    <div className="font-bold text-sm">{tx('field.required.yes', 'Obligatorio')}</div>
                                                 </button>
                                                 <button
                                                     type="button"
@@ -4062,7 +4050,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                     <div className="w-8 h-8 shrink-0 rounded-xl bg-emerald-50 flex items-center justify-center">
                                                         <i className="fa-solid fa-check text-xs text-emerald-500"></i>
                                                     </div>
-                                                    <div className="font-bold text-sm">Opcional</div>
+                                                    <div className="font-bold text-sm">{tx('field.required.no', 'Opcional')}</div>
                                                 </button>
                                             </div>
                                         )}
@@ -4070,7 +4058,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
 
                                 <div className="space-y-1.5 overflow-visible">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">Ancho del Campo</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{tx('field.width', 'Ancho del Campo')}</label>
                                     <div className="grid grid-cols-2 gap-3">
                                         <button
                                             type="button"
@@ -4080,7 +4068,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             <div className="w-full h-8 bg-gray-200 rounded flex items-center px-1">
                                                 <div className="w-full h-4 bg-blue-400 rounded"></div>
                                             </div>
-                                            <span className={`text-xs font-bold ${formData.width === 100 ? 'text-blue-700' : 'text-gray-500'}`}>100% Ancho</span>
+                                            <span className={`text-xs font-bold ${formData.width === 100 ? 'text-blue-700' : 'text-gray-500'}`}>{tx('field.width.full', '100% Ancho')}</span>
                                         </button>
                                         <button
                                             type="button"
@@ -4091,7 +4079,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                 <div className="w-1/2 h-4 bg-blue-400 rounded"></div>
                                                 <div className="w-1/2 h-4 bg-gray-300 rounded opacity-30"></div>
                                             </div>
-                                            <span className={`text-xs font-bold ${formData.width === 50 ? 'text-blue-700' : 'text-gray-500'}`}>50% Ancho</span>
+                                            <span className={`text-xs font-bold ${formData.width === 50 ? 'text-blue-700' : 'text-gray-500'}`}>{tx('field.width.half', '50% Ancho')}</span>
                                         </button>
                                     </div>
                                 </div>
@@ -4100,7 +4088,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     fixed person attribute. Editable anytime (they don't alter the column). Separate
                                     "by gender / by any field" for lodging lives in the Assignment tab as a rule. */}
                                 <div className="space-y-2.5">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">Comportamiento del campo</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{tx('field.behaviour', 'Comportamiento del campo')}</label>
                                     <label className="flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 bg-gray-50/30 cursor-pointer hover:border-blue-200 transition-all">
                                         <input
                                             type="checkbox"
@@ -4109,8 +4097,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             onChange={e => setFormData({ ...formData, is_group: e.target.checked ? 1 : 0 })}
                                         />
                                         <span>
-                                            <span className="block text-sm font-semibold text-gray-800">Agrupar inscritos por este campo</span>
-                                            <span className="block text-[11px] text-gray-500">Activa los grupos en el portal (p. ej. grupo familiar, delegación). Solo un campo puede agrupar.</span>
+                                            <span className="block text-sm font-semibold text-gray-800">{tx('field.group', 'Agrupar inscritos por este campo')}</span>
+                                            <span className="block text-[11px] text-gray-500">{tx('field.group.hint', 'Activa los grupos en el portal (p. ej. grupo familiar, delegación). Solo un campo puede agrupar.')}</span>
                                         </span>
                                     </label>
                                     <label className="flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 bg-gray-50/30 cursor-pointer hover:border-blue-200 transition-all">
@@ -4121,8 +4109,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             onChange={e => setFormData({ ...formData, is_unique: e.target.checked ? 1 : 0 })}
                                         />
                                         <span>
-                                            <span className="block text-sm font-semibold text-gray-800">No permitir valores duplicados</span>
-                                            <span className="block text-[11px] text-gray-500">Rechaza la inscripción si otro inscrito ya tiene el mismo valor (p. ej. documento, email).</span>
+                                            <span className="block text-sm font-semibold text-gray-800">{tx('field.unique', 'No permitir valores duplicados')}</span>
+                                            <span className="block text-[11px] text-gray-500">{tx('field.unique.hint', 'Rechaza la inscripción si otro inscrito ya tiene el mismo valor (p. ej. documento, email).')}</span>
                                         </span>
                                     </label>
                                 </div>
@@ -4148,9 +4136,9 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 placeholder:text-gray-500 font-medium"
                                             value={formData.options}
                                             onChange={e => setFormData({ ...formData, options: e.target.value })}
-                                            placeholder="Pequeña, Mediana, Grande"
+                                            placeholder={tx('field.options.placeholder', 'Pequeña, Mediana, Grande')}
                                         />
-                                        <p className="text-[10px] text-gray-500 px-1 italic">* Separa las opciones por comas</p>
+                                        <p className="text-[10px] text-gray-500 px-1 italic">{tx('field.options.hint', '* Separa las opciones por comas')}</p>
                                     </div>
                                 )}
 
@@ -5270,16 +5258,12 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                     <div className="space-y-1">
                         <label htmlFor={`lodging-${which}`} className="block text-[9px] font-bold text-gray-500 uppercase tracking-widest ml-1">{label}</label>
                         <div className="flex items-center gap-1">
-                            <input
-                                id={`lodging-${which}`}
-                                type="date"
-                                value={datesInput[which]}
-                                max={which === 'opens' ? (datesInput.closes || undefined) : undefined}
-                                min={which === 'closes' ? (datesInput.opens || undefined) : undefined}
-                                onChange={e => setDatesInput(d => ({ ...d, [which]: e.target.value }))}
-                                disabled={!canDeadline}
-                                className="min-w-[10rem] border-2 border-gray-100 rounded-xl px-4 py-3 bg-white focus:border-blue-500 outline-none text-sm font-bold text-gray-900 disabled:opacity-70 disabled:cursor-not-allowed"
-                            />
+                            <div className="min-w-[10rem]">
+                                <DateField id={`lodging-${which}`} value={datesInput[which]} clearable={false} disabled={!canDeadline}
+                                    max={which === 'opens' ? (datesInput.closes || undefined) : undefined}
+                                    min={which === 'closes' ? (datesInput.opens || undefined) : undefined}
+                                    onChange={v => setDatesInput(d => ({ ...d, [which]: v }))} />
+                            </div>
                             {canDeadline && datesInput[which] && (
                                 <button type="button" onClick={() => setDatesInput(d => ({ ...d, [which]: '' }))}
                                     aria-label={`${t('lodging.dates.clear') || 'Quitar'} · ${label}`} title={t('lodging.dates.clear') || 'Quitar'}
@@ -5502,7 +5486,7 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                                     title={!canManage ? tx('perm.readonly.short', 'Solo lectura') : on ? (t('payment.method.disable') || 'Deshabilitar') : (t('payment.method.enable') || 'Habilitar')}
                                                                     className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border transition-all disabled:opacity-50 ${on ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-gray-50 border-gray-200 text-gray-400 line-through hover:bg-gray-100'}`}
                                                                 >
-                                                                    <i className={`fa-solid ${on ? 'fa-check' : 'fa-ban'} mr-1`}></i>{m}
+                                                                    <i className={`fa-solid ${on ? 'fa-check' : 'fa-ban'} mr-1`}></i>{paymentMethodLabel(tx, m)}
                                                                 </button>
                                                             );
                                                         })}
@@ -5607,9 +5591,8 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                             <option value="none">{isOpens ? (t('lodging.dates.opens.nowait') || 'Sin esperar') : (t('lodging.dates.closes.never') || 'Sin cierre')}</option>
                                                         </select>
                                                         {mode === 'date' && (
-                                                            <input type="date" value={day} aria-label={`${isOpens ? (t('lodging.dates.opens') || 'Apertura') : (t('lodging.dates.closes') || 'Cierre')} · ${loc.name}`}
-                                                                onChange={ev => set(isOpens ? { opens: ev.target.value } : { closes: ev.target.value })}
-                                                                className={selectCls} />
+                                                            <DateField value={day} ariaLabel={`${isOpens ? (t('lodging.dates.opens') || 'Apertura') : (t('lodging.dates.closes') || 'Cierre')} · ${loc.name}`}
+                                                                onChange={v => set(isOpens ? { opens: v } : { closes: v })} />
                                                         )}
                                                     </div>
                                                 );
@@ -6023,7 +6006,7 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                     onChange={() => setNewLocation({ ...newLocation, payment_methods: on ? newLocation.payment_methods.filter(x => x !== m) : [...newLocation.payment_methods, m] })}
                                                     className="accent-emerald-600"
                                                 />
-                                                <span className="text-sm font-bold">{m}</span>
+                                                <span className="text-sm font-bold">{paymentMethodLabel(tx, m)}</span>
                                             </label>
                                         );
                                     })}
