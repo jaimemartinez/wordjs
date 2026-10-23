@@ -173,13 +173,11 @@ function generateInstallToken(): string {
         console.log(`   → ${siteUrl}/install`);
         console.log('');
         console.log('   The install token is NOT printed: stdout is not a terminal, so this line would be');
-        if (envTok.length >= MIN_ENV_TOKEN_LEN) {
-            // The operator chose it: say so, instead of sending them to a file for a value they already have.
-            console.log('   shipped to whatever aggregates these logs. It is the WORDJS_INSTALL_TOKEN value you');
-            console.log('   set for this server (also written to this file):');
-        } else {
-            console.log('   shipped to whatever aggregates these logs. Read it from the file instead:');
-        }
+        // When the operator chose it (WORDJS_INSTALL_TOKEN), say so instead of sending them to a file for a
+        // value they already have. One line either way: the banner's console calls are counted.
+        console.log(envTok.length >= MIN_ENV_TOKEN_LEN
+            ? '   shipped to whatever aggregates these logs. It is your WORDJS_INSTALL_TOKEN (also in this file):'
+            : '   shipped to whatever aggregates these logs. Read it from the file instead:');
         console.log('');
         console.log(`      cat ${TOKEN_FILE}`);
         console.log('');
