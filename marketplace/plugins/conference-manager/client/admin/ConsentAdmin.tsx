@@ -51,8 +51,19 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
         if (!iso) return "";
         try { return new Intl.DateTimeFormat(language || "es", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso)); } catch { return iso; }
     };
+    // The plugin-wide default e-mail language (2.33.4): '' = the site's.
+    const [pluginLang, setPluginLang] = useState<{ email_lang: string; site_lang: string; effective: string } | null>(null);
+    const savePluginLang = async (v: string) => {
+        try {
+            const r = await apiPut<any>(`${BASE}/consent/defaults`, { email_lang: v });
+            setPluginLang(r);
+            addToast(t("admin.plugin.lang.saved"), "success");
+            load();
+        } catch (e: any) { addToast(e?.message || "Error", "error"); }
+    };
     const load = useCallback(async () => {
         try {
+            if (perms.can("settings")) apiGet<any>(`${BASE}/consent/defaults`).then(setPluginLang).catch(() => {});
             const [s, st, list] = await Promise.all([
                 perms.can("settings") ? apiGet<any>(`${BASE}/consent/settings?conference_id=${conferenceId}`) : Promise.resolve(null),
                 apiGet<any>(`${BASE}/consent/states?conference_id=${conferenceId}`),
@@ -146,6 +157,23 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
 
     return (
         <div className="space-y-6" data-consent-admin="">
+            {pluginLang && (
+                <section className="rounded-xl border border-gray-200 p-5 flex flex-wrap items-center gap-4" data-consent-plugin-lang="">
+                    <div className="min-w-0" style={{ flex: '1 1 16rem' }}>
+                        <label className="block text-sm font-bold text-gray-900" htmlFor="cs-plugin-lang">{t("admin.plugin.lang")}</label>
+                        <p className="text-xs text-gray-500 mt-1">{t("admin.plugin.lang.hint")}</p>
+                    </div>
+                    <div style={{ flex: '0 1 16rem' }}>
+                        <Select id="cs-plugin-lang" className={input} value={pluginLang.email_lang || ""} disabled={!canSettings} onChange={(e) => savePluginLang(e.target.value)}>
+                            <option value="">{t("admin.email.lang.site", { lang: LANG_NAMES[pluginLang.site_lang] || pluginLang.site_lang })}</option>
+                            <option value="es">Español</option>
+                            <option value="en">English</option>
+                            <option value="pt">Português</option>
+                        </Select>
+                    </div>
+                </section>
+            )}
+
             {draft && (
                 <section className="rounded-xl border border-gray-200 p-5 space-y-4" data-consent-settings="">
                     <h2 className="text-lg font-bold text-gray-900">{t("admin.settings")}</h2>
@@ -191,7 +219,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                         <div>
                             <label className={label} htmlFor="cs-mail-lang">{t("admin.email.lang")}</label>
                             <Select id="cs-mail-lang" className={input} value={draft.email_lang || ""} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, email_lang: e.target.value })}>
-                                <option value="">{t("admin.email.lang.site", { lang: LANG_NAMES[settings.site_lang] || settings.site_lang })}</option>
+                                <option value="">{t("admin.email.lang.plugin", { lang: LANG_NAMES[settings.plugin_email_lang] || settings.plugin_email_lang })}</option>
                                 <option value="es">Español</option>
                                 <option value="en">English</option>
                                 <option value="pt">Português</option>

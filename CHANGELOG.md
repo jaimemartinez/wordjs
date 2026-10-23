@@ -44,9 +44,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ### Changed
 
 - **conference-manager 2.33.4: the consent e-mails, page and copied message in the e-mail language.**
-  - A new **«Idioma de los correos»** setting (Autorizaciones › Configuración: Español, English or Português) is,
-    by default, the site's language (WPLANG). The three consent e-mails (the link, the one-time code and the copy
-    of what was authorized) are sent in it. They were always Spanish; no other Conference Manager e-mail exists.
+  - A new plugin setting, **«Idioma de los correos de consentimiento»** (Autorizaciones, for all conferences:
+    Español, English or Português), starts as the site's language (WPLANG). A conference can choose its own. The
+    three consent e-mails (the link, the one-time code and the copy of what was authorized) are sent in it. They
+    were always Spanish; no other Conference Manager e-mail exists.
   - The consent page starts in that language. The person can switch it (Español / English / Português), and the
     choice is remembered on their device. The page's error messages follow the chosen language too.
   - The «Copiar mensaje» dialog has a language picker. It starts in the e-mail language or in the last language

@@ -561,3 +561,30 @@ test('e-mail language (2.33.4): the site language by default, the setting when c
     assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}consent_policies WHERE conference_id = ?`, w.cid).n, 1);
     assert.ok(id2);
 });
+
+test('the plugin-wide default e-mail language (2.33.4): starts as the site language, a conference may override it', async () => {
+    const w = await world();
+    w.p.setOption('WPLANG', 'en_US');
+    // Never set: the site's language.
+    assert.deepStrictEqual(ok(await w.p.call('get', '/consent/defaults')), { email_lang: '', site_lang: 'en', effective: 'en' });
+    // Set in the plugin: every conference without its own choice follows it.
+    assert.strictEqual((await w.p.call('put', '/consent/defaults', { body: { email_lang: 'de' } })).status, 400);
+    ok(await w.p.call('put', '/consent/defaults', { body: { email_lang: 'pt' } }));
+    let st = ok(await w.p.call('get', `/consent/settings?conference_id=${w.cid}`)).settings;
+    assert.deepStrictEqual([st.email_lang, st.plugin_email_lang, st.mail_lang], ['', 'pt', 'pt']);
+    (await w.register({ first_name: 'Rui', email: 'rui@example.org' }));
+    assert.ok(w.p.mails.some((m: any) => m.to === 'rui@example.org' && m.subject.startsWith('Autorize o uso dos seus dados')));
+    // A conference's own choice wins; clearing it goes back to the plugin's.
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, email_lang: 'es' } }));
+    st = ok(await w.p.call('get', `/consent/settings?conference_id=${w.cid}`)).settings;
+    assert.strictEqual(st.mail_lang, 'es');
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, email_lang: '' } }));
+    assert.strictEqual(ok(await w.p.call('get', `/consent/settings?conference_id=${w.cid}`)).settings.mail_lang, 'pt');
+    // Back to «the site's»: English again. The plugin row is no conference: the purge and the states ignore it.
+    ok(await w.p.call('put', '/consent/defaults', { body: { email_lang: '' } }));
+    assert.strictEqual(ok(await w.p.call('get', '/consent/defaults')).effective, 'en');
+    assert.deepStrictEqual(ok(await w.p.call('post', '/consent/purge', { body: {} })).purged, []);
+    // A role without Configuración cannot change it.
+    const staff = { id: 79, role: 'conference_manager_team', userLogin: 'nocfg', extra: { pluginCapabilities: ['conference_manager_access'] } };
+    assert.strictEqual((await w.p.call('put', '/consent/defaults', { body: { email_lang: 'es' }, user: staff as any })).status, 403);
+});

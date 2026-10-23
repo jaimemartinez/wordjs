@@ -341,8 +341,22 @@ function createConsent(base) {
             // «Idioma de los correos» (2.33.4): the e-mails, the copied message and the consent page start in it.
             email_lang: mails.langOf(r.email_lang) || '',
             site_lang: await siteLang(),
-            mail_lang: mails.langOf(r.email_lang) || await siteLang(),
+            plugin_email_lang: await pluginLang(),
+            mail_lang: mails.langOf(r.email_lang) || await pluginLang(),
         };
+    }
+    // The plugin's own default (owner: «en el plugin se configure en qué idioma se envían los correos de consentimiento
+    // by default»): the row conference_id = 0 of consent_settings (no conference has id 0), never set = the site's.
+    const PLUGIN_ROW = 0;
+    async function pluginLang() {
+        let r = null;
+        try { r = await db.get(`SELECT email_lang FROM ${T.consentSettings} WHERE conference_id = ?`, [PLUGIN_ROW]); } catch { r = null; }
+        return (r && mails.langOf(r.email_lang)) || await siteLang();
+    }
+    async function setPluginLang(lang) {
+        const v = lang ? String(lang).toLowerCase() : '';
+        const r = await db.run(`UPDATE ${T.consentSettings} SET email_lang = ?, updated_s = ? WHERE conference_id = ?`, [v, nowS(), PLUGIN_ROW]);
+        if (!r || !r.changes) await db.run(`INSERT INTO ${T.consentSettings} (conference_id, enabled, email_lang, updated_s) VALUES (?, 0, ?, ?)`, [PLUGIN_ROW, v, nowS()]);
     }
     /** The site's language (WPLANG, «es_ES» → es) when it is es / en / pt; else Spanish, the plugin's own. */
     async function siteLang() {
@@ -824,6 +838,25 @@ function createConsent(base) {
                 if (!cid || !await conferenceOf(cid)) return res.status(404).json({ error: 'Conferencia no encontrada.' });
                 if (!await ensureReady()) return res.status(503).json({ error: MSG.unavailable });
                 res.json({ settings: await saveSettings(cid, req.body, httpError) });
+            } catch (e) { sendError(res, e); }
+        });
+        // GET / PUT /consent/defaults { email_lang } — the plugin-wide default e-mail language (2.33.4): '' = the site's.
+        http.route('get', '/consent/defaults', { auth: true }, async (req, res) => {
+            if (!await allow(req, res, 'settings', 'view')) return;
+            try {
+                if (!await ensureReady()) return res.status(503).json({ error: MSG.unavailable });
+                const r = await db.get(`SELECT email_lang FROM ${T.consentSettings} WHERE conference_id = ?`, [PLUGIN_ROW]);
+                res.json({ email_lang: (r && mails.langOf(r.email_lang)) || '', site_lang: await siteLang(), effective: await pluginLang() });
+            } catch (e) { sendError(res, e); }
+        });
+        http.route('put', '/consent/defaults', { auth: true }, async (req, res) => {
+            if (!await allow(req, res, 'settings', 'manage')) return;
+            try {
+                if (!await ensureReady()) return res.status(503).json({ error: MSG.unavailable });
+                const v = String(((req.body || {}).email_lang) || '').trim().toLowerCase();
+                if (v && !mails.LANGS.includes(v)) return res.status(400).json({ error: 'Idioma de los correos inválido (es, en o pt).' });
+                await setPluginLang(v);
+                res.json({ email_lang: v, site_lang: await siteLang(), effective: await pluginLang() });
             } catch (e) { sendError(res, e); }
         });
         // POST /consent/purge { conference_id } → { purged } — runs the due purge now (settings:manage).
