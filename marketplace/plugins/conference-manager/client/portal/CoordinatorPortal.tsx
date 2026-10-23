@@ -23,6 +23,8 @@ import LegacyBulkPayment from "./LegacyBulkPayment";
 import { useFieldErrors } from "../lib/useFieldErrors";
 // Visual primitives shared with the conference-manager admin design language (see ui.tsx).
 import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Notice, Spinner, captionCls, captionWideCls, cx, headingCls, inputBoldCls, inputCls, selectCls } from "./ui";
+import { HealthConditionsInput } from "../lib/HealthConditionsInput";
+import { HEALTH_FIELD, healthAnswerError, healthPayload, isHealthField } from "../lib/health";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -170,6 +172,10 @@ function LocationPortalContent() {
     // input text is sent as-is; the plugin canonicalises "0030" → "30" and rejects non-numbers with 400).
     const [formData, setFormData] = useState<Record<string, string>>({});
     const [fields, setFields] = useState<PortalField[]>([]);
+    // «Condiciones de salud» (2.32.0) is asked on registration and never read back: the lists, the sheet, the
+    // search and the price quote work on the other fields.
+    const listFields = fields.filter((f) => !isHealthField(f));
+    const [healthError, setHealthError] = useState<string | null>(null);
     const [groups, setGroups] = useState<any[]>([]);
     // Live fee quote for the form being filled (POST /public/quote). `null` = not available yet, or the
     // current values are not quotable (a 400 for an invalid number just hides the line until it is fixed).
@@ -238,7 +244,7 @@ function LocationPortalContent() {
                 const res = await fetch('/api/v1/plugin/conference-manager/public/quote', {
                     method: 'POST', signal: ctrl.signal, credentials: 'include',
                     headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({ conference_id: conferenceId, fields: formBody(formData) }),
+                    body: JSON.stringify({ conference_id: conferenceId, fields: formBody(Object.fromEntries(Object.entries(formData).filter(([k]) => k !== HEALTH_FIELD))) }),
                 });
                 if (!res.ok) { setQuote(null); return; }
                 const data = await res.json().catch(() => null);
@@ -444,13 +450,26 @@ function LocationPortalContent() {
 
     const handleCreateInscription = async (e: React.FormEvent) => {
         e.preventDefault();
+        // «Condiciones de salud»: its errors are said under the field (never a browser bubble).
+        const healthField = fields.find(isHealthField);
+        if (healthField) {
+            const err = healthAnswerError(healthField, formData[HEALTH_FIELD] || null);
+            if (err) {
+                setHealthError(err === 'other' ? 'Escribe cuál es la otra condición.' : 'Marca al menos una opción (o «Prefiero no responder»).');
+                if (typeof document !== 'undefined') document.getElementById('cm-health-input')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                return;
+            }
+        }
+        setHealthError(null);
         setLoading(true);
         try {
+            const { [HEALTH_FIELD]: healthValue, ...rest } = formData;
             const res = await fetch('/api/v1/plugin/conference-manager/portal/inscriptions', {
                 method: 'POST',
                 headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
-                // Strings only, trimmed, '' kept — the server canonicalises and runs the required checks.
-                body: JSON.stringify(formBody(formData)),
+                // Strings only, trimmed, '' kept — the server canonicalises and runs the required checks. The health
+                // answer travels as its own object.
+                body: JSON.stringify({ ...formBody(rest), ...(healthField ? { [HEALTH_FIELD]: healthPayload(healthField, healthValue || null) } : {}) }),
                 credentials: 'include'
             });
             if (res.ok) {
@@ -616,8 +635,8 @@ function LocationPortalContent() {
     const activeTab = tab === 'fees' && !feesOn ? 'participants' : tab;
     const badge = feesOn ? feeBadge(myLocation?.fees) : null;
     const byId = new Map(inscriptions.map((i) => [Number(i.id), i]));
-    const nameOf = (id: number) => { const p = byId.get(id); return p ? personName(p, fields) : `#${id}`; };
-    const familyGroups = familyGroupsOf(inscriptions, fields);
+    const nameOf = (id: number) => { const p = byId.get(id); return p ? personName(p, listFields) : `#${id}`; };
+    const familyGroups = familyGroupsOf(inscriptions, listFields);
     const sheetPerson = sheetId != null ? byId.get(sheetId) ?? null : null;
     const tabs: { key: 'participants' | 'fees' | 'lodging'; label: string; icon: string }[] = [
         { key: 'participants', label: 'Participantes', icon: 'fa-users' },
@@ -754,7 +773,7 @@ function LocationPortalContent() {
                     {view === 'list' ? (
                         <ParticipantList
                             people={inscriptions}
-                            fields={fields}
+                            fields={listFields}
                             onOpen={setSheetId}
                             openId={sheetId}
                             legacy={feesOn ? null : {
@@ -785,10 +804,19 @@ function LocationPortalContent() {
                                                 key={field.name}
                                                 error={fe.error(field.name)}
                                                 errorId={fe.errorId(field.name)}
-                                                className={field.width === 50 ? 'col-span-1' : 'md:col-span-2'}
+                                                className={field.width === 50 && !isHealthField(field) ? 'col-span-1' : 'md:col-span-2'}
                                                 label={<>{field.label} {field.is_required ? <span className="text-rose-500">*</span> : ''}</>}
                                             >
-                                                {(id) => field.is_group ? (
+                                                {(id) => isHealthField(field) ? (
+                                                    // «Condiciones de salud» (2.32.0): write-only here — the portal never reads an answer back.
+                                                    <HealthConditionsInput
+                                                        id="cm-health-input"
+                                                        field={field}
+                                                        value={formData[field.name] || null}
+                                                        onChange={(v) => { setFormData({ ...formData, [field.name]: v }); setHealthError(null); }}
+                                                        error={healthError}
+                                                    />
+                                                ) : field.is_group ? (
                                                     <GroupPicker
                                                         id={id}
                                                         field={field}
@@ -883,7 +911,7 @@ function LocationPortalContent() {
             {sheetPerson && (
                 <ParticipantSheet
                     person={sheetPerson}
-                    fields={fields}
+                    fields={listFields}
                     onClose={() => { setSheetId(null); feeHub.clearNotice(); }}
                     notice={feeHub.sheet ? null : feeHub.notice}
                     feesOn={feesOn}

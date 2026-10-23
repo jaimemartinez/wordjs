@@ -9,6 +9,26 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ### Added
 
 - **Folders in the media library.** Admin → Media has a folder tree beside the library (a panel on phones): create, rename and nest folders, browse them (the address keeps the folder), upload straight into the current one, and move files by dragging them onto a folder or with *Move to…* — one file from its details, or many at once. Deleting a folder asks where its files and subfolders go; no file is ever deleted with it or left in a folder that no longer exists. The editor's media picker browses by folder too. Folders are organisation only: moving a file never changes its URL, so content that links to it keeps working. Anyone who uploads can create folders and move the files they may edit; renaming and deleting folders is for editors. (`GET`/`POST /api/v1/media/folders`, `PUT`/`DELETE /api/v1/media/folders/:id`, `POST /api/v1/media/folders/move`, `?folder=` on `GET /api/v1/media` and on uploads.)
+- **conference-manager 2.32.0: health conditions and meal turns.**
+  - A new **«Condiciones de salud»** field template asks about health conditions: several can be ticked,
+    «Otros» opens a text box, and «Ninguna» and «Prefiero no responder» are answers too. A consent line on
+    the form says what the answers are for.
+  - Health answers are special-category data. They are kept apart from the rest of the registration, and
+    only staff with the new **«Datos de salud»** section see them (list, Excel, person sheet) or change them.
+  - The coordinators' portal can record an answer when it registers someone, but never shows it back.
+  - Deleting the field deletes every answer.
+  - A new **«Edad»** template asks for the age in years.
+  - **«Alimentación › Turnos»** puts every participant in a meal group A–F, all of nearly the same size. The
+    order comes from a priority score: young children and older people first, then health conditions, with
+    weights the administrator can change. Sex never counts on its own; «Embarazo» and «Lactancia» are
+    conditions the person marks.
+  - Families eat together. Each meal gets a call time per group from the number of serving lines and plates
+    per minute, and a warning shows when the last group would end after the meal's closing time.
+  - A coordinator can move a person to another group. «Fijar grupos» stops letters from changing once badges
+    are printed.
+  - Turns are off until the administrator turns them on. When on, the badge can print the group letter,
+    «Mi inscripción» shows the group and each meal's turn, and the meal scanner shows the letter without
+    ever refusing a delivery.
 
 - **The admin's own calendar.** Date fields used the browser's native picker, which looked different in every
   browser and OS, ignored the admin palette and the editor's dark mode, and followed the browser's language.

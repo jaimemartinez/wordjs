@@ -31,10 +31,13 @@ const { createPackages } = require('./server/transport-packages');
 const { createPush } = require('./server/transport-push');
 // Room packing (2.20.0): the fewest rooms and empty beds — the engine's and «Sugerir reparto»'s arithmetic.
 const pack = require('./server/lodging-pack');
+// «Condiciones de salud» and «Turnos de comida» (2.32.0).
+const healthMod = require('./server/health');
+const { createMealPriority } = require('./server/meal-priority');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.31.1',
+    version: '2.32.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -104,6 +107,12 @@ exports.init = async function (wordjs) {
         // «Requiere hospedaje» (2.31.0): a Sí / No switch. «No» keeps the person out of every room — the automatic
         // assignment skips them and a manual one (admin or coordinator) is refused. See needsLodging.
         lodging: { name: 'needs_lodging', label: 'Requiere hospedaje', type: 'switch', options: '', is_required: 0, role: 'lodging', is_group: 0 },
+        // «Edad» (2.32.0): a whole number 0–120; the meal groups read it (role 'age').
+        age: { name: 'age', label: 'Edad', type: 'number', options: '', is_required: 0, role: 'age', is_group: 0 },
+        // «Condiciones de salud» (2.32.0): several conditions, «Otros» with text, «Ninguna», «Prefiero no responder».
+        // Special-category data: its answers live in their OWN table (server/health.js), never in a column of
+        // the inscriptions table — the field's name is reserved below, so no generic path reads or writes it.
+        health: { name: 'health_conditions' /* = server/health.js FIELD */, label: 'Condiciones de salud', type: healthMod.TYPE, options: healthMod.DEFAULT_OPTIONS.join(', '), is_required: 0, role: 'health', is_group: 0 },
     });
     // The lodging switch's column and its two canonical values. A form without the field (or a value left
     // blank) means the person NEEDS lodging: nothing changes for a conference that never added it.
@@ -124,6 +133,8 @@ exports.init = async function (wordjs) {
     const RESERVED_INSCRIPTION_COLUMNS = new Set([
         'id', 'conference_id', 'location', 'location_id', 'custom_data', 'registration_date', 'status',
         'payment_status', 'total_due', 'amount_paid', 'room_id', 'notes', 'reg_code', 'room_locked',
+        // Not a column at all: the health field's answers live in server/health.js's table (2.32.0).
+        healthMod.FIELD,
     ]);
     // SQL reserved words that isSafeColumn would otherwise accept as a column name.
     const SQL_RESERVED_WORDS = new Set(['select', 'from', 'where', 'table', 'order', 'group', 'by', 'index', 'primary',
@@ -664,6 +675,8 @@ exports.init = async function (wordjs) {
         if (field.type === 'number') {
             const canon = canonicalNumber(s);   // textual: "30.0"→"30", "0030"→"30", "12.50"→"12.5"; 20 digits stay 20 digits
             if (canon === null) throw httpError(400, `El campo «${field.label || field.name}» debe ser un número.`);
+            // «Edad» (2.32.0, role 'age'): whole years, 0–120 — the meal groups read it.
+            if (field.role === 'age' && (!/^[0-9]+$/.test(canon) || Number(canon) > 120)) throw httpError(400, `El campo «${field.label || field.name}» debe ser una edad en años, de 0 a 120.`);
             return canon;
         }
         if (field.type === 'switch') {
@@ -714,7 +727,7 @@ exports.init = async function (wordjs) {
             if (await db.get(sql, params)) throw httpError(409, `Ya existe una inscripción con ese valor en «${f.label || f.name}» (campo sin duplicados).`);
         }
     }
-    const FIELD_COLUMNS_SQL = `SELECT name, label, type, options, is_required, is_unique FROM ${T.fields} WHERE conference_id = ?`;
+    const FIELD_COLUMNS_SQL = `SELECT name, label, type, options, is_required, is_unique, role FROM ${T.fields} WHERE conference_id = ?`;
 
     // Resolve the admin-supplied location for an inscription. `location_id` (preferred) must belong to
     // the conference; a legacy caller may still send the `location` NAME. Returns { id, name } or null
@@ -800,6 +813,9 @@ exports.init = async function (wordjs) {
     const packages = createPackages({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex });
     // Boarding and bus notices (2.27.0): bus state, the passengers' phones and Web Push live in server/transport-push.js.
     const push = createPush({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex });
+    // «Condiciones de salud» and «Turnos de comida» (2.32.0): see server/health.js and server/meal-priority.js.
+    const health = healthMod.createHealth({ db, T, P, createIndex, createUniqueIndex });
+    const mealPriority = createMealPriority({ db, T, P, createIndex, createUniqueIndex });
     /**
      * Set-based payment recompute: ONE statement for a set of inscriptions. `where` is 'id = ?' |
      * 'id IN (?, ?, …)' | 'conference_id = ?' | '1 = 1'. amount_paid / payment_status come from VALIDATED
@@ -1006,6 +1022,12 @@ exports.init = async function (wordjs) {
         await push.migrate();
     } catch (e) {
         console.warn('[conference-manager] bus notices migration failed — boarding notices are unavailable until it succeeds:', e.message);
+    }
+    try {
+        await health.migrate();
+        await mealPriority.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] health / meal groups migration failed:', e.message);
     }
 
     // ── one-time data hygiene (idempotent, safe to run every boot) ───────────────────────────────
@@ -1656,7 +1678,7 @@ exports.init = async function (wordjs) {
         try {
             const rules = await db.all(`SELECT * FROM ${T.feeRules} WHERE conference_id = ? AND enabled = 1 ORDER BY priority ASC, id ASC`, [conferenceId]);
             if (!rules.length) return rules;
-            const names = new Set([...FEE_ALWAYS_FILLED, ...(await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [conferenceId])).map(f => f.name)]);
+            const names = new Set([...FEE_ALWAYS_FILLED, ...(await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [conferenceId])).map(f => f.name).filter(isFieldColumn)]);
             return rules.filter(r => !r.field_name || r.operator === 'any' || names.has(r.field_name));
         }
         catch { return []; }
@@ -1811,6 +1833,9 @@ exports.init = async function (wordjs) {
         // «Escarapelas» (2.19.0): view = see / share / download badges (with inscriptions:view, as they carry
         // the code); manage = the design and regenerating or revoking links. Existing roles get none.
         { key: 'badges', levels: ['none', 'view', 'manage'] },
+        // «Datos de salud» (2.32.0): view = read the answers to «Condiciones de salud» (and the meal-group scores built
+        // from them); manage = write them. Special-category data: existing roles get none.
+        { key: 'health', levels: ['none', 'view', 'manage'] },
         { key: 'reports', levels: ['none', 'view'] },
         { key: 'settings', levels: ['none', 'view', 'manage'] },
     ];
@@ -1919,6 +1944,32 @@ exports.init = async function (wordjs) {
     // to NAME people; the ID document stays with inscriptions:view.
     const DOCUMENT_COLUMN = 'document_number';
     const maskDocument = (obj, perms) => (obj && !canSeeDocuments(perms) && DOCUMENT_COLUMN in obj ? { ...obj, [DOCUMENT_COLUMN]: null } : obj);
+
+    // «Condiciones de salud» (2.32.0): read with health:view, written from the admin with health:manage.
+    const HEALTH_FIELD = healthMod.FIELD;
+    const canSeeHealth = (perms) => hasLevel(perms, 'health', 'view');
+    const canWriteHealth = (perms) => hasLevel(perms, 'health', 'manage');
+    // The body's answer to the conference's health field, checked BEFORE anything is written: { field, answer }
+    // (answer undefined = the key was absent; null = clear). A caller who may not write it and sends it gets 403;
+    // `creating` makes a required field required (an edit only refuses clearing it). The portal may always answer
+    // (it registers the person, and never reads an answer back).
+    async function healthFromBody(conferenceId, body, { mayWrite, creating }) {
+        const field = await health.fieldOf(conferenceId);
+        if (!field) return { field: null, answer: undefined };
+        const has = !!body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, HEALTH_FIELD);
+        if (has && !mayWrite) throw httpError(403, 'No tienes permiso para registrar datos de salud.');
+        const answer = has ? healthMod.parseAnswer(field, body[HEALTH_FIELD], httpError) : undefined;
+        if (mayWrite && Number(field.is_required) && ((creating && !answer) || (!creating && answer === null))) {
+            throw httpError(400, `El campo «${field.label || 'Condiciones de salud'}» es obligatorio.`);
+        }
+        return { field, answer };
+    }
+    // Roster rows of ONE conference + the health answer as text, for health:view only (and only when the form has it).
+    async function withHealthText(rows, conferenceId, perms) {
+        if (!rows.length || !canSeeHealth(perms) || !await health.fieldOf(conferenceId)) return rows;
+        const answers = await health.answersOf(rows.map(r => r.id));
+        return rows.map(r => ({ ...r, [HEALTH_FIELD]: healthMod.answerText(answers.get(Number(r.id))) }));
+    }
 
     const denyAccess = (res) => { res.status(403).json({ error: NO_ACCESS }); return false; };
     async function gatePerms(req, res) {
@@ -2623,8 +2674,8 @@ exports.init = async function (wordjs) {
             const list = await db.all(query, params);
 
             // Parse custom_data (guarded — one malformed legacy row must not 500 the whole roster). The
-            // registration code (barcode payload) only reaches inscriptions:view.
-            res.json(list.map(item => rosterRow(item, perms)));
+            // registration code (barcode payload) only reaches inscriptions:view; the health answer health:view.
+            res.json(await withHealthText(list.map(item => rosterRow(item, perms)), conference_id, perms));
         } catch (e) { sendError(res, e); }
     });
 
@@ -2657,7 +2708,7 @@ exports.init = async function (wordjs) {
 
     // Closed allowlist of field types (the admin builder offers text/number/select/date; the rest are
     // accepted for API callers and render as text inputs on the portal).
-    const FIELD_TYPES = new Set(['text', 'number', 'select', 'textarea', 'date', 'email', 'tel', 'notes', 'switch']);
+    const FIELD_TYPES = new Set(['text', 'number', 'select', 'textarea', 'date', 'email', 'tel', 'notes', 'switch', healthMod.TYPE]);
     // Field creation is check-then-insert (a template refuses a duplicate): serialised in this process.
     let fieldsLock = Promise.resolve();
     const withFieldsLock = (fn) => {
@@ -2697,7 +2748,7 @@ exports.init = async function (wordjs) {
                 }
                 // ONE grouping field per conference: a template never takes the flag away from another field.
                 const grp = tpl.is_group && !existing.some(f => Number(f.is_group)) ? 1 : 0;
-                await addColumnIfMissing(T.inscriptions, tpl.name, 'TEXT');
+                if (tpl.type !== healthMod.TYPE) await addColumnIfMissing(T.inscriptions, tpl.name, 'TEXT');
                 const r = await db.run(
                     `INSERT INTO ${T.fields} (conference_id, name, label, type, options, is_required, sort_order, width, role, is_group, is_unique) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [conferenceId, tpl.name, label, tpl.type, tpl.options, tpl.is_required, await nextFieldOrder(conferenceId), 100, tpl.role, grp, 0]
@@ -2720,7 +2771,7 @@ exports.init = async function (wordjs) {
         if (!cleanLabel) return res.status(400).json({ error: 'La etiqueta del campo es obligatoria.' });
         if (cleanLabel.length > 120) return res.status(400).json({ error: 'La etiqueta del campo es demasiado larga (máximo 120 caracteres).' });
         if (!FIELD_TYPES.has(type)) return res.status(400).json({ error: 'Tipo de campo inválido.' });
-        const opts = options == null ? '' : String(options);
+        let opts = options == null ? '' : String(options);
         if (opts.length > 2000) return res.status(400).json({ error: 'Las opciones del campo son demasiado largas (máximo 2000 caracteres).' });
         try {
             // Normalize width to the two layouts the builder offers (100% / 50%).
@@ -2738,6 +2789,12 @@ exports.init = async function (wordjs) {
                 if (!existing) return res.status(404).json({ error: 'Campo no encontrado.' });
                 // «Requiere hospedaje» stays a Sí / No switch: the assignment reads its «No».
                 if (existing.name === LODGING_FIELD && type !== 'switch') return res.status(400).json({ error: 'El campo «Requiere hospedaje» siempre es un interruptor Sí / No.' });
+                // «Condiciones de salud» stays what it is, and no other field becomes one (its answers are not a column).
+                if ((existing.name === healthMod.FIELD) !== (type === healthMod.TYPE)) return res.status(400).json({ error: 'El campo «Condiciones de salud» solo se crea con su plantilla y no cambia de tipo.' });
+                if (type === healthMod.TYPE) {
+                    opts = healthMod.optionsText(opts);
+                    if (!opts) return res.status(400).json({ error: 'Deja al menos una condición en la lista (además de «Otros»).' });
+                }
                 if (String(existing.conference_id) !== String(conference_id)) return res.status(403).json({ error: 'El campo no pertenece a esta conferencia.' });
                 if (conf.is_form_published && existing.type !== type) {
                     return res.status(400).json({ error: 'No se puede cambiar el tipo de un campo después de publicar el formulario.' });
@@ -2760,6 +2817,7 @@ exports.init = async function (wordjs) {
                 if (requested && isReservedFieldName(requested)) return res.status(400).json({ error: 'Ese nombre de campo está reservado por el sistema.' });
                 // The lodging switch's column is the template's alone (the assignment reads its «No»).
                 if (requested === LODGING_FIELD) return res.status(400).json({ error: 'Para preguntar si requiere hospedaje, usa la plantilla «Requiere hospedaje».' });
+                if (type === healthMod.TYPE) return res.status(400).json({ error: 'Para preguntar por condiciones de salud, usa la plantilla «Condiciones de salud».' });
                 const colName = isSafeColumn(requested) ? requested : ('f_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
                 const clash = await db.get(`SELECT id FROM ${T.fields} WHERE conference_id = ? AND name = ?`, [conference_id, colName]);
                 if (clash) return res.status(409).json({ error: 'Ya existe un campo con ese nombre en este formulario.' });
@@ -2789,6 +2847,8 @@ exports.init = async function (wordjs) {
             await db.run(`DELETE FROM ${T.fields} WHERE id = ?`, [req.params.id]);
             // Without the switch everyone needs lodging again: its answers must not keep anyone out of a room.
             if (field && field.name === LODGING_FIELD) await db.run(`UPDATE ${T.inscriptions} SET ${LODGING_FIELD} = NULL WHERE conference_id = ?`, [field.conference_id]);
+            // Deleting «Condiciones de salud» deletes every answer to it (2.32.0).
+            if (field && field.name === healthMod.FIELD) await health.clearConference(field.conference_id);
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -2814,6 +2874,8 @@ exports.init = async function (wordjs) {
         const act = action === 'add' ? 'add' : 'set';
         if (!Number.isFinite(Number(amount)) || Math.abs(Number(amount)) > MAX_MONEY) return res.status(400).json({ error: 'El monto de la regla es inválido.' });
         const amt = roundMoney(amount);
+        // Health answers never set a price (2.32.0): they are not a column, and pricing by them would be unfair.
+        if (field_name === healthMod.FIELD) return res.status(400).json({ error: 'Las condiciones de salud no pueden usarse en una regla de precio.' });
         try {
             const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
@@ -2895,7 +2957,8 @@ exports.init = async function (wordjs) {
 
     // Create Inscription (admin). total_due is server-controlled (fee rules + base fee).
     http.route('post', '/inscriptions', { auth: true }, async (req, res) => {
-        if (!await allow(req, res, 'inscriptions', 'manage')) return;
+        const perms = await allow(req, res, 'inscriptions', 'manage');
+        if (!perms) return;
         const { conference_id, ...fieldValues } = req.body || {};
         // Guard against a non-scalar conference_id (the old client arity bug shipped the whole form
         // object here) so we never insert a garbage row bound to '[object Object]'.
@@ -2912,6 +2975,7 @@ exports.init = async function (wordjs) {
             const values = { conference_id: confId };
             Object.assign(values, canonicalFieldValues(confFields, fieldValues));
             assertRequired(confFields, values, false);
+            const healthIn = await healthFromBody(confId, fieldValues, { mayWrite: canWriteHealth(perms), creating: true });
 
             // The admin explicitly PICKS the location (unlike the portal, which forces the coordinator's
             // own). It's an operational column, not a form field: `location_id` (preferred) or the
@@ -2942,6 +3006,7 @@ exports.init = async function (wordjs) {
                 Object.values(values)
             );
             const result = loc ? await takeSeat(loc, insert) : await insert();
+            if (healthIn.answer) await health.save(confId, result.lastID, healthIn.answer);
             res.json({ success: true, id: result.lastID });
         } catch (e) { sendError(res, e); }
     });
@@ -4929,6 +4994,10 @@ exports.init = async function (wordjs) {
         const base = { result: d.result, service_id: svc.id, service: scanServiceOf(svc) };
         if (!d.ins) return base;
         const person = { ...maskRegCode(await personWithName(d.ins), perms), fields: await displayFieldsOf(d.ins, await mealDisplayOf(svc.conference_id), perms) };
+        // 2.32.0: the person's meal group letter, only while «Turnos de comida» is on (shown, never enforced: an early
+        // or a late arrival is served all the same).
+        const mealGroup = await mealPriority.letterOf(svc.conference_id, d.ins.id);
+        if (mealGroup) person.meal_group = mealGroup;
         if (d.result === 'already') return { ...base, person, ...deliveryFields(d.prior) };
         if (d.result === 'cancelled') return { ...base, person };
         return { ...base, person, source: d.ent.source };
@@ -5151,6 +5220,7 @@ exports.init = async function (wordjs) {
             const vals = canonicalFieldValues(confFields, fieldValues);
             assertRequired(confFields, vals, true);
             await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
+            const healthIn = await healthFromBody(existing.conference_id, fieldValues, { mayWrite: canWriteHealth(perms), creating: false });
 
             const sets = [], params = [];
             for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
@@ -5273,6 +5343,7 @@ exports.init = async function (wordjs) {
                 await db.run(`UPDATE ${T.inscriptions} SET total_due = ? WHERE id = ?`, [feeAfter, id]);
             }
             await recomputePayment(id);
+            if (healthIn.answer !== undefined) await health.save(existing.conference_id, id, healthIn.answer);
             res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { sendError(res, e); }
     });
@@ -5342,6 +5413,8 @@ exports.init = async function (wordjs) {
                     if (onlyIfFree && !gone) return false;
                     await db.run(`DELETE FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [req.params.id]);
                     await db.run(`DELETE FROM ${T.mealOverrides} WHERE inscription_id = ?`, [req.params.id]);
+                    await health.clearInscription(req.params.id);
+                    await db.run(`DELETE FROM ${T.mealGroups} WHERE inscription_id = ?`, [req.params.id]);
                     return gone;
                 });
                 // Someone with no bed, no seat and no package touches neither transport nor lodging: deleted without
@@ -5508,6 +5581,7 @@ exports.init = async function (wordjs) {
     badges.install({
         http, allow, positiveInt, actorOf, resolvePortalLocation, personWithName, isFieldColumn, hasLevel,
         randomToken: (n) => wordjs.crypto.randomToken(n), qrText,
+        mealGroupOf: (cid, id) => mealPriority.letterOf(cid, id),
     });
     packages.install({
         http, allow, allowAny, positiveInt, withAssignmentLock, sendError, httpError, roundMoney, assertMoneyRange, runBatched, MAX_MONEY,
@@ -5515,12 +5589,30 @@ exports.init = async function (wordjs) {
     });
     selfPage.install({
         http, isFieldColumn, personWithName, badges, mealsOf: mealsOfPerson,
+        mealGroupOf: (ins) => mealPriority.personGroup(ins.conference_id, ins.id),
         randomToken: (n) => wordjs.crypto.randomToken(n),
         transportOf: (ins) => push.transportOf(ins),
         pushKey: async () => (await push.siteKey()).publicKey,
         onSessionEnd: (id) => push.dropSession(id),
     });
     push.install({ http, allow, positiveInt, sendError, actorOf, siteLinkBase, selfPage, selfMessages: selfPage.MSG });
+    // «Turnos de comida» (2.32.0). Group writes are read-then-write: serialised in this process.
+    let priorityLock = Promise.resolve();
+    const withPriorityLock = (fn) => {
+        const run = priorityLock.then(fn, fn);
+        priorityLock = run.then(() => {}, () => {});
+        return run;
+    };
+    mealPriority.install({
+        http, allow, allowAny, hasLevel, positiveInt, sendError, httpError, actorOf, runBatched, isFieldColumn,
+        entitlementFrom, health, withPriorityLock,
+        // Names for the groups list: the meals section's own (name fallback included), live location.
+        peopleByIds: async (cid, ids) => {
+            const cols = await nameFallbackColumns(cid);
+            const rows = await db.all(`${PERSON_SQL.replace(' FROM ', `${nameColumnsSql(cols)} FROM `)} WHERE i.id IN (${ids.map(() => '?').join(', ')})`, ids);
+            return rows.map(r => personOf(r, cols));
+        },
+    });
     // GET /qr-link?conference_id → { prefix } — what the admin's code viewer and the Excel QR column put before
     // a code (null = the bare code). inscriptions:view, like the codes themselves.
     http.route('get', '/qr-link', { auth: true }, async (req, res) => {
@@ -5667,7 +5759,7 @@ exports.init = async function (wordjs) {
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             // Columns follow the form: one per defined field (its label), then payment + lodging.
-            const flds = await db.all(`SELECT name, label FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
+            const flds = await db.all(`SELECT name, label, sort_order FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
             // The ID document's column only for inscriptions:view (maskDocument).
             const safeFlds = flds.filter(f => isFieldColumn(f.name) && (canSeeDocuments(perms) || f.name !== DOCUMENT_COLUMN));
 
@@ -5680,7 +5772,10 @@ exports.init = async function (wordjs) {
             const params = [conference_id];
             query += await inscriptionFilters(req.query, params, perms);
             query += ROSTER_ORDER;
-            const rows = await db.all(query, params);
+            const rows = await withHealthText(await db.all(query, params), conference_id, perms);
+            // «Condiciones de salud» (2.32.0): its column, in form order, for health:view only.
+            const healthCol = canSeeHealth(perms) ? flds.find(f => f.name === HEALTH_FIELD) : null;
+            if (healthCol) safeFlds.splice(flds.filter(f => safeFlds.includes(f) && f.sort_order <= healthCol.sort_order).length, 0, healthCol);
 
             const MONEY_COLS = new Set(['total_due', 'amount_paid', 'pending_amount']);
             // The Código column (barcode payload) only for inscriptions:view. «Por validar» (2.18.0) = fee money
@@ -5719,7 +5814,21 @@ exports.init = async function (wordjs) {
             const id = positiveInt(req.params.id);
             const row = id ? await db.get(`${rosterSelect()} WHERE i.id = ?`, [id]) : null;
             if (!row) return res.status(404).json({ error: 'Inscripción no encontrada.' });
-            res.json(rosterRow(row, perms));
+            res.json((await withHealthText([rosterRow(row, perms)], row.conference_id, perms))[0]);
+        } catch (e) { sendError(res, e); }
+    });
+
+    // GET /inscriptions/:id/health → { field, answer } — the answer as the edit form needs it (health:view). The
+    // field is null when the form has no «Condiciones de salud»; the answer null when the person gave none.
+    http.route('get', '/inscriptions/:id/health', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'health', 'view')) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const ins = id ? await db.get(`SELECT id, conference_id FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
+            if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            const field = await health.fieldOf(ins.conference_id);
+            const answer = field ? ((await health.answersOf([id])).get(id) || null) : null;
+            res.json({ field: field ? { name: field.name, label: field.label } : null, answer });
         } catch (e) { sendError(res, e); }
     });
 
@@ -8090,7 +8199,8 @@ exports.init = async function (wordjs) {
             // `role` and `is_unique` let the coordinators' portal name people the way the admin does (the
             // fields tagged Nombre / Apellido; never an ID document as a name).
             const list = await db.all(`SELECT name, label, type, options, is_required, width, is_group, role, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
-            res.json(list.filter(f => isFieldColumn(f.name)));
+            // The health field travels as a definition (the portal asks it on registration, write-only).
+            res.json(list.filter(f => isFieldColumn(f.name) || f.name === healthMod.FIELD));
         } catch (e) { sendError(res, e); }
     });
 
@@ -8271,6 +8381,8 @@ exports.init = async function (wordjs) {
             // Write each DEFINED form field's canonical value to its own column (schema follows the form).
             const confFields = await db.all(FIELD_COLUMNS_SQL, [conference_id]);
             Object.assign(values, canonicalFieldValues(confFields, fieldValues));
+            // «Condiciones de salud» (2.32.0): the coordinator answers it while registering — write-only.
+            const healthIn = await healthFromBody(conference_id, fieldValues, { mayWrite: true, creating: true });
 
             // Enforce required fields SERVER-SIDE — is_required was only advisory on the public form, so a
             // client could omit a field that drives pricing and under-quote total_due (audit MEDIUM).
@@ -8296,6 +8408,7 @@ exports.init = async function (wordjs) {
                 `INSERT INTO ${T.inscriptions} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
                 Object.values(values)
             ));
+            if (healthIn.answer) await health.save(conference_id, result.lastID, healthIn.answer);
             res.json({ success: true, id: result.lastID });
         } catch (e) { sendError(res, e); }
     });

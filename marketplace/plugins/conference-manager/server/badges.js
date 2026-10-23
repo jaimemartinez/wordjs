@@ -59,6 +59,9 @@ const BUILTINS = [
     { key: '@room', label: 'Habitación' },
     { key: '@dates', label: 'Fechas' },
     { key: '@conference', label: 'Conferencia' },
+    // 2.32.0: the person's meal group letter (A–F, «Turnos de comida»). Only the letter: the times are in «Mi
+    // inscripción», and nothing about why.
+    { key: '@meal_group', label: 'Grupo de comida' },
 ];
 const DEFAULT_DESIGN = Object.freeze({
     layout: 'horizontal', title: '', colors: { ...DEFAULT_COLORS }, panel: 'none',
@@ -254,6 +257,7 @@ function createBadges(base) {
                 case '@room': value = room ? [room.hotel_name, room.room_number].filter(Boolean).join(' · ') : (sample ? 'Hotel · 101' : null); break;
                 case '@dates': value = datesOf(conf) || (sample ? '12 – 14 oct 2026' : null); break;
                 case '@conference': value = conf.name; break;
+                case '@meal_group': value = (D.mealGroupOf ? await D.mealGroupOf(conf.id, ins.id) : null) || (sample ? 'C' : null); break;
                 default: value = D.isFieldColumn(f.key) && ins[f.key] != null ? String(ins[f.key]) : (sample ? (labels.get(f.key) || f.key) : null);
             }
             if (value == null || !String(value).trim()) continue;
@@ -269,7 +273,7 @@ function createBadges(base) {
         return buildBadge(design, { title: cfg.design.title || conf.name, name, lines, code, qr });
     }
     // 2.29.0: a free-form design — the person's values for the tokens its texts use, then the shared layout.
-    const SAMPLE = { '@name': 'María Fernanda Gómez', '@location': 'Localidad', '@room': 'Hotel Central · 204', '@code': 'ABCD2345EF' };
+    const SAMPLE = { '@name': 'María Fernanda Gómez', '@location': 'Localidad', '@room': 'Hotel Central · 204', '@code': 'ABCD2345EF', '@meal_group': 'C' };
     async function badgeForV2(ins, conf, cfg, assets, labels, sample) {
         const keys = new Set(keysOfDesign(cfg.design));
         const data = {};
@@ -286,6 +290,7 @@ function createBadges(base) {
             const room = ins.room_id != null ? await db.get(`SELECT r.room_number, h.name AS hotel_name FROM ${T.rooms} r LEFT JOIN ${T.hotels} h ON h.id = r.hotel_id WHERE r.id = ?`, [ins.room_id]) : null;
             data['@room'] = room ? [room.hotel_name, room.room_number].filter(Boolean).join(' · ') : (sample ? SAMPLE['@room'] : '');
         }
+        if (keys.has('@meal_group')) data['@meal_group'] = sample ? SAMPLE['@meal_group'] : ((D.mealGroupOf ? await D.mealGroupOf(conf.id, ins.id) : null) || '');
         for (const k of keys) {
             if (k.startsWith('@') || !D.isFieldColumn(k)) continue;
             data[k] = ins[k] != null && String(ins[k]).trim() ? String(ins[k]) : (sample ? (labels.get(k) || k) : '');

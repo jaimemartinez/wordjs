@@ -739,6 +739,8 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
         {mealOpen && meal.cap != null && <MoreCue attr="data-verdict-meal-more" atEnd={meal.atEnd} style={VERDICT_MORE_STYLE} />}
     </> : null);
     const method = r === 'delivered' && v.method === 'override' && <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90" data-verdict-method="override">{tx('meals.method.override', 'Sin derecho (autorizado)')}</div>;
+    // 2.32.0: the person's meal group («Turnos de comida» on) — shown, never enforced.
+    const groupEl = p && p.meal_group ? <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90" data-verdict-group={p.meal_group}>{tx('meals.group', 'Grupo {g}', { g: p.meal_group })}</div> : null;
     const F = large ? VERDICT_FIT : VERDICT_BOX;
     const body = (
         <div style={F.body} data-verdict-body="">
@@ -783,6 +785,7 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
                         <div className="text-3xl font-black tracking-tight leading-tight break-words" data-verdict-title="">{title}</div>
                         {mealLineEl('text-lg font-black leading-snug', '')}
                         {method}
+                        {groupEl}
                     </div>
                 </div>
                 {body}
@@ -802,6 +805,7 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
                     <div className="text-2xl font-black tracking-tight leading-tight break-words" data-verdict-title="">{title}</div>
                     {mealLineEl('text-base font-black leading-snug mt-0.5 break-words', ' mr-1.5')}
                     {method}
+                    {groupEl}
                 </div>
             </div>
             {body}
@@ -1109,6 +1113,7 @@ export function ConfirmCard({ card, service, language, delivering = false, waiti
             <div ref={headRef} data-confirm-head="" style={{ flex: '0 1 auto', minHeight: 0, overflow: 'hidden', padding: large ? '12px 16px 8px' : '12px 14px 8px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
                 <div data-confirm-status="" style={{ alignSelf: 'flex-start', flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: tone.chip, color: tone.text, fontWeight: 900, fontSize: 14 }}>
                     <i className={`fa-solid ${r === 'offline' ? 'fa-wifi' : tone.icon}`} aria-hidden="true"></i>{status}
+                    {p && p.meal_group ? <span data-confirm-group={p.meal_group} style={{ opacity: 0.85 }}>{` · ${tx('meals.group', 'Grupo {g}', { g: p.meal_group })}`}</span> : null}
                 </div>
                 {/* WHY there is no right to it: decision information, part of the status — never a detail that gives way. */}
                 {why && <div data-confirm-why="" style={CONFIRM_WHY_STYLE(tone.text)}>{why}</div>}

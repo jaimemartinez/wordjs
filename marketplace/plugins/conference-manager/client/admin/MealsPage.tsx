@@ -63,9 +63,11 @@ import { Counter, Counters } from "./Counters";
 import { TAB_STRIP_CSS } from "../lib/phoneLayout";
 import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStripOverflow";
 import { usePerms, ReadOnlyNotice } from "./perms";
+import MealTurnsTab from "./MealTurnsTab";
 
-type Tab = 'plan' | 'people' | 'delivery' | 'report';
-const TABS: Tab[] = ['plan', 'people', 'delivery', 'report'];
+type Tab = 'plan' | 'people' | 'turns' | 'delivery' | 'report';
+// «Turnos» (2.32.0): the meal groups A–F and each service's call times (MealTurnsTab.tsx).
+const TABS: Tab[] = ['plan', 'people', 'turns', 'delivery', 'report'];
 const TAB_KEY = 'conference-manager:meals.tab';
 
 const inputCls = 'w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm';
@@ -176,6 +178,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
     const tabMeta: Record<Tab, [string, string]> = {
         plan: [tx('meals.tab.plan', 'Plan'), 'fa-table-cells'],
         people: [tx('meals.tab.people', 'Por persona'), 'fa-user'],
+        turns: [tx('meals.tab.turns', 'Turnos'), 'fa-people-line'],
         delivery: [tx('meals.tab.delivery', 'Entrega'), 'fa-qrcode'],
         report: [tx('meals.tab.report', 'Reporte'), 'fa-clipboard-list'],
     };
@@ -222,6 +225,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
 
             {shownTab === 'plan' && canPlan && <PlanTab conferenceId={conferenceId} conference={conference} data={data} services={services} reload={reload} />}
             {shownTab === 'people' && canPlan && <PeopleTab conferenceId={conferenceId} data={data} services={services} reload={reload} />}
+            {shownTab === 'turns' && canPlan && <MealTurnsTab conferenceId={conferenceId} />}
             {shownTab === 'delivery' && canDeliver && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={openScanner} changed={deliveriesRev} />}
             {shownTab === 'report' && canPlan && <ReportTab services={services} serviceId={serviceId} setServiceId={chooseService} slug={slug} />}
 

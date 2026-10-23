@@ -37,7 +37,7 @@ export function isNameFallbackField(f: Partial<FormFieldLike> | null | undefined
 
 /** A template as the «Añadir campo» dialog lists it. `key` is what POST /fields { template } takes. */
 export type FieldTemplate = {
-    key: 'first_name' | 'last_name' | 'email' | 'phone' | 'gender' | 'family_group' | 'lodging';
+    key: 'first_name' | 'last_name' | 'email' | 'phone' | 'gender' | 'family_group' | 'lodging' | 'age' | 'health';
     /** The column the field gets (= its `name`); the server fixes it, the dialog only shows it. */
     name: string;
     labelKey: string;
@@ -57,6 +57,9 @@ export const FIELD_TEMPLATES: readonly FieldTemplate[] = [
     { key: 'gender', name: 'gender', labelKey: 'fields.template.gender', fallback: 'Género', icon: 'fa-venus-mars', hintKey: 'fields.template.gender.hint', hint: 'Avisos de género al asignar habitaciones y el gráfico por género.' },
     { key: 'family_group', name: 'family_group', labelKey: 'fields.template.family_group', fallback: 'Grupo familiar', icon: 'fa-people-group', hintKey: 'fields.template.family_group.hint', hint: 'Agrupa a las familias en el portal de los encargados.' },
     { key: 'lodging', name: 'needs_lodging', labelKey: 'fields.template.lodging', fallback: 'Requiere hospedaje', icon: 'fa-bed', hintKey: 'fields.template.lodging.hint', hint: 'Interruptor Sí / No. Quien marque «No» no entra en la asignación automática ni se le puede asignar habitación a mano.' },
+    // 2.32.0 — the meal groups read both («Turnos de comida»).
+    { key: 'age', name: 'age', labelKey: 'fields.template.age', fallback: 'Edad', icon: 'fa-cake-candles', hintKey: 'fields.template.age.hint', hint: 'Edad en años (0 a 120). Los turnos de comida dan prioridad a niños pequeños y adultos mayores.' },
+    { key: 'health', name: 'health_conditions', labelKey: 'fields.template.health', fallback: 'Condiciones de salud', icon: 'fa-notes-medical', hintKey: 'fields.template.health.hint', hint: 'Selección múltiple con «Otros». Datos sensibles: solo los ve quien tiene el permiso «Datos de salud». Da prioridad en los turnos de comida.' },
 ];
 
 /** The «Requiere hospedaje» switch's column (2.31.0; mirror of index.js LODGING_FIELD). */
@@ -67,7 +70,7 @@ export const SWITCH_OFF = 'No';
 /** Is a switch value «Sí»? Blank (never answered, or a form without the field) reads as «Sí». */
 export const isSwitchOn = (v: unknown): boolean => String(v ?? '').trim().toLowerCase() !== 'no';
 
-const ROLE_OF: Record<string, string> = { first_name: 'first_name', last_name: 'last_name', email: 'email', phone: 'phone', gender: 'gender', lodging: 'lodging' };
+const ROLE_OF: Record<string, string> = { first_name: 'first_name', last_name: 'last_name', email: 'email', phone: 'phone', gender: 'gender', lodging: 'lodging', age: 'age', health: 'health' };
 
 /** The form field a template corresponds to (same column, or a field carrying the template's role), if any. */
 export function templateField(fields: readonly FormFieldLike[] | null | undefined, tpl: Pick<FieldTemplate, 'key' | 'name'>): FormFieldLike | undefined {
@@ -179,6 +182,12 @@ export function fieldDependents(
     }
     if (field.name === LODGING_FIELD) {
         out.push({ key: 'fields.dep.lodging', fallback: 'Quienes marcaron «No requiere hospedaje» volverán a necesitar habitación (sus respuestas se borran).' });
+    }
+    if (field.name === 'health_conditions' || field.type === 'health') {
+        out.push({ key: 'fields.dep.health', fallback: 'Todas las respuestas de salud se borran, y los turnos de comida dejan de tenerlas en cuenta.' });
+    }
+    if (field.role === 'age' || field.name === 'age') {
+        out.push({ key: 'fields.dep.age', fallback: 'Los turnos de comida dejan de tener en cuenta la edad.' });
     }
     if (Number(field.is_group)) {
         out.push({ key: 'fields.dep.group', fallback: 'Los grupos (familias) que ven y eligen los encargados en su portal.' });

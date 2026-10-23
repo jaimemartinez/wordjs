@@ -216,7 +216,7 @@ export async function prepareImage(file: File, max = 1600): Promise<{ url: strin
 export function sampleData(conference: any, available: any[]): Record<string, string> {
     const data: Record<string, string> = {
         '@name': 'María Fernanda Gómez', '@code': 'ABCD2345EF', '@location': 'Barranquilla', '@room': 'Hotel Central · 204',
-        '@dates': '12 – 14 oct 2026', '@conference': (conference && conference.name) || 'Congreso Nacional',
+        '@dates': '12 – 14 oct 2026', '@conference': (conference && conference.name) || 'Congreso Nacional', '@meal_group': 'C',
     };
     for (const f of available || []) if (!f.key.startsWith('@')) data[f.key] = f.label || f.key;
     return data;
