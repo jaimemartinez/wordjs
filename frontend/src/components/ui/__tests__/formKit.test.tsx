@@ -69,6 +69,16 @@ describe("the field contract: label, help, error, required — wired the same on
         expect(m).toContain("Español");
     });
 
+    it("Select's label looks like every other field's (one kit label style)", () => {
+        const sel = html(<Select id="s" label="Language" options={[]} value="" onChange={() => {}} />);
+        const inp = html(<Input id="i" label="Title" value="" onChange={() => {}} />);
+        const labelClass = (m: string) => /<label\b[^>]*class="([^"]*)"/.exec(m)![1].split(/\s+/);
+        for (const token of ["text-[11px]", "font-black", "uppercase", "tracking-widest", "text-gray-500"]) {
+            expect(labelClass(sel), token).toContain(token);
+            expect(labelClass(inp), token).toContain(token);
+        }
+    });
+
     it("Select shows the placeholder in the admin language when nothing is chosen", () => {
         const m = html(<Select aria-label="Role" options={[{ value: "a", label: "A" }]} value="" onChange={() => {}} />);
         expect(m).toContain("Select an option");
