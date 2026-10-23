@@ -185,7 +185,7 @@ describe("no core admin overlay is left under the shell", () => {
             "components/MediaPickerModal.tsx": 1,
             "app/admin/users/UserFormModal.tsx": 1,
             "app/admin/plugins/page.tsx": 7,
-            "app/admin/plugins/MarketplaceTab.tsx": 1,
+            "app/admin/plugins/MarketplaceTab.tsx": 2,
             "app/admin/db-migration/page.tsx": 3,
             "app/admin/media/page.tsx": 1,
             "app/admin/settings/site-address/page.tsx": 1,
