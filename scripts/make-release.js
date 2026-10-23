@@ -139,6 +139,16 @@ Open the URL printed in the console (default https://localhost:3000). The first 
 **MySQL / MariaDB** (both with a built-in connection test), or the pure-JS *SQLite (legacy / WASM)*
 fallback for hosts where the native binary cannot load — then create your admin account, and you're in.
 
+## 4. Updating
+On a standard install (the monolith started by its service, with its own files), **Admin → Updates**
+installs a newer release with one click: a backup first, then the update, a restart, and the previous
+version put back if the new one fails. Otherwise, from this directory:
+\`\`\`
+npx create-wordjs@latest upgrade . --yes
+\`\`\`
+Your database, uploads, backups and config are kept; restart WordJS afterwards. See
+\`documentation/deployment.md\` (Updates).
+
 ## Notes
 - Secrets (JWT, gateway, DB password) are generated locally during install and stored in
   \`backend/wordjs-config.json\` — never shipped, never committed.

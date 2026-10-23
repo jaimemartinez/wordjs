@@ -53,7 +53,7 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 | --- | --- |
 | `--zip <path-or-url>` | Use a local release ZIP (or a direct **`https://`** ZIP URL — plain `http://` is refused) instead of querying the GitHub API. Handy offline or when rate-limited. |
 | `--sha256 <hex>` | Refuse the ZIP unless its SHA-256 is exactly this (the value in the release's `.sha256` asset). Use it to pin a `--zip` file or URL; with a GitHub download it is checked on top of the release checksum. |
-| `--version <tag>` | Install a specific release (e.g. `--version v2.1.0`) instead of the latest. |
+| `--version <tag>` | Install a specific release (e.g. `--version v2.9.0`) instead of the latest. |
 | `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
 | `--no-start` | Scaffold and install dependencies only — start the server yourself later. |
 | `--yes`, `-y` | Skip the confirmation prompt (required when `upgrade` runs non-interactively). |
@@ -172,8 +172,11 @@ npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash 
 `--ca-hash` is required: `join` refuses to enroll without it, and there is no trust-on-first-use
 opt-out. Each `join` downloads the release, enrolls against the gateway (the token authorizes exactly one
 certificate signing; it is burned afterwards, and the ones `gateway` printed also expire after 120
-minutes — mint more on the gateway with `node scripts/cluster.js token <backend|frontend>`, which
-defaults to a 60-minute TTL and takes `--ttl <minutes>`), then starts the service, which registers
+minutes — once the first backend has joined, mint more from **Admin → Servers → Add a server**, which
+also prints the `node-join` command for the new machine
+([managing the cluster from the admin panel](https://github.com/jaimemartinez/wordjs/blob/main/documentation/separate-mode.md#managing-the-cluster-from-the-admin-panel));
+the second way is `node scripts/cluster.js token <backend|frontend>` on the gateway, which defaults to
+a 60-minute TTL and takes `--ttl <minutes>`), then starts the service, which registers
 with the gateway over mTLS. Browse `https://<gateway>:3000` when all three are up. `join` machines
 need `openssl` on the PATH. Full details, port matrix and the manual (source-checkout) procedure:
 [documentation/separate-mode.md](https://github.com/jaimemartinez/wordjs/blob/main/documentation/separate-mode.md).
@@ -193,8 +196,8 @@ need `openssl` on the PATH. Full details, port matrix and the manual (source-che
 - **GitHub rate limit / offline**: the release lookup uses the unauthenticated GitHub API. If it
   is rate-limited or you're offline, download `wordjs-v*.zip` from the
   [releases page](https://github.com/jaimemartinez/wordjs/releases) and run
-  `npx create-wordjs@latest my-site --zip ./wordjs-v2.1.0.zip` — add
-  `--sha256 <hex>` with the value from `wordjs-v2.1.0.zip.sha256` to have it verified.
+  `npx create-wordjs@latest my-site --zip ./wordjs-v2.9.0.zip` — add
+  `--sha256 <hex>` with the value from `wordjs-v2.9.0.zip.sha256` to have it verified.
 - **Existing directories**: the target directory must not exist (or must be empty) — the tool
   refuses to overwrite anything.
 
