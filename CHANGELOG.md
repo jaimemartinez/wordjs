@@ -58,6 +58,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     atenderte mejor. Solo la ve el equipo autorizado. Puedes no responder.» (and the same in English and
     Portuguese).
 
+- **Updating a plugin never requires uninstalling it.** A plugin uploaded as a ZIP, installed before WordJS
+  recorded where plugins come from, or installed from another catalog used to say «uninstall it and reinstall it
+  from the catalog». From the official catalog it now offers **Update to vX** like any other plugin: the verified
+  version goes in place and keeps its data and tables. From another catalog it offers **Reinstall from this
+  source**, which names the old and the new source and asks whether to keep the plugin's data (ticked by default,
+  with a warning for a plugin that asks for a high-risk permission). In both cases the permissions are asked for
+  again in the dialog instead of being carried over, the new source is recorded so later updates are normal ones,
+  and the action is recorded in the audit trail with the old and new source and permissions
+  (`POST /api/v1/marketplace/adopt`, see `documentation/deployment.md`).
+
 ### Fixed
 
 - **conference-manager 2.33.3: «Copiar mensaje» works for people with no e-mail on file.** It used to refuse with

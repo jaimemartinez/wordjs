@@ -36,7 +36,8 @@ const https = require('https');
 const http = require('http');
 const config = require('../config/app');
 const egress = require('../core/egress-guard');
-const { authenticate } = require('../middleware/auth');
+// refusePluginGrantByToken: the consent of an adopt/reinstall is an administrator's, never an API token's.
+const { authenticate, refusePluginGrantByToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 // publicErrorText: un fallo que nadie ha reconocido (DNS, TLS, socket, driver) se registra entero
 // y al cliente le llega la operación que falló, no el texto del componente que la rompió.
@@ -413,7 +414,12 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
  *                         type: boolean
  *                       updatable:
  *                         type: boolean
- *                         description: True only when an update exists AND the catalog entry's source matches the recorded install origin. An update listed but not updatable is shown without the button.
+ *                         description: True only when an update exists AND the catalog entry's source matches the recorded install origin.
+ *                       applyMode:
+ *                         type: string
+ *                         nullable: true
+ *                         enum: [update, adopt, reinstall]
+ *                         description: For an installed plugin with a newer version, how it can take it - update (same source, POST /marketplace/update), adopt (no recorded origin and the official catalog, POST /marketplace/adopt with mode adopt) or reinstall (a different source, POST /marketplace/adopt with mode reinstall). Null otherwise.
  *                       installedFrom:
  *                         type: string
  *                         nullable: true
@@ -447,6 +453,12 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
             // upload or from another source shows the update but not the button (the UI explains why).
             const updatable = !!(updateAvailable && recorded && recorded.source &&
                 pluginOrigins.normSource(recorded.source) === pluginOrigins.normSource(e.source));
+            // How a newer version reaches an installed plugin that is NOT updatable: 'adopt' (no origin,
+            // official catalog: in place, permissions asked again) or 'reinstall' (another source: explicit,
+            // fresh consent, keeping the data is a choice). null when nothing applies.
+            const applyMode = local && updateAvailable
+                ? pluginOrigins.catalogApplyMode(recorded, String(e.source || ''), DEFAULT_REMOTE)
+                : null;
             return {
                 ...e,
                 installed: !!local,
@@ -454,6 +466,7 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
                 installedVersion: local ? local.version || null : null,
                 updateAvailable,
                 updatable,
+                applyMode,
                 installedFrom: recorded ? recorded.source : null,
             };
         });
@@ -529,27 +542,34 @@ function applyAuditDetail(entry: any, result: any): Record<string, any> {
     };
 }
 
-const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) => {
-    const id = String((req.body || {}).id || '').trim();
-    if (!id) return res.status(400).json({ error: 'Falta el id del plugin.' });
-
-    let entry: any;
+/** The catalog entry for `id`, or the HTTP refusal to send (400 no id, 404 not listed, 502 unreadable). */
+async function findCatalogEntry(idIn: any): Promise<{ entry?: any; status?: number; body?: any }> {
+    const id = typeof idIn === 'string' ? idIn.trim() : '';
+    if (!id) return { status: 400, body: { error: 'Falta el id del plugin.' } };
     try {
         const { merged } = await getCatalog(false);
-        entry = merged.find((e: any) => String(e.id) === id);
+        const entry = merged.find((e: any) => String(e.id) === id);
+        if (!entry) return { status: 404, body: { error: `El plugin "${id}" no está en el catálogo.` } };
+        return { entry };
     } catch (e: any) {
         log.error({ err: e }, '[marketplace] plugin catalog read failed');
-        return res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de plugins.') });
+        return { status: 502, body: { error: publicErrorText(e, 'No se pudo leer el catálogo de plugins.') } };
     }
-    if (!entry) return res.status(404).json({ error: `El plugin "${id}" no está en el catálogo.` });
+}
 
+/**
+ * The verified bytes of a catalog entry, or the HTTP refusal to send. Every path that puts catalog code on
+ * this server goes through here: the bytes come from the source the entry was listed under (a local dir
+ * proven to contain the file, or https), and a remote entry must carry a sha256 that the bytes match.
+ */
+async function fetchVerifiedPackage(entry: any): Promise<{ buf?: Buffer; status?: number; body?: any }> {
     // Install from the SAME source the entry was listed under (each merged entry carries its source).
     const source = String(entry.source || '');
     const isLocal = !/^https?:\/\//i.test(source);
 
     const file = String(entry.file || '');
     if (!SAFE_FILE_RE.test(file)) {
-        return res.status(400).json({ error: 'El catálogo contiene un nombre de archivo inválido.' });
+        return { status: 400, body: { error: 'El catálogo contiene un nombre de archivo inválido.' } };
     }
 
     // Fetch the zip bytes (remote) or read them from the dist dir (local), then sha256-verify.
@@ -559,18 +579,18 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
             const base = path.resolve(source);
             const zipAbs = path.resolve(base, file);
             if (!(zipAbs === base || zipAbs.startsWith(base + path.sep))) {
-                return res.status(400).json({ error: 'Ruta de archivo fuera del directorio del marketplace.' });
+                return { status: 400, body: { error: 'Ruta de archivo fuera del directorio del marketplace.' } };
             }
-            if (!fs.existsSync(zipAbs)) return res.status(404).json({ error: `No existe ${file} en el marketplace local.` });
+            if (!fs.existsSync(zipAbs)) return { status: 404, body: { error: `No existe ${file} en el marketplace local.` } };
             const size = fs.statSync(zipAbs).size;
-            if (size > MAX_ZIP_BYTES) return res.status(400).json({ error: 'El paquete excede el tamaño máximo permitido.' });
+            if (size > MAX_ZIP_BYTES) return { status: 400, body: { error: 'El paquete excede el tamaño máximo permitido.' } };
             buf = fs.readFileSync(zipAbs);
         } else {
             buf = await fetchRemote(`${source}/${file}`, MAX_ZIP_BYTES);
         }
     } catch (e: any) {
         log.error({ err: e }, '[marketplace] plugin download failed');
-        return res.status(502).json({ error: publicErrorText(e, 'No se pudo descargar el plugin del catálogo.') });
+        return { status: 502, body: { error: publicErrorText(e, 'No se pudo descargar el plugin del catálogo.') } };
     }
 
     // Integrity is MANDATORY for a REMOTE source: a plugin installs+runs arbitrary server-side code, so a
@@ -579,14 +599,25 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
     // regression. Local-dir sources are exempt: the bytes are read from an admin-controlled path already
     // confined to the marketplace dir above.
     if (!isLocal && !entry.sha256) {
-        return res.status(400).json({ error: 'El paquete remoto no incluye un hash de integridad (sha256) — instalación abortada.' });
+        return { status: 400, body: { error: 'El paquete remoto no incluye un hash de integridad (sha256) — instalación abortada.' } };
     }
     if (entry.sha256) {
         const digest = crypto.createHash('sha256').update(buf).digest('hex');
         if (digest !== String(entry.sha256).toLowerCase()) {
-            return res.status(400).json({ error: 'La verificación de integridad (sha256) del paquete falló — instalación abortada.' });
+            return { status: 400, body: { error: 'La verificación de integridad (sha256) del paquete falló — instalación abortada.' } };
         }
     }
+    return { buf };
+}
+
+const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) => {
+    const found = await findCatalogEntry((req.body || {}).id);
+    if (!found.entry) return res.status(found.status as number).json(found.body);
+    const entry = found.entry;
+    const file = String(entry.file || '');
+    const pkg = await fetchVerifiedPackage(entry);
+    if (!pkg.buf) return res.status(pkg.status as number).json(pkg.body);
+    const buf = pkg.buf;
 
     // Hand off to the shared upload pipeline via a temp file (the pipeline owns cleanup of the FILE; we
     // own the directory around it).
@@ -659,6 +690,104 @@ router.post('/install', authenticate, isAdmin, handleMarketplaceApply);
  *         description: The catalog could not be read, or the package could not be downloaded
  */
 router.post('/update', authenticate, isAdmin, handleMarketplaceApply);
+
+/**
+ * @swagger
+ * /marketplace/adopt:
+ *   post:
+ *     summary: Bring an installed plugin from another provenance onto this catalog entry, with fresh consent
+ *     description: For an installed plugin that the normal update refuses because its recorded source is not the entry's. Mode adopt (no recorded origin and the official catalog) installs the verified code in place keeping the data directory and tables. Mode reinstall (any other source change) requires confirmSourceChange true and an explicit keepData choice; with keepData false the plugin's data directory, tables, owned options and private storage are removed. In both modes the stored permissions are not replayed - they are replaced by the grants sent here, limited to what the new manifest declares - and the new source is recorded so later updates are normal ones. The mode must match the plugin's current origin, read on the server. Integrity rules are those of /marketplace/install. Every attempt is audited with the previous and new source and grants.
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id, mode, grants]
+ *             properties:
+ *               id:
+ *                 type: string
+ *               mode:
+ *                 type: string
+ *                 enum: [adopt, reinstall]
+ *               grants:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: The permissions the administrator approved now, as scope:access tokens (or network).
+ *               keepData:
+ *                 type: boolean
+ *                 description: Required for reinstall. Ignored for adopt, which always keeps the data.
+ *               confirmSourceChange:
+ *                 type: boolean
+ *                 description: Required true for reinstall.
+ *     responses:
+ *       200:
+ *         description: Applied. The body is the update result plus mode, keptData, previousSource, newSource, previousGrants and grants.
+ *       400:
+ *         description: A malformed field, an unconfirmed source change, a reinstall without a keepData choice, or a package that fails verification
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: No such id in the catalog, the plugin is not installed, or the local package file is missing
+ *       409:
+ *         description: The mode does not match the plugin's origin (useUpdate when it was installed from this same source), or another operation on the plugin is in progress
+ *       502:
+ *         description: The catalog could not be read, or the package could not be downloaded
+ */
+router.post('/adopt', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const mode = b.mode;
+    if (mode !== 'adopt' && mode !== 'reinstall') return res.status(400).json({ error: 'mode must be "adopt" or "reinstall".' });
+    if (!Array.isArray(b.grants) || b.grants.some((g: any) => typeof g !== 'string')) {
+        return res.status(400).json({ error: 'grants must be a list of permission tokens.' });
+    }
+    if (b.keepData !== undefined && typeof b.keepData !== 'boolean') return res.status(400).json({ error: 'keepData must be true or false.' });
+    if (b.confirmSourceChange !== undefined && typeof b.confirmSourceChange !== 'boolean') return res.status(400).json({ error: 'confirmSourceChange must be true or false.' });
+    // Keeping the data is never assumed when the source changes: the administrator says which.
+    if (mode === 'reinstall' && typeof b.keepData !== 'boolean') return res.status(400).json({ error: 'A reinstall from another source must say whether to keep the plugin data (keepData).', code: 'keepDataRequired' });
+
+    // What is granted here is what an administrator approved in the consent dialog: a token read no dialog.
+    if (b.grants.length && refusePluginGrantByToken(req, res, b.grants)) return;
+
+    const found = await findCatalogEntry(b.id);
+    if (!found.entry) return res.status(found.status as number).json(found.body);
+    const entry = found.entry;
+    const slug = String(entry.id);
+    if (!(await getAllPlugins()).some((p: any) => String(p.slug || p.id) === slug)) {
+        return res.status(404).json({ error: `Plugin '${slug}' is not installed: install it instead.` });
+    }
+    const pkg = await fetchVerifiedPackage(entry);
+    if (!pkg.buf) return res.status(pkg.status as number).json(pkg.body);
+
+    const origin = { source: String(entry.source || ''), catalogId: slug, version: entry.version != null ? String(entry.version) : null };
+    const keepData = mode === 'adopt' ? true : b.keepData === true;
+    const tmp = createInstallTmp();
+    try {
+        fs.writeFileSync(tmp.zipPath, pkg.buf, { mode: 0o600, flag: 'wx' });
+        const result = await runPluginUpdate(slug, tmp.zipPath, origin, {
+            via: mode, officialSource: DEFAULT_REMOTE, grants: b.grants, keepData, confirmedSourceChange: b.confirmSourceChange === true,
+        });
+        // Old and new provenance and permissions, on success AND refusal (see applyAuditDetail).
+        const r = result.body || {};
+        await recordAudit(req.user && req.user.id, 'marketplace.adopt', 'plugin', slug, {
+            ...applyAuditDetail(entry, result),
+            mode, keepData,
+            previousSource: r.previousSource !== undefined ? r.previousSource : (r.recordedOrigin !== undefined ? r.recordedOrigin : null),
+            newSource: origin.source.slice(0, 200),
+            previousGrants: Array.isArray(r.previousGrants) ? r.previousGrants : null,
+            grants: Array.isArray(r.grants) ? r.grants : null,
+        });
+        return res.status(result.status).json(result.body);
+    } finally {
+        tmp.dispose();
+    }
+}));
 
 /**
  * @swagger

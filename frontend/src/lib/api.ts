@@ -996,9 +996,28 @@ export interface MarketplaceEntry {
     updateAvailable: boolean;
     // One-click update is possible only if installed + a newer version + the entry's source MATCHES the
     // source it was installed from. `installedFrom` is that recorded source (null = installed by upload or
-    // before origin-binding existed → not one-click updatable; uninstall+reinstall from the catalog first).
+    // before origin-binding existed).
     updatable?: boolean;
     installedFrom?: string | null;
+    // How an installed plugin with a newer version takes it (backend plugin-origins catalogApplyMode):
+    // 'update' (same source), 'adopt' (no recorded source + the official catalog: in place, permissions
+    // asked again) or 'reinstall' (another source: explicit, keeping the data is a choice). Optional:
+    // an older backend does not send it, and then neither button is offered.
+    applyMode?: 'update' | 'adopt' | 'reinstall' | null;
+}
+
+/** What POST /marketplace/adopt answers on success: the update result plus what changed hands. */
+export interface MarketplaceAdoptResult {
+    success: boolean;
+    slug: string;
+    fromVersion: string | null;
+    toVersion: string | null;
+    mode: 'adopt' | 'reinstall';
+    keptData: boolean;
+    previousSource: string | null;
+    newSource: string | null;
+    previousGrants: string[];
+    grants: string[];
 }
 
 export interface MarketplaceSourceStatus {
@@ -1019,6 +1038,11 @@ export const marketplaceApi = {
     // In-place update of an already-installed plugin (preserves data + tables + grants; gated to the
     // install origin server-side). /install also updates when installed, so this is the explicit alias.
     update: (id: string) => apiPost<{ success: boolean; slug: string; updated: boolean; fromVersion: string | null; toVersion: string | null; newPermissions: string[]; ungrantedPermissions: string[] }>(`/marketplace/update`, { id }),
+    // An installed plugin whose recorded source is not this entry's: 'adopt' (official catalog, no recorded
+    // source) or 'reinstall' (another source, `keepData` chosen by the admin). `grants` is what the admin
+    // approved in the consent dialog — the previous grants are never carried over.
+    adopt: (id: string, body: { mode: 'adopt' | 'reinstall'; grants: string[]; keepData?: boolean; confirmSourceChange?: boolean }) =>
+        apiPost<MarketplaceAdoptResult>(`/marketplace/adopt`, { id, ...body }),
     // Configurable catalog sources (managed from the Marketplace UI — no hard-coded URL).
     // Saving an EMPTY list disables the remote marketplace; resetSources returns to the official default.
     getSources: () => apiGet<MarketplaceSources>(`/marketplace/sources`),

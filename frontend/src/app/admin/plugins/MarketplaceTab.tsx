@@ -17,7 +17,7 @@ import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
 import { t as translate } from "@/lib/i18n";
 import { FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaShieldAlt, FaCodeBranch, FaQuestionCircle } from "react-icons/fa";
 import type { IconType } from "react-icons";
-import { Button, EmptyState, IconButton, Input, SegmentedControl } from "@/components/ui";
+import { Button, Checkbox, EmptyState, IconButton, Input, SegmentedControl } from "@/components/ui";
 
 const permToken = (p: { scope: string; access?: string }) =>
     p.scope === 'network' ? 'network' : `${p.scope}:${p.access || 'read'}`;
@@ -139,6 +139,99 @@ export function installGrantNoteKey(entry: Pick<MarketplaceEntry, "installed" | 
     return entry.installed && entry.updateAvailable ? "plugins.marketplace.grantNote.update" : "plugins.marketplace.grantNote.install";
 }
 
+/**
+ * The body of POST /marketplace/adopt for what the dialog shows: the ticked permissions are the grants
+ * (nothing from the previous install is carried over), and a source change sends the keep-data choice and
+ * its confirmation — confirming the dialog IS the confirmation, the dialog having named both sources.
+ */
+export function adoptRequest(entry: Pick<MarketplaceEntry, "applyMode">, ticked: Record<string, boolean>, keepData: boolean):
+    { mode: "adopt" | "reinstall"; grants: string[]; keepData?: boolean; confirmSourceChange?: boolean } {
+    const grants = Object.keys(ticked).filter((k) => ticked[k]);
+    return entry.applyMode === "reinstall"
+        ? { mode: "reinstall", grants, keepData, confirmSourceChange: true }
+        : { mode: "adopt", grants };
+}
+
+/**
+ * The adopt / reinstall dialog's content: the copy installed by upload or from another source takes the
+ * catalog version in one step. A source change names both sources and asks whether to keep the data
+ * (with a warning when the plugin asks for a high-risk permission); in both modes the permissions are
+ * approved again here. Exported so a test can render it without the fetch-on-mount tab around it.
+ */
+export function AdoptDialogContent({ entry, ticked, keepData, onTick, onKeepData, onCancel, onConfirm, t }: {
+    entry: MarketplaceEntry;
+    ticked: Record<string, boolean>;
+    keepData: boolean;
+    onTick: (token: string, on: boolean) => void;
+    onKeepData: (on: boolean) => void;
+    onCancel: () => void;
+    onConfirm: () => void;
+    t: (key: string) => string;
+}) {
+    const reinstall = entry.applyMode === "reinstall";
+    const perms = entry.permissions || [];
+    const sensitive = perms.some((p) => permMeta(permToken(p), t).risk === "high");
+    return (
+        <div role="dialog" aria-modal="true" aria-labelledby="mkt-adopt-title" className="bg-white/95 backdrop-blur-lg rounded-[32px] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 w-full max-w-md p-8 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200" onClick={(ev) => ev.stopPropagation()}>
+            <h3 id="mkt-adopt-title" className="font-extrabold text-lg text-slate-900 mb-1">{fill(t(reinstall ? "plugins.marketplace.confirmReinstall" : "plugins.marketplace.confirmAdopt"), { name: entry.name })}</h3>
+            <p className="text-xs font-medium text-slate-500 mb-4 leading-relaxed">
+                {fill(t("plugins.marketplace.confirmMeta"), { version: entry.version, size: fmtKB(entry.size) })}
+            </p>
+            {reinstall && (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900" data-source-change="">
+                    <div className="font-black uppercase tracking-widest text-[10px] mb-2">{t("plugins.marketplace.sourceChange")}</div>
+                    <div className="flex gap-2"><span className="w-10 shrink-0 font-semibold">{t("plugins.marketplace.sourceFrom")}</span><span className="font-mono break-all">{entry.installedFrom || t("plugins.marketplace.sourceUpload")}</span></div>
+                    <div className="flex gap-2 mt-1"><span className="w-10 shrink-0 font-semibold">{t("plugins.marketplace.sourceTo")}</span><span className="font-mono break-all">{entry.source || ""}</span></div>
+                </div>
+            )}
+            <p className="text-[11px] text-slate-600 mb-4 bg-blue-50/50 border border-blue-100/50 rounded-xl p-3 leading-relaxed">
+                {t(reinstall ? "plugins.marketplace.reinstallNote" : "plugins.marketplace.adoptNote")}
+            </p>
+            <div className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3">{t("plugins.marketplace.approvePermissions")}</div>
+            {perms.length === 0 ? (
+                <p className="text-xs text-slate-500 mb-4">{t("plugins.marketplace.noPermissions")}</p>
+            ) : (
+                <div className="space-y-2 mb-4">
+                    {perms.map((p) => {
+                        const token = permToken(p);
+                        const meta = permMeta(token, t);
+                        return (
+                            <Checkbox
+                                key={token}
+                                name={`grant-${token}`}
+                                checked={!!ticked[token]}
+                                onChange={(ev) => onTick(token, ev.target.checked)}
+                                label={<><span className="font-mono text-[11px] font-semibold">{token}</span> <span className="text-slate-500 text-[11px]">· {meta.label}</span></>}
+                                containerClassName="bg-slate-50 border border-slate-100 rounded-xl p-2.5"
+                            />
+                        );
+                    })}
+                </div>
+            )}
+            {reinstall && (
+                <div className="mb-4">
+                    <Checkbox
+                        name="keep-data"
+                        checked={keepData}
+                        onChange={(ev) => onKeepData(ev.target.checked)}
+                        label={t("plugins.marketplace.keepData")}
+                        help={t("plugins.marketplace.keepDataHelp")}
+                    />
+                    {keepData && sensitive && (
+                        <p className="mt-2 text-[11px] text-rose-700 bg-rose-50 border border-rose-100 rounded-xl p-3 leading-relaxed" role="note" data-keep-data-warning="">{t("plugins.marketplace.keepDataSensitive")}</p>
+                    )}
+                </div>
+            )}
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <Button variant="ghost" size="md" onClick={onCancel}>{t("plugins.marketplace.cancel")}</Button>
+                <Button variant={reinstall ? "danger" : "primary"} icon={reinstall ? "fa-right-left" : "fa-download"} onClick={onConfirm}>
+                    {reinstall ? t("plugins.marketplace.reinstall") : fill(t("plugins.marketplace.updateTo"), { version: entry.version })}
+                </Button>
+            </div>
+        </div>
+    );
+}
+
 export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { onInstalled: () => void; initialSearch?: string }) {
     const { addToast } = useToast();
     const { t } = useI18n();
@@ -151,6 +244,11 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
     const [category, setCategory] = useState<string>("all");
     const [installing, setInstalling] = useState<Record<string, boolean>>({});
     const [confirmEntry, setConfirmEntry] = useState<MarketplaceEntry | null>(null);
+    // Adopt / reinstall dialog: the permissions are approved again (one box per token, ticked by default)
+    // and, on a source change, keeping the plugin's data is the administrator's explicit choice.
+    const [adoptEntry, setAdoptEntry] = useState<MarketplaceEntry | null>(null);
+    const [adoptGrants, setAdoptGrants] = useState<Record<string, boolean>>({});
+    const [keepData, setKeepData] = useState(true);
     // Configurable catalog sources (managed from the UI — no hard-coded URL).
     const [sourcesStatus, setSourcesStatus] = useState<MarketplaceSourceStatus[]>([]);
     const [showSources, setShowSources] = useState(false);
@@ -269,6 +367,31 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
             onInstalled();
         } catch (e: any) {
             addToast(e?.message || t(isUpdate ? "plugins.marketplace.updateFailed" : "plugins.marketplace.installFailed"), "error");
+        } finally {
+            setInstalling((m) => ({ ...m, [entry.id]: false }));
+        }
+    };
+
+    const openAdopt = (entry: MarketplaceEntry) => {
+        setAdoptGrants(Object.fromEntries((entry.permissions || []).map((p) => [permToken(p), true])));
+        setKeepData(true);
+        setAdoptEntry(entry);
+    };
+
+    const doAdopt = async (entry: MarketplaceEntry) => {
+        const body = adoptRequest(entry, adoptGrants, keepData);
+        const mode = body.mode;
+        setAdoptEntry(null);
+        setInstalling((m) => ({ ...m, [entry.id]: true }));
+        try {
+            await marketplaceApi.adopt(entry.id, body);
+            addToast(fill(t(mode === "reinstall" ? "plugins.marketplace.reinstalled" : "plugins.marketplace.adopted"), { name: entry.name, version: entry.version, count: body.grants.length }), "success");
+            setEntries((list) => list.map((e) => (e.id === entry.id
+                ? { ...e, installedVersion: entry.version, updateAvailable: false, updatable: false, applyMode: null, installedFrom: entry.source || null }
+                : e)));
+            onInstalled();
+        } catch (e: any) {
+            addToast(e?.message || t(mode === "reinstall" ? "plugins.marketplace.reinstallFailed" : "plugins.marketplace.updateFailed"), "error");
         } finally {
             setInstalling((m) => ({ ...m, [entry.id]: false }));
         }
@@ -437,13 +560,31 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                         <FaCheck className="text-[11px]" /> {t(e.active ? "plugins.marketplace.installedActive" : "plugins.marketplace.installedInactive")}
                                     </div>
                                 ) : e.installed && e.updateAvailable && !e.updatable ? (
-                                    // Update exists but can't be applied in one click: this copy was installed by
-                                    // upload or from a different source, so replaying its grants/data onto catalog
-                                    // code would be a takeover. The safe path is uninstall (data + tables kept) then
-                                    // install from the catalog.
-                                    <div title={t("plugins.marketplace.reinstallToUpdateTitle")} className="text-amber-700 text-[11px] font-semibold leading-snug bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 w-full text-center">
-                                        {fill(t("plugins.marketplace.reinstallToUpdate"), { version: e.version })}
-                                    </div>
+                                    // This copy was installed by upload or from another source: its grants and
+                                    // data are not replayed onto catalog code. It still updates in one step —
+                                    // the dialog asks for the permissions again, and a source change says so and
+                                    // asks whether to keep the data.
+                                    e.applyMode === "adopt" || e.applyMode === "reinstall" ? (
+                                        <div className="w-full">
+                                            <Button
+                                                variant={e.applyMode === "reinstall" ? "secondary" : "primary"}
+                                                onClick={() => openAdopt(e)}
+                                                disabled={busy}
+                                                pending={busy}
+                                                icon={e.applyMode === "reinstall" ? "fa-right-left" : "fa-download"}
+                                                className="w-full justify-center"
+                                            >
+                                                {e.applyMode === "reinstall" ? t("plugins.marketplace.reinstallFromSource") : fill(t("plugins.marketplace.updateTo"), { version: e.version })}
+                                            </Button>
+                                            <p className="text-[11px] text-slate-500 mt-2 text-center leading-snug">
+                                                {t(e.applyMode === "reinstall" ? "plugins.marketplace.reinstallHint" : "plugins.marketplace.adoptHint")}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="text-slate-500 text-[11px] font-semibold leading-snug bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 w-full text-center">
+                                            {fill(t("plugins.marketplace.updateAvailable"), { version: e.version })}
+                                        </div>
+                                    )
                                 ) : (
                                     <Button onClick={() => setConfirmEntry(e)} disabled={busy} className="w-full justify-center shadow-lg shadow-gray-200/50">
                                         {busy ? (
@@ -495,6 +636,23 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             <Button onClick={() => doInstall(confirmEntry)}><FaDownload className="mr-2 text-xs" /> {confirmEntry.installed && confirmEntry.updateAvailable ? fill(t("plugins.marketplace.updateTo"), { version: confirmEntry.version }) : t("plugins.marketplace.install")}</Button>
                         </div>
                     </div>
+                </DialogLayer>
+            )}
+
+            {/* Adopt / reinstall — the copy installed by upload or from another source takes this version in
+                one step. Nothing it was granted before is carried over: the boxes below are the grants. */}
+            {adoptEntry && (
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setAdoptEntry(null)}>
+                    <AdoptDialogContent
+                        entry={adoptEntry}
+                        ticked={adoptGrants}
+                        keepData={keepData}
+                        onTick={(token, on) => setAdoptGrants((g) => ({ ...g, [token]: on }))}
+                        onKeepData={setKeepData}
+                        onCancel={() => setAdoptEntry(null)}
+                        onConfirm={() => doAdopt(adoptEntry)}
+                        t={t}
+                    />
                 </DialogLayer>
             )}
         </div>
