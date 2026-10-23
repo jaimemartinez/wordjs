@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **body-parser 1.20.9 (gateway, backend) and 2.4.0 (backend, via the MCP SDK)** for [GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828) (high): a compressed request body followed by trailing bytes could tie up the process. Lockfile-only change.
+
 ### Added
 
 - **conference-manager 2.36.2: paper consent sheets.**
