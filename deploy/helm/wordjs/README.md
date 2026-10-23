@@ -81,6 +81,23 @@ Both volumes are `ReadWriteOnce`.
 Both PVCs survive `helm uninstall` on purpose — the data volume carries the database and the
 `jwtSecret`, and losing it silently would destroy the site. Delete them explicitly when you mean to.
 
+## Upgrading
+
+On Kubernetes, update WordJS by changing the image tag: what is written to a container's own filesystem
+does not outlive the pod. **Admin → Updates** recognises the pod and gives this instruction instead of an
+update button. Build and push the new
+release's image, then point the release at it:
+
+```bash
+docker build -t <registry>/wordjs:2.9.0 . && docker push <registry>/wordjs:2.9.0
+helm upgrade wordjs deploy/helm/wordjs --namespace wordjs --reuse-values --set image.tag=2.9.0
+```
+
+The two volumes are kept, and database schema migrations run when the new pod starts. Take a backup
+first (Settings → Backups). Settings the panel applies by restarting (the database engine, Redis,
+trusted proxies, the log level) do not need the pod to be recreated: the image runs `monolith.js`, whose
+supervisor starts the app again in the same container.
+
 ## Limits
 
 This chart models the simplest working WordJS and nothing more.

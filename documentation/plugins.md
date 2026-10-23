@@ -536,6 +536,39 @@ Avoid raw `div` containers for main content. Use the `Card` component, which han
     or send. The calendar speaks the admin language (es/en/pt), starts the week on the site's
     `start_of_week` (Settings → General), and supports min/max, Today/Clear, keyboard navigation and a
     bottom sheet on phones. Rebuild the plugin bundle after switching.
+*   **Dialogs: `useModal()`, never the browser's `alert()`, `confirm()` or `prompt()`.** The native dialogs
+    block the page, cannot be translated or themed, and some embedders suppress them, so the action
+    silently never happens. `@/contexts/ModalContext` is a host module, and every admin screen, Verso
+    component and portal page runs inside its provider:
+
+    ```tsx
+    import { useModal } from "@/contexts/ModalContext";
+
+    const { alert, confirm, prompt } = useModal();
+
+    await alert(t("saved"));                                                    // Promise<void>
+    if (!(await confirm(t("confirmDelete"), undefined, true))) return;         // isDanger → red button; Promise<boolean>
+    const to = await prompt(t("testAddress"), undefined, { inputType: "email" }); // Promise<string | null>
+    if (to === null) return;                                                    // Cancel, Escape or the backdrop
+    ```
+
+    `confirm(message, title?, isDanger?, labels?)` and `alert(message, title?, labels?)` take optional
+    `{ confirmText, cancelText }` labels; `prompt(message, title?, { defaultValue, placeholder, inputType,
+    confirmText, cancelText })` takes `inputType` `"text"` (default), `"email"`, `"url"` or `"number"`; its text
+    box starts with `defaultValue`, and OK resolves to what is in it. Titles and buttons default to the
+    reader's language. For a notice that needs no answer, prefer a toast (`useToast()` from
+    `@/contexts/ToastContext`).
+
+    **This is enforced.** `frontend/src/lib/__tests__/noNativeDialogs.test.ts` scans every file under
+    `marketplace/plugins/**` (and the core's frontend, public assets, themes and gateway) with scope
+    analysis: a `confirm` destructured from `useModal()` passes, while `confirm(…)`, `window.confirm(…)`,
+    `globalThis.prompt(…)`, an inline `onclick="return confirm(…)"` or a `<script>` in an `.html` file
+    fails the suite. An `eslint-disable` comment does not hide a call, and a file the scanner cannot parse
+    is a finding too. Run it before you open a pull request:
+
+    ```bash
+    cd frontend && npx vitest run src/lib/__tests__/noNativeDialogs.test.ts
+    ```
 
 ---
 
@@ -748,6 +781,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 3.  **Declare `"isolated": true`:** It is mandatory; a plugin without it is rejected.
 4.  **Namespaced routes:** Your routes mount under `/api/v1/plugin/<slug>/...` — fetch them at that path.
 5.  **Unique Slugs:** Ensure your plugin folder name and slug are unique.
+6.  **No browser dialogs:** `alert()`, `confirm()` and `prompt()` are forbidden in every plugin file; use `useModal()` from `@/contexts/ModalContext` (§6). A repository test fails the build otherwise.
 
 ---
 
@@ -943,10 +977,8 @@ coordinators, a vendor, a field team opening a QR link. Declare it in the manife
 **What the page gets.** The bare portal layout — no theme header or footer, no admin shell — with
 `ModalProvider`, `I18nProvider` and `ToastProvider` mounted, so `useModal()`, `useI18n()` and `useToast()`
 work. **Never call the browser's own `alert()`, `confirm()` or `prompt()`** (nor `window.*`): use
-`useModal()` — `alert(message)`, `confirm(message, title, isDanger)` (a `Promise<boolean>`) and
-`prompt(message, title, { defaultValue, placeholder, inputType })` (a `Promise<string | null>`, `null` when
-cancelled) — or a toast. A repository test (`frontend/src/lib/__tests__/noNativeDialogs.test.ts`) fails on
-any native dialog in a marketplace plugin, the admin, the themes and the portals. It may import the same host modules as an admin page (`@/lib/api`, `@/lib/csrf`,
+`useModal()` (its `alert`, `confirm` and `prompt` are described in §6) or a toast — the repository test
+`noNativeDialogs.test.ts` fails on a native dialog in a portal as anywhere else. The page may import the same host modules as an admin page (`@/lib/api`, `@/lib/csrf`,
 `@/contexts/ToastContext`, …); a portal that posts with its own `fetch` must spread `csrfHeaders()` from
 `@/lib/csrf` into a mutating request that carries cookies. Your own look is your own: copy the UI
 primitives you want into your plugin rather than importing another plugin's.
@@ -1130,7 +1162,12 @@ addresses cannot be approved, and an API token may withdraw an approval but neve
 
 There is no first-party pre-seeding: **activation** grants a plugin exactly the capabilities its
 manifest declares (idempotent — only when the plugin holds no grants an administrator decided, so a
-revoke survives a re-activation), and that applies
+revoke survives a re-activation). That grant **is the administrator's consent**: the Plugins screen shows
+the activation dialog listing every requested capability (high-risk ones marked, see below) before it
+activates, and the seed is recorded as the administrator's decision. **An API token never consents**: a
+token-driven activation that would grant capabilities is refused before anything runs, naming them, while
+a plugin that requests nothing, or already holds what an administrator decided (re-activating it after a
+deactivation or an update), can still be activated headlessly. This applies
 identically to first-party plugins (`mail-server`, `conference-manager`, the galleries, …) and
 anything you upload. First-party plugins are **not privileged** — they run in the same sandbox under
 the same checks.

@@ -217,6 +217,15 @@ npm run dev:mono      # monolith on http(s)://localhost:3000 — HTTPS once gate
 npm run dev           # or the 3-service split
 ```
 
+**After the install, the admin panel runs the site.** **Admin → Updates** installs a newer release with
+one click (backup first, then the upgrade, a restart and an automatic rollback if the new version
+fails); **Admin → Site Health** says what needs attention and links to the screen that fixes it; and
+**Admin → Servers** adds and removes machines in split and separate mode. Settings that are read at
+start-up (the database engine, the network of sites, Redis, trusted proxies) restart WordJS by
+themselves when saved. The command line is the second way: `npx create-wordjs@latest upgrade`, for
+instance, does the same update from a terminal. See
+[deployment.md](documentation/deployment.md#-managing-a-running-site-from-the-panel).
+
 <details>
 <summary><b>Architecture & run-mode details</b></summary>
 
@@ -319,7 +328,7 @@ In production the backend is **compiled** (`tsc` → `dist/`) and run as plain J
 | `npm test` | Test suite (`node --test`) |
 | `npm run lint` / `format` | ESLint / Prettier |
 
-CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compiled build, a dependency license gate, an `npm audit` gate that blocks high/critical production advisories in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, the unit suite with `WORDJS_CI_DB=1` so the driver-conformance tests hard-fail (rather than skip) unless they really ran against the `postgres:16` and `mysql:8` service containers, integration tests against real `postgres:16` + `redis:7` containers, a separate two-process multi-node coherence job on shared Postgres + Redis, a **coverage ratchet** (c8 for the backend, vitest coverage for the frontend) that fails a run dropping below the committed floor, a job that **builds the Docker image, boots it and completes the installer inside the container**, and the frontend lint/type-check/tests/build. A separate scheduled workflow (`.github/workflows/dependency-audit.yml`) re-runs that audit across all six workspaces — root and `setup` included — every day at 04:41 UTC and opens or updates an issue when one of them fails.
+CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compiled build, a dependency license gate, an `npm audit` gate that blocks high/critical production advisories in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, the unit suite with `WORDJS_CI_DB=1` so the driver-conformance tests hard-fail (rather than skip) unless they really ran against the `postgres:16` and `mysql:8` service containers, integration tests against real `postgres:16` + `redis:7` containers, a separate two-process multi-node coherence job on shared Postgres + Redis, a **coverage ratchet** (vitest coverage for the frontend on every pull request; c8 for the backend in a daily run that opens a `ci-daily` issue when it fails) that fails a run dropping below the committed floor, a job that **builds the Docker image, boots it and completes the installer inside the container**, and the frontend lint/type-check/tests/build. A separate scheduled workflow (`.github/workflows/dependency-audit.yml`) re-runs that audit across all six workspaces — root and `setup` included — every day at 04:41 UTC and opens or updates an issue when one of them fails.
 
 </details>
 

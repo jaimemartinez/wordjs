@@ -10,7 +10,7 @@ or newer. If you did [Tutorial 7](07-build-your-first-plugin.md) you already hav
 the repository; otherwise:
 
 ```bash
-git clone --depth 1 --branch v2.7.0 https://github.com/jaimemartinez/wordjs.git
+git clone --depth 1 --branch v2.9.0 https://github.com/jaimemartinez/wordjs.git
 ```
 
 ```bash

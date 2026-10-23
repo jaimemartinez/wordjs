@@ -250,7 +250,7 @@ These WordPress-style core services back most CMS configuration.
 *   Roles + capabilities are **persisted in the `options` table** under `wordjs_user_roles` and cached in memory for synchronous access (`getRoles()` is used by `User.toJSON`).
 *   `loadRoles()` (boot) hydrates the cache; `setRole / removeRole / updateRoleCapabilities` persist changes; `syncRoles(configRoles)` reconciles missing roles/capabilities from config on startup.
 *   `getAllAvailableCapabilities()` unions role caps + core caps + capabilities registered by plugin admin menus.
-*   **Plugin-declared roles** (namespace rules in `backend/src/core/plugin-roles.ts`, see [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare)):
+*   **Plugin-declared roles** (namespace rules in `backend/src/core/plugin-roles.ts`, see [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-)):
     `registerPluginRoles(pluginId, manifest, { installedPluginIds })` registers/refreshes them all-or-nothing
     (code `PLUGIN_ROLES_REFUSED`; `{ dryRun: true }` runs the same checks without writing — activation calls
     it before spawning the plugin), `releasePluginRoles(pluginId)` retires them on plugin deletion (removed

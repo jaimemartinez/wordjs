@@ -17,7 +17,7 @@ needs the backend's development dependencies, which a production install leaves 
 computer (or any development machine), not on the server:
 
 ```bash
-git clone --depth 1 --branch v2.7.0 https://github.com/jaimemartinez/wordjs.git
+git clone --depth 1 --branch v2.9.0 https://github.com/jaimemartinez/wordjs.git
 ```
 
 ```bash
