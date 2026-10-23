@@ -726,7 +726,9 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                     {((email.labels || []).length > 0 || email.delivery_status === 'failed' || email.delivery_status === 'retry' || scheduledSoon || (activeQuery && email.is_spam)) && (
                         <div className="mt-1.5 flex flex-wrap gap-1">
                             {email.delivery_status === 'failed' && <Pill tone="red"><i className="fa-solid fa-circle-exclamation"></i>{t('badge.failed')}</Pill>}
-                            {email.delivery_status === 'retry' && <Pill tone="amber"><i className="fa-solid fa-rotate"></i>{t('badge.retrying')}</Pill>}
+                            {email.delivery_status === 'retry' && (Number(email.paced) === 1
+                                ? <Pill tone="blue"><i className="fa-solid fa-hourglass-half"></i>{t('badge.waitingRate')}</Pill>
+                                : <Pill tone="amber"><i className="fa-solid fa-rotate"></i>{t('badge.retrying')}</Pill>)}
                             {scheduledSoon && <Pill tone="violet">{scheduledTime && scheduledTime.getTime() - Date.now() < 60000 ? t('badge.sending') : t('badge.scheduled')}</Pill>}
                             {activeQuery && !!email.is_spam && <Pill tone="orange">{t('badge.spam')}</Pill>}
                             {(email.labels || []).slice(0, 3).map((l: any) => (
