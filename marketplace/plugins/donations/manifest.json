@@ -1,7 +1,7 @@
 {
     "id": "donations",
     "name": "Donations",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "Donation campaigns with a goal thermometer, preset or custom amounts, always-available manual payment instructions plus optional Stripe Checkout, donor management and CSV export. GiveWP-style, sandbox-native.",
     "author": "WordJS",
     "isolated": true,

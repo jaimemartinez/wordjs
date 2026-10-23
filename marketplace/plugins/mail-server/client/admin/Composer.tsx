@@ -7,6 +7,7 @@ import { api, apiPost } from "../../../../../frontend/src/lib/api";
 // Platform isomorphic sanitizer (DOMPurify on the client). It guards the ONE live-DOM innerHTML sink —
 // this editor — which receives the quoted body of a reply/forward (attacker-controlled HTML).
 import { sanitizeHTML } from "../../../../../frontend/src/lib/sanitize";
+import { useModal } from "@/contexts/ModalContext";
 import { cx, ScrollRow, IconBtn, Button, Menu, MenuItem, Avatar, formatBytes, escapeHtml } from "./ui";
 
 const splitList = (v: string) => String(v || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
@@ -171,6 +172,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
     const [pickDate, setPickDate] = useState(false);
     const [dragOver, setDragOver] = useState(false);
     const editorRef = useRef<HTMLDivElement>(null);
+    const { prompt } = useModal();
     const fileRef = useRef<HTMLInputElement>(null);
     const lastBody = useRef('');
     const dirty = useRef(false);
@@ -277,6 +279,18 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
     const mailRef = useRef(mail);
     mailRef.current = mail;
 
+    // Insert a link over the selected text. The address is asked in the host's dialog (never the browser's
+    // prompt()); the dialog takes the focus, so the editor's selection is saved first and put back before
+    // the link is applied.
+    const insertLink = async () => {
+        const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+        const inEditor = sel && sel.rangeCount && editorRef.current && editorRef.current.contains(sel.anchorNode);
+        const saved = inEditor ? sel.getRangeAt(0).cloneRange() : null;
+        const url = await prompt(t('comp.linkPrompt'), t('comp.link'), { defaultValue: 'https://', inputType: 'url', confirmText: t('comp.link') });
+        editorRef.current?.focus();
+        if (saved) { const s2 = window.getSelection(); s2?.removeAllRanges(); s2?.addRange(saved); }
+        if (url && /^(https?:|mailto:)/i.test(url.trim())) exec('createLink', url.trim());
+    };
     const exec = (cmd: string, arg?: string) => {
         editorRef.current?.focus();
         document.execCommand(cmd, false, arg);
@@ -431,10 +445,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
                     <IconBtn size="sm" icon="fa-solid fa-list-ul" label={t('comp.bullets')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('insertUnorderedList')} />
                     <IconBtn size="sm" icon="fa-solid fa-list-ol" label={t('comp.numbers')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('insertOrderedList')} />
                     <IconBtn size="sm" icon="fa-solid fa-quote-left" label={t('comp.quote')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('formatBlock', 'blockquote')} />
-                    <IconBtn size="sm" icon="fa-solid fa-link" label={t('comp.link')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => {
-                        const url = window.prompt(t('comp.linkPrompt'), 'https://');
-                        if (url && /^(https?:|mailto:)/i.test(url.trim())) exec('createLink', url.trim());
-                    }} />
+                    <IconBtn size="sm" icon="fa-solid fa-link" label={t('comp.link')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => insertLink()} />
                     <IconBtn size="sm" icon="fa-solid fa-text-slash" label={t('comp.clear')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('removeFormat')} />
                 </ScrollRow>
 

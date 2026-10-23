@@ -15,6 +15,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const BASE = "/plugin/popup-builder";
 
@@ -301,6 +302,7 @@ function PopupCard({ popup, busy, onToggle, onEdit, onDelete }) {
 }
 
 export default function PopupBuilderAdminPage() {
+    const { confirm } = useModal();
     const { t } = useT();
     const [popups, setPopups] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -336,7 +338,7 @@ export default function PopupBuilderAdminPage() {
     };
 
     const remove = async (popup) => {
-        if (!window.confirm(t("app.confirmDelete", { title: popup.title }))) return;
+        if (!(await confirm(t("app.confirmDelete", { title: popup.title }), undefined, true))) return;
         setBusy(true);
         setMessage("");
         try {

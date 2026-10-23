@@ -44,7 +44,7 @@
 
 exports.metadata = {
     name: 'Bookings',
-    version: '1.0.3',
+    version: '1.0.4',
     description: 'Services with weekly availability, public slot picker, race-safe reservations, email confirmation, admin agenda.',
     author: 'WordJS',
 };

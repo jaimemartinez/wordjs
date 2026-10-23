@@ -16,6 +16,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 // Status label keys resolve through t() at render time (see i18n.ts).
 const STATUS_META = {
@@ -121,6 +122,7 @@ const IconImage = (props) => (
 );
 
 export default function AuctionsAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [tab, setTab] = useState("auctions");
     const [auctions, setAuctions] = useState([]);
@@ -253,22 +255,22 @@ export default function AuctionsAdminPage() {
     };
 
     const endNow = async (a) => {
-        if (!window.confirm(t("confirm.endNow", { title: a.title }))) return;
+        if (!(await confirm(t("confirm.endNow", { title: a.title }), undefined, false))) return;
         try { await apiPost(`/plugin/auctions/auctions/${a.id}/end-now`, {}); setMsg(t("msg.ended")); loadAuctions(); }
         catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
     const cancelAuction = async (a) => {
-        if (!window.confirm(t("confirm.cancel", { title: a.title }))) return;
+        if (!(await confirm(t("confirm.cancel", { title: a.title }), undefined, true))) return;
         try { await apiPost(`/plugin/auctions/auctions/${a.id}/cancel`, {}); setMsg(t("msg.cancelled")); loadAuctions(); }
         catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
     const deleteAuction = async (a) => {
-        if (!window.confirm(t("confirm.delete", { title: a.title }))) return;
+        if (!(await confirm(t("confirm.delete", { title: a.title }), undefined, true))) return;
         try { await apiDelete(`/plugin/auctions/auctions/${a.id}`); setMsg(t("msg.deleted")); loadAuctions(); }
         catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };
     const deleteBid = async (b) => {
-        if (!window.confirm(t("confirm.deleteBid", { name: b.bidder_name, amount: fmtMoney(b.amount_cents, symbol, locale) }))) return;
+        if (!(await confirm(t("confirm.deleteBid", { name: b.bidder_name, amount: fmtMoney(b.amount_cents, symbol, locale) }), undefined, true))) return;
         try { await apiDelete(`/plugin/auctions/bids/${b.id}`); setMsg(t("msg.bidDeleted")); loadBids(bidsAuction); loadAuctions(); }
         catch (e) { setMsg(t("common.error", { msg: e?.message || e })); }
     };

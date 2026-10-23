@@ -13,6 +13,7 @@ import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import MediaPickerModal from "../../../../../frontend/src/components/MediaPickerModal";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const B = "/plugin/online-store";
 
@@ -90,6 +91,7 @@ const EMPTY_ZONE = { id: 0, name: "", rate: "", freeOver: "", taxPercent: "", is
 const EMPTY_VARIANT = { id: 0, name: "", sku: "", price: "", stock: "", is_active: true };
 
 export default function OnlineStoreAdminPage() {
+    const { confirm } = useModal();
     const { t } = useT();
     // Label maps hold i18n keys; unknown values render as received.
     const statusLabel = (s) => (STATUS_LABELS[s] ? t(STATUS_LABELS[s]) : s);
@@ -226,7 +228,7 @@ export default function OnlineStoreAdminPage() {
         } catch (e) { flash(false, t("common.error", { msg: e?.message || e })); }
     };
     const deleteOrder = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteOrder"))) return;
+        if (!(await confirm(t("confirm.deleteOrder"), undefined, true))) return;
         try {
             await apiDelete(`${B}/orders/${id}`);
             setDetail(null);
@@ -348,7 +350,7 @@ export default function OnlineStoreAdminPage() {
         finally { setBusy(false); }
     };
     const deleteProduct = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteProduct"))) return;
+        if (!(await confirm(t("confirm.deleteProduct"), undefined, true))) return;
         try {
             await apiDelete(`${B}/products/${id}`);
             loadProducts();
@@ -410,7 +412,7 @@ export default function OnlineStoreAdminPage() {
         finally { setBusy(false); }
     };
     const deleteCoupon = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteCoupon"))) return;
+        if (!(await confirm(t("confirm.deleteCoupon"), undefined, true))) return;
         try {
             await apiDelete(`${B}/coupons/${id}`);
             loadCoupons();
@@ -448,7 +450,7 @@ export default function OnlineStoreAdminPage() {
         finally { setBusy(false); }
     };
     const deleteZone = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteZone"))) return;
+        if (!(await confirm(t("confirm.deleteZone"), undefined, true))) return;
         try {
             await apiDelete(`${B}/shipping-zones/${id}`);
             loadZones();

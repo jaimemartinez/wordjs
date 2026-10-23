@@ -15,6 +15,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const EMPTY_EVENT = { title: "", starts_at: "", venue: "", description: "", is_published: true };
 const EMPTY_TYPE = { name: "", price: "", capacity: "100", sales_end: "", is_active: true };
@@ -95,6 +96,7 @@ const IconSliders = (props) => (
 );
 
 export default function EventTicketsAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [tab, setTab] = useState("eventos");
     const [message, setMessage] = useState("");
@@ -191,7 +193,7 @@ export default function EventTicketsAdminPage() {
         } finally { setBusy(false); }
     };
     const deleteEvent = async (ev) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteEvent", { title: ev.title }))) return;
+        if (!(await confirm(t("confirm.deleteEvent", { title: ev.title }), undefined, true))) return;
         setBusy(true);
         try {
             await apiDelete(`/plugin/event-tickets/events/${ev.id}`);
@@ -227,7 +229,7 @@ export default function EventTicketsAdminPage() {
         } finally { setBusy(false); }
     };
     const deleteType = async (tp) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.deleteType", { name: tp.name }))) return;
+        if (!(await confirm(t("confirm.deleteType", { name: tp.name }), undefined, true))) return;
         setBusy(true);
         try {
             await apiDelete(`/plugin/event-tickets/types/${tp.id}`);
@@ -248,7 +250,7 @@ export default function EventTicketsAdminPage() {
 
     // ── pedidos actions ──────────────────────────────────────────────────────────────────────────
     const confirmPaid = async (o) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.paid", { buyer: o.buyer_name, amount: fmtMoney(o.total_cents, config.currencySymbol) }))) return;
+        if (!(await confirm(t("confirm.paid", { buyer: o.buyer_name, amount: fmtMoney(o.total_cents, config.currencySymbol) }), undefined, false))) return;
         setBusy(true); setMessage("");
         try {
             const r = await apiPost(`/plugin/event-tickets/orders/${o.id}/paid`, {});
@@ -261,7 +263,7 @@ export default function EventTicketsAdminPage() {
         } finally { setBusy(false); }
     };
     const cancelOrder = async (o) => {
-        if (typeof window !== "undefined" && !window.confirm(t("confirm.cancel", { buyer: o.buyer_name }))) return;
+        if (!(await confirm(t("confirm.cancel", { buyer: o.buyer_name }), undefined, true))) return;
         setBusy(true); setMessage("");
         try {
             await apiPost(`/plugin/event-tickets/orders/${o.id}/cancel`, {});

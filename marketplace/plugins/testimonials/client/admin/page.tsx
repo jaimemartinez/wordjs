@@ -15,6 +15,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 /* Tiny inline icon set (viewBox 24, stroke currentColor) so the identity needs no icon-font. */
 const IconQuote = (props) => (
@@ -223,6 +224,7 @@ function TestimonialModal({ initial, onClose, onSaved }) {
 }
 
 export default function TestimonialsAdminPage() {
+    const { confirm } = useModal();
     const { t } = useT();
     const [items, setItems] = useState([]);
     const [counts, setCounts] = useState({ pending: 0, approved: 0 });
@@ -266,7 +268,7 @@ export default function TestimonialsAdminPage() {
     };
 
     const remove = async (item) => {
-        if (typeof window !== "undefined" && !window.confirm(t("app.confirmDelete", { name: item.author_name }))) return;
+        if (!(await confirm(t("app.confirmDelete", { name: item.author_name }), undefined, true))) return;
         setBusy(true); setMessage("");
         try {
             await apiDelete(`/plugin/testimonials/${item.id}`);

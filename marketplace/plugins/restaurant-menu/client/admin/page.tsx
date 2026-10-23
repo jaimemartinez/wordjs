@@ -18,6 +18,7 @@ import {
 } from "./shared";
 import { ModifiersTab, KitchenTab, TablesTab, ReservationsTab, ReportsTab } from "./v2tabs";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 // ---- module-level modals (NEVER define components inside components — focus loss) ----------------
 
@@ -529,6 +530,7 @@ function ConfigForm({ initial, busy, onSave, flash }) {
 // ---- page ------------------------------------------------------------------------------------------
 
 export default function RestaurantAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [tab, setTab] = useState("menu"); // menu | modifiers | orders | kitchen | tables | reservations | reports | config
     const [sections, setSections] = useState(null);
@@ -632,8 +634,8 @@ export default function RestaurantAdminPage() {
         await apiPost(`${BASE}/sections/${id}/move`, { dir });
         await loadMenu();
     });
-    const deleteSection = (s) => {
-        if (typeof window !== "undefined" && !window.confirm(t("msg.sectionDeleteConfirm", { name: s.name }))) return;
+    const deleteSection = async (s) => {
+        if (!(await confirm(t("msg.sectionDeleteConfirm", { name: s.name }), undefined, true))) return;
         run(async () => {
             await apiDelete(`${BASE}/sections/${s.id}`);
             await loadMenu();
@@ -669,8 +671,8 @@ export default function RestaurantAdminPage() {
         await apiPost(`${BASE}/items/${id}/move`, { dir });
         await loadMenu();
     });
-    const deleteItem = (it) => {
-        if (typeof window !== "undefined" && !window.confirm(t("msg.itemDeleteConfirm", { name: it.name }))) return;
+    const deleteItem = async (it) => {
+        if (!(await confirm(t("msg.itemDeleteConfirm", { name: it.name }), undefined, true))) return;
         run(async () => {
             await apiDelete(`${BASE}/items/${it.id}`);
             await loadMenu();
@@ -688,8 +690,8 @@ export default function RestaurantAdminPage() {
         await loadOrders();
         setSelectedOrder((prev) => (prev && prev.id === id ? { ...prev, payment_status: paid ? "paid" : "none" } : prev));
     });
-    const deleteOrder = (id) => {
-        if (typeof window !== "undefined" && !window.confirm(t("msg.orderDeleteConfirm"))) return;
+    const deleteOrder = async (id) => {
+        if (!(await confirm(t("msg.orderDeleteConfirm"), undefined, true))) return;
         run(async () => {
             await apiDelete(`${BASE}/orders/${id}`);
             setSelectedOrder(null);

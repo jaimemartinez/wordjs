@@ -16,6 +16,7 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const BASE = "/plugin/bookings";
 
@@ -253,6 +254,7 @@ function ServiceModal({ service, onClose, onSaved }) {
 // ── main page ───────────────────────────────────────────────────────────────────────────────────
 
 export default function BookingsAdminPage() {
+    const { confirm } = useModal();
     const { t } = useT();
     const [tab, setTab] = useState("agenda");
 
@@ -321,7 +323,7 @@ export default function BookingsAdminPage() {
     };
 
     const deleteBooking = async (id) => {
-        if (typeof window !== "undefined" && !window.confirm(t("agenda.confirmDelete"))) return;
+        if (!(await confirm(t("agenda.confirmDelete"), undefined, true))) return;
         setAgendaMsg("");
         try {
             await apiDelete(`${BASE}/bookings/${id}`);
@@ -354,7 +356,7 @@ export default function BookingsAdminPage() {
     };
 
     const deleteService = async (svc) => {
-        if (typeof window !== "undefined" && !window.confirm(t("services.confirmDelete", { name: svc.name }))) return;
+        if (!(await confirm(t("services.confirmDelete", { name: svc.name }), undefined, true))) return;
         setServicesMsg("");
         try {
             await apiDelete(`${BASE}/services/${svc.id}`);

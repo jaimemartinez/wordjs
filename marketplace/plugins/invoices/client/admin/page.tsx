@@ -16,6 +16,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 // Labels are looked up through `t("status.<key>")` at render time (hooks only run inside components).
 const STATUS_META = {
@@ -276,6 +277,7 @@ function InvoiceModal({ initial, config, onClose, onDone }) {
 }
 
 export default function InvoicesAdminPage() {
+    const { confirm, prompt } = useModal();
     const { t } = useT();
     const [tab, setTab] = useState("list");
     const [invoices, setInvoices] = useState([]);
@@ -333,7 +335,8 @@ export default function InvoicesAdminPage() {
             await navigator.clipboard.writeText(link);
             setMessage(t("msg.linkCopied", { number: inv.number }));
         } catch {
-            window.prompt(t("msg.copyPrompt"), link);
+            // No clipboard access (an insecure origin, a denied permission): show the link to copy by hand.
+            await prompt(t("msg.copyPrompt"), undefined, { defaultValue: link });
         }
     };
 
@@ -365,7 +368,7 @@ export default function InvoicesAdminPage() {
     };
 
     const remove = async (inv) => {
-        if (!window.confirm(t("msg.confirmDelete", { number: inv.number, client: inv.client_name }))) return;
+        if (!(await confirm(t("msg.confirmDelete", { number: inv.number, client: inv.client_name }), undefined, true))) return;
         setBusyId(inv.id);
         try {
             await apiDelete(`/plugin/invoices/${inv.id}`);

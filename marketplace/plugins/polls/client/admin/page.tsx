@@ -15,6 +15,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 // Labels are looked up through `t` at render time so they follow the admin's language;
 // an unknown mode falls back to the "after" label, as before.
@@ -202,6 +203,7 @@ function PollModal({ initial, onClose, onSaved }) {
 }
 
 export default function PollsAdminPage() {
+    const { confirm } = useModal();
     const { t } = useT();
     const [polls, setPolls] = useState(null); // null = loading
     const [modal, setModal] = useState(null); // null = closed, {} = new, {poll} = edit
@@ -231,7 +233,7 @@ export default function PollsAdminPage() {
     };
 
     const remove = async (poll) => {
-        if (typeof window !== "undefined" && !window.confirm(t("msg.deleteConfirm", { question: poll.question }))) return;
+        if (!(await confirm(t("msg.deleteConfirm", { question: poll.question }), undefined, true))) return;
         setBusyId(poll.id); setMessage("");
         try {
             await apiDelete(`/plugin/polls/${poll.id}`);

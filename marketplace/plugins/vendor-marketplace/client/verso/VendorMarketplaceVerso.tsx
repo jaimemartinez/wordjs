@@ -18,6 +18,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useModal } from "@/contexts/ModalContext";
 
 const API = "/api/v1/plugin/vendor-marketplace";
 const TOKEN_KEY = "wjmk_portal_token";
@@ -214,6 +215,7 @@ function ProductModal({ product, symbol, onClose }) {
 
 // ---- inline vendor portal (login -> own products CRUD + inquiries) ------------------------------
 function PortalPanel({ symbol, onBack }) {
+    const { confirm } = useModal();
     const [token, setToken] = useState(readToken);
     const [me, setMe] = useState(null);
     const [checking, setChecking] = useState(!!readToken());
@@ -324,7 +326,7 @@ function PortalPanel({ symbol, onBack }) {
     };
 
     const deleteProduct = async (p) => {
-        if (typeof window !== "undefined" && !window.confirm(`¿Eliminar "${p.name}"?`)) return;
+        if (!(await confirm(`¿Eliminar "${p.name}"?`, undefined, true))) return;
         setBusy(true); setMsg("");
         try {
             await portalFetch(`/portal/products/${p.id}`, token, { method: "DELETE" });

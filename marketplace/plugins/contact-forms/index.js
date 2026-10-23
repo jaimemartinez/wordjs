@@ -21,7 +21,7 @@
 
 exports.metadata = {
     name: 'Contact Forms',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Form builder with custom fields, Verso embed block, submissions inbox, CSV export and email notifications.',
     author: 'WordJS',
 };

@@ -15,6 +15,7 @@ import { createPortal } from "react-dom";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import NewsletterTab from "./NewsletterTab";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 // Translation keys (looked up through t); an unknown status / source shows its raw value.
 const STATUS_LABELS = { active: "status.active", past_due: "status.past_due", canceled: "status.canceled", incomplete: "status.incomplete", expired: "status.expired" };
@@ -134,6 +135,7 @@ function TierModal({ initial, symbol, onClose, onSaved }) {
 }
 
 export default function MembershipsAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [tab, setTab] = useState("tiers");
     const [message, setMessage] = useState("");
@@ -161,7 +163,7 @@ export default function MembershipsAdminPage() {
     useEffect(() => { loadConfig(); loadTiers(); loadMembers(); }, []);
 
     const deleteTier = async (tier) => {
-        if (!window.confirm(t("tiers.deleteConfirm", { name: tier.name }))) return;
+        if (!(await confirm(t("tiers.deleteConfirm", { name: tier.name }), undefined, true))) return;
         try { await apiDelete(`/plugin/memberships/tiers/${tier.id}`); setMessage(t("tiers.deleted")); loadTiers(); } catch (e) { setMessage(`Error: ${e.message}`); }
     };
 
@@ -184,7 +186,7 @@ export default function MembershipsAdminPage() {
     const revoke = async (m) => {
         const who = (m.user && (m.user.email || m.user.login)) || `#${m.user_id}`;
         const what = m.source !== "comped" ? t("members.revokeProvider", { provider: SOURCE_LABELS[m.source] ? t(SOURCE_LABELS[m.source]) : m.source }) : t("members.revokeComped");
-        if (!window.confirm(t("members.revokeConfirm", { who, what }))) return;
+        if (!(await confirm(t("members.revokeConfirm", { who, what }), undefined, true))) return;
         setBusy(true);
         try { await apiPost(`/plugin/memberships/members/${m.id}/revoke`, {}); setMessage(t("members.revoked")); loadMembers(); } catch (e) { setMessage(`Error: ${e.message}`); } finally { setBusy(false); }
     };

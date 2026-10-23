@@ -15,6 +15,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const STATUS_CLS = {
     pending: "is-pending",
@@ -205,6 +206,7 @@ function CampaignCard({ c, symbol, onEdit, onDelete }) {
 }
 
 export default function DonationsAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [tab, setTab] = useState("campaigns");
     const [message, setMessage] = useState("");
@@ -279,7 +281,7 @@ export default function DonationsAdminPage() {
     useEffect(() => { if (tab === "donations") loadDonations(); }, [tab, filterCampaign, filterStatus]);
 
     const deleteCampaign = async (c) => {
-        if (!window.confirm(t("campaigns.confirmDelete", { title: c.title }))) return;
+        if (!(await confirm(t("campaigns.confirmDelete", { title: c.title }), undefined, true))) return;
         try {
             await apiDelete(`/plugin/donations/campaigns/${c.id}`);
             setMessage(t("campaigns.deleted", { title: c.title }));
@@ -303,7 +305,7 @@ export default function DonationsAdminPage() {
     };
 
     const deleteDonation = async (d) => {
-        if (!window.confirm(t("donations.confirmDelete", { name: d.donor_name || t("common.noName"), amount: fmtMoney(d.amount_cents, symbol, locale) }))) return;
+        if (!(await confirm(t("donations.confirmDelete", { name: d.donor_name || t("common.noName"), amount: fmtMoney(d.amount_cents, symbol, locale) }), undefined, true))) return;
         setBusy(true);
         try {
             await apiDelete(`/plugin/donations/donations/${d.id}`);

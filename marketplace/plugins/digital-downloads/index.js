@@ -30,7 +30,7 @@
 
 exports.metadata = {
     name: 'Digital Downloads',
-    version: '1.1.2',
+    version: '1.1.3',
     description: 'Downloadable products (private media files) with token-gated, expiring, limited-use download links.',
     author: 'WordJS',
 };
