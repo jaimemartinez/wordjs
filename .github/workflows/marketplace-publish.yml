@@ -1,0 +1,98 @@
+name: Publish marketplace
+
+# Publishes marketplace plugin updates WITHOUT a new WordJS release.
+#
+# Every install reads its catalog from releases/latest/download (DEFAULT_REMOTE in
+# backend/src/routes/marketplace.ts), and release.yml only refreshes those assets on a version tag.
+# This workflow rebuilds the catalog and the plugin zips from a chosen ref, runs the same integrity
+# gate as the release, and replaces the marketplace assets on the LATEST release, so a plugin fix
+# reaches every site at once, with no core upgrade.
+#
+# It never touches the core bundle (wordjs-<tag>.zip), its .sha256 or the SBOM. Publish only when the
+# plugins at `ref` run on the core of the latest release: a plugin that needs a newer core belongs in
+# a core release instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or commit to build the plugins from'
+        required: true
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Rebuild and publish the marketplace catalog
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write # replaces assets on the latest release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+            gateway/package-lock.json
+            setup/package-lock.json
+
+      # Same install as release.yml: build-marketplace compiles each plugin's frontend bundles.
+      - name: Install all workspaces
+        run: npm run ci:all
+
+      - name: Build marketplace catalog + plugin zips
+        run: npm run build:marketplace
+
+      # The installer refuses any package whose sha256 does not match its catalog entry, so a drift here
+      # would make a plugin uninstallable for everyone. Same gate as release.yml and ci.yml.
+      - name: Verify the catalog matches the artifacts it publishes
+        run: npm run verify:marketplace
+
+      - name: Publish to the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release view --json tagName --jq .tagName)"
+          echo "latest release: $tag"
+          cd marketplace/dist
+          # Zips first, the catalog last: an install never sees an index that points at a zip that is
+          # not there yet.
+          zips=(*.zip)
+          gh release upload "$tag" "${zips[@]}" --clobber
+          gh release upload "$tag" marketplace-index.json marketplace-themes-index.json --clobber
+          # Drop plugin zips the new catalog no longer lists (older versions). The core bundle, its
+          # checksum, the SBOM and the catalogs are never candidates.
+          for asset in $(gh release view "$tag" --json assets --jq '.assets[].name'); do
+            case "$asset" in
+              wordjs-*|*.json|*.sha256) continue ;;
+            esac
+            if [[ "$asset" == *.zip && ! -f "$asset" ]]; then
+              echo "removing stale asset $asset"
+              gh release delete-asset "$tag" "$asset" --yes
+            fi
+          done
+          {
+            echo "### Marketplace published to $tag"
+            echo
+            echo "Built from \`${{ inputs.ref }}\` ($(git rev-parse --short HEAD))."
+            echo
+            for z in "${zips[@]}"; do echo "- $z"; done
+          } >> "$GITHUB_STEP_SUMMARY"
