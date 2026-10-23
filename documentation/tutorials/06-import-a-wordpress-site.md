@@ -66,7 +66,7 @@ matched, not duplicated, and an attachment that already downloaded is never fetc
 | `/friday-roast-schedule` | The second post |
 | `/wholesale` | The page |
 | `/category/brewing`, `/tag/pour-over` | The archives, listing the imported posts |
-| `/author/user-<id>` | María's author archive. WordJS never puts a sign-in name in a public address, so the archive uses her user number (shown in **Users**). |
+| `/author/user-<id>` | María's author archive. WordJS never puts a sign-in name in a public address, so the archive uses her account number instead. |
 
 ## Good to know
 

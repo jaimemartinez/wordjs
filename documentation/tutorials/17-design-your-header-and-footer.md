@@ -8,8 +8,8 @@ your site still has text from the old **Footer** settings page — you convert i
 
 **Time:** about 15 minutes.
 **You need:** a WordJS site and an administrator account (any account that can edit theme options),
-from [Tutorial 1](01-install-on-a-linux-server.md) or any other install. A menu assigned to the
-**header** and **footer** locations in **Admin → Menus** makes the result look like a real site.
+from [Tutorial 1](01-install-on-a-linux-server.md) or any other install. A menu ticked for the
+**Main Menu** and **Footer Menu** boxes in **Admin → Menus** makes the result look like a real site.
 
 ## 1. Open the editor and read the badge
 
