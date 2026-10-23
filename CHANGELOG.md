@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-10-23
+
 ### Added
 
 - **Settings → Emails: every message the site sends is editable, and arrives in a proper HTML layout.**
