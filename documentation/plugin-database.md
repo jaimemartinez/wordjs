@@ -383,6 +383,14 @@ async function migrate(wordjs) {
 >
 > Mind an `ADD COLUMN`'s `DEFAULT`: it only fills existing rows on the boot where the column is first
 > created. New rows arrive with whatever value your `INSERT` supplies.
+>
+> On **PostgreSQL and MySQL/MariaDB** write the column type in SQLite's dialect, as in `CREATE TABLE`:
+> since 2.9.0 `ALTER TABLE … ADD [COLUMN] [IF NOT EXISTS] <col> <type>` gets exactly the translation a
+> `CREATE TABLE` column gets (`DATETIME` → `TIMESTAMP`, `BLOB` → `BYTEA` on PostgreSQL; `TEXT DEFAULT '…'`
+> accepted on MySQL 8), and a type word inside a quoted default (`DEFAULT 'DATETIME'`) is left alone. On
+> PostgreSQL a table you create with an auto-numbered id (`INTEGER PRIMARY KEY AUTOINCREMENT`, `SERIAL`
+> or `IDENTITY`) also gives your plugin's database role the sequence behind it, so the first insert after
+> activation works without a restart.
 
 ## Complete examples
 

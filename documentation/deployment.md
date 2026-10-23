@@ -68,6 +68,27 @@ WordJS ships **downloadable, pre-compiled bundles** so an operator can deploy wi
 
 > **Latest release:** [v2.9.0](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
 
+### Versioning policy
+
+WordJS follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`):
+
+- **Patch** (`2.9.0` → `2.9.1`): fixes only — nothing new for an administrator or a plugin author to learn.
+- **Minor** (`2.9.0` → `2.10.0`): a new feature, screen, API or option, backwards compatible. A release
+  whose [Unreleased] section has anything under *Added* is a minor.
+- **Major** (`2.x` → `3.0.0`): a change that breaks something that worked — an API, a config key or a plugin
+  contract — without a compatible path.
+
+Something an operator must act on during an upgrade (a raised Node.js floor, database TLS now verified)
+gets a **⚠️ Upgrade note** in that release's CHANGELOG section, whatever the bump. Marketplace plugins are
+versioned on their own, by the same rules, in their `manifest.json`. A version is released only with no
+known open bug in it.
+
+A release bumps, in one pull request: the `version` of the root, `backend` and `packages/create-wordjs`
+`package.json` (and their lockfiles), the [Unreleased] heading of `CHANGELOG.md` to `## [x.y.z] - <date>`,
+`deploy/helm/wordjs/Chart.yaml` (`appVersion` to the release, `version` — the chart's own — by one minor),
+the image-tag examples in `deploy/helm/wordjs/values.yaml` and the chart README, the *Latest release* line and the
+tag examples on this page, and the supported-versions table in `SECURITY.md`.
+
 ### How a release is cut (maintainers)
 
 Push a version tag and the release pipeline does the rest:
@@ -77,7 +98,7 @@ git tag v2.9.0
 git push origin v2.9.0
 ```
 
-A `v*` tag triggers **`.github/workflows/release.yml`**. It runs a **`verify`** job first — `npm run ci:all` (the parallel workspace installer, root `scripts/ci-install.mjs`), then the dependency-audit gate (`scripts/ci-audit.mjs`, which wraps `npm audit --omit=dev --audit-level=high` and blocks on any high/critical advisory in production dependencies) in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, a strict backend type check (`npx tsc --noEmit`) and the backend unit tests (`npm test`). Nothing is built or published unless that job is green. The **`build-release`** job (`needs: verify`) then runs `npm run ci:all` again followed by `npm run bundle-release` (root `scripts/make-release.js`). The packager:
+A `v*` tag triggers **`.github/workflows/release.yml`**. It runs a **`verify`** job first — `npm run ci:all` (the parallel workspace installer, root `scripts/ci-install.mjs`), then the dependency-audit gate (`scripts/ci-audit.mjs`, which wraps `npm audit --omit=dev --audit-level=high` and blocks on any high/critical advisory in production dependencies) in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, and a strict backend type check (`npx tsc --noEmit`), plus the frontend, gateway and `create-wordjs` tests; the backend unit suite runs beside it in **`verify-backend-tests`**, four parallel shards (`npm test -- --test-shard=N/4`). Nothing is built or published unless `verify` and all four shards are green. The **`build-release`** job (`needs: [verify, verify-backend-tests]`) then runs `npm run ci:all` again followed by `npm run bundle-release` (root `scripts/make-release.js`). The packager:
 
 1. Builds the **frontend** (`next build` → `.next`) **hermetically**: it deletes `frontend/.next/cache` first and builds with `WORDJS_HERMETIC_BUILD=1` (`frontend/hermetic-build.js`), so prerendering cannot read a backend running on the packaging machine — its server-side reads fail exactly as on a clean CI runner, the baked `/api` rewrite is the compiled-in default whatever `wordjs-config.json` or `WORDJS_BACKEND_URL` say, and the prebuild plugin registries list only the plugins git tracks (no backend is asked which are active). The shell's `NEXT_PUBLIC_*` variables are dropped from the build, and a `frontend/.env*` file that sets one stops it. `scripts/release-hermetic-check.js` then fails the bundle on any trace of a live backend in the output (a fetch-cache entry, a path prerendered from `generateStaticParams`, a prerendered title other than the default `WordJS`, a non-default rewrite) or a plugin module git does not track in the generated registries.
 2. Compiles the **backend** to `dist/` (`tsc`), so the bundle runs without `ts-node`.
@@ -239,6 +260,51 @@ Example `backend/wordjs-config.json`:
 > Because this is invisible from the front end, the fallback now reports itself in two places instead of one boot-log line: a **persistent admin notice** (`db.sqlite-legacy-fallback`, shown on **Admin → Notices**) and `GET /api/v1/health/details`, whose `database` section carries `driver` (the driver **actually** running, not the configured one), `degraded: true` and a `reason`. To fix it, run `npm rebuild better-sqlite3` in `backend/` and restart — the next boot on the native driver retires the notice on its own. Note that each SQLite driver keeps its **own** data file, so if you decide to stay on a different driver, move the data with `npm run migrate` rather than by editing `dbDriver` alone.
 >
 > If you would rather the site not start than run degraded, turn on **strict driver mode**: `"dbStrictDriver": true` in `backend/wordjs-config.json` or `WORDJS_DB_STRICT=1` in the backend's environment (the variable wins; `WORDJS_DB_STRICT=0` turns it off for one boot). The fallback then becomes a boot error that names the failed driver, the cause and the fix, and a SQLite build without FTS5 fails migration `0008` instead of skipping it. It is off by default. See [database.md → Strict driver mode](database.md#strict-driver-mode-dbstrictdriver--wordjs_db_strict).
+
+---
+
+## 🎛️ Managing a running site from the panel
+
+The rule is **zero config**: whatever an administrator needs after the install is a screen in the admin
+panel first, and a command or a config edit only as the second way. The screens an operator uses most:
+
+| Screen | What it does | The second way |
+|---|---|---|
+| **Admin → Updates** | Installs a newer release: backup, upgrade, restart, rollback ([§ Updates](#-updates)) | `npx create-wordjs@latest upgrade` |
+| **Admin → Site Health** | Runs the install's diagnostics — versions and Node.js, writable folders and free disk, the database's answer time and engine, password-reset mail and SPF/DMARC, HTTPS and the certificate, a proxy that is not trusted, the scheduler, plugin isolation, whether WordJS can restart itself, a newer release — each with a link to the screen that fixes it | `GET /api/v1/health/site`, `GET /api/v1/health/details` |
+| **Admin → Servers** | Split and separate mode: the nodes the gateway knows with their health, join tokens for a new backend or frontend (password and a two-factor code; the screen prints the `node-join` command to run on the new machine), removing a node, revoking unused tokens ([separate-mode.md](separate-mode.md#managing-the-cluster-from-the-admin-panel)) | `npm run cluster -- token \| tokens \| revoke-tokens \| info` |
+| **Settings → Network** | Turns a network of sites on and off, picks the network administrators, and moves a `sqlite-legacy` site to `sqlite-native` ([multisite.md](multisite.md)) | `npm run network -- enable \| disable \| admins` |
+| **Settings → Site address** | The main address and the other names the site answers ([site-address.md](site-address.md)) | `npm run site` |
+| **Admin → Security** | Certificates (one name, or automatic renewal for several, with the port-80 listener for HTTP-01), and in a monolith the public port and the HTTPS switch | `PORT`, `WORDJS_HTTP`, `gateway-config.json` |
+| **Admin → Security → Server** | Which proxies to trust (address-based only) and the log level | `WORDJS_TRUST_PROXY`, `LOG_LEVEL` |
+| **Settings → Performance & Cache** | The page cache, and the Redis server: host, port, database and password, tested before it is saved, with its state (connected, configured but not answering, not configured) | the `redis` block, `REDIS_*` |
+| **Settings → Backups** | Backups, how many to keep, and restore (WordJS restarts by itself after a restore) | — |
+| **Admin → DB Migration** | Moves the site to another engine (SQLite, PostgreSQL, MySQL/MariaDB), then restarts | `dbDriver` in `wordjs-config.json` plus a restart |
+
+What still needs a terminal, and why: the first install and the systemd unit (`create-wordjs`, before
+there is a panel), creating a separate-mode cluster and the very first backend's join token, running
+`node-join` on a new machine, upgrading split or separate mode (each machine), and the environment-only
+security gates (`WORDJS_AI_ALLOW_PRIVATE_PROVIDER`, `WORDJS_ACCOUNT_MAIL_ALLOW_PRIVATE_RELAY`).
+
+### Restarting by itself (exit code 75)
+
+A few settings are read only when the backend starts — the database engine, the network switch, the
+Redis connection, trusted proxies and the log level, the monolith's port and HTTPS, a restored backup, a
+new version. After saving one of them the panel **restarts WordJS by itself** and the page waits for it
+to come back. How depends on what started the process:
+
+| Started with | Restarted by |
+|---|---|
+| `npm run start:mono` / `node monolith.js` (the monolith, the Docker image) and `npm start` (split mode) | Their own supervisor (`monolith.js`, `backend/server.js`): the app exits with code **75** and is started again at once; it never counts as a crash. |
+| `npm run dev` | `node --watch` (the entry file is touched). |
+| systemd, Kubernetes, pm2, Docker's restart policy | The service manager: the process exits with code 75 (non-zero, so `Restart=on-failure` restarts it). |
+| Anything else (`node dist/index.js` typed in a terminal) | Nothing: the screen says so before you save, saves the change and asks for one restart by hand. |
+
+Site Health reports which case applies. If your own manager restarts the process on exit but is not one
+WordJS recognises, set `WORDJS_RESTART_ON_EXIT=1` in its environment. `WORDJS_NO_SUPERVISOR=1` runs the
+monolith in a single process, without its supervisor (then something else must restart it). With
+several backend nodes, the node that applied a boot-time change announces it on Redis
+(`wordjs:node-restart`) and every other node applies it and restarts too.
 
 ---
 
@@ -704,16 +770,17 @@ WordJS is **MIT-licensed** consistently across every package (root, `backend`, `
 
 ## 🤖 Continuous Integration
 
-CI runs on every pull request and on pushes to `main` and `v*` tags via `.github/workflows/ci.yml`, on **Node 22**, with fourteen jobs — two of them four-way matrices, so a run has twenty legs (the `Docker image (build + boot + install)` job is described under [What CI checks](#what-ci-checks)):
+CI runs on every pull request, on `v*` tags, once a day on `main` (`17 6 * * *`, 06:17 UTC) and on manual dispatch via `.github/workflows/ci.yml`, on **Node 22**. A newer push to the same pull request or branch cancels the run it supersedes; the daily run has its own concurrency group, so a merge never cancels it. Branch protection on `main` requires the merge-carrying checks and **requires a branch to be up to date with `main`** before it merges. The jobs (the `Docker image (build + boot + install)` job is described under [What CI checks](#what-ci-checks)):
 
 - **Gates that travel:** a checkout-only job (no npm, no database, no build) that asserts two things a checkout can answer: every file on an explicit manifest of required gate files is present **and tracked by git**, and every tracked test file is actually run by one of the suites this workflow invokes. It exists because an untracked gate is vacuously green in CI, and because `node --test 'src/tests/*.test.ts'` does not recurse into subdirectories.
 - **Backend**, as three jobs:
   - **Backend gates** — **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **lint** (`npm run lint`; ESLint errors block the job, warnings do not) → **build** (`npm run build`, compile to `dist/`) → the **F0–F6 verifiers** (`npm run verify:f0` … `verify:f6`, one step each) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → the **F0 content performance budget** (`npm run perf:f0`) → **integration tests** (`npm run test:integration`, against real **`postgres:16`** + **`redis:7`** service containers) → the marketplace catalog integrity step described below.
-  - **Backend unit tests**, in **four shards** (`npm test -- --test-shard=<k>/4`: node splits the sorted file list, so every test file runs in exactly one shard), each with real **`postgres:16`**, **`redis:7`** and **`mysql:8`** service containers.
+  - **Backend unit tests**, in **eight shards** (`npm test -- --test-shard=<k>/8`: node splits the sorted file list, so every test file runs in exactly one shard), each with real **`postgres:16`**, **`redis:7`** and **`mysql:8`** service containers. To reproduce one red leg locally, run the same command with its `k` (see `CONTRIBUTING.md`).
   - **Backend** — an aggregator with the required check's name, green only when the gates job and every shard are.
 
   Both test steps run with `WORDJS_CI_DB=1`, which turns the Postgres/MySQL driver-conformance blocks from graceful skips into hard failures — this is the only coverage of the SQLite→MySQL translation layer. The integration tests exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`). The gates job ends with a **marketplace catalog integrity** step that rebuilds the catalog (`build-marketplace.js`) and then runs `verify-marketplace.js --rebuild`, which re-hashes every zip on disk against the catalog entry advertising it, checks each manifest and its compiled frontend bundles, rejects packages carrying a plugin's runtime `data/` or exceeding the installer's 10 MB cap, and requires a second build of unchanged sources to be byte-identical. The catalog itself (`marketplace/dist/`) is **not** committed — it is a build output published as GitHub Release assets by `release.yml` — so this step validates the build rather than a checked-in artifact.
-- **Backend coverage:** the same backend unit suite run instrumented in four parallel shards (`backend-coverage-shard`, with the same service containers and `WORDJS_CI_DB=1`) and merged with `c8 report` (`npm run test:coverage:report`, the options of `test:coverage:check`) in `backend-coverage`, in parallel with the Backend jobs, as a ratchet that fails a run whose line coverage drops below the committed floor.
+- **Backend coverage:** the same backend unit suite run instrumented in four parallel shards (`backend-coverage-shard`, with the same service containers and `WORDJS_CI_DB=1`) and merged with `c8 report` (`npm run test:coverage:report`, the options of `test:coverage:check`) in `backend-coverage`, as a ratchet that fails a run whose line coverage drops below the committed floor. It runs **only in the daily scheduled run and on a manual dispatch**, never on a pull request, and is not a required check.
+- **Report a failed daily run (`daily-failure-issue`):** when the daily run fails, opens an issue titled *Daily CI run failed on main* labelled **`ci-daily`** (created if missing) with the run link and each job's result — or comments on the open `ci-daily` issue if there is one. It has `issues: write` only and never runs on a pull request.
 - **Multi-node coherence:** boots **two** backend cores as separate OS processes against one shared `postgres:16` + `redis:7` and asserts that an option/role change written on node A is observed on node B through the Redis bus + shared Postgres — the cross-process coverage the single-process integration test cannot give. It also `docker compose config`-validates the Docker stack.
 - **Gateway:** audit gate → tests (`npm test`), including the proxy/mTLS integration test.
 - **Install channel:** the `create-wordjs` bootstrapper (`packages/create-wordjs`), the first thing a new user runs and a package published to immutable npm — audit gate (the same `scripts/ci-audit.mjs` wrapper around `npm audit --omit=dev --audit-level=high` used by the other jobs) → its unit tests (`npm test`, i.e. `node --test test/*.test.js`, with the step failing unless the runner reports a non-zero test count, because `node --test` exits 0 when its pattern matches no files) → a `node index.js --help` smoke run so a syntax error or top-level throw in the published bin can never reach npm.
@@ -722,7 +789,7 @@ CI runs on every pull request and on pushes to `main` and `v*` tags via `.github
 - **Compiled bundle smoke-boot:** builds the real release bundle (`npm run bundle-release`), extracts it, runs `npm run release:install` on the extract and drives it through **`scripts/smoke-deploy.sh`** in all three deploy shapes (mono, split, enrollment) — the only job that runs the packaged, compiled artifact rather than the TypeScript source. It is the same step `release.yml` runs before publishing.
 - **Performance budgets:** measures the F6 performance budget on the Linux runner, prints each observation beside its ceiling and enforces the committed `linux` calibration (not a required check); a manual `workflow_dispatch` with `calibrate: true` mints a fresh calibration instead.
 
-Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAST** (`security-and-quality` queries, JavaScript/TypeScript) on push/PR to `main` and weekly, reporting to the repo's **Security** tab without blocking merges. A second per-push/PR workflow, **`.github/workflows/sandbox-parity.yml`**, certifies the compiled sandbox on a four-way OS matrix (`ubuntu-latest`, `ubuntu-22.04`, `macos-14`, `windows-latest`) by running `backend/scripts/verify-sandbox-parity.mjs` against the real kernel of each runner. A scheduled workflow, **`.github/workflows/dependency-audit.yml`**, runs the same `scripts/ci-audit.mjs` gate across **all six** workspaces (root, `backend`, `frontend`, `gateway`, `setup`, `packages/create-wordjs`) every day at 04:41 UTC — and on demand via `workflow_dispatch` — opening or commenting on a `Dependency audit failed (<date>)` issue that names the failing workspaces and links the run; `ci.yml` itself audits only `backend`, `gateway`, `frontend` and `packages/create-wordjs`, so the root and `setup` workspaces are covered by that sweep alone. The release pipeline (`release.yml`) also emits a **CycloneDX SBOM** (`release/wordjs-sbom.cdx.json`) attached as a release asset, and third-party Actions are **pinned to immutable commit SHAs** for supply-chain integrity.
+Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAST** (`security-and-quality` queries, JavaScript/TypeScript) on pull requests, pushes to `main` and weekly, reporting to the repo's **Security** tab without blocking merges. Two more workflows run on every pull request (and on manual dispatch) and are required: **`.github/workflows/f6-certification.yml`** re-runs the phase suites on all three database engines, and **`.github/workflows/sandbox-parity.yml`** certifies the compiled sandbox on a four-way OS matrix (`ubuntu-latest`, `ubuntu-22.04`, `macos-14`, `windows-latest`) by running `backend/scripts/verify-sandbox-parity.mjs` against the real kernel of each runner. A scheduled workflow, **`.github/workflows/dependency-audit.yml`**, runs the same `scripts/ci-audit.mjs` gate across **all six** workspaces (root, `backend`, `frontend`, `gateway`, `setup`, `packages/create-wordjs`) every day at 04:41 UTC — and on demand via `workflow_dispatch` — opening or commenting on a `Dependency audit failed (<date>)` issue that names the failing workspaces and links the run; `ci.yml` itself audits only `backend`, `gateway`, `frontend` and `packages/create-wordjs`, so the root and `setup` workspaces are covered by that sweep alone. The release pipeline (`release.yml`) also emits a **CycloneDX SBOM** (`release/wordjs-sbom.cdx.json`) attached as a release asset, and third-party Actions are **pinned to immutable commit SHAs** for supply-chain integrity.
 
 > **Note:** Production runs the **compiled** backend — the `server.js` supervisor launches `node dist/index.js` when `dist/` exists, and only falls back to `ts-node` in development or when no build is present. Run `npm run build` before deploying.
 
@@ -747,7 +814,15 @@ the Helm chart) or, on Kubernetes, the `KUBERNETES_SERVICE_HOST` every pod gets 
 npx create-wordjs@latest upgrade [dir]        # dir defaults to the current directory
 ```
 
-It downloads the latest release (`--version <tag>` for another one, which is also how you roll back), verifies its SHA-256, backs up the config, replaces the code while preserving the database, uploads, `wordjs-config.json` / gateway config and user-installed plugins, and runs `npm run release:install` (`--no-install` skips it). It asks before applying (`--yes` for a non-interactive run) and does nothing when the site is already on the target version (`--force` re-applies it; with `--systemd` the unit is rewritten either way). Then restart the server. Database schema migrations run automatically on the next start.
+It downloads the latest release (`--version <tag>` for another one, which is also how you roll back), verifies its SHA-256, backs up the config, replaces the code while preserving the database, uploads, backups, `wordjs-config.json` / gateway config and user-installed plugins, and runs `npm run release:install` (`--no-install` skips it). It asks before applying (`--yes` for a non-interactive run) and does nothing when the site is already on the target version (`--force` re-applies it; with `--systemd` the unit is rewritten either way). Then restart the server. Database schema migrations run automatically on the next start.
+
+Without access to GitHub (or to pin the exact bundle), download `wordjs-<tag>.zip` and its `.sha256` from the releases page and point the upgrade at the file:
+
+```bash
+npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.9.0.zip --sha256 <hex> --yes --force
+```
+
+`--force` is needed only when the site already reports that version (re-applying a release). Run it with `sudo` when the site belongs to the service account: the upgraded files are given back to the site's owner. Then `sudo systemctl restart wordjs`.
 
 **A source checkout:**
 

@@ -78,15 +78,39 @@ Separate-mode options:
 
 ## Upgrade an existing site
 
+**From the admin panel first.** On a standard install (the monolith started by its service, with its
+own files — the `--systemd` layout) **Admin → Updates** lists the newer releases with their notes and
+installs one with your password and a two-factor code: it takes a backup, runs this same command with
+`--version <tag>`, restarts WordJS by itself and puts the previous version back if the new one fails to
+install or to start. In a container, a git checkout, split or separate mode, or when the code belongs
+to another account, the screen says so and gives you the command instead.
+
+**From the command line:**
+
 ```bash
 cd .. && npx create-wordjs@latest upgrade my-site      # or run it from inside: npx create-wordjs@latest upgrade .
 ```
 
 Downloads the newest release and replaces the app code while **preserving your data**: the database
-directory (`backend/data`), `backend/uploads/`, `wordjs-config.json`, `.env`, gateway secrets
-(`gateway/gateway-config.json`) and any user-installed plugins survive. It asks for confirmation
-before touching an existing install — on a non-interactive shell it refuses unless you pass `--yes`.
-Restart the server afterwards (schema migrations run automatically on the next start).
+directory (`backend/data`), `backend/uploads/`, `backend/backups/`, `wordjs-config.json`, `.env`,
+gateway secrets (`gateway/gateway-config.json`) and any user-installed plugins survive; the small config
+files are also copied to a `.upgrade-backup-<time>/` folder first. It asks for confirmation before
+touching an existing install — on a non-interactive shell it refuses unless you pass `--yes`. On a
+site that is already on the target version it does nothing unless you pass `--force`. Restart the
+server afterwards (`sudo systemctl restart wordjs` for a service); schema migrations run automatically
+on the next start.
+
+```bash
+npx create-wordjs@latest upgrade /srv/wordjs --yes                                   # unattended
+npx create-wordjs@latest upgrade /srv/wordjs --version v2.9.0 --yes                  # a given release
+npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.9.0.zip --sha256 <hex> --yes --force   # offline, re-apply
+```
+
+`--zip` takes a release ZIP you downloaded (or an `https://` URL) instead of asking GitHub, and
+`--sha256` pins it to the value in `wordjs-<tag>.zip.sha256`. To go back, run `upgrade` with
+`--version <old-tag>` (add `--force` if the site already reports that version); your data stays
+intact. Run it as root (`sudo npx …`) when the site's files belong to the service account: the upgraded
+files are given back to the site's owner.
 
 ## Run it as a service (Linux)
 
@@ -193,9 +217,9 @@ need `openssl` on the PATH. Full details, port matrix and the manual (source-che
 ## What gets created
 
 A ready-to-run WordJS bundle: backend (pre-compiled to `dist/`), frontend (pre-built `.next`),
-gateway, the bundled plugins and the four bundled themes (`circuito`, `default`, `gaceta`,
-`vergel`). Marketplace plugins are **not** in the bundle — they ship as separate release assets and
-are installed from the admin. Secrets (JWT, DB password, install token) are generated
+gateway and the four bundled themes (`circuito`, `default`, `gaceta`,
+`vergel`). No plugin ships in the bundle: plugins come from the marketplace (separate release assets),
+installed from **Admin → Plugins**. Secrets (JWT, DB password, install token) are generated
 locally during install — nothing sensitive ships in the bundle. See `INSTALL.md` inside the
 scaffolded directory for the manual steps and `documentation/deployment.md` for production
 deployment.

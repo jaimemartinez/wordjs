@@ -62,7 +62,7 @@ The command:
 
 1. downloads the latest release and checks its SHA-256;
 2. backs up the config;
-3. replaces the code. Your database, uploads, `wordjs-config.json` and installed plugins are kept;
+3. replaces the code. Your database, uploads, backups, `wordjs-config.json` and installed plugins are kept;
 4. reinstalls the dependencies;
 5. gives the files back to the account that owns the site, so the service can still write its cache.
 
@@ -70,7 +70,7 @@ It ends with:
 
 ```
   Gave the upgraded files back to the site's owner (999:996).
-✅ Upgraded WordJS: v2.6.0 → v2.7.0.
+✅ Upgraded WordJS: v2.8.0 → v2.9.0.
 ```
 
 Then restart:
@@ -86,8 +86,13 @@ and look at your site: posts, pages and images are all there.
 sudo journalctl -u wordjs -n 30
 ```
 
-- **A specific version:** add `--version v2.7.0`. The same flag rolls back: run the command with the
+- **A specific version:** add `--version v2.9.0`. The same flag rolls back: run the command with the
   previous tag. Your data is kept.
+- **No access to GitHub from the server?** Download `wordjs-v2.9.0.zip` and `wordjs-v2.9.0.zip.sha256`
+  from the releases page, copy them to the server and run
+  `sudo npx -y create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.9.0.zip --sha256 <hex> --yes`
+  (`<hex>` is the first word of the `.sha256` file). Add `--force` to re-apply the version the site
+  already runs.
 - **Coming from 2.6.0?** The 2.6.0 release package carried a stray test backup, and upgrading to 2.6.0
   copied it into the site's backups. If the list shows a backup dated **2026-10-15** that you did not
   create, delete it. Don't restore it.
@@ -107,7 +112,7 @@ Say a post was deleted by mistake. It was moved to the trash, and then the trash
    accounts from the backup).
 
    Only if WordJS was started by something that does not restart it (see
-   [Restarting by itself](../multisite.md#restarting-by-itself)) the screen asks you to restart it once,
+   [Restarting by itself](../deployment.md#restarting-by-itself-exit-code-75)) the screen asks you to restart it once,
    for example `sudo systemctl restart wordjs`.
 
 The post is back, with its image. The first visit to the page can still show the cached "not found"
