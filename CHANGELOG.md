@@ -11,6 +11,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ### Security
 
 - **body-parser 1.20.9 (gateway, backend) and 2.4.0 (backend, via the MCP SDK)** for [GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828) (high): a compressed request body followed by trailing bytes could tie up the process. Lockfile-only change.
+- **multer 2.5.0 and fast-uri 3.1.9 (backend)** for [GHSA-q7qp-rjg7-q26m](https://github.com/advisories/GHSA-q7qp-rjg7-q26m) (high: a pending async fileFilter after the request is torn down could tie up the process) and the fast-uri percent-encoded scheme advisories ([GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg) and related, moderate/low). Lockfile-only change.
 
 ### Added
 
