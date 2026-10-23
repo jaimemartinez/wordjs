@@ -43,7 +43,6 @@ const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/email-
 // own errors) — an unwritable audit row must never turn a successful login into a 500.
 const { recordAudit } = require('../core/audit');
 // The one HTML escaper for every transactional mail body this router builds.
-const { escHtml } = require('../core/formatting');
 // Self-registrations that wait for their address to be confirmed before any account exists.
 const { createPendingRegistration, consumePendingRegistration } = require('../core/pending-registrations');
 
@@ -763,19 +762,17 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         // remove (the account owner can register again; the caller learns nothing either way).
         const passwordHash = await User.hashPassword(password);
         try {
-            const siteName = await getOption('blogname', 'WordJS');
+            // Account mail (core/account-mail) through the editable templates (core/email-templates): the
+            // built-in transport, or a provider plugin only if an administrator allowed it. Handed off, not
+            // awaited — the answer must not wait on (or time) the relay. Every value is escaped by the
+            // renderer (the login is chosen by an anonymous caller), and the link is drawn by the layout:
+            // no edit of the template can drop it or move the token into another field.
+            const emailTemplates = require('../core/email-templates');
+            const lang = emailTemplates.langFromRequest(req);
             if (emailTaken) {
                 // assertNewIdentity checks the username first, so this username is free: the only thing that
                 // collided is the address. Tell its owner, not the caller.
-                const text = `Someone tried to create a new ${siteName} account with this email address. It already has an account, so nothing was created.\n\nIf this was you, sign in instead, or use "Forgot password" if you no longer know your password. If it was not you, you can ignore this message.`;
-                // Account mail (core/account-mail): the built-in transport, or a provider plugin only if an
-                // administrator allowed it. Not awaited — the answer must not wait on (or time) the relay.
-                await sendAccountMailDetached({
-                    to: String(email).trim().toLowerCase(),
-                    subject: `Sign-up attempt on ${siteName}`,
-                    text,
-                    html: `<p>${escHtml(text).replace(/\n\n/g, '</p><p>')}</p>`
-                });
+                await emailTemplates.sendTemplated('account.signup_attempt', String(email).trim().toLowerCase(), { lang });
             } else {
                 const raw = await createPendingRegistration({
                     username,
@@ -786,16 +783,10 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 // The site's link base (core/site-address) — never this request's Host: whoever calls this
                 // endpoint must not be able to choose which host receives the verification token.
                 const link = `${await linkBase()}/verify-email?token=${raw}`;
-                await sendAccountMailDetached({
-                    to: String(email).trim().toLowerCase(),
-                    subject: `Verify your email for ${siteName}`,
-                    text: `Welcome to ${siteName}! Please confirm this email address to create your account (${username}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not ask for this account, you can safely ignore this email: nothing is created until the link is followed.`,
-                    // Every interpolated value is escaped (core/formatting escHtml): the login is chosen by an
-                    // anonymous caller and the site name by an administrator, and raw they put markup — a
-                    // phishing link — into a message the site itself sends.
-                    html: `<p>Welcome to <strong>${escHtml(siteName)}</strong>! Please confirm this email address to create your account (<code>${escHtml(username)}</code>).</p>`
-                        + `<p><a href="${escHtml(link)}">Verify your email</a> — this link is valid for 24 hours.</p>`
-                        + `<p>If you did not ask for this account, you can safely ignore this email: nothing is created until the link is followed.</p>`
+                await emailTemplates.sendTemplated('account.verify_email', String(email).trim().toLowerCase(), {
+                    lang,
+                    values: { user_name: username, expires: emailTemplates.durationText(VERIFY_TTL_MS, lang) },
+                    actionUrl: link,
                 });
             }
         } catch (error) {
@@ -1483,10 +1474,6 @@ async function mailReady(): Promise<boolean> {
     }
 }
 
-/** Hand an account message to its transport (core/account-mail) without waiting for delivery. */
-async function sendAccountMailDetached(msg: { to: string; subject: string; text: string; html?: string }): Promise<void> {
-    await require('../core/account-mail').handOffAccountMail(msg);
-}
 
 // EMAIL VERIFICATION on self-registration is OPT-IN and FAIL-CLOSED. It can only be *required* when a
 // mail provider can actually deliver the link — exactly the same readiness the reset flow depends on.
@@ -1622,22 +1609,18 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
     // victim's reset token. Aliases are answered, never used as a link base.
     const base = await linkBase();
     const link = `${base}/reset-password?uid=${user.id}&token=${raw}`;
-    const siteName = await getOption('blogname', 'WordJS');
 
     try {
         // A reset link is the account: it goes through account mail (core/account-mail), never to a plugin
         // provider an administrator did not allow by name. Detached, so the answer's timing is the same
-        // whether or not an account matched.
-        await sendAccountMailDetached({
-            to,
-            subject: `Password reset for ${siteName}`,
-            text: `Someone requested a password reset for your ${siteName} account (${user.userLogin}).\n\nReset your password (this link is valid for 30 minutes):\n${link}\n\nIf you did not request this, you can safely ignore this email — your password will not change.`,
-            // Every interpolated value is escaped (core/formatting escHtml): the login and the site name are
-            // written by users and administrators, and raw they could put markup — a phishing link — into a
-            // message the site itself sends.
-            html: `<p>Someone requested a password reset for your <strong>${escHtml(siteName)}</strong> account (<code>${escHtml(user.userLogin)}</code>).</p>`
-                + `<p><a href="${escHtml(link)}">Reset your password</a> — this link is valid for 30 minutes.</p>`
-                + `<p>If you did not request this, you can safely ignore this email; your password will not change.</p>`
+        // whether or not an account matched. The editable template (core/email-templates) holds the words;
+        // the link is the layout's button, outside anything an administrator can edit.
+        const emailTemplates = require('../core/email-templates');
+        const lang = emailTemplates.langFromRequest(req);
+        await emailTemplates.sendTemplated('account.password_reset', to, {
+            lang,
+            values: { user_name: user.userLogin, expires: emailTemplates.durationText(RESET_TTL_MS, lang) },
+            actionUrl: link,
         });
     } catch { /* swallow send errors — keep the response uniform, don't leak mail-infra state */ }
 

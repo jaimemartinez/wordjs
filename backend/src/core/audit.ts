@@ -207,6 +207,13 @@ const AUDIT_ACTIONS = Object.freeze({
     ACCOUNT_MAIL_SMTP: 'account_mail.smtp',
     ACCOUNT_MAIL_PROVIDER: 'account_mail.provider',
 
+    // ── Settings → Emails (routes/email-templates, core/email-templates) ─────────────────────────────
+    // A message's words were edited or reset to the default: {template, lang} (never the text itself);
+    // and the layout around every message was changed: {accentColor, backgroundColor, showLogo}.
+    EMAIL_TEMPLATE_UPDATE: 'email_template.update',
+    EMAIL_TEMPLATE_RESET: 'email_template.reset',
+    EMAIL_LAYOUT_UPDATE: 'email_layout.update',
+
     // ── The log about the log ───────────────────────────────────────────────────────────────────────
     AUDIT_PRUNE: 'audit.prune'
 } as const);

@@ -10,9 +10,10 @@ The **Performance & Cache** card's Redis server has its own buttons: see [Redis]
 
 ## Links at the top
 
-Four cards open screens of their own:
+Five cards open screens of their own:
 
 - **Account email** («Correo de la cuenta») → how password-reset and verification email is sent. See [below](#account-email).
+- **Emails** («Correos») → the words and the look of every message the site sends. See [Emails](emails.md).
 - **Site address** («Dirección del sitio») → **Manage addresses**. See [Site address and HTTPS](site-address-and-https.md#site-address).
 - **Media storage** («Almacenamiento de medios») → **Configure storage**: this server's disk or an S3-compatible
   bucket. See [Media storage](../media-storage.md).
@@ -122,3 +123,5 @@ These have their own sidebar entries:
   message to the address you type.
 - **Mail provider plugin**: a plugin that sends mail can send these links only if you press **Allow for
   account email**.
+
+The words of these messages, and the layout they are sent in, are edited in [Settings → Emails](emails.md).

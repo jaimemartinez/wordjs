@@ -123,6 +123,9 @@ const PROTECTED_OPTION_NAMES = new Set([
     // carry reset and verification links. A plugin rewriting either could route those links to itself.
     // (The relay password, 'account_mail_smtp_password', is already a secret-shaped name.)
     'account_mail_smtp', 'account_mail_provider_allowed',
+    // Settings → Emails (core/email-templates): the words of every core message, password reset and
+    // verification included, and the layout around them. Edited only by an administrator.
+    'email_templates', 'email_layout',
     // 'ai_provider' says WHERE the site's AI requests go (provider, model, base URL). Its key lives in
     // 'ai_provider_api_key', which PROTECTED_OPTION_RE already covers — but a plugin able to rewrite the
     // base URL would have the host send that key, and every prompt, to a server of its choosing.

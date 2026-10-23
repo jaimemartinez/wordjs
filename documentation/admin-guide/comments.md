@@ -55,3 +55,4 @@ In [Settings → Reading & Discussion](settings.md#reading--discussion), **Comme
 The emails are sent only when the comment arrives: approving a held comment later sends nothing. They need a
 plugin that sends mail for the site; without one,
 the settings say **No mail plugin is active on this site, so no notification will be sent.**
+Their subject and words are edited in [Settings → Emails](emails.md).

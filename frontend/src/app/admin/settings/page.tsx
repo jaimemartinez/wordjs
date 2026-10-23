@@ -291,6 +291,22 @@ export default function SettingsPage() {
                     </Link>
                 </div>
 
+                <div className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-3xl border-2 border-gray-50 bg-white px-6 py-5 shadow-xl shadow-gray-100/50">
+                    <div className="flex min-w-0 flex-1 items-start gap-4">
+                        <i className="fa-solid fa-envelope-open-text text-blue-500 text-xl mt-0.5" aria-hidden="true"></i>
+                        <div>
+                            <h2 className="text-sm font-bold text-gray-900">{t('emails.title')}</h2>
+                            <p className="text-sm text-gray-500 mt-1 leading-relaxed">{t('emails.cardHelp')}</p>
+                        </div>
+                    </div>
+                    <Link
+                        href="/admin/settings/email-templates"
+                        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-bold text-white hover:bg-gray-800 whitespace-nowrap"
+                    >
+                        {t('emails.open')} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                    </Link>
+                </div>
+
                 {/* The site address has its own screen: every change there is sudo-gated, audited and
                     notified, so it is deliberately NOT a field of this bulk form (PUT /settings refuses
                     siteurl/home). */}
