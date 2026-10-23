@@ -5,6 +5,7 @@ import { getSettings, getPostById, getLatestPostsPage, getPluginShortcodes, html
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 import BlogRoll from "@/components/public/BlogRoll";
+import { OUTAGE_ATTR, refuseOutageRender } from "@/lib/outageRender";
 
 // Server-rendered AND cached: the homepage serves from the Full-Route Cache (crawlers and first
 // paint still get the real blog roll / static page), revalidating every 60s + purged on publish.
@@ -32,9 +33,10 @@ export async function generateMetadata(): Promise<Metadata> {
     };
 }
 
+// Only ever rendered during `next build`, tagged so the post-build step drops the prerender (lib/outageRender).
 function ServiceUnavailable() {
     return (
-        <div className="min-h-[60vh] flex flex-col items-center justify-center p-8 text-center">
+        <div {...{ [OUTAGE_ATTR]: "" }} className="min-h-[60vh] flex flex-col items-center justify-center p-8 text-center">
             <div className="text-red-500 text-6xl mb-6">
                 <i className="fa-solid fa-triangle-exclamation"></i>
             </div>
@@ -48,7 +50,11 @@ function ServiceUnavailable() {
 
 export default async function HomePage() {
     const settings = await getSettings();
-    if (!settings) return <ServiceUnavailable />;
+    if (!settings) {
+        // An outage render must not be cached: at runtime this throws (the last good page keeps serving).
+        refuseOutageRender("/");
+        return <ServiceUnavailable />;
+    }
 
     // WebSite schema (+SearchAction → /search?q=) on the front page enables sitelinks search box
     // and names the site for rich results.
