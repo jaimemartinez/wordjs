@@ -103,7 +103,7 @@ export default function ConsentPage() {
         return (
             <main className="min-h-dvh bg-gray-50 flex items-center justify-center p-6" data-consent-page="error" data-consent-error={c}>
                 <div className="max-w-sm w-full bg-white rounded-3xl border border-gray-100 shadow-sm p-8 text-center space-y-3">
-                    <div className="w-14 h-14 mx-auto rounded-2xl bg-gray-100 text-gray-400 flex items-center justify-center text-2xl"><i className="fa-solid fa-file-signature" aria-hidden="true"></i></div>
+                    <div className="w-14 h-14 shrink-0 mx-auto rounded-2xl bg-gray-100 text-gray-400 flex items-center justify-center text-2xl"><i className="fa-solid fa-file-signature" aria-hidden="true"></i></div>
                     <h1 className="text-xl font-black text-gray-900">{c === "network" ? t("page.title") : t(`page.error.${c}`)}</h1>
                     <p className="text-sm text-gray-600">{c === "network" ? t("page.network") : t(`page.error.${c}.text`)}</p>
                     {c === "network" && <button type="button" onClick={load} className="min-h-[44px] px-5 rounded-2xl bg-gray-900 text-white font-black text-[11px] uppercase tracking-widest">{t("page.retry")}</button>}
@@ -125,7 +125,7 @@ export default function ConsentPage() {
         return (
             <main className="min-h-dvh bg-gray-100 px-4 py-8 sm:py-14" data-consent-page="done">
                 <div className="mx-auto w-full max-w-md bg-white rounded-3xl border border-gray-100 shadow-sm p-6 sm:p-8 space-y-4 text-center">
-                    <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-2xl"><i className="fa-solid fa-circle-check" aria-hidden="true"></i></div>
+                    <div className="w-14 h-14 shrink-0 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-2xl"><i className="fa-solid fa-circle-check" aria-hidden="true"></i></div>
                     <h1 className="text-xl font-black text-gray-900">{t("page.done.title")}</h1>
                     <p className="text-sm text-gray-600">{t("page.done.text", { when: whenOf(state.at) })}</p>
                     <ul className="text-left">{row("page.done.general", state.choices.general)}{row("page.done.health", state.choices.health)}{row("page.done.image", state.choices.image)}</ul>
@@ -219,7 +219,7 @@ export default function ConsentPage() {
         <main className="min-h-dvh bg-gray-100 px-4 py-6 sm:py-10" data-consent-page="form">
             <form onSubmit={submit} noValidate className="mx-auto w-full max-w-xl space-y-4">
                 <header className="text-center space-y-2 pt-2">
-                    <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-2xl"><i className="fa-solid fa-file-signature" aria-hidden="true"></i></div>
+                    <div className="w-14 h-14 shrink-0 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-2xl"><i className="fa-solid fa-file-signature" aria-hidden="true"></i></div>
                     <h1 className="text-2xl font-black text-gray-900">{t("page.title")}</h1>
                     <p className="text-[11px] font-black uppercase tracking-widest text-gray-500">Conferencia: {view.conference}</p>
                 </header>
