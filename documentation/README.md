@@ -7,6 +7,11 @@ are in the [repository README](../README.md); security reports go through [SECUR
 
 - [Tutorials](tutorials/README.md) — step-by-step walkthroughs.
 
+## Using the admin
+
+- [Admin guide](admin-guide/README.md) — running a site from the admin panel, screen by screen: your account, media and
+  folders, posts and tags, menus, comments, users, settings, plugins, and the site address and HTTPS.
+
 ## Getting started
 
 - [development.md](development.md) — installing dependencies, the compiled build, the strict typecheck, and running the services in development or production.
