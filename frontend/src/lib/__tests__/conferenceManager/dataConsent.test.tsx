@@ -337,3 +337,12 @@ describe('verbal health authorization (2.34.0)', () => {
         expect(s).not.toContain('YesNo');
     });
 });
+
+describe('registering without an e-mail (2.35.0)', () => {
+    it('«Sin correo» is said in each language, the resend button hides, and the toast says what to do', () => {
+        for (const l of ['es', 'en', 'pt']) for (const k of ['noemail.badge', 'noemail.hint', 'portal.registered.noemail']) expect(consentT(l)(k)).not.toBe(k);
+        expect(src('client/portal/ConsentBits.tsx')).toContain('!consent.no_email &&');
+        expect(src('client/admin/ConsentAdmin.tsx')).toContain('!noEmail.has(p.id)');
+        expect(src('client/portal/CoordinatorPortal.tsx')).toContain("ct('portal.registered.noemail')");
+    });
+});

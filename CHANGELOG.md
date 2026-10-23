@@ -8,6 +8,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **conference-manager 2.35.0: registering without an e-mail.** While a conference asks for «Autorización de
+  datos», a person can now be registered without an e-mail, for example a walk-in who signs on paper.
+  - An e-mail written in the form must still be a valid one. An e-mail field the administrator marked as required
+    stays required.
+  - Without an e-mail nothing is sent. The person is marked «Sin correo» in Autorizaciones and in the coordinators'
+    portal, and «Reenviar enlace» is hidden for them.
+  - «Copiar mensaje» still shares the link, and the consent page asks for the e-mail (from 2.33.3). The paper sheet
+    lists them like anyone else.
+  - Badges and the CSV export work as before, with the e-mail column empty.
+  - Duplicates: with no e-mail, a registration with the same name (accents and case aside) and the same ID document
+    number or phone counts as a duplicate. Cancelled registrations do not count. In the portal the check covers the
+    coordinator's own locality.
+
 - **conference-manager 2.34.0: paper consent and verbal health authorization.**
   - **Paper consent («Consentimiento en papel»).** People who sign by hand can authorize the processing of their
     data on a printed sheet. This sits alongside the e-mailed code; it does not replace it. Coordinators work in

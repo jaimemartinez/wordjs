@@ -245,6 +245,20 @@ test('a verbal health authorization is confirmed by the paper signature, or its 
     for (const id of [ana, beto]) assert.strictEqual(ok(await w.p.call('get', `/consent/evidence/${id}`)).chain_ok, true);
 });
 
+test('a walk-in without an e-mail is registered, printed on the sheet and signs on paper (2.35.0)', async () => {
+    const w = await world();
+    const made = ok(await w.portal('post', '/portal/inscriptions', w.tNorte, { first_name: 'Dora', last_name: 'Sin Correo', email: '', age: 60 }));
+    assert.strictEqual(made.consent.no_email, true);
+    const sheet = ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create' }));
+    assert.ok(sheet.html.includes('Dora Sin Correo'));
+    ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'upload', sheet_id: sheet.sheet.id, data_url: dataUrl('image/png', PNG) }));
+    ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'marks', sheet_id: sheet.sheet.id, marks: [{ inscription_id: made.id }] }));
+    const g = w.events(made.id).find(e => e.kind === 'granted');
+    assert.strictEqual(g.email, null, 'no e-mail, and none needed');
+    assert.strictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[made.id].state, 'granted');
+    assert.strictEqual(w.p.mails.filter((m: any) => /Dora/.test(m.text || '')).length, 0, 'no confirmation e-mail attempted');
+});
+
 test('the activation scan accepts the plugin (no computed call, every permission declared)', () => {
     const { validatePluginPermissions } = require('../core/plugins');
     const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'manifest.json'), 'utf8'));

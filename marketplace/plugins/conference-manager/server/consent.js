@@ -724,6 +724,16 @@ function createConsent(base) {
         }
         return out;
     }
+    /** Has the person a valid e-mail on file (the form's e-mail field)? (2.35.0: registering without one is allowed.) */
+    async function hasEmail(ins) {
+        return !!(await emailOf(ins, await formOf(ins.conference_id)));
+    }
+    /** The ids of a conference's people without a valid e-mail on file («sin correo», 2.35.0). */
+    async function noEmailIds(conferenceId) {
+        const f = emailFieldOf(await formOf(conferenceId));
+        const rows = await db.all(`SELECT id${f ? `, ${f.name} AS email_value` : ''} FROM ${T.inscriptions} WHERE conference_id = ?`, [conferenceId]);
+        return rows.filter(r => !f || !EMAIL_RE.test(String(r.email_value == null ? '' : r.email_value).trim())).map(r => Number(r.id));
+    }
     /** Has the person's general authorization (the one that confirms an inscription)? */
     async function isGranted(inscriptionId) {
         const r = await requestOf(inscriptionId);
@@ -929,7 +939,7 @@ function createConsent(base) {
             try {
                 const cid = positiveInt(req.query.conference_id);
                 if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
-                res.json({ enabled: await isEnabled(cid), states: Object.fromEntries(await statesOf(cid, null)) });
+                res.json({ enabled: await isEnabled(cid), states: Object.fromEntries(await statesOf(cid, null)), no_email: await noEmailIds(cid) });
             } catch (e) { sendError(res, e); }
         });
         // POST /consent/send { inscription_id } → the link (inscriptions:manage).
@@ -1129,7 +1139,7 @@ function createConsent(base) {
     });
 
     return {
-        migrate, ensureReady, install, isEnabled, settingsOf, statesOf, isGranted, healthAllowed, healthWritten, healthRefused, healthEntered, issueLink, shareLink, purgeDue, eventsOf,
+        migrate, ensureReady, install, isEnabled, settingsOf, statesOf, isGranted, hasEmail, healthAllowed, healthWritten, healthRefused, healthEntered, issueLink, shareLink, purgeDue, eventsOf,
         VERBAL_STATEMENT,
         MSG, LIMITS,
     };

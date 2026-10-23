@@ -61,6 +61,8 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
     const [defaults, setDefaults] = useState<any>(null);
     const [people, setPeople] = useState<any[]>([]);
     const [states, setStates] = useState<Record<string, any>>({});
+    // 2.35.0: the people without an e-mail on file («Sin correo»): no link to e-mail them, «Copiar mensaje» or paper.
+    const [noEmail, setNoEmail] = useState<Set<number>>(new Set());
     const [enabled, setEnabled] = useState(false);
     const [q, setQ] = useState("");
     const [onlyVerbal, setOnlyVerbal] = useState(false);
@@ -93,6 +95,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
             ]);
             if (s) { setSettings(s.settings); setDraft({ ...s.settings, policy_url: s.settings.policy_url_custom }); setDefaults(s.defaults); }
             setStates(st.states || {});
+            setNoEmail(new Set((st.no_email || []).map(Number)));
             setEnabled(!!st.enabled);
             setPeople(Array.isArray(list) ? list : []);
         } catch (e: any) { addToast(e?.message || "Error", "error"); }
@@ -342,10 +345,14 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                                             )}
                                             {st && st.method === "paper" && <span className="ml-2 inline-block border border-gray-200 rounded-full px-2 py-0.5 text-[10px] font-bold text-gray-600" data-consent-method="paper"><i className="fa-solid fa-file-signature mr-1" aria-hidden="true"></i>{t("paper.method")}</span>}
                                         </td>
-                                        <td className="px-4 py-3 text-xs text-gray-500">{st ? st.email_masked : ""}</td>
+                                        <td className="px-4 py-3 text-xs text-gray-500">
+                                            {noEmail.has(p.id) && !(st && st.email_masked)
+                                                ? <span className="inline-block border border-gray-200 bg-gray-50 rounded-full px-2 py-0.5 text-[10px] font-bold text-gray-600" title={t("noemail.hint")} data-consent-noemail="">{t("noemail.badge")}</span>
+                                                : (st ? st.email_masked : "")}
+                                        </td>
                                         <td className="px-4 py-3">
                                             <div className="flex flex-wrap justify-end gap-2">
-                                                {enabled && canManage && state !== "granted" && (
+                                                {enabled && canManage && state !== "granted" && !noEmail.has(p.id) && (
                                                     <button type="button" disabled={busyId === p.id} onClick={() => send(p.id)} className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50" data-consent-send={p.id}>
                                                         {st ? t("portal.resend") : t("portal.send")}
                                                     </button>
