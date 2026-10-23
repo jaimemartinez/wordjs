@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Plugin updates without a core release.** A new *Publish marketplace* workflow rebuilds the marketplace catalog and plugin zips, runs the same integrity gate as a release, and replaces the marketplace assets on the latest release, so a plugin update reaches every site's Marketplace tab without a new WordJS version (see `documentation/deployment.md`).
+
 ## [2.10.0] - 2026-10-23
 
 ### Added
