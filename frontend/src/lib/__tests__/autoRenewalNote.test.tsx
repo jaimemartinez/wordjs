@@ -4,7 +4,6 @@
  * "en el todos los modos", "HTTP-01 ; por eso" and "Port 80 listenerabove".
  */
 import { describe, it, expect } from "vitest";
-import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { withParts } from "@/app/admin/security/AutoRenewalPanel";
 import { translations, type Language } from "../i18n";
