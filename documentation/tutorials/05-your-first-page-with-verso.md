@@ -13,11 +13,12 @@ page with a hero, a heading, a paragraph and a button, publish it, and see it on
 Sign in and open **Admin → Pages → New Page**. The editor opens on an empty canvas:
 
 - **Left:** the **Blocks** panel. Blocks are grouped as Layout, Content, Media, Marketing, Dynamic and
-  Navigation. **Structure** shows the page as a tree, **Templates** offers ready-made sections, and
-  **Media library** lets you pick images.
+  Navigation. The buttons on the far left switch to **Structure** (the page as a tree), **Templates**
+  (ready-made sections) and **Assets** (the media library, to pick images).
 - **Center:** the canvas, with buttons on top to preview it as **Desktop**, **Tablet** or **Mobile**.
 - **Right:** **Properties** for the selected block, or the page settings when nothing is selected.
-- **Top right:** the status (**Draft**, **Publish**, **Pending**, **Scheduled**) and **Save**.
+- **Top right:** the status (**Draft**, **Publish**, **Pending**, **Scheduled**), the publication date when
+  there is one, **Preview** and **Save**.
 
 On a narrow screen the side panels move to tabs at the bottom (**Blocks**, **Structure**,
 **Properties**, **Page**).
@@ -44,10 +45,15 @@ overlay strength and the hero's height.
 Click **Heading** in the Blocks panel. It is added below the selected block; set its **Title** to
 `Visit the roastery`.
 
-Click **Text**. A paragraph block is added. Text is written **on the canvas**, not in the panel. With the
-block selected, click the **pencil** in its toolbar (or double-click the text), type
-`Open Tuesday to Saturday, 8 am to 4 pm. Ask for a cupping on Fridays.`, and press **Esc** when you are
-done. The panel keeps the paragraph's style: color, size, line height and maximum width.
+Click **Text**. A paragraph block is added with the sample text `Write here...`. Text is written **on the
+canvas**, not in the panel. With the block selected, click the **pencil** in its toolbar (or double-click
+the text): the cursor goes to the end of the text. Select the sample text (**Ctrl/⌘+A**), type
+`Open Tuesday to Saturday, 8 am to 4 pm. Ask for a cupping on Fridays.` over it, and press **Esc** (or click
+outside the text) when you are done. While you edit, selecting some words shows a small toolbar with
+**Bold**, **Italic**, **Link**, **List**, **Numbered list** and **Clear formatting**. The panel keeps the
+paragraph's style: color, size, line height and maximum width.
+
+Headings, buttons, cards, quotes and CTA banners are edited on the canvas the same way, as plain text.
 
 Each block's toolbar also has **Move up/down**, **Duplicate** and **Delete**. Undo and redo are
 **Ctrl+Z** and **Ctrl+Shift+Z**, and **Ctrl/⌘+K** opens a quick block search.
@@ -78,4 +84,9 @@ The site menu is managed separately, in **Admin → Menus**.
 *Tested on 2026-10-17 with WordJS 2.6.0 on a fresh install (Debian 12), in a browser, following these
 exact steps: page created, Hero, Heading and Text blocks added and edited (the text inline on the
 canvas), published, then the hero button changed and published again. The public `/our-story` showed
-the title, subtitle, heading and paragraph, and a button `See this week's beans` linking to `/about`.*
+the title, subtitle, heading and paragraph, and a button `See this week's beans` linking to `/about`.
+The editor's panels, the Text block's sample text and in-place editing were checked again on 2026-10-23
+with WordJS 2.9.*
+
+For everything around the content (post settings, the date picker, scheduling, tags), see the
+[admin guide](../admin-guide/content.md).
