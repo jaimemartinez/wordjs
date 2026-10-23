@@ -5,7 +5,7 @@ import { apiGet, apiPost, apiPut, accountBoundSessionAddress } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader, Button, Card, Input } from "@/components/ui";
+import { PageHeader, Button, Card, Checkbox, Input, Select } from "@/components/ui";
 
 /**
  * Admin → Servers (backend routes/cluster.ts → the gateway's /cluster*): the panel path for
@@ -197,13 +197,16 @@ export default function ClusterPage() {
                     <h2 className="text-xs font-black uppercase tracking-widest text-gray-400">{t("cluster.addTitle")}</h2>
                     <p className="text-sm text-gray-500">{t("cluster.addHelp")}</p>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="space-y-1">
-                            <label htmlFor="cluster-role" className="text-xs font-bold uppercase tracking-wide text-gray-600">{t("cluster.role")}</label>
-                            <select id="cluster-role" value={role} onChange={(e) => setRole(e.target.value as any)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-sm">
-                                <option value="backend">{t("cluster.role.backend")}</option>
-                                <option value="frontend">{t("cluster.role.frontend")}</option>
-                            </select>
-                        </div>
+                        <Select
+                            id="cluster-role"
+                            label={t("cluster.role")}
+                            value={role}
+                            onChange={(v) => setRole(v as any)}
+                            options={[
+                                { value: "backend", label: t("cluster.role.backend") },
+                                { value: "frontend", label: t("cluster.role.frontend") },
+                            ]}
+                        />
                         <Input label={t("cluster.host")} icon="fa-network-wired" value={host} onChange={(e) => setHost(e.target.value)} placeholder="10.0.0.7" />
                         <Input label={t("cluster.ttl")} icon="fa-clock" type="number" min={1} max={60} value={ttl} onChange={(e) => setTtl(e.target.value)} />
                     </div>
@@ -267,10 +270,12 @@ export default function ClusterPage() {
                                 <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto_auto] gap-3 items-end">
                                     <Input label={t("cluster.forwardPort")} type="number" min={1} max={65535} value={String(f.port ?? "")} onChange={(e) => setForwardDraft(forwardDraft.map((x, j) => (j === i ? { ...x, port: e.target.value as any } : x)))} />
                                     <Input label={t("cluster.forwardTargetPort")} type="number" min={1} max={65535} value={String(f.targetPort ?? "")} onChange={(e) => setForwardDraft(forwardDraft.map((x, j) => (j === i ? { ...x, targetPort: e.target.value as any } : x)))} />
-                                    <label className="flex items-center gap-2 text-sm text-gray-700 pb-3">
-                                        <input type="checkbox" checked={f.proxyProtocol} onChange={(e) => setForwardDraft(forwardDraft.map((x, j) => (j === i ? { ...x, proxyProtocol: e.target.checked } : x)))} />
-                                        {t("cluster.forwardProxy")}
-                                    </label>
+                                    <Checkbox
+                                        containerClassName="pb-3"
+                                        label={t("cluster.forwardProxy")}
+                                        checked={f.proxyProtocol}
+                                        onChange={(e) => setForwardDraft(forwardDraft.map((x, j) => (j === i ? { ...x, proxyProtocol: e.target.checked } : x)))}
+                                    />
                                     <Button variant="ghost" size="sm" icon="fa-trash" onClick={() => setForwardDraft(forwardDraft.filter((_, j) => j !== i))}>{t("cluster.forwardRemove")}</Button>
                                 </div>
                             ))}

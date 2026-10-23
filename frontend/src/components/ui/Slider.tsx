@@ -13,16 +13,21 @@ export interface SliderProps extends FieldProps {
     withNumber?: boolean;
     /** Shown after the value (px, %, ms). */
     unit?: string;
+    /** How the value is shown and read out (e.g. ms as "1.5 s"); overrides `unit`. */
+    format?: (value: number) => string;
+    /** Hide the value beside the track (when the label already says it). It is still read out. */
+    showValue?: boolean;
     disabled?: boolean;
     className?: string;
     "aria-label"?: string;
 }
 
 /** Slider — a range with an optional number box; both edit the same value, clamped to min…max. */
-export function Slider({ label, help, error, required, id, value, onChange, min = 0, max = 100, step = 1, withNumber, unit, disabled, className = "", ...rest }: SliderProps) {
+export function Slider({ label, help, error, required, id, value, onChange, min = 0, max = 100, step = 1, withNumber, unit, format, showValue = true, disabled, className = "", ...rest }: SliderProps) {
     const { controlId, helpId, errorId, aria } = useFieldA11y({ id, help, error, required });
     useNameCheck("Slider", !!label || !!rest["aria-label"]);
     const clamp = (n: number) => Math.min(max, Math.max(min, n));
+    const shown = format ? format(value) : unit ? `${value} ${unit}` : String(value);
     return (
         <Field label={label} help={help} error={error} required={required} controlId={controlId} helpId={helpId} errorId={errorId} className={className}>
             <div className="flex items-center gap-3">
@@ -35,7 +40,7 @@ export function Slider({ label, help, error, required, id, value, onChange, min 
                     value={value}
                     disabled={disabled}
                     aria-label={label ? undefined : rest["aria-label"]}
-                    aria-valuetext={unit ? `${value} ${unit}` : undefined}
+                    aria-valuetext={format || unit ? shown : undefined}
                     onChange={(e) => onChange(clamp(Number(e.target.value)))}
                     data-wjs-control=""
                     {...aria}
@@ -56,8 +61,8 @@ export function Slider({ label, help, error, required, id, value, onChange, min 
                         />
                         {unit && <span className="text-xs text-gray-500">{unit}</span>}
                     </div>
-                ) : (
-                    <output htmlFor={controlId} className="min-w-12 text-right text-sm text-gray-700 tabular-nums">{value}{unit ? ` ${unit}` : ""}</output>
+                ) : showValue && (
+                    <output htmlFor={controlId} className="min-w-12 text-right text-sm text-gray-700 tabular-nums">{shown}</output>
                 )}
             </div>
         </Field>

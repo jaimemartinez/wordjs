@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { aiApi, AiProviderId, AiSettings } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button, Card, Input, Select } from "@/components/ui";
+import { PageHeader, Button, Card, Checkbox, Input, Select } from "@/components/ui";
 import { resetAiStatusCache } from "@/components/AiSuggest";
 
 export default function AiSettingsPage() {
@@ -137,10 +137,7 @@ export default function AiSettingsPage() {
                                         {settings.hasKey ? t("ai.settings.apiKeyStored").replace("{hint}", settings.keyHint) : t("ai.settings.apiKeyNone")}
                                     </p>
                                     {settings.hasKey && (
-                                        <label className="mt-2 flex items-center gap-2 text-xs text-gray-600">
-                                            <input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
-                                            {t("ai.settings.clearKey")}
-                                        </label>
+                                        <Checkbox containerClassName="mt-2" label={t("ai.settings.clearKey")} checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
                                     )}
                                 </div>
                             )}

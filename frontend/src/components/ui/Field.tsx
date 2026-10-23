@@ -64,7 +64,9 @@ export function useNameCheck(component: string, named: boolean) {
     }, [component, named]);
 }
 
-export const LABEL_CLASS = "block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2";
+/** The kit's label look (uppercase micro-label, gray-500: 4.8:1 on white), shared by every control. */
+export const LABEL_TEXT_CLASS = "text-[11px] font-black uppercase tracking-widest text-gray-500";
+export const LABEL_CLASS = `block ${LABEL_TEXT_CLASS} mb-2`;
 export const HELP_CLASS = "mt-1 text-xs text-gray-500";
 export const ERROR_CLASS = "mt-1 text-xs text-red-600 font-medium";
 

@@ -655,7 +655,8 @@ describe("the IP-address policy form: hostPolicy.ipSignIn has a control (REDTEAM
     it("the screen binds a checkbox to it and saves what policyWrite builds", () => {
         const page = screenSource("app/admin/settings/site-address/page.tsx");
         expect(page).toMatch(/setIpSignInChoice\(next\.ipSignIn\)/);
-        expect(page).toMatch(/type="checkbox"\s+checked=\{ipSignInChoice\}[\s\S]{0,300}onChange=\{\(e\) => setIpSignInChoice\(e\.target\.checked\)\}/);
+        // The form kit's Checkbox (components/ui), bound to the choice both ways.
+        expect(page).toMatch(/<Checkbox[\s\S]{0,300}checked=\{ipSignInChoice\}[\s\S]{0,300}onChange=\{\(e\) => setIpSignInChoice\(e\.target\.checked\)\}/);
         expect(page).toMatch(/policyWrite\(state, \{ ipLiterals: ipChoice, ipSignIn: ipSignInChoice \}\)/);
         expect(page).toMatch(/siteAddressApi\.putPolicy\(\{ \.\.\.body, currentPassword, rev \}\)/);
     });

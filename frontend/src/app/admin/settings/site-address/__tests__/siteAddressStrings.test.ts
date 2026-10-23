@@ -101,7 +101,8 @@ describe("site-address strings", () => {
         const page = fs.readFileSync(path.join(SRC, "app/admin/settings/site-address/page.tsx"), "utf8");
         expect(page).toMatch(/^[ \t]*<RefusedByLabel source=\{entry\.source\} t=\{t\} \/>\r?$/m);
         expect(page).toMatch(/\{t\(ownAddressesHeadingKey\(state\.ownAddressesFrom\)\)\}/);
-        expect(page).toMatch(/<option key=\{mode\} value=\{mode\}>\{t\(ipLiteralsLabelKey\(mode, state\.ownAddressesFrom\)\)\}<\/option>/);
+        // The policy's options (the form kit's Select): each mode labelled by the same helper.
+        expect(page).toMatch(/\(\["any", "own", "none"\] as const\)\.map\(\(mode\) => \(\{ value: mode, label: t\(ipLiteralsLabelKey\(mode, state\.ownAddressesFrom\)\) \}\)\)/);
         expect(page).toMatch(/\$\{t\(ipLiteralsLabelKey\(body\.ipLiterals, state\.ownAddressesFrom\)\)\}/);
         expect(page).not.toMatch(/siteAddress\.(ip|refusedBy)\.\$\{/);
         expect(page).not.toMatch(/siteAddress\.accepted\.own(Gateway)?["']/);

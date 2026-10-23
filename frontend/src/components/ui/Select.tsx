@@ -14,7 +14,7 @@ import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useDropdownPlacement } from "@/lib/useDropdownPlacement";
 import { ADMIN_Z } from "@/lib/adminLayers";
-import { ERROR_CLASS, HELP_CLASS, useFieldA11y, useKitText, useNameCheck } from "./Field";
+import { ERROR_CLASS, HELP_CLASS, LABEL_TEXT_CLASS, useFieldA11y, useKitText, useNameCheck } from "./Field";
 
 export interface SelectOption {
     value: string | number;
@@ -191,7 +191,7 @@ export function Select({
     return (
         <div className={`space-y-2 ${containerClassName}`} ref={containerRef} data-wjs-field="" {...props}>
             {label && (
-                <label ref={labelRef} htmlFor={controlId} className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                <label ref={labelRef} htmlFor={controlId} className={`flex items-center gap-2 ${LABEL_TEXT_CLASS}`}>
                     {icon && <i className={`${icon} text-blue-500/70`} aria-hidden="true"></i>}
                     {label}
                     {required && <span aria-hidden="true" className="text-red-600">*</span>}

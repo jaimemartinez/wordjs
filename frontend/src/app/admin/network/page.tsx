@@ -6,7 +6,7 @@ import { networkApi, type NetworkPlugin, type NetworkQuotas, type NetworkSite, t
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { formatServerTimestamp } from "@/lib/serverTimestamp";
-import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/components/ui";
+import { PageHeader, Button, Card, Checkbox, EmptyState, Input, StatusBadge, Textarea } from "@/components/ui";
 import { fmtBytes, fromMbField, toMbField } from "@/lib/networkQuota";
 
 /**
@@ -427,10 +427,15 @@ export default function NetworkPage() {
                                     {!site.main && addressEdit?.id === site.id && (
                                         <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3 grid gap-3" data-site-address-edit={site.id}>
                                             <Input label={t("network.addressMain")} icon="fa-globe" value={addressEdit.url} onChange={(e) => setAddressEdit({ ...addressEdit, url: e.target.value })} autoComplete="off" />
-                                            <label className="block text-xs font-bold text-gray-600">
-                                                {t("network.addressOthers")}
-                                                <textarea className="mt-1 w-full h-20 font-mono text-xs rounded-lg border border-gray-200 p-2 bg-white text-gray-800" placeholder="www.example.com" value={addressEdit.aliases} onChange={(e) => setAddressEdit({ ...addressEdit, aliases: e.target.value })} autoComplete="off" />
-                                            </label>
+                                            <Textarea
+                                                label={t("network.addressOthers")}
+                                                rows={3}
+                                                className="font-mono text-xs"
+                                                placeholder="www.example.com"
+                                                value={addressEdit.aliases}
+                                                onChange={(e) => setAddressEdit({ ...addressEdit, aliases: e.target.value })}
+                                                autoComplete="off"
+                                            />
                                             <p className="text-xs text-gray-500">{t("network.addressChangeHint")}</p>
                                             <div className="flex flex-wrap gap-2 justify-end">
                                                 <Button variant="secondary" size="sm" onClick={() => setAddressEdit(null)}>{t("common.cancel")}</Button>
@@ -473,9 +478,9 @@ export default function NetworkPage() {
                                                 </div>
                                                 {certUpload?.id === site.id && (
                                                     <div className="mt-2 grid gap-2 md:grid-cols-2" data-site-cert-upload={site.id}>
-                                                        <textarea className="w-full h-28 font-mono text-[11px] rounded-lg border border-gray-200 p-2" placeholder="-----BEGIN CERTIFICATE-----" aria-label={t("network.certPem")}
+                                                        <Textarea rows={5} className="font-mono text-[11px]" placeholder="-----BEGIN CERTIFICATE-----" aria-label={t("network.certPem")}
                                                             value={certUpload.certPem} onChange={(e) => setCertUpload({ ...certUpload, certPem: e.target.value })} />
-                                                        <textarea className="w-full h-28 font-mono text-[11px] rounded-lg border border-gray-200 p-2" placeholder="-----BEGIN PRIVATE KEY-----" aria-label={t("network.certKey")}
+                                                        <Textarea rows={5} className="font-mono text-[11px]" placeholder="-----BEGIN PRIVATE KEY-----" aria-label={t("network.certKey")}
                                                             value={certUpload.keyPem} onChange={(e) => setCertUpload({ ...certUpload, keyPem: e.target.value })} autoComplete="off" />
                                                         <div className="md:col-span-2 flex gap-2 justify-end">
                                                             <Button variant="secondary" size="sm" onClick={() => setCertUpload(null)}>{t("common.cancel")}</Button>
@@ -573,10 +578,14 @@ export default function NetworkPage() {
                                     ) : (
                                         <div className="flex flex-wrap gap-2">
                                             {plugin.requestedPermissions.map((token) => (
-                                                <label key={token} className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono cursor-pointer ${draft.has(token) ? "bg-blue-50 border-blue-200 text-blue-700" : "bg-gray-50 border-gray-200 text-gray-500"}`}>
-                                                    <input type="checkbox" checked={draft.has(token)} onChange={() => toggleCeiling(plugin.slug, token)} data-ceiling-token={token} />
-                                                    {token}
-                                                </label>
+                                                <Checkbox
+                                                    key={token}
+                                                    containerClassName={`inline-flex px-3 py-1.5 rounded-lg border ${draft.has(token) ? "bg-blue-50 border-blue-200" : "bg-gray-50 border-gray-200"}`}
+                                                    label={<span className="text-xs font-mono font-normal">{token}</span>}
+                                                    checked={draft.has(token)}
+                                                    onChange={() => toggleCeiling(plugin.slug, token)}
+                                                    data-ceiling-token={token}
+                                                />
                                             ))}
                                         </div>
                                     )}

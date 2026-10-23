@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { PageHeader, Button, Input } from "@/components/ui";
+import { PageHeader, Button, Checkbox, Input, Radio, RadioGroup } from "@/components/ui";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
@@ -185,15 +185,18 @@ export default function MediaStoragePage() {
                 </div>
                 <div className="p-8 space-y-6">
                     <fieldset>
-                        <legend className="text-sm font-bold text-gray-700 mb-2">{t("mediaStorage.driver.label")}</legend>
-                        <div className="flex flex-wrap gap-6">
+                        <RadioGroup
+                            label={t("mediaStorage.driver.label")}
+                            name="driver"
+                            orientation="horizontal"
+                            value={form.driver}
+                            onChange={(v) => set("driver", v as "local" | "s3")}
+                            disabled={fromEnv("driver")}
+                        >
                             {(["local", "s3"] as const).map((d) => (
-                                <label key={d} className="flex items-center gap-2 text-sm">
-                                    <input type="radio" name="driver" value={d} checked={form.driver === d} disabled={fromEnv("driver")} onChange={() => set("driver", d)} />
-                                    {t(`mediaStorage.driver.${d}`)}
-                                </label>
+                                <Radio key={d} value={d} label={t(`mediaStorage.driver.${d}`)} />
                             ))}
-                        </div>
+                        </RadioGroup>
                     </fieldset>
 
                     {s3 && (
@@ -243,10 +246,7 @@ export default function MediaStoragePage() {
                                 </ul>
                             )}
                             <p className="text-xs text-gray-500">{t("mediaStorage.field.help")}</p>
-                            <label className="flex items-center gap-2 text-sm">
-                                <input type="checkbox" checked={form.keepLocalCopy} disabled={fromEnv("keepLocalCopy")} onChange={(e) => set("keepLocalCopy", e.target.checked)} />
-                                {t("mediaStorage.field.keepLocalCopy")}
-                            </label>
+                            <Checkbox label={t("mediaStorage.field.keepLocalCopy")} checked={form.keepLocalCopy} disabled={fromEnv("keepLocalCopy")} onChange={(e) => set("keepLocalCopy", e.target.checked)} />
                         </>
                     )}
 
@@ -299,10 +299,7 @@ export default function MediaStoragePage() {
                         </div>
                     )}
                     {!effectiveS3 && <p className="text-sm text-gray-500">{t("mediaStorage.migrate.needsS3")}</p>}
-                    <label className="flex items-center gap-2 text-sm">
-                        <input type="checkbox" checked={deleteLocal} disabled={!effectiveS3 || view.running} onChange={(e) => setDeleteLocal(e.target.checked)} />
-                        {t("mediaStorage.migrate.deleteLocal")}
-                    </label>
+                    <Checkbox label={t("mediaStorage.migrate.deleteLocal")} checked={deleteLocal} disabled={!effectiveS3 || view.running} onChange={(e) => setDeleteLocal(e.target.checked)} />
                     <div className="flex flex-wrap gap-3">
                         <Button onClick={() => migrate("offload")} disabled={!effectiveS3 || view.running} icon="fa-cloud-arrow-up">{t("mediaStorage.migrate.offload")}</Button>
                         <Button variant="secondary" onClick={() => migrate("restore")} disabled={!effectiveS3 || view.running} icon="fa-hard-drive">{t("mediaStorage.migrate.restore")}</Button>

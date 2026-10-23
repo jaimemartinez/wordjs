@@ -10,8 +10,8 @@
  * property. A body the simple editor cannot show exactly (more steps, more tracks, custom curves…)
  * opens there; switching back offers to start over in simple mode rather than silently simplifying.
  */
-import React, { useId, useMemo, useState } from "react";
-import { Button, Card, Input } from "@/components/ui";
+import { useId, useMemo, useState } from "react";
+import { Button, Card, Input, Slider, UnstyledButton } from "@/components/ui";
 import { MotionPreview } from "@/components/motion/MotionPreview";
 import { useI18n } from "@/contexts/I18nContext";
 import { IX_PRESET_NAME_MAX, type IxSpec } from "@/lib/verso/interactions";
@@ -96,7 +96,7 @@ export default function MotionEditor(props: MotionEditorProps) {
             <h2 className="text-lg font-black text-gray-900">{id ? t("motion.editor.editTitle") : t("motion.editor.newTitle")}</h2>
             <div role="group" aria-label={t("motion.editor.mode")} className="flex rounded-xl border border-gray-200 bg-gray-50 p-1">
                 {(["simple", "advanced"] as const).map((m) => (
-                    <button
+                    <UnstyledButton
                         key={m}
                         type="button"
                         aria-pressed={mode === m}
@@ -104,7 +104,7 @@ export default function MotionEditor(props: MotionEditorProps) {
                         className={`min-h-11 sm:min-h-9 rounded-lg px-4 text-xs font-bold transition-colors ${mode === m ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
                     >
                         {t(`motion.editor.mode.${m}`)}
-                    </button>
+                    </UnstyledButton>
                 ))}
             </div>
         </div>
@@ -161,7 +161,7 @@ export default function MotionEditor(props: MotionEditorProps) {
                                     {SIMPLE_EFFECTS.map((e) => {
                                         const fits = effectFitsWhen(e, m.when);
                                         return (
-                                            <button
+                                            <UnstyledButton
                                                 key={e}
                                                 type="button"
                                                 aria-pressed={m.effect === e}
@@ -172,7 +172,7 @@ export default function MotionEditor(props: MotionEditorProps) {
                                             >
                                                 <i className={`fa-solid ${EFFECT_ICON[e]} text-xs`} aria-hidden="true"></i>
                                                 {t(`motion.effect.${e}`)}
-                                            </button>
+                                            </UnstyledButton>
                                         );
                                     })}
                                 </div>
@@ -182,10 +182,10 @@ export default function MotionEditor(props: MotionEditorProps) {
                                 <legend className="mb-2 text-[11px] font-black uppercase tracking-widest text-gray-500">{t("motion.editor.when")}</legend>
                                 <div className="flex flex-wrap gap-2">
                                     {SIMPLE_WHENS.map((w) => (
-                                        <button key={w} type="button" aria-pressed={m.when === w} onClick={() => change({ when: w })} className={chip(m.when === w)}>
+                                        <UnstyledButton key={w} type="button" aria-pressed={m.when === w} onClick={() => change({ when: w })} className={chip(m.when === w)}>
                                             <i className={`fa-solid ${WHEN_ICON[w]} text-xs`} aria-hidden="true"></i>
                                             {t(`motion.whenChoice.${w}`)}
-                                        </button>
+                                        </UnstyledButton>
                                     ))}
                                 </div>
                             </fieldset>
@@ -198,60 +198,49 @@ export default function MotionEditor(props: MotionEditorProps) {
                                         <legend className="mb-2 text-[11px] font-black uppercase tracking-widest text-gray-500">{t("motion.editor.speed")}</legend>
                                         <div className="flex rounded-xl border border-gray-200 bg-gray-50 p-1">
                                             {SIMPLE_SPEEDS.map((s) => (
-                                                <button key={s} type="button" aria-pressed={m.speed === s} onClick={() => change({ speed: s })}
+                                                <UnstyledButton key={s} type="button" aria-pressed={m.speed === s} onClick={() => change({ speed: s })}
                                                     className={`min-h-11 flex-1 rounded-lg px-2 text-xs font-bold ${m.speed === s ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
                                                     {t(`motion.speed.${s}`)}
-                                                </button>
+                                                </UnstyledButton>
                                             ))}
                                         </div>
                                     </fieldset>
-                                    <div>
-                                        <label htmlFor={`${formId}-delay`} className="mb-2 block text-[11px] font-black uppercase tracking-widest text-gray-500">
-                                            {t("motion.editor.delay")}: {(m.delay / 1000).toFixed(1)} s
-                                        </label>
-                                        <input
-                                            id={`${formId}-delay`}
-                                            type="range"
-                                            min={0}
-                                            max={SIMPLE_DELAY_MAX}
-                                            step={100}
-                                            value={m.delay}
-                                            aria-valuetext={`${(m.delay / 1000).toFixed(1)} s`}
-                                            onChange={(e) => change({ delay: Number(e.target.value) })}
-                                            className="h-11 w-full accent-blue-600"
-                                        />
-                                    </div>
+                                    <Slider
+                                        id={`${formId}-delay`}
+                                        label={t("motion.editor.delay")}
+                                        min={0}
+                                        max={SIMPLE_DELAY_MAX}
+                                        step={100}
+                                        value={m.delay}
+                                        format={(v) => `${(v / 1000).toFixed(1)} s`}
+                                        onChange={(v) => change({ delay: v })}
+                                    />
                                 </div>
                             )}
 
                             <fieldset>
                                 <legend className="mb-2 text-[11px] font-black uppercase tracking-widest text-gray-500">{t("motion.editor.appliesTo")}</legend>
                                 <div className="flex flex-wrap gap-2">
-                                    <button type="button" aria-pressed={m.target === "self"} onClick={() => change({ target: "self", stagger: 0 })} className={chip(m.target === "self")}>
+                                    <UnstyledButton type="button" aria-pressed={m.target === "self"} onClick={() => change({ target: "self", stagger: 0 })} className={chip(m.target === "self")}>
                                         <i className="fa-solid fa-square text-xs" aria-hidden="true"></i>{t("motion.target.self")}
-                                    </button>
-                                    <button type="button" aria-pressed={m.target === "children"} onClick={() => change({ target: "children", stagger: m.stagger || 120 })} className={chip(m.target === "children")}>
+                                    </UnstyledButton>
+                                    <UnstyledButton type="button" aria-pressed={m.target === "children"} onClick={() => change({ target: "children", stagger: m.stagger || 120 })} className={chip(m.target === "children")}>
                                         <i className="fa-solid fa-layer-group text-xs" aria-hidden="true"></i>{t("motion.target.children")}
-                                    </button>
+                                    </UnstyledButton>
                                 </div>
                                 {m.target === "children" && (
-                                    <div className="mt-4">
-                                        <label htmlFor={`${formId}-stagger`} className="mb-2 block text-xs font-semibold text-gray-600">
-                                            {t("motion.editor.stagger")}: {m.stagger} ms
-                                        </label>
-                                        <input
-                                            id={`${formId}-stagger`}
-                                            type="range"
-                                            min={0}
-                                            max={SIMPLE_STAGGER_MAX}
-                                            step={20}
-                                            value={m.stagger}
-                                            aria-valuetext={`${m.stagger} ms`}
-                                            onChange={(e) => change({ stagger: Number(e.target.value) })}
-                                            className="h-11 w-full accent-blue-600"
-                                        />
-                                        <p className="mt-1 text-xs text-gray-500">{t("motion.editor.staggerHelp")}</p>
-                                    </div>
+                                    <Slider
+                                        id={`${formId}-stagger`}
+                                        className="mt-4"
+                                        label={t("motion.editor.stagger")}
+                                        help={t("motion.editor.staggerHelp")}
+                                        min={0}
+                                        max={SIMPLE_STAGGER_MAX}
+                                        step={20}
+                                        value={m.stagger}
+                                        unit="ms"
+                                        onChange={(v) => change({ stagger: v })}
+                                    />
                                 )}
                             </fieldset>
                         </>

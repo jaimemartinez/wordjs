@@ -4,7 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { DatePicker } from "@/components/ui/DatePicker";
 import DialogLayer from "@/components/DialogLayer";
 import { useSearchParams } from "next/navigation";
-import { PageHeader, DataTable } from "@/components/ui";
+import { Button, Checkbox, DataTable, IconButton, Input, PageHeader, Radio, RadioGroup, Select } from "@/components/ui";
+import { LABEL_CLASS } from "@/components/ui/Field";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -61,11 +62,6 @@ type T = (key: string) => string;
 const card = "bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden";
 const cardHead = "px-5 sm:px-8 py-5 sm:py-6 border-b border-gray-50 bg-gray-50/30";
 const cardTitle = "text-lg font-bold text-gray-900 flex items-center gap-2";
-const inputCls = "block w-full rounded-2xl border-2 border-gray-100 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-blue-500";
-const labelCls = "block text-sm font-bold text-gray-700 mb-2";
-const primaryBtn = "inline-flex items-center justify-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-bold text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed";
-const secondaryBtn = "inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-gray-100 bg-white px-5 py-3 text-sm font-bold text-gray-600 hover:border-blue-500 hover:text-blue-600 disabled:opacity-50";
-const linkBtn = "text-xs font-bold text-blue-600 hover:text-blue-800 disabled:opacity-40";
 
 const formatTime = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toLocaleString());
 
@@ -88,9 +84,7 @@ function Dialog({ title, t, onClose, children, wide = false }: { title: string; 
             <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`w-full ${wide ? "max-w-2xl" : "max-w-lg"} max-h-[90dvh] overflow-auto rounded-[32px] bg-white p-8 shadow-2xl`}>
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <h2 id={titleId} className="text-lg font-bold text-gray-900">{title}</h2>
-                    <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700" aria-label={t("close")}>
-                        <i className="fa-solid fa-xmark" aria-hidden="true"></i>
-                    </button>
+                    <IconButton icon="fa-xmark" label={t("close")} onClick={onClose} />
                 </div>
                 {children}
             </div>
@@ -149,10 +143,10 @@ function SudoDialog({ pending, t, onDone, onStale, onClose }: {
                 </ul>
                 {error && <p role="alert" className="mt-4 text-sm font-medium text-red-600">{error}</p>}
                 <div className="mt-6 flex justify-end gap-3">
-                    <button type="button" className={secondaryBtn} onClick={onClose}>{t("cancel")}</button>
-                    <button type="button" className={`${primaryBtn} bg-red-600 hover:bg-red-700`} disabled={busy} onClick={() => submit(true)}>
+                    <Button variant="ghost" size="md" onClick={onClose}>{t("cancel")}</Button>
+                    <Button variant="danger" size="md" pending={busy} onClick={() => submit(true)}>
                         {t("siteAddress.inUse.force")}
-                    </button>
+                    </Button>
                 </div>
             </Dialog>
         );
@@ -162,26 +156,24 @@ function SudoDialog({ pending, t, onDone, onStale, onClose }: {
         <Dialog title={t("siteAddress.sudo.title")} t={t} onClose={onClose}>
             <form onSubmit={(e) => { e.preventDefault(); void submit(false); }} className="space-y-4">
                 <p className="text-sm text-gray-700">{pending.summary}</p>
-                <div>
-                    <label className={labelCls} htmlFor="site-address-sudo">{t("siteAddress.sudo.password")}</label>
-                    <input
-                        id="site-address-sudo"
-                        type="password"
-                        autoComplete="current-password"
-                        required
-                        autoFocus
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className={inputCls}
-                    />
-                </div>
+                <Input
+                    id="site-address-sudo"
+                    size="md"
+                    type="password"
+                    revealable
+                    label={t("siteAddress.sudo.password")}
+                    autoComplete="current-password"
+                    required
+                    autoFocus
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                />
                 {error && <p role="alert" className="text-sm font-medium text-red-600">{error}</p>}
                 <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" className={secondaryBtn} onClick={onClose}>{t("cancel")}</button>
-                    <button type="submit" className={primaryBtn} disabled={busy || !password}>
-                        {busy && <i className="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>}
+                    <Button variant="ghost" size="md" onClick={onClose}>{t("cancel")}</Button>
+                    <Button type="submit" size="md" disabled={!password} pending={busy}>
                         {t("siteAddress.sudo.confirm")}
-                    </button>
+                    </Button>
                 </div>
             </form>
         </Dialog>
@@ -249,26 +241,35 @@ function AliasDialog({ state, previous, prefillUrl, fromRefused, t, onSubmit, on
                         {t("siteAddress.dnsWarning")}
                     </p>
                 )}
+                <Input
+                    id="alias-url"
+                    size="md"
+                    type="url"
+                    required
+                    label={t("siteAddress.field.url")}
+                    help={t("siteAddress.field.url.help")}
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    className="font-mono"
+                    placeholder="https://www.example.com"
+                    autoComplete="off"
+                    spellCheck={false}
+                />
+                <Input id="alias-label" size="md" label={t("siteAddress.field.label")} maxLength={100} value={label} onChange={(e) => setLabel(e.target.value)} />
+                <Select
+                    id="alias-mode"
+                    label={t("siteAddress.field.mode")}
+                    value={mode}
+                    onChange={(v) => setMode(v === "redirect" ? "redirect" : "serve")}
+                    options={[
+                        { value: "serve", label: t("siteAddress.mode.serve") },
+                        { value: "redirect", label: t("siteAddress.mode.redirect") },
+                    ]}
+                />
                 <div>
-                    <label className={labelCls} htmlFor="alias-url">{t("siteAddress.field.url")}</label>
-                    <input id="alias-url" type="url" required value={url} onChange={(e) => setUrl(e.target.value)} className={`${inputCls} font-mono`} placeholder="https://www.example.com" autoComplete="off" spellCheck={false} />
-                    <p className="mt-1 text-xs text-gray-400">{t("siteAddress.field.url.help")}</p>
-                </div>
-                <div>
-                    <label className={labelCls} htmlFor="alias-label">{t("siteAddress.field.label")}</label>
-                    <input id="alias-label" type="text" maxLength={100} value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls} />
-                </div>
-                <div>
-                    <label className={labelCls} htmlFor="alias-mode">{t("siteAddress.field.mode")}</label>
-                    <select id="alias-mode" value={mode} onChange={(e) => setMode(e.target.value === "redirect" ? "redirect" : "serve")} className={inputCls}>
-                        <option value="serve">{t("siteAddress.mode.serve")}</option>
-                        <option value="redirect">{t("siteAddress.mode.redirect")}</option>
-                    </select>
-                </div>
-                <div>
-                    <label className={labelCls} htmlFor="alias-expires">{t("siteAddress.field.expires")}</label>
                     <DatePicker
                         id="alias-expires"
+                        label={t("siteAddress.field.expires")}
                         value={shownExpiry}
                         onChange={(v) => { setExpiryTouched(true); setExpiryDate(v); }}
                         className="rounded-2xl border-2 px-4 py-3 text-sm"
@@ -279,15 +280,7 @@ function AliasDialog({ state, previous, prefillUrl, fromRefused, t, onSubmit, on
                 </div>
                 {policy?.relevant && (
                     <div className="rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
-                        <label className="flex cursor-pointer items-start gap-3">
-                            <input
-                                type="checkbox"
-                                checked={policy.effective}
-                                onChange={(e) => setSignIn(e.target.checked)}
-                                className="mt-1 h-4 w-4 rounded border-gray-300"
-                            />
-                            <span className="text-sm font-bold text-gray-800">{t("siteAddress.field.signIn")}</span>
-                        </label>
+                        <Checkbox label={t("siteAddress.field.signIn")} checked={policy.effective} onChange={(e) => setSignIn(e.target.checked)} />
                         {policy.warning && (
                             <p className={`mt-2 text-xs leading-relaxed ${policy.effective ? "font-semibold text-red-700" : "text-gray-500"}`}>
                                 {t(`siteAddress.signIn.warn.${policy.warning}`)}
@@ -296,15 +289,17 @@ function AliasDialog({ state, previous, prefillUrl, fromRefused, t, onSubmit, on
                     </div>
                 )}
                 {isLocal && !localAlreadyAccepted && (
-                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                        <input type="checkbox" checked={localConfirmed} onChange={(e) => setLocalConfirmed(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
-                        <span className="text-sm font-medium text-amber-900">{t("siteAddress.localConfirm")}</span>
-                    </label>
+                    <Checkbox
+                        containerClassName="rounded-2xl border border-amber-200 bg-amber-50 p-4"
+                        label={<span className="font-medium text-amber-900">{t("siteAddress.localConfirm")}</span>}
+                        checked={localConfirmed}
+                        onChange={(e) => setLocalConfirmed(e.target.checked)}
+                    />
                 )}
                 {error && <p role="alert" className="text-sm font-medium text-red-600">{error}</p>}
                 <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" className={secondaryBtn} onClick={onClose}>{t("cancel")}</button>
-                    <button type="submit" className={primaryBtn} disabled={!site}>{t("save")}</button>
+                    <Button variant="ghost" size="md" onClick={onClose}>{t("cancel")}</Button>
+                    <Button type="submit" size="md" disabled={!site}>{t("save")}</Button>
                 </div>
             </form>
         </Dialog>
@@ -336,26 +331,25 @@ function CanonicalDialog({ state, prefillUrl, usingCurrent, t, onSubmit, onClose
                 className="space-y-6"
             >
                 <fieldset className="space-y-3">
-                    <legend className={labelCls}>{t("siteAddress.change.pick")}</legend>
+                    <legend className={LABEL_CLASS}>{t("siteAddress.change.pick")}</legend>
                     {state.aliases.length > 0 && (
-                        <select
+                        <Select
                             aria-label={t("siteAddress.change.pickAlias")}
+                            placeholder={t("siteAddress.change.pickAlias")}
                             value=""
-                            onChange={(e) => { if (e.target.value) setUrl(e.target.value); }}
-                            className={inputCls}
-                        >
-                            <option value="">{t("siteAddress.change.pickAlias")}</option>
-                            {state.aliases.map((a) => <option key={a.hostname} value={a.origin}>{a.origin}</option>)}
-                        </select>
+                            onChange={(v) => { if (v) setUrl(v); }}
+                            options={state.aliases.map((a) => ({ value: a.origin, label: a.origin }))}
+                        />
                     )}
-                    <input
+                    <Input
+                        size="md"
                         type="url"
                         required
                         aria-label={t("siteAddress.change.orType")}
                         placeholder={t("siteAddress.change.orType")}
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
-                        className={`${inputCls} font-mono`}
+                        className="font-mono"
                         autoComplete="off"
                         spellCheck={false}
                     />
@@ -365,15 +359,16 @@ function CanonicalDialog({ state, prefillUrl, usingCurrent, t, onSubmit, onClose
                 </fieldset>
 
                 {askOld && state.canonical && (
-                    <fieldset className="space-y-2">
-                        <legend className={labelCls}>{fillTemplate(t("siteAddress.change.old"), { old: state.canonical.origin })}</legend>
+                    <RadioGroup
+                        label={fillTemplate(t("siteAddress.change.old"), { old: state.canonical.origin })}
+                        name="old-address"
+                        value={oldAddress}
+                        onChange={(v) => setOldAddress(v as typeof oldAddress)}
+                    >
                         {(["keep", "redirect", "drop"] as const).map((option) => (
-                            <label key={option} className="flex cursor-pointer items-center gap-3 text-sm text-gray-700">
-                                <input type="radio" name="old-address" value={option} checked={oldAddress === option} onChange={() => setOldAddress(option)} />
-                                {t(`siteAddress.old.${option}`)}
-                            </label>
+                            <Radio key={option} value={option} label={t(`siteAddress.old.${option}`)} />
                         ))}
-                    </fieldset>
+                    </RadioGroup>
                 )}
 
                 {next && (
@@ -390,8 +385,8 @@ function CanonicalDialog({ state, prefillUrl, usingCurrent, t, onSubmit, onClose
                 )}
 
                 <div className="flex justify-end gap-3">
-                    <button type="button" className={secondaryBtn} onClick={onClose}>{t("cancel")}</button>
-                    <button type="submit" className={primaryBtn} disabled={!next}>{t("siteAddress.change.submit")}</button>
+                    <Button variant="ghost" size="md" onClick={onClose}>{t("cancel")}</Button>
+                    <Button type="submit" size="md" disabled={!next}>{t("siteAddress.change.submit")}</Button>
                 </div>
             </form>
         </Dialog>
@@ -570,9 +565,9 @@ export default function SiteAddressPage() {
                                 <p className="mt-1 text-sm text-amber-900/90">{fillTemplate(t("siteAddress.conflict.body"), state.conflict)}</p>
                                 <div className="mt-3 flex flex-wrap gap-3">
                                     {[state.conflict.config, state.conflict.db].map((address) => (
-                                        <button key={address} type="button" className={secondaryBtn} onClick={() => openChange(address)}>
+                                        <Button key={address} variant="secondary" size="md" onClick={() => openChange(address)}>
                                             {fillTemplate(t("siteAddress.useAddress"), { address })}
-                                        </button>
+                                        </Button>
                                     ))}
                                 </div>
                             </div>
@@ -582,9 +577,9 @@ export default function SiteAddressPage() {
                             <div role="alert" className="rounded-3xl border-2 border-amber-200 bg-amber-50 px-6 py-5">
                                 <h3 className="text-sm font-bold text-amber-900">{t("siteAddress.drift.title")}</h3>
                                 <p className="mt-1 text-sm text-amber-900/90">{fillTemplate(t("siteAddress.drift.body"), state.gatewayDrift)}</p>
-                                <button type="button" className={`${secondaryBtn} mt-3`} onClick={() => openChange(state.gatewayDrift!.gateway)}>
+                                <Button variant="secondary" size="md" className="mt-3" onClick={() => openChange(state.gatewayDrift!.gateway)}>
                                     {fillTemplate(t("siteAddress.useAddress"), { address: state.gatewayDrift.gateway })}
-                                </button>
+                                </Button>
                             </div>
                         )}
 
@@ -607,7 +602,7 @@ export default function SiteAddressPage() {
                                         : <p className="text-sm font-semibold text-red-700">{t("siteAddress.main.none")}</p>}
                                     <p className="mt-1 text-sm text-gray-500">{t("siteAddress.main.note")}</p>
                                 </div>
-                                <button type="button" className={`${primaryBtn} shrink-0 self-start lg:self-auto`} onClick={() => openChange("")}>{t("siteAddress.main.change")}</button>
+                                <Button size="md" className="shrink-0 self-start lg:self-auto" onClick={() => openChange("")}>{t("siteAddress.main.change")}</Button>
                             </div>
                         </section>
 
@@ -618,9 +613,9 @@ export default function SiteAddressPage() {
                                     <h2 id="sa-aliases" className={cardTitle}><i className="fa-solid fa-signs-post text-purple-500" aria-hidden="true"></i> {t("siteAddress.aliases.title")}</h2>
                                     <p className="mt-1 text-sm text-gray-500">{t("siteAddress.aliases.help")}</p>
                                 </div>
-                                <button type="button" className={`${secondaryBtn} shrink-0 self-start lg:self-auto`} onClick={() => setDialog({ kind: "alias", previous: null, prefillUrl: "", fromRefused: false })}>
-                                    <i className="fa-solid fa-plus" aria-hidden="true"></i> {t("siteAddress.aliases.add")}
-                                </button>
+                                <Button variant="secondary" size="md" icon="fa-plus" className="shrink-0 self-start lg:self-auto" onClick={() => setDialog({ kind: "alias", previous: null, prefillUrl: "", fromRefused: false })}>
+                                    {t("siteAddress.aliases.add")}
+                                </Button>
                             </div>
                             {state.aliases.length === 0 ? (
                                 <p className="p-8 text-sm text-gray-500">{t("siteAddress.aliases.empty")}</p>
@@ -700,35 +695,30 @@ export default function SiteAddressPage() {
                                         : <ul className="mt-1 flex flex-wrap gap-2">{state.ownAddresses.map((a) => <li key={a} className="rounded-xl bg-gray-100 px-3 py-1 font-mono text-xs">{a}</li>)}</ul>}
                                 </div>
                                 <div>
-                                    <label className="font-bold text-gray-900" htmlFor="sa-ip-policy">{t("siteAddress.accepted.ipPolicy")}</label>
-                                    <div className="mt-2 flex flex-col sm:flex-row gap-3">
-                                        <select
+                                    <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                                        <Select
                                             id="sa-ip-policy"
+                                            containerClassName="sm:max-w-xs flex-1"
+                                            label={t("siteAddress.accepted.ipPolicy")}
                                             value={ipChoice}
                                             disabled={state.ipLiteralsSource === "env"}
-                                            onChange={(e) => setIpChoice(e.target.value === "own" || e.target.value === "none" ? e.target.value : "any")}
-                                            className={`${inputCls} sm:max-w-xs`}
-                                        >
-                                            {(["any", "own", "none"] as const).map((mode) => <option key={mode} value={mode}>{t(ipLiteralsLabelKey(mode, state.ownAddressesFrom))}</option>)}
-                                        </select>
-                                        <button type="button" className={secondaryBtn} disabled={!policyChange} onClick={submitPolicy}>
+                                            onChange={(v) => setIpChoice(v === "own" || v === "none" ? v : "any")}
+                                            options={(["any", "own", "none"] as const).map((mode) => ({ value: mode, label: t(ipLiteralsLabelKey(mode, state.ownAddressesFrom)) }))}
+                                        />
+                                        <Button variant="secondary" size="md" disabled={!policyChange} onClick={submitPolicy}>
                                             {t("save")}
-                                        </button>
+                                        </Button>
                                     </div>
                                     <p className="mt-2 text-xs text-gray-500">{t(state.ipLiteralsSource === "env" ? "siteAddress.ip.fromEnv" : "siteAddress.ip.help")}</p>
                                     {/* hostPolicy.ipSignIn, saved with the mode above (one sudo step). Read-only while
                                         WORDJS_IP_HOSTS sets the mode: see policyWrite. */}
                                     <div className="mt-3 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
-                                        <label className="flex cursor-pointer items-start gap-3">
-                                            <input
-                                                type="checkbox"
-                                                checked={ipSignInChoice}
-                                                disabled={state.ipLiteralsSource === "env"}
-                                                onChange={(e) => setIpSignInChoice(e.target.checked)}
-                                                className="mt-1 h-4 w-4 rounded border-gray-300"
-                                            />
-                                            <span className="text-sm font-bold text-gray-800">{t(ipSignInChoice ? "siteAddress.ipSignIn.on" : "siteAddress.ipSignIn.off")}</span>
-                                        </label>
+                                        <Checkbox
+                                            label={t(ipSignInChoice ? "siteAddress.ipSignIn.on" : "siteAddress.ipSignIn.off")}
+                                            checked={ipSignInChoice}
+                                            disabled={state.ipLiteralsSource === "env"}
+                                            onChange={(e) => setIpSignInChoice(e.target.checked)}
+                                        />
                                         <p className={`mt-2 text-xs leading-relaxed ${ipSignInChoice ? "font-semibold text-red-700" : "text-gray-500"}`}>
                                             {t("siteAddress.signIn.warn.ip")}
                                         </p>
