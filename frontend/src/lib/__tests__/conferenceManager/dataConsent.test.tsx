@@ -346,3 +346,45 @@ describe('registering without an e-mail (2.35.0)', () => {
         expect(src('client/portal/CoordinatorPortal.tsx')).toContain("ct('portal.registered.noemail')");
     });
 });
+
+describe('paper sheets (2.36.2): delete an unused one, and the sheet next to the checklist', () => {
+    it('the sheet view follows the paper: printed rows in order, settled rows kept in place, blank rows with their walk-in', async () => {
+        const { SheetView } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/PaperConsent');
+        const t = consentT('es');
+        const sheet = { code: 'ABC', blank: 2, roster: [{ row: 1, inscription_id: 11, name: 'Ana Pérez' }, { row: 2, inscription_id: 12, name: 'Beto Gil' }, { row: 3, inscription_id: 13, name: 'Carla Ruiz' }] };
+        const people = [{ id: 11, name: 'Ana Pérez', state: 'pending' }, { id: 12, name: 'Beto Gil', state: 'granted' }, { id: 20, name: 'Dora Paz', state: 'pending' }];
+        const rows = [
+            { id: 11, name: 'Ana Pérez', row: 1, on: true, noHealth: true, noImage: false, typedRow: '' },
+            { id: 20, name: 'Dora Paz', row: null, on: true, noHealth: false, noImage: false, typedRow: '5' },
+        ];
+        const html = renderToStaticMarkup(React.createElement(SheetView, { t, sheet, rows, people, setRow: () => {} }));
+        expect([...html.matchAll(/data-paper-sheet-row="(\d+)"/g)].map(m => Number(m[1]))).toEqual([1, 2, 3, 4, 5]);
+        const row = (n: number) => html.split(`data-paper-sheet-row="${n}"`)[1].split('</tr>')[0];
+        expect(row(1)).toContain('Ana Pérez');
+        expect(row(1)).toContain('aria-pressed="true"');
+        expect(row(2)).toContain(t('paper.row.granted'));
+        expect(row(3)).toContain(t('paper.row.gone'));
+        expect(row(4)).toContain(t('paper.row.blank'));
+        expect(row(5)).toContain('Dora Paz');
+        // Every box is a fixed square (the core sweep: shrink-0).
+        expect(src('client/lib/PaperConsent.tsx')).toContain('inline-flex w-5 h-5 shrink-0');
+    });
+    it('a phone toggles between the sheet and the list; a wide screen shows both; the photo is a second view of the sheet', () => {
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).toContain('<Dialog wide');
+        expect(s).toContain('data-paper-pane-toggle={k}');
+        expect(s).toContain('lg:grid lg:grid-cols-2');
+        expect(s).toContain('hidden lg:block');
+        expect(s).toContain('data-paper-photo-toggle');
+        expect(src('client/admin/ConsentAdmin.tsx')).toContain('wide ? "max-w-5xl"');
+        expect(src('client/portal/ConsentBits.tsx')).toContain('size={wide ? "xl" : "lg"}');
+        for (const k of ['paper.view.sheet', 'paper.view.list']) for (const l of ['es', 'en', 'pt']) expect(consentT(l)(k)).not.toBe(k);
+    });
+    it('delete: only an unused sheet offers it, confirmed in the host dialog, never a native one', () => {
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).toContain('canManage && s.deletable &&');
+        expect(s).toContain('testId="paper-delete"');
+        expect(s).toContain('action: "delete", sheet_id: del.sheet.id');
+        expect(s).not.toMatch(/\b(alert|confirm|prompt)\s*\(/);
+    });
+});

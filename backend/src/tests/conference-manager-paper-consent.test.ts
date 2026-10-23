@@ -259,6 +259,49 @@ test('a walk-in without an e-mail is registered, printed on the sheet and signs 
     assert.strictEqual(w.p.mails.filter((m: any) => /Dora/.test(m.text || '')).length, 0, 'no confirmation e-mail attempted');
 });
 
+test('an unused sheet can be deleted; one with a signed page cannot (2.36.2)', async () => {
+    const w = await world();
+    const ana = await w.register(w.tNorte, 'Ana');
+    const beto = await w.register(w.tNorte, 'Beto');
+    const wrong = ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create', lang: 'en' })).sheet;
+    const used = ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create' })).sheet;
+    // The list says which can go, and carries the printed rows with their names, in the sheet's order.
+    let list = ok(await w.portal('get', '/portal/consent/paper', w.tNorte));
+    const byId = (id: number) => list.sheets.find((s: any) => s.id === id);
+    assert.strictEqual(byId(wrong.id).deletable, true);
+    assert.deepStrictEqual(byId(used.id).roster.map((r: any) => [r.row, r.inscription_id, r.name]), [[1, ana, 'Ana Pérez'], [2, beto, 'Beto Pérez']]);
+    // Once a signed page is uploaded the sheet is evidence: no delete, even before anyone is ticked.
+    ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'upload', sheet_id: used.id, data_url: dataUrl('image/png', PNG) }));
+    list = ok(await w.portal('get', '/portal/consent/paper', w.tNorte));
+    assert.strictEqual(byId(used.id).deletable, false);
+    const refused = await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'delete', sheet_id: used.id });
+    assert.strictEqual(refused.status, 409);
+    assert.match(refused.body.error, /evidencia/);
+    // Ticked and then undone: still evidence (the person's chain names the sheet).
+    ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'marks', sheet_id: used.id, marks: [{ inscription_id: ana, health: true, image: true }] }));
+    ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'unmark', inscription_id: ana, reason: 'Se marcó a la persona equivocada' }));
+    assert.strictEqual((await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'delete', sheet_id: used.id })).status, 409);
+    // Another locality cannot delete it (404), nor can a team member without «inscriptions: manage».
+    assert.strictEqual((await w.portal('post', '/portal/consent/paper', w.tSur, { action: 'delete', sheet_id: wrong.id })).status, 404);
+    const editor = { id: 77, role: 'editor', userLogin: 'editor' };
+    assert.notStrictEqual((await w.p.call('post', '/consent/paper', { user: editor as any, body: { action: 'delete', sheet_id: wrong.id } })).status, 200);
+    // The unused one goes; the conference's chain keeps both its creation and its deletion.
+    assert.deepStrictEqual(ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'delete', sheet_id: wrong.id })), { deleted: wrong.id });
+    list = ok(await w.portal('get', '/portal/consent/paper', w.tNorte));
+    assert.deepStrictEqual(list.sheets.map((s: any) => s.id), [used.id]);
+    assert.strictEqual((await w.portal('get', `/portal/consent/paper?sheet_id=${wrong.id}`, w.tNorte)).status, 404);
+    assert.strictEqual((await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'delete', sheet_id: wrong.id })).status, 404);
+    const audit = w.p.q(`SELECT kind, actor, data FROM ${PREFIX}consent_events WHERE conference_id = ? AND inscription_id IS NULL ORDER BY id`, w.cid) as any[];
+    const gone = audit.find(a => a.kind === 'paper_sheet_deleted');
+    assert.ok(gone, audit.map(a => a.kind).join(', '));
+    assert.strictEqual(gone.actor, 'portal:Norte');
+    assert.deepStrictEqual([JSON.parse(gone.data).sheet_id, JSON.parse(gone.data).code], [wrong.id, wrong.code]);
+    // The admin deletes an unused sheet of any locality.
+    const surSheet = ok(await w.portal('post', '/portal/consent/paper', w.tSur, { action: 'create' })).sheet;
+    assert.deepStrictEqual(ok(await w.p.call('post', '/consent/paper', { body: { action: 'delete', sheet_id: surSheet.id } })), { deleted: surSheet.id });
+    assert.strictEqual(ok(await w.p.call('get', `/consent/evidence/${ana}`)).chain_ok, true);
+});
+
 test('the activation scan accepts the plugin (no computed call, every permission declared)', () => {
     const { validatePluginPermissions } = require('../core/plugins');
     const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'manifest.json'), 'utf8'));

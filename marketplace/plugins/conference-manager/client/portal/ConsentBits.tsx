@@ -164,8 +164,8 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
     );
 }
 
-function PortalDialog({ title, onClose, children, footer, testId }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string }) {
-    return <Modal title={title} onClose={onClose} size="lg" testId={testId} footer={footer}>{children}</Modal>;
+function PortalDialog({ title, onClose, children, footer, testId, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string; wide?: boolean }) {
+    return <Modal title={title} onClose={onClose} size={wide ? "xl" : "lg"} testId={testId} footer={footer}>{children}</Modal>;
 }
 
 /** The coordinator's paper consent for their own locality (the portal session's). */

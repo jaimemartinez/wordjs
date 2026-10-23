@@ -34,15 +34,15 @@ const LANG_NAMES: Record<string, string> = { es: "Español", en: "English", pt: 
 const STATE_TONE: Record<string, string> = { pending: "bg-amber-50 text-amber-800 border-amber-200", granted: "bg-emerald-50 text-emerald-800 border-emerald-200", revoked: "bg-rose-50 text-rose-800 border-rose-200" };
 
 /** The admin's dialog for the paper panel: the plugin's Overlay, with a title, a body and a footer. */
-function AdminDialog({ title, onClose, children, footer, testId, closeLabel }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string; closeLabel?: string }) {
+function AdminDialog({ title, onClose, children, footer, testId, closeLabel, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string; closeLabel?: string; wide?: boolean }) {
     return (
         <Overlay layer={2} onBackdrop={onClose} onEscape={onClose}>
-            <div role="dialog" aria-modal="true" aria-label={title} className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 space-y-4" data-testid={testId}>
+            <div role="dialog" aria-modal="true" aria-label={title} className={`bg-white rounded-2xl shadow-2xl w-full ${wide ? "max-w-5xl" : "max-w-2xl"} p-4 sm:p-6 space-y-4`} data-testid={testId}>
                 <div className="flex items-start justify-between gap-3">
                     <h3 className="text-lg font-bold text-gray-900">{title}</h3>
                     <button type="button" onClick={onClose} aria-label={closeLabel || "Cerrar"} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
                 </div>
-                <div className="max-h-[60vh] overflow-y-auto">{children}</div>
+                <div className={`${wide ? "max-h-[70vh]" : "max-h-[60vh]"} overflow-y-auto`}>{children}</div>
                 {footer}
             </div>
         </Overlay>
