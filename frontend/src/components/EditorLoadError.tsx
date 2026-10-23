@@ -1,8 +1,8 @@
 "use client";
 
-import React from "react";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
+import { Button } from "@/components/ui";
 
 /**
  * Blocking error state shown when an existing post/page FAILS to load. It replaces the editor entirely
@@ -27,21 +27,12 @@ export default function EditorLoadError({ onRetry, onBack }: { onRetry: () => vo
                     )}
                 </p>
                 <div className="flex justify-center gap-2">
-                    <button
-                        type="button"
-                        onClick={onRetry}
-                        className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition-colors flex items-center gap-2"
-                    >
-                        <i className="fa-solid fa-rotate-right text-xs"></i>
+                    <Button size="md" icon="fa-rotate-right" onClick={onRetry}>
                         {trStr("Reintentar", language)}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onBack}
-                        className="px-5 py-2.5 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-semibold transition-colors"
-                    >
+                    </Button>
+                    <Button size="md" variant="secondary" onClick={onBack}>
                         {trStr("Volver", language)}
-                    </button>
+                    </Button>
                 </div>
             </div>
         </div>

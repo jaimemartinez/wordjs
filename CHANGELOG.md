@@ -101,6 +101,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   so it read "runs in the every deployment mode" and "Port 80 listenerabove" in English, "en el todos los modos"
   and "HTTP-01 ; por eso" in Spanish, and "na todos os modos" in Portuguese. Each language now has the whole
   sentence, with its own word order and punctuation.
+- **The sign-in screens use the admin's form kit.** Sign in, register, reset password and verify email, plus
+  two-factor setup, the one-time secret dialog, the API access card and the plugin and editor error notices,
+  now use `@/components/ui` instead of their own fields and buttons. Every field has its label tied to it; its
+  error appears under it and is announced (it was a red line nothing pointed to, and register's errors were
+  not announced at all); every form's submit is explicit; and the screens take the admin's field and button
+  look. The two-factor password field can show what was typed. These files are off the form kit's allowlist
+  (719 → 687 raw controls left).
 - **Admin → Updates no longer offers an in-place update inside a Kubernetes pod.** containerd and CRI-O write
   no `/.dockerenv`, and the Helm chart did not say it was a container, so the screen offered the one-click update,
   which rewrites code the next pod restart replaces with the image. A pod is now recognised by

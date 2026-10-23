@@ -7,6 +7,7 @@ import { authApi, settingsApi } from "@/lib/api";
 import { currentReturnPath } from "@/lib/safeReturnPath";
 import { useI18n } from "@/contexts/I18nContext";
 import { apiErrorText } from "@/lib/apiErrorText";
+import { Button, Checkbox, IconButton, Input } from "@/components/ui";
 
 function LoginForm() {
     const [username, setUsername] = useState("");
@@ -97,103 +98,77 @@ function LoginForm() {
                             <i className="fa-solid fa-shield-halved text-blue-600 text-2xl mb-2"></i>
                             <p className="text-sm text-gray-500">{t('login.mfaPrompt')}</p>
                         </div>
-                        <div>
-                            <label htmlFor="login-mfa-code" className="block text-sm font-medium text-gray-700 mb-2">{t('login.mfaCode')}</label>
-                            <input
-                                id="login-mfa-code"
-                                type="text"
-                                inputMode="numeric"
-                                autoComplete="one-time-code"
-                                autoFocus
-                                value={mfaCode}
-                                onChange={(e) => setMfaCode(e.target.value)}
-                                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 tracking-widest text-center text-lg"
-                                placeholder="123456"
-                                required
-                            />
-                        </div>
+                        <Input
+                            id="login-mfa-code"
+                            size="md"
+                            label={t('login.mfaCode')}
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            autoFocus
+                            value={mfaCode}
+                            onChange={(e) => setMfaCode(e.target.value)}
+                            className="tracking-widest text-center text-lg"
+                            placeholder="123456"
+                            required
+                        />
                         {error && (
-                            <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>
+                            <div role="alert" className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>
                         )}
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-                        >
-                            {loading ? t('login.verifying') : t('login.verify')}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => { setMfaToken(null); setMfaCode(""); setError(""); }}
-                            className="w-full text-sm text-gray-500 hover:text-blue-600"
-                        >
+                        <Button type="submit" size="md" className="w-full" pending={loading} pendingLabel={t('login.verifying')}>
+                            {t('login.verify')}
+                        </Button>
+                        <Button variant="link" className="w-full justify-center" onClick={() => { setMfaToken(null); setMfaCode(""); setError(""); }}>
                             &larr; {t('login.backToSignIn')}
-                        </button>
+                        </Button>
                     </form>
                 ) : (
                 <form onSubmit={handleSubmit} className="space-y-6">
-                    <div>
-                        <label htmlFor="login-username" className="block text-sm font-medium text-gray-700 mb-2">
-                            {t('users.username')}
-                        </label>
-                        <input id="login-username"
-                            type="text"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                            placeholder={t('login.usernamePlaceholder')}
-                            required
-                        />
-                    </div>
+                    <Input
+                        id="login-username"
+                        size="md"
+                        label={t('users.username')}
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder={t('login.usernamePlaceholder')}
+                        required
+                    />
 
-                    <div>
-                        <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-2">
-                            {t('users.password')}
-                        </label>
-                        <div className="relative">
-                            <input id="login-password"
-                                type={showPassword ? "text" : "password"}
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 pr-12"
-                                placeholder={t('login.passwordPlaceholder')}
-                                required
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setShowPassword(!showPassword)}
-                                aria-label={t(showPassword ? 'login.hidePassword' : 'login.showPassword')}
+                    <Input
+                        id="login-password"
+                        size="md"
+                        type={showPassword ? "text" : "password"}
+                        label={t('users.password')}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder={t('login.passwordPlaceholder')}
+                        required
+                        trailing={
+                            <IconButton
+                                size="sm"
+                                icon={showPassword ? 'fa-eye-slash' : 'fa-eye'}
+                                label={t(showPassword ? 'login.hidePassword' : 'login.showPassword')}
                                 aria-pressed={showPassword}
-                                className="absolute inset-y-0 right-0 w-11 flex items-center justify-center rounded-r-lg text-gray-400 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-blue-500"
-                            >
-                                <i className={`fa-solid ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`} aria-hidden="true"></i>
-                            </button>
-                        </div>
-                    </div>
+                                onClick={() => setShowPassword(!showPassword)}
+                            />
+                        }
+                    />
 
-                    <label className="flex items-center gap-2 text-sm text-gray-600 select-none min-h-11">
-                        <input
-                            type="checkbox"
-                            checked={remember}
-                            onChange={(e) => setRemember(e.target.checked)}
-                            className="h-4 w-4 rounded border-gray-300"
-                        />
-                        <span>{t('login.rememberMe')}</span>
-                    </label>
+                    <Checkbox
+                        label={t('login.rememberMe')}
+                        checked={remember}
+                        onChange={(e) => setRemember(e.target.checked)}
+                        containerClassName="min-h-11 flex items-center"
+                    />
 
                     {error && (
-                        <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
+                        <div role="alert" className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
                             {error}
                         </div>
                     )}
 
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-                    >
-                        {loading ? t('login.signingIn') : t('login.signIn')}
-                    </button>
+                    <Button type="submit" size="md" className="w-full" pending={loading} pendingLabel={t('login.signingIn')}>
+                        {t('login.signIn')}
+                    </Button>
 
                     {resetAvailable && (
                         <div className="text-center">

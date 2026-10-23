@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { authApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { apiErrorText } from "@/lib/apiErrorText";
+import { Button, IconButton, Input } from "@/components/ui";
 
 // Public, unauthenticated. Two modes on one page:
 //   • No token in the URL  → "request a reset link" form (enter username/email → POST forgot-password).
@@ -104,12 +105,9 @@ function ResetPasswordInner() {
             <div className="text-center space-y-4">
                 <i className="fa-solid fa-circle-check text-green-500 text-4xl"></i>
                 <p className="text-gray-700">{t("reset.doneTitle")}</p>
-                <button
-                    onClick={() => router.push("/login")}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-                >
+                <Button size="md" className="w-full" onClick={() => router.push("/login")}>
                     {t("auth.goToLogin")}
-                </button>
+                </Button>
             </div>,
             false,
         );
@@ -129,52 +127,44 @@ function ResetPasswordInner() {
         return shell(
             <form onSubmit={handleReset} className="space-y-6">
                 <p className="text-sm text-gray-500 text-center">{t("reset.chooseNew")}</p>
-                <div>
-                    <label htmlFor="reset-password" className="block text-sm font-medium text-gray-700 mb-2">{t("reset.newPassword")}</label>
-                    <div className="relative">
-                        <input
-                            id="reset-password"
-                            type={showPassword ? "text" : "password"}
-                            autoComplete="new-password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 pr-10"
-                            placeholder={t("reset.newPasswordPlaceholder")}
-                            required
-                            minLength={8}
-                        />
-                        <button
-                            type="button"
+                <Input
+                    id="reset-password"
+                    size="md"
+                    type={showPassword ? "text" : "password"}
+                    label={t("reset.newPassword")}
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={t("reset.newPasswordPlaceholder")}
+                    required
+                    minLength={8}
+                    // One eye shows / hides both passwords, so the two can be compared.
+                    trailing={
+                        <IconButton
+                            size="sm"
+                            icon={showPassword ? "fa-eye-slash" : "fa-eye"}
+                            label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
+                            aria-pressed={showPassword}
                             onClick={() => setShowPassword(!showPassword)}
-                            aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
-                            className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
-                        >
-                            <i className={`fa-solid ${showPassword ? "fa-eye-slash" : "fa-eye"}`}></i>
-                        </button>
-                    </div>
-                </div>
-                <div>
-                    <label htmlFor="reset-confirm" className="block text-sm font-medium text-gray-700 mb-2">{t("reset.confirmNew")}</label>
-                    <input
-                        id="reset-confirm"
-                        type={showPassword ? "text" : "password"}
-                        autoComplete="new-password"
-                        value={confirm}
-                        onChange={(e) => setConfirm(e.target.value)}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                        placeholder={t("reset.confirmPlaceholder")}
-                        required
-                        minLength={8}
-                    />
-                </div>
+                        />
+                    }
+                />
+                <Input
+                    id="reset-confirm"
+                    size="md"
+                    type={showPassword ? "text" : "password"}
+                    label={t("reset.confirmNew")}
+                    autoComplete="new-password"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    placeholder={t("reset.confirmPlaceholder")}
+                    required
+                    minLength={8}
+                />
                 {error && <div role="alert" className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>}
-                <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-                >
-                    {loading ? t("reset.resetting") : t("reset.submit")}
-                </button>
+                <Button type="submit" size="md" className="w-full" pending={loading} pendingLabel={t("reset.resetting")}>
+                    {t("reset.submit")}
+                </Button>
             </form>
         );
     }
@@ -196,27 +186,20 @@ function ResetPasswordInner() {
     return shell(
         <form onSubmit={handleRequest} className="space-y-6">
             <p className="text-sm text-gray-500 text-center">{t("reset.requestIntro")}</p>
-            <div>
-                <label htmlFor="reset-login" className="block text-sm font-medium text-gray-700 mb-2">{t("reset.login")}</label>
-                <input
-                    id="reset-login"
-                    type="text"
-                    autoComplete="username"
-                    value={login}
-                    onChange={(e) => setLogin(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder={t("reset.loginPlaceholder")}
-                    required
-                />
-            </div>
+            <Input
+                id="reset-login"
+                size="md"
+                label={t("reset.login")}
+                autoComplete="username"
+                value={login}
+                onChange={(e) => setLogin(e.target.value)}
+                placeholder={t("reset.loginPlaceholder")}
+                required
+            />
             {error && <div role="alert" className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>}
-            <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-            >
-                {loading ? t("reset.sending") : t("reset.send")}
-            </button>
+            <Button type="submit" size="md" className="w-full" pending={loading} pendingLabel={t("reset.sending")}>
+                {t("reset.send")}
+            </Button>
         </form>
     );
 }

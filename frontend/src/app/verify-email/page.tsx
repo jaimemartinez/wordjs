@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { Button } from "@/components/ui";
 import {
     verifyCopy,
     classifyVerifyFailure,
@@ -92,13 +93,9 @@ function VerifyEmailInner() {
                     <h2 className="text-lg font-semibold text-gray-800">{copy.title}</h2>
                     <p className="text-sm text-gray-600 leading-relaxed">{copy.body}</p>
                     {copy.action && (
-                        <button
-                            type="button"
-                            onClick={() => router.push("/login")}
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-                        >
+                        <Button size="md" className="w-full" onClick={() => router.push("/login")}>
                             {copy.action}
-                        </button>
+                        </Button>
                     )}
                 </div>
 

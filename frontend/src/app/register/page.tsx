@@ -31,6 +31,7 @@ import { useRouter } from "next/navigation";
 import { authApi, settingsApi } from "@/lib/api";
 import { currentReturnPath } from "@/lib/safeReturnPath";
 import { useI18n } from "@/contexts/I18nContext";
+import { Button, IconButton, Input } from "@/components/ui";
 import {
     EMPTY_DRAFT,
     PASSWORD_MAX,
@@ -149,14 +150,10 @@ function RegisterForm() {
                 <i className="fa-solid fa-circle-check text-green-500 text-4xl"></i>
                 <h2 className="text-lg font-semibold text-gray-800">{t("register.createdTitle")}</h2>
                 <p className="text-sm text-gray-600 leading-relaxed">{t("register.createdBody")}</p>
-                <button
-                    type="button"
-                    onClick={() => router.push(currentReturnPath() || "/admin")}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-                >
-                    {/* Rendered only after a submit (client state), so reading the URL here cannot mismatch the server HTML. */}
+                {/* Rendered only after a submit (client state), so reading the URL here cannot mismatch the server HTML. */}
+                <Button size="md" className="w-full" onClick={() => router.push(currentReturnPath() || "/admin")}>
                     {currentReturnPath() ? t("register.continue") : t("register.goToDashboard")}
-                </button>
+                </Button>
             </div>
         );
     }
@@ -164,108 +161,74 @@ function RegisterForm() {
     // ---- Formulario -------------------------------------------------------------------------------
     return shell(
         <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-            <div>
-                <label htmlFor="reg-username" className="block text-sm font-medium text-gray-700 mb-2">
-                    {t("register.username")}
-                </label>
-                <input
-                    id="reg-username"
-                    type="text"
-                    autoComplete="username"
-                    value={draft.username}
-                    onChange={set("username")}
-                    aria-invalid={!!fieldErrors.username}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder={t("register.usernamePlaceholder")}
-                />
-                {fieldErrors.username && <p className="mt-1.5 text-sm text-red-600">{fieldErrors.username}</p>}
-            </div>
-
-            <div>
-                <label htmlFor="reg-email" className="block text-sm font-medium text-gray-700 mb-2">
-                    {t("register.email")}
-                </label>
-                <input
-                    id="reg-email"
-                    type="email"
-                    autoComplete="email"
-                    value={draft.email}
-                    onChange={set("email")}
-                    aria-invalid={!!fieldErrors.email}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder={t("register.emailPlaceholder")}
-                />
-                {fieldErrors.email && <p className="mt-1.5 text-sm text-red-600">{fieldErrors.email}</p>}
-            </div>
-
-            <div>
-                <label htmlFor="reg-display" className="block text-sm font-medium text-gray-700 mb-2">
-                    {t("register.displayName")} <span className="font-normal text-gray-400">{t("register.optional")}</span>
-                </label>
-                <input
-                    id="reg-display"
-                    type="text"
-                    autoComplete="name"
-                    value={draft.displayName}
-                    onChange={set("displayName")}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder={t("register.displayNamePlaceholder")}
-                />
-            </div>
-
-            <div>
-                <label htmlFor="reg-password" className="block text-sm font-medium text-gray-700 mb-2">
-                    {t("register.password")}
-                </label>
-                <div className="relative">
-                    <input
-                        id="reg-password"
-                        type={showPassword ? "text" : "password"}
-                        autoComplete="new-password"
-                        value={draft.password}
-                        onChange={set("password")}
-                        aria-invalid={!!fieldErrors.password}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 pr-10"
-                        placeholder={t("register.passwordPlaceholder").replace("{min}", String(PASSWORD_MIN)).replace("{max}", String(PASSWORD_MAX))}
-                    />
-                    <button
-                        type="button"
+            <Input
+                id="reg-username"
+                size="md"
+                label={t("register.username")}
+                autoComplete="username"
+                value={draft.username}
+                onChange={set("username")}
+                error={fieldErrors.username}
+                placeholder={t("register.usernamePlaceholder")}
+            />
+            <Input
+                id="reg-email"
+                size="md"
+                type="email"
+                label={t("register.email")}
+                autoComplete="email"
+                value={draft.email}
+                onChange={set("email")}
+                error={fieldErrors.email}
+                placeholder={t("register.emailPlaceholder")}
+            />
+            <Input
+                id="reg-display"
+                size="md"
+                label={<>{t("register.displayName")} <span className="font-normal normal-case tracking-normal text-gray-500">{t("register.optional")}</span></>}
+                autoComplete="name"
+                value={draft.displayName}
+                onChange={set("displayName")}
+                placeholder={t("register.displayNamePlaceholder")}
+            />
+            <Input
+                id="reg-password"
+                size="md"
+                type={showPassword ? "text" : "password"}
+                label={t("register.password")}
+                autoComplete="new-password"
+                value={draft.password}
+                onChange={set("password")}
+                error={fieldErrors.password}
+                placeholder={t("register.passwordPlaceholder").replace("{min}", String(PASSWORD_MIN)).replace("{max}", String(PASSWORD_MAX))}
+                // One eye shows / hides both passwords, so the two can be compared.
+                trailing={
+                    <IconButton
+                        size="sm"
+                        icon={showPassword ? "fa-eye-slash" : "fa-eye"}
+                        label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
+                        aria-pressed={showPassword}
                         onClick={() => setShowPassword(!showPassword)}
-                        aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
-                    >
-                        <i className={`fa-solid ${showPassword ? "fa-eye-slash" : "fa-eye"}`}></i>
-                    </button>
-                </div>
-                {fieldErrors.password && <p className="mt-1.5 text-sm text-red-600">{fieldErrors.password}</p>}
-            </div>
+                    />
+                }
+            />
+            <Input
+                id="reg-confirm"
+                size="md"
+                type={showPassword ? "text" : "password"}
+                label={t("register.confirm")}
+                autoComplete="new-password"
+                value={draft.confirm}
+                onChange={set("confirm")}
+                error={fieldErrors.confirm}
+                placeholder={t("register.confirmPlaceholder")}
+            />
 
-            <div>
-                <label htmlFor="reg-confirm" className="block text-sm font-medium text-gray-700 mb-2">
-                    {t("register.confirm")}
-                </label>
-                <input
-                    id="reg-confirm"
-                    type={showPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    value={draft.confirm}
-                    onChange={set("confirm")}
-                    aria-invalid={!!fieldErrors.confirm}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900"
-                    placeholder={t("register.confirmPlaceholder")}
-                />
-                {fieldErrors.confirm && <p className="mt-1.5 text-sm text-red-600">{fieldErrors.confirm}</p>}
-            </div>
+            {error && <div role="alert" className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>}
 
-            {error && <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>}
-
-            <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-            >
-                {loading ? t("register.submitting") : t("register.submit")}
-            </button>
+            <Button type="submit" size="md" className="w-full" pending={loading} pendingLabel={t("register.submitting")}>
+                {t("register.submit")}
+            </Button>
         </form>
     );
 }
