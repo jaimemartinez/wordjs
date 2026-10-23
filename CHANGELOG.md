@@ -8,6 +8,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **conference-manager 2.36.0: a printable sticker for the physical badge, and the meal group on badges.**
+  - **«Sticker para imprimir»** is a second design next to the virtual badge, under *Escarapelas › Diseño*, for a
+    label printer. It uses the same designer: texts with the person's data, shapes, images and the QR.
+    - Sizes: presets (62 × 100 mm, the default, and 62 × 29 mm for Brother QL; 100 × 50 mm; 4 × 6 in; 2 × 1 in),
+      or a custom width × height in mm. «1:1» shows it at real size on screen.
+    - Changing the label's shape (tall ↔ wide) offers a layout made for it, or scales the current one.
+    - A sticker may drop its QR. The starting points are black on white, since label printers are thermal.
+  - **Printing**:
+    - for one person (their badge window), the people a search shows, a locality, or everyone;
+    - each sticker comes from the registrant's live data;
+    - a PDF with one label per page at the label's exact size, so no browser margins or headers;
+    - in the print window, choose the sticker printer and the label size, «Márgenes: ninguno» and «Escala: 100 %».
+  - **Meal group (A–F)**:
+    - The designer's «Texto» tab has a «Grupo de comida (letra)» button that places the person's letter in large
+      type. The field was already in «Datos del inscrito», but easy to miss.
+    - A person with no group yet shows nothing.
+    - The letter appears once «Turnos de comida» is on and groups are assigned.
+
 - **conference-manager 2.35.0: registering without an e-mail.** While a conference asks for «Autorización de
   datos», a person can now be registered without an e-mail, for example a walk-in who signs on paper.
   - An e-mail written in the form must still be a valid one. An e-mail field the administrator marked as required

@@ -39,7 +39,8 @@ export type LinksState = 'disabled' | 'expired' | null;
 
 export const badgesApi = {
     getConfig: (conferenceId: number) => apiGet<{ config: BadgeConfig; available_fields: AvailableField[]; assets: { kind: string; sha: string; width: number | null; height: number | null }[]; zones: { horizontal: Zones; vertical: Zones }; max_rows: { horizontal: number; vertical: number }; self_page?: { fields: { name: string; label: string; type: string }[]; type_field: string | null; number_field: string | null; link: string | null } }>(`${BASE}/badges/config?conference_id=${conferenceId}`),
-    saveConfig: (conferenceId: number, design: BadgeDesign, policy: BadgePolicy) => apiPut<{ success: boolean; config: BadgeConfig }>(`${BASE}/badges/config`, { conference_id: conferenceId, design, policy }),
+    /** 2.36.0: `sticker` = the printable sticker's design (server/badge-design.js, layout 'sticker'). */
+    saveConfig: (conferenceId: number, design: BadgeDesign, policy: BadgePolicy, sticker?: any) => apiPut<{ success: boolean; config: BadgeConfig }>(`${BASE}/badges/config`, { conference_id: conferenceId, design, policy, ...(sticker ? { sticker } : {}) }),
     getAsset: (conferenceId: number, kind: string) => apiGet<{ data_url: string; width: number | null; height: number | null; sha: string }>(`${BASE}/badges/assets/${kind}?conference_id=${conferenceId}`),
     putAsset: (conferenceId: number, kind: string, dataUrl: string, width: number, height: number) => apiPut<{ success: boolean; sha: string }>(`${BASE}/badges/assets`, { conference_id: conferenceId, kind, data_url: dataUrl, width, height }),
     deleteAsset: (conferenceId: number, kind: string) => apiDelete<{ success: boolean }>(`${BASE}/badges/assets?conference_id=${conferenceId}&kind=${encodeURIComponent(kind)}`),
@@ -51,7 +52,8 @@ export const badgesApi = {
     links: (conferenceId: number, scope: { inscription_ids?: number[]; location_id?: number; all?: boolean }) => apiPost<{ links: BadgeLink[]; state: LinksState; country_code: string }>(`${BASE}/badges/links`, { conference_id: conferenceId, ...scope }),
     rotate: (inscriptionId: number) => apiPost<{ link: BadgeLink | null }>(`${BASE}/badges/links/${inscriptionId}/rotate`, {}),
     revoke: (inscriptionId: number) => apiDelete<{ success: boolean }>(`${BASE}/badges/links/${inscriptionId}`),
-    ticket: (conferenceId: number, scope: { inscription_id?: number; inscription_ids?: number[]; location_id?: number; all?: boolean }, sheet: 'single' | 'letter') =>
+    /** sheet 'sticker' (2.36.0): the printable stickers, one label per PDF page at the label's exact size. */
+    ticket: (conferenceId: number, scope: { inscription_id?: number; inscription_ids?: number[]; location_id?: number; all?: boolean }, sheet: 'single' | 'letter' | 'sticker') =>
         apiPost<{ d: string }>(`${BASE}/badges/ticket`, { conference_id: conferenceId, ...scope, sheet }),
 };
 

@@ -124,9 +124,14 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
                                     title={number ? `+${number}` : tx('badges.act.whatsapp.hint', 'No hay un teléfono válido en la inscripción: WhatsApp se abrirá para escoger el contacto.')}>
                                     <i className="fa-brands fa-whatsapp"></i>{number ? tx('badges.act.whatsapp', 'WhatsApp') : tx('badges.act.whatsapp.nophone', 'WhatsApp (sin número)')}
                                 </a>
-                                <button type="button" className={`${ghost} col-span-2`} data-badge-act="pdf" disabled={!!busy}
+                                <button type="button" className={ghost} data-badge-act="pdf" disabled={!!busy}
                                     onClick={() => act('pdf', () => openBadgeFileFrom(async () => (await badgesApi.ticket(conferenceId, { inscription_id: person.id }, 'single')).d))}>
                                     <i className={`fa-solid ${busy === 'pdf' ? 'fa-spinner animate-spin' : 'fa-file-pdf'}`}></i>{tx('badges.act.pdf', 'Descargar PDF')}
+                                </button>
+                                {/* 2.36.0: the printable sticker for the physical badge (one label, its exact size). */}
+                                <button type="button" className={ghost} data-badge-act="sticker" disabled={!!busy}
+                                    onClick={() => act('sticker', () => openBadgeFileFrom(async () => (await badgesApi.ticket(conferenceId, { inscription_id: person.id }, 'sticker')).d))}>
+                                    <i className={`fa-solid ${busy === 'sticker' ? 'fa-spinner animate-spin' : 'fa-note-sticky'}`}></i>{tx('badges.act.sticker', 'Sticker para imprimir')}
                                 </button>
                             </div>
                             <p className="text-[10px] text-gray-400 break-all" data-badge-url="">{url}</p>

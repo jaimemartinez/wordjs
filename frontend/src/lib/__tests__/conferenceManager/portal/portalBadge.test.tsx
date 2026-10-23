@@ -177,7 +177,7 @@ describe("the review fixes, in the sources", () => {
     it("the designer (2.29.0) saves the design with the policy, its images already uploaded, and locks the form meanwhile", () => {
         const page = read(`${PLUGIN}/admin/BadgesPage.tsx`);
         const save = page.slice(page.indexOf("const save = async"), page.indexOf("if (loading) return"));
-        expect(save).toContain("saveConfig(conferenceId, design, policy)");
+        expect(save).toContain("saveConfig(conferenceId, design, policy, sticker)");
         expect(page).toContain("const locked = !canManage || saving;");
         expect(page).not.toContain("disabled={!canManage}");
         // An image goes to the gallery when it is picked (badgesApi.putImage), so a saved design never points at a missing one.
@@ -445,5 +445,44 @@ describe("the badge designer", () => {
         const keys = Object.keys(translations.es).filter((k) => k.startsWith("badges.ed."));
         expect(keys.length).toBeGreaterThanOrEqual(100);
         for (const lang of ["en", "pt"] as const) for (const k of keys) expect((translations as any)[lang][k], `${lang} ${k}`).toBeTruthy();
+    });
+});
+
+describe('the printable sticker (2.36.0)', () => {
+    const CMD = path.resolve(__dirname, '../../../../../../marketplace/plugins/conference-manager');
+    const read = (rel: string) => fs.readFileSync(path.join(CMD, rel), 'utf8');
+    it('presets, templates on any label size, and a resize that keeps everything on the label', async () => {
+        const { STICKER_PRESETS, STICKER_TEMPLATES, scaleDesign, presetOf, normalizeDesignV2, layoutDesign, cardOf, editorMetrics } = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/badgeEditor");
+        expect(STICKER_PRESETS[0]).toMatchObject({ w: 62, h: 100 });
+        expect(presetOf({ w: 29, h: 62 })!.id).toBe('62x29');
+        const metrics = editorMetrics;
+        for (const t of STICKER_TEMPLATES) {
+            const d = normalizeDesignV2(t.make());
+            expect(d.layout).toBe('sticker');
+            expect(d.elements.some((e: any) => e.text === '{{@meal_group}}')).toBe(true);
+            for (const p of STICKER_PRESETS) {
+                const s = scaleDesign(d, { w: p.w, h: p.h });
+                expect(cardOf(s.layout, s.size)).toEqual({ w: p.w, h: p.h });
+                for (const e of s.elements) {
+                    expect(e.x).toBeGreaterThanOrEqual(-0.01);
+                    expect(e.y).toBeGreaterThanOrEqual(-0.01);
+                    expect(e.x + e.w).toBeLessThanOrEqual(p.w + 0.01);
+                    if (e.type !== 'qr') expect(e.y + e.h).toBeLessThanOrEqual(p.h + 0.01);
+                }
+                const b = layoutDesign(s, { data: { '@name': 'Ana', '@meal_group': 'B', '@location': 'Norte' }, qr: 'ABC', metrics, images: {} });
+                expect([b.w_mm, b.h_mm]).toEqual([p.w, p.h]);
+            }
+        }
+    });
+    it('the designer offers the meal group letter and the sticker mode, with the styled Select and in three languages', () => {
+        const ed = read('client/admin/BadgeEditor.tsx');
+        expect(ed).toContain('data-ed-meal-group');
+        expect(ed).toContain('data-ed-sticker-size');
+        expect(ed).not.toMatch(/<select\b/);
+        expect(read('client/admin/BadgesPage.tsx')).toContain('data-badges-target-tab="sticker"');
+        expect(read('client/admin/BadgeActions.tsx')).toContain("'sticker')).d");
+        for (const k of ['badges.target.sticker', 'badges.sticker.help.print', 'badges.ed.meal', 'badges.bulk.sticker', 'badges.act.sticker', 'badges.sticker.real'])
+            for (const lang of ['es', 'en', 'pt'] as const) expect(translations[lang][k], `${lang} ${k}`).toBeTruthy();
+        expect(translations.es['badges.sticker.help.print']).toContain('Márgenes: ninguno');
     });
 });

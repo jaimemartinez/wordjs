@@ -32,7 +32,7 @@
 const { buildBadge, zonesOf, rowsOf, LAYOUTS, DEFAULT_COLORS } = require('./badge-layout');
 const crypto = require('crypto');
 const { buildBadgePdf } = require('./badge-pdf');
-const { normalizeDesignV2, layoutDesign, assetsOfDesign, keysOfDesign } = require('./badge-design');
+const { normalizeDesignV2, layoutDesign, assetsOfDesign, keysOfDesign, STICKER } = require('./badge-design');
 const { createMetrics, isFace } = require('./badge-font');
 const { faceBytes, faceBase64, faceParsed } = require('./badge-font-files');
 const { docFieldsOf } = require('./selfpage');
@@ -67,6 +67,17 @@ const BUILTINS = [
 const DEFAULT_DESIGN = Object.freeze({
     layout: 'horizontal', title: '', colors: { ...DEFAULT_COLORS }, panel: 'none',
     fields: [{ key: '@location', show_label: true }],
+});
+// 2.36.0: «Sticker para imprimir» — the label a sticker printer prints for the physical badge, designed like the
+// virtual badge (server/badge-design.js, layout 'sticker'). Black on white (label printers are thermal): the name,
+// the locality, the meal group letter (nothing when the person has none yet) and the QR, on 62 × 100 mm.
+const DEFAULT_STICKER = Object.freeze({
+    version: 2, layout: STICKER, size: { w: 62, h: 100 }, background: '#ffffff', elements: [
+        { id: 's1', type: 'text', x: 3, y: 4, w: 56, h: 22, text: '{{@name}}', font: 'montserrat', bold: true, size: 20, color: '#000000', align: 'center', valign: 'middle', fit: 'shrink', lh: 1.1 },
+        { id: 's2', type: 'text', x: 3, y: 27, w: 56, h: 8, text: '{{@location}}', font: 'montserrat', size: 11, color: '#000000', align: 'center', valign: 'middle', upper: true, ls: 0.5 },
+        { id: 's3', type: 'text', x: 11, y: 37, w: 40, h: 33, text: '{{@meal_group}}', font: 'montserrat', bold: true, size: 72, color: '#000000', align: 'center', valign: 'middle', fit: 'shrink', name: 'Grupo de comida' },
+        { id: 's4', type: 'qr', x: 19, y: 73, w: 24, h: 24, bg: false },
+    ],
 });
 const DEFAULT_POLICY = Object.freeze({ enabled: true, portal_enabled: true, expires_on: null, country_code: '57' });
 const MSG = {
@@ -154,6 +165,7 @@ function createBadges(base) {
         return {
             configured: !!stored,
             design: normalizeDesign(stored && stored.design, null),
+            sticker: normalizeSticker(stored && stored.sticker, null),
             policy: normalizePolicy(stored && stored.policy),
             rev: stored && Number.isInteger(stored.rev) ? stored.rev : 0,
         };
@@ -186,6 +198,11 @@ function createBadges(base) {
             panel: PANELS.has(src.panel) ? src.panel : 'none',
             fields,
         };
+    }
+    /** The sticker design (2.36.0): a free-form design with layout 'sticker' and its size; the default until saved. */
+    function normalizeSticker(d, assetIds) {
+        const src = d && typeof d === 'object' && d.version === 2 ? d : DEFAULT_STICKER;
+        return normalizeDesignV2({ ...src, layout: STICKER }, { assets: assetIds || null });
     }
     const isBareDate = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
     function normalizePolicy(p) {
@@ -340,10 +357,11 @@ function createBadges(base) {
         return new Map((await availableFields(cid)).map(f => [f.key, f.label]));
     }
     // The display lists of several inscriptions of one conference (the PDF), plus the plate bytes.
-    async function badgesFor(cid, ids) {
+    async function badgesFor(cid, ids, { sticker = false } = {}) {
         const conf = await db.get(`SELECT id, name, date_start, date_end FROM ${T.conferences} WHERE id = ?`, [cid]);
         if (!conf) throw httpError(404, 'Conferencia no encontrada.');
         const cfg = await configOf(cid);
+        if (sticker) cfg.design = cfg.sticker;
         const assets = await assetsOf(cid, true);
         const labels = await labelsOf(cid);
         const list = [];
@@ -430,7 +448,8 @@ function createBadges(base) {
         const scope = parseJson(t.scope);
         return scope ? { conference_id: Number(t.conference_id), scope } : null;
     }
-    const sheetOf = (v) => (v === 'letter' ? 'letter' : 'single');
+    // 'sticker' (2.36.0): the printable sticker's design, one label per page at the label's exact size.
+    const sheetOf = (v) => (v === 'letter' ? 'letter' : v === 'sticker' ? 'sticker' : 'single');
     const pdfName = (base) => `${String(base || 'escarapela').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'escarapela'}.pdf`;
 
     // ── public throttle ────────────────────────────────────────────────────────────────────────────
@@ -570,6 +589,7 @@ function createBadges(base) {
                 const assetIds = new Set([...(await assetsOf(cid, false)).keys()].filter(k => IMAGE_KIND.test(k)).map(k => k.slice(4)));
                 const next = {
                     design: normalizeDesign(body.design || cur.design, known, assetIds),
+                    sticker: normalizeSticker(body.sticker || cur.sticker, assetIds),
                     policy: normalizePolicy(body.policy || cur.policy),
                     rev: cur.rev + 1,
                 };
@@ -645,8 +665,9 @@ function createBadges(base) {
                 res.json({ success: true });
             } catch (e) { send(res, e); }
         });
-        // POST /badges/preview { conference_id, design?, inscription_id? } → { badge, plate_screen? }: the
+        // POST /badges/preview { conference_id, design?, inscription_id?, target? } → { badge, plate_screen? }: the
         // designer's preview with the design being edited, for a chosen inscription or a sample person.
+        // target 'sticker' (2.36.0): the printable sticker's design instead of the virtual badge's.
         http.route('post', '/badges/preview', AUTH, async (req, res) => {
             const perms = await gate(req, res, 'view', false);
             if (!perms) return;
@@ -657,9 +678,11 @@ function createBadges(base) {
                 if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
                 const known = new Set((await availableFields(cid)).map(f => f.key));
                 const cfg = await configOf(cid);
+                const sticker = body.target === 'sticker';
+                if (sticker) cfg.design = cfg.sticker;
                 if (body.design) {
                     const assetIds = new Set([...(await assetsOf(cid, false)).keys()].filter(k => IMAGE_KIND.test(k)).map(k => k.slice(4)));
-                    cfg.design = normalizeDesign(body.design, known, assetIds);
+                    cfg.design = sticker ? normalizeSticker(body.design, assetIds) : normalizeDesign(body.design, known, assetIds);
                 }
                 const assets = await assetsOf(cid, false);
                 const labels = await labelsOf(cid);
@@ -851,12 +874,14 @@ function createBadges(base) {
                 try {
                     const t = await useTicket(String((req.query || {}).d || ''));
                     if (!t) return res.status(410).json({ error: MSG.ticket, code: 'ticket' });
-                    const { list, plates, images, conf } = await badgesFor(t.conference_id, (t.scope.ids || []).map(Number).filter(Boolean));
+                    const sticker = t.scope.sheet === 'sticker';
+                    const { list, plates, images, conf } = await badgesFor(t.conference_id, (t.scope.ids || []).map(Number).filter(Boolean), { sticker });
                     if (!list.length) return res.status(410).json({ error: MSG.inactive, code: 'inactive' });
-                    const pdf = buildBadgePdf({ badges: list, plates, images, fontBytes: faceBytes, sheet: t.scope.sheet, title: conf.name });
+                    // A sticker sheet is one label per page, each page exactly the label's size.
+                    const pdf = buildBadgePdf({ badges: list, plates, images, fontBytes: faceBytes, sheet: sticker ? 'single' : t.scope.sheet, title: conf.name });
                     const one = list.length === 1 && t.scope.ids.length === 1
                         ? (await D.personWithName(await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [t.scope.ids[0]]))).name : null;
-                    res.json({ mime: 'application/pdf', filename: pdfName(one ? `Escarapela ${one}` : `Escarapelas ${t.scope.name || conf.name}`), b64: pdf.toString('base64') });
+                    res.json({ mime: 'application/pdf', filename: pdfName(sticker ? (one ? `Sticker ${one}` : `Stickers ${t.scope.name || conf.name}`) : one ? `Escarapela ${one}` : `Escarapelas ${t.scope.name || conf.name}`), b64: pdf.toString('base64') });
                 } catch (e) { send(res, e); }
             })();
         });

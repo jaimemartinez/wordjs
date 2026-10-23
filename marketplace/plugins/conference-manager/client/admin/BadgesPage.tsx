@@ -12,6 +12,11 @@
  * «Escarapelas › ver» sees everything and uses the bulk tools (with «Inscripciones › ver»); «› administrar»
  * edits. Two views: «Personas» (each person's badge — view, copy, WhatsApp — and everyone's at once) and
  * «Diseño». The per-person overlay (BadgeActions) is also in the person sheet.
+ *
+ * 2.36.0: «Diseño» has two targets — «Escarapela virtual» (the one shown on the phone) and «Sticker para imprimir»
+ * (a label for a sticker printer, to stick on the physical badge: its own size, the same designer). Both are saved
+ * together; stickers print one per PDF page at the label's exact size (for a person, the list shown, a locality or
+ * everyone).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
@@ -49,6 +54,8 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
     const [error, setError] = useState('');
     const [cfg, setCfg] = useState<any>(null);
     const [design, setDesign] = useState<any>(null);
+    const [sticker, setSticker] = useState<any>(null);
+    const [target, setTarget] = useState<'badge' | 'sticker'>('badge');
     const [policy, setPolicy] = useState<any>(null);
     const [available, setAvailable] = useState<any[]>([]);
     // «Mi inscripción» (2.23.0): the form fields, the document fields in use and the QR's link.
@@ -101,6 +108,7 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
                 d = r.config.configured ? fromLegacy(d, r.zones, { bg, logo }, labelOf, rows) : TEMPLATES[0].make();
             }
             setImages(gallery);
+            setSticker(r.config.sticker || null);
             setDesign(d); setConverted(wasLegacy && r.config.configured);
             setEditorKey(k => k + 1);
             setDirty(wasLegacy && !r.config.configured ? false : false);
@@ -111,6 +119,7 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
 
     const patchPolicy = (p: any) => { setPolicy((cur: any) => ({ ...cur, ...p })); setDirty(true); };
     const onDesign = useCallback((d: any) => { setDesign(d); setDirty(true); }, []);
+    const onSticker = useCallback((d: any) => { setSticker(d); setDirty(true); }, []);
 
     // The data the designer's texts can show, with their labels (and a sample person for the canvas).
     const tokenLabels = useMemo(() => {
@@ -126,7 +135,7 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
         if (!canManage || saving || !design) return;
         setSaving(true);
         try {
-            const r = await badgesApi.saveConfig(conferenceId, design, policy);
+            const r = await badgesApi.saveConfig(conferenceId, design, policy, sticker);
             setCfg(r.config); setPolicy(r.config.policy); setConverted(false);
             setDirty(false);
             addToast(tx('badges.saved', 'Escarapela guardada'), 'success');
@@ -174,11 +183,36 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
 
             {/* Hidden, not unmounted: an unsaved edit (and the designer's undo history) stays. An inline style, because a layered `hidden` loses to core's `grid`. */}
             <div style={tab === 'design' ? undefined : { display: 'none' }} data-badges-designer="">
-                {design && (
-                    <BadgeEditor key={editorKey} conferenceId={conferenceId} initial={design} onChange={onDesign} images={images} onImages={setImages}
-                        sample={sample} tokenLabels={tokenLabels} tokenShown={tokenShown} qrSample={qrSample} locked={locked} canManage={canManage} tx={tx} addToast={addToast}
-                        onSave={save} dirty={dirty || !cfg.configured} saving={saving} />
+                {/* 2.36.0: what is being designed — the badge on the phone, or the printed sticker for the physical one. */}
+                <div className="flex gap-2 max-w-xl mb-3" role="tablist" aria-label={tx('badges.target', 'Qué diseñas')} data-badges-target="">
+                    <button type="button" role="tab" aria-selected={target === 'badge'} className={seg(target === 'badge')} onClick={() => setTarget('badge')} data-badges-target-tab="badge">
+                        <i className="fa-solid fa-mobile-screen mr-1.5"></i>{tx('badges.target.badge', 'Escarapela virtual')}
+                    </button>
+                    <button type="button" role="tab" aria-selected={target === 'sticker'} className={seg(target === 'sticker')} onClick={() => setTarget('sticker')} data-badges-target-tab="sticker">
+                        <i className="fa-solid fa-note-sticky mr-1.5"></i>{tx('badges.target.sticker', 'Sticker para imprimir')}
+                    </button>
+                </div>
+                {target === 'sticker' && (
+                    <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3 mb-3 space-y-1" data-badges-sticker-help="">
+                        <p className="font-bold text-gray-800">{tx('badges.sticker.help.title', 'Una etiqueta por persona, del tamaño exacto de tu rollo de stickers.')}</p>
+                        <p>{tx('badges.sticker.help.size', 'Escoge el tamaño de la etiqueta arriba del diseño (o «Personalizado» en mm). Las impresoras de stickers imprimen en negro: diseña en blanco y negro.')}</p>
+                        <p>{tx('badges.sticker.help.print', 'Para imprimir: «Personas» › «Stickers para imprimir» (o el botón de cada persona). En la ventana de impresión escoge la impresora de stickers y el tamaño de la etiqueta, «Márgenes: ninguno» y «Escala: 100 %» (o «Tamaño real»).')}</p>
+                    </div>
                 )}
+                <div style={target === 'badge' ? undefined : { display: 'none' }}>
+                    {design && (
+                        <BadgeEditor key={editorKey} conferenceId={conferenceId} initial={design} onChange={onDesign} images={images} onImages={setImages}
+                            sample={sample} tokenLabels={tokenLabels} tokenShown={tokenShown} qrSample={qrSample} locked={locked} canManage={canManage} tx={tx} addToast={addToast}
+                            onSave={save} dirty={dirty || !cfg.configured} saving={saving} />
+                    )}
+                </div>
+                <div style={target === 'sticker' ? undefined : { display: 'none' }} data-badges-sticker-designer="">
+                    {sticker && (
+                        <BadgeEditor key={`sticker-${editorKey}`} conferenceId={conferenceId} initial={sticker} onChange={onSticker} images={images} onImages={setImages}
+                            sample={sample} tokenLabels={tokenLabels} tokenShown={tokenShown} qrSample={qrSample} locked={locked} canManage={canManage} tx={tx} addToast={addToast}
+                            onSave={save} dirty={dirty || !cfg.configured} saving={saving} />
+                    )}
+                </div>
             </div>
 
             {tab === 'settings' && (
@@ -471,7 +505,7 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
             </div>
 
             <BulkTools conferenceId={conferenceId} conference={conference} tx={tx} addToast={addToast} loc={loc} locName={locName}
-                placeOf={placeOf} onLinks={mergeLinks} />
+                placeOf={placeOf} onLinks={mergeLinks} shownIds={q.trim() ? shown.map((x: any) => Number(x.r.id)) : null} />
 
             {open && (
                 <BadgeActions person={open} name={personDisplayName(open, fields)} fields={fields} conferenceId={conferenceId}
@@ -483,7 +517,7 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
 }
 
 /** Everyone's links and PDFs at once: the location chosen in the person list, or the whole conference. */
-function BulkTools({ conferenceId, conference, tx, addToast, loc, locName, placeOf, onLinks }: any) {
+function BulkTools({ conferenceId, conference, tx, addToast, loc, locName, placeOf, onLinks, shownIds }: any) {
     const [busy, setBusy] = useState('');
     const [count, setCount] = useState<number | null>(null);
     // What could not be copied (no clipboard): shown to copy by hand.
@@ -549,6 +583,12 @@ function BulkTools({ conferenceId, conference, tx, addToast, loc, locName, place
                 <button type="button" className={ghost} disabled={!!busy} data-bulk="single"
                     onClick={() => run('single', () => openBadgeFileFrom(async () => (await badgesApi.ticket(conferenceId, scope(), 'single')).d))}>
                     <i className={`fa-solid ${busy === 'single' ? 'fa-spinner animate-spin' : 'fa-file-pdf'}`}></i>{tx('badges.bulk.single', 'PDF una por página')}
+                </button>
+                {/* 2.36.0: the printable stickers — the people the list shows (a search), else the locality or everyone. */}
+                <button type="button" className={`${ghost} sm:col-span-2`} disabled={!!busy || (shownIds && !shownIds.length)} data-bulk="sticker"
+                    onClick={() => run('sticker', () => openBadgeFileFrom(async () => (await badgesApi.ticket(conferenceId, shownIds ? { inscription_ids: shownIds } : scope(), 'sticker')).d))}>
+                    <i className={`fa-solid ${busy === 'sticker' ? 'fa-spinner animate-spin' : 'fa-note-sticky'}`}></i>
+                    {shownIds ? tx('badges.bulk.sticker.shown', 'Stickers para imprimir ({n} de la búsqueda)').replace('{n}', String(shownIds.length)) : tx('badges.bulk.sticker', 'Stickers para imprimir')}
                 </button>
             </div>
             {count != null && <p className="text-[11px] font-bold text-emerald-700" data-bulk-count={count}>{tx('badges.bulk.count', '{n} enlaces listos').replace('{n}', String(count))}</p>}
