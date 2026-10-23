@@ -151,6 +151,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   with a clear message instead of leaving the plugin's admin screen blank. A plugin screen built for a newer
   WordJS says *This plugin needs WordJS ≥ X* instead of staying blank. WordJS releases before this one ignore
   the field. **conference-manager 2.33.5** declares `>=2.10.0` (its date picker comes from WordJS 2.10.0).
+- **A plugin keeps running when its admin menu or public assets are not granted.** Leaving *Add admin menu*
+  (`admin_menu:register`) or *Add scripts and styles to public pages* (`assets:write`) off for a plugin, on the permission
+  screen or in the consent dialog of an update, made the plugin crash and restart in a loop, taking its pages,
+  routes and blocks down with it. The plugin now runs without the menu entry or the assets it was not granted,
+  and its log says once which permission to grant. The permission is still refused exactly as before.
 - **conference-manager 2.33.3: «Copiar mensaje» works for people with no e-mail on file.** It used to refuse with
   «se requiere un correo válido». The message is now copied anyway, and the consent page asks the person for their
   e-mail. The signing code goes there, and the e-mail is kept as verified in the evidence (noted as typed on the
