@@ -30,8 +30,8 @@
  * arrastre lleva el foco a la fila del paso (el gesto de la tira P5) — y nunca el único camino: los
  * campos numéricos siguen debajo.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Card, Input } from "@/components/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Card, Checkbox, ColorInput, Input, SegmentedControl, Select, Slider } from "@/components/ui";
 import { useI18n } from "@/contexts/I18nContext";
 import {
     addStep,
@@ -178,23 +178,12 @@ const intToHex = (v: number): string => `#${v.toString(16).padStart(6, "0")}`;
 const hexToInt = (hex: string): number => parseInt(hex.slice(1), 16);
 
 const LABEL = "block text-xs font-bold uppercase tracking-wide text-gray-500 mb-1.5";
-const NUM =
-    "w-full rounded-xl border-2 border-gray-100 bg-gray-50/50 px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none";
-/** El swatch nativo de las propiedades de color, con el mismo marco que los inputs numéricos. */
-const COLOR =
-    "h-10 w-full cursor-pointer rounded-xl border-2 border-gray-100 bg-gray-50/50 p-1 focus:border-blue-400 focus:outline-none";
 
 /**
- * Los desplegables son `<select>` NATIVOS y no el `Select` de `@/components/ui`.
- *
- * Aquel es un botón con una lista portaleada: no acepta un `id`, así que un `<label for>` no tiene a
- * qué apuntar y el control se queda SIN NOMBRE ACCESIBLE — un lector de pantalla anuncia «Al entrar
- * en pantalla, botón» y no dice de qué. Se vio en el navegador (todas las etiquetas de los
- * desplegables apuntaban a ids inexistentes). Un `<select>` nativo se etiqueta, se navega con el
- * teclado y anuncia su valor sin que nadie tenga que acordarse.
+ * The drop-downs are the kit's `Select` (components/ui), which takes an `id` and ties its label to the
+ * trigger: a screen reader announces "When it enters the screen, Trigger, button", not a bare button.
+ * (They were native `<select>`s while the kit's select had no id for a `<label for>` to point at.)
  */
-const SEL = `${NUM} appearance-none pr-8`;
-
 interface FieldSelectProps {
     id: string;
     label: string;
@@ -204,20 +193,7 @@ interface FieldSelectProps {
 }
 
 function FieldSelect({ id, label, value, options, onChange }: FieldSelectProps) {
-    return (
-        <div>
-            <label className={LABEL} htmlFor={id}>
-                {label}
-            </label>
-            <select id={id} className={SEL} value={value} onChange={(e) => onChange(e.target.value)}>
-                {options.map((o) => (
-                    <option key={o.value} value={o.value}>
-                        {o.label}
-                    </option>
-                ))}
-            </select>
-        </div>
-    );
+    return <Select id={id} label={label} value={value} options={options} onChange={onChange} />;
 }
 
 export interface PresetEditorProps {
@@ -435,29 +411,23 @@ export default function PresetEditor({
                             {t("interactions.editor.play")}
                         </Button>
                     ) : (
-                        <div className="mt-4">
-                            <label className={LABEL} htmlFor="ixp-preview-pct">
-                                {t("interactions.editor.previewProgress").replace("{pct}", String(previewPct))}
-                            </label>
-                            <input
-                                id="ixp-preview-pct"
-                                type="range"
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={previewPct}
-                                disabled={!previewUnit}
-                                // El deslizador nativo ya anuncia su valor; esto le pone la unidad.
-                                aria-valuetext={`${previewPct} %`}
-                                className="w-full accent-blue-600"
-                                onChange={(e) => scrubPreview(Number(e.target.value))}
-                            />
-                            <p className="mt-1 text-xs text-gray-500">
-                                {trigger.on === "pointer"
-                                    ? t("interactions.editor.previewPointerHint")
-                                    : t("interactions.editor.previewScrubHint")}
-                            </p>
-                        </div>
+                        <Slider
+                            id="ixp-preview-pct"
+                            className="mt-4"
+                            // The label already says the percentage; the slider reads it out with its unit.
+                            label={t("interactions.editor.previewProgress").replace("{pct}", String(previewPct))}
+                            showValue={false}
+                            format={(v) => `${v} %`}
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={previewPct}
+                            disabled={!previewUnit}
+                            onChange={scrubPreview}
+                            help={trigger.on === "pointer"
+                                ? t("interactions.editor.previewPointerHint")
+                                : t("interactions.editor.previewScrubHint")}
+                        />
                     )}
                     {!previewUnit && (
                         <p className="mt-2 text-xs text-gray-500">
@@ -473,31 +443,12 @@ export default function PresetEditor({
                     <legend className={LABEL}>{t("interactions.editor.tracks")}</legend>
                     <div className="flex flex-wrap items-center gap-3">
                         {state.tracks.length > 1 && (
-                            <div
-                                role="radiogroup"
+                            <SegmentedControl
                                 aria-label={t("interactions.editor.activeTrack")}
-                                className="flex rounded-xl border-2 border-gray-100 p-0.5"
-                            >
-                                {state.tracks.map((_, i) => (
-                                    <label
-                                        key={i}
-                                        className={`cursor-pointer rounded-lg px-3 py-1.5 text-sm ${
-                                            active === i
-                                                ? "bg-blue-600 font-medium text-white"
-                                                : "text-gray-700 hover:bg-gray-50"
-                                        }`}
-                                    >
-                                        <input
-                                            type="radio"
-                                            name="ixp-track"
-                                            className="sr-only"
-                                            checked={active === i}
-                                            onChange={() => setTrackSel(i)}
-                                        />
-                                        {t("interactions.editor.trackN").replace("{n}", String(i + 1))}
-                                    </label>
-                                ))}
-                            </div>
+                                value={String(active)}
+                                onChange={(v) => setTrackSel(Number(v))}
+                                options={state.tracks.map((_, i) => ({ value: String(i), label: t("interactions.editor.trackN").replace("{n}", String(i + 1)) }))}
+                            />
                         )}
                         {state.tracks.length < IX_MAX_TRACKS && (
                             <Button
@@ -576,13 +527,11 @@ export default function PresetEditor({
 
                     {trigger.on === "load" && (
                         <div>
-                            <label className={LABEL} htmlFor="ixp-load-delay">
-                                {t("interactions.editor.loadDelay")}
-                            </label>
-                            <input
+                            <Input
                                 id="ixp-load-delay"
+                                size="sm"
+                                label={t("interactions.editor.loadDelay")}
                                 type="number"
-                                className={NUM}
                                 min={0}
                                 max={3000}
                                 step={50}
@@ -607,13 +556,11 @@ export default function PresetEditor({
                             />
                             {/* Suavizado del scroll (P10) — opt-in: sin él, exactitud nativa 1:1. */}
                             <div>
-                                <label className={LABEL} htmlFor="ixp-scrub-smooth">
-                                    {t("interactions.editor.smoothMs")}
-                                </label>
-                                <input
+                                <Input
                                     id="ixp-scrub-smooth"
+                                    size="sm"
+                                    label={t("interactions.editor.smoothMs")}
                                     type="number"
-                                    className={NUM}
                                     min={0}
                                     max={IX_POINTER_SMOOTH_MAX}
                                     step={10}
@@ -632,13 +579,11 @@ export default function PresetEditor({
                     {trigger.on === "event" && (
                         <>
                             <div>
-                                <label className={LABEL} htmlFor="ixp-event-name">
-                                    {t("interactions.editor.eventName")}
-                                </label>
-                                <input
+                                <Input
                                     id="ixp-event-name"
+                                    size="sm"
+                                    label={t("interactions.editor.eventName")}
                                     type="text"
-                                    className={NUM}
                                     value={trigger.name}
                                     onChange={(e) => write(setEventName(draft, e.target.value))}
                                 />
@@ -647,14 +592,12 @@ export default function PresetEditor({
                                     {t("interactions.editor.eventHelp").split("{code}")[1] ?? ""}
                                 </p>
                             </div>
-                            <label className="flex cursor-pointer select-none items-center gap-2 self-center text-sm text-gray-700">
-                                <input
-                                    type="checkbox"
-                                    checked={trigger.toggle === true}
-                                    onChange={(e) => write(setEventToggle(draft, e.target.checked))}
-                                />
-                                {t("interactions.editor.eventToggle")}
-                            </label>
+                            <Checkbox
+                                containerClassName="self-center"
+                                label={t("interactions.editor.eventToggle")}
+                                checked={trigger.toggle === true}
+                                onChange={(e) => write(setEventToggle(draft, e.target.checked))}
+                            />
                         </>
                     )}
 
@@ -676,19 +619,17 @@ export default function PresetEditor({
                                 ]}
                             />
                             <div>
-                                <label className={LABEL} htmlFor="ixp-pointer-smooth">
-                                    {t("interactions.editor.smoothMs")}
-                                </label>
-                                <input
+                                <Input
                                     id="ixp-pointer-smooth"
+                                    size="sm"
+                                    label={t("interactions.editor.smoothMs")}
                                     type="number"
-                                    className={NUM}
                                     min={0}
                                     max={IX_POINTER_SMOOTH_MAX}
                                     step={10}
                                     value={trigger.smooth ?? IX_POINTER_SMOOTH_DEFAULT}
                                     onChange={(e) =>
-                                        write(setPointerSmooth(draft, Number(e.target.value)))
+                                    write(setPointerSmooth(draft, Number(e.target.value)))
                                     }
                                 />
                                 <p className="mt-1 text-xs text-gray-500">
@@ -719,62 +660,54 @@ export default function PresetEditor({
                         retrasar: el compilador lo ignora con aviso, así que no se ofrece. */}
                     {trigger.on !== "pointer" &&
                         (track.target.kind === "children" || track.target.kind === "words") && (
-                        <div>
-                            <label className={LABEL} htmlFor="ixp-stagger">
-                                {/* Con `total` los ms dejan de ser "entre hermanos" y pasan a ser el
-                                    tiempo del primero al último: la etiqueta dice lo que significa. */}
-                                {track.stagger?.total === true
-                                    ? t("interactions.editor.staggerTotalMs")
-                                    : t("interactions.editor.staggerEachMs")}
-                            </label>
-                            <input
-                                id="ixp-stagger"
-                                type="number"
-                                className={NUM}
-                                min={0}
-                                max={IX_STAGGER_MAX}
-                                step={10}
-                                value={track.stagger?.each ?? 0}
-                                onChange={(e) =>
-                                    write(setStagger(draft, Number(e.target.value), undefined, active))
-                                }
-                            />
-                        </div>
+                        <Input
+                            id="ixp-stagger"
+                            size="sm"
+                            type="number"
+                            // Con `total` los ms dejan de ser "entre hermanos" y pasan a ser el tiempo del
+                            // primero al último: la etiqueta dice lo que significa.
+                            label={track.stagger?.total === true
+                                ? t("interactions.editor.staggerTotalMs")
+                                : t("interactions.editor.staggerEachMs")}
+                            min={0}
+                            max={IX_STAGGER_MAX}
+                            step={10}
+                            value={track.stagger?.each ?? 0}
+                            onChange={(e) =>
+                                write(setStagger(draft, Number(e.target.value), undefined, active))
+                            }
+                        />
                     )}
 
                     {timed && (
                         <>
                             <div>
-                                <label className={LABEL} htmlFor="ixp-dur">
-                                    {t("interactions.editor.duration")}
-                                </label>
-                                <input
+                                <Input
                                     id="ixp-dur"
+                                    size="sm"
+                                    label={t("interactions.editor.duration")}
                                     type="number"
-                                    className={NUM}
                                     min={100}
                                     max={3000}
                                     step={50}
                                     value={track.dur ?? 600}
                                     onChange={(e) =>
-                                        write(setDuration(draft, Number(e.target.value), undefined, active))
+                                    write(setDuration(draft, Number(e.target.value), undefined, active))
                                     }
                                 />
                             </div>
                             <div>
-                                <label className={LABEL} htmlFor="ixp-delay">
-                                    {t("interactions.editor.delay")}
-                                </label>
-                                <input
+                                <Input
                                     id="ixp-delay"
+                                    size="sm"
+                                    label={t("interactions.editor.delay")}
                                     type="number"
-                                    className={NUM}
                                     min={0}
                                     max={3000}
                                     step={50}
                                     value={track.delay ?? 0}
                                     onChange={(e) =>
-                                        write(setDelay(draft, Number(e.target.value), undefined, active))
+                                    write(setDelay(draft, Number(e.target.value), undefined, active))
                                     }
                                 />
                             </div>
@@ -829,48 +762,42 @@ export default function PresetEditor({
                                         />
                                     </div>
                                 )}
-                                <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
-                                    <input
-                                        type="checkbox"
-                                        checked={track.stagger.total === true}
-                                        onChange={(e) =>
-                                            write(setStaggerTotal(draft, e.target.checked, undefined, active))
-                                        }
-                                    />
-                                    {t("interactions.editor.staggerAsTotal")}
-                                </label>
-                                <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
-                                    <input
-                                        type="checkbox"
-                                        checked={track.stagger.cols != null}
-                                        onChange={(e) =>
-                                            write(
-                                                setStaggerCols(
-                                                    draft,
-                                                    e.target.checked ? IX_STAGGER_COLS_MIN : null,
-                                                    undefined,
-                                                    active,
-                                                ),
-                                            )
-                                        }
-                                    />
-                                    {t("interactions.editor.staggerGrid")}
-                                </label>
+                                <Checkbox
+                                    containerClassName="mb-2.5"
+                                    label={t("interactions.editor.staggerAsTotal")}
+                                    checked={track.stagger.total === true}
+                                    onChange={(e) =>
+                                    write(setStaggerTotal(draft, e.target.checked, undefined, active))
+                                    }
+                                />
+                                <Checkbox
+                                    containerClassName="mb-2.5"
+                                    label={t("interactions.editor.staggerGrid")}
+                                    checked={track.stagger.cols != null}
+                                    onChange={(e) =>
+                                    write(
+                                    setStaggerCols(
+                                    draft,
+                                    e.target.checked ? IX_STAGGER_COLS_MIN : null,
+                                    undefined,
+                                    active,
+                                    ),
+                                    )
+                                    }
+                                />
                                 {track.stagger.cols != null && (
                                     <div className="w-36">
-                                        <label className={LABEL} htmlFor="ixp-stagger-cols">
-                                            {t("interactions.editor.staggerCols")}
-                                        </label>
-                                        <input
+                                        <Input
                                             id="ixp-stagger-cols"
+                                            size="sm"
+                                            label={t("interactions.editor.staggerCols")}
                                             type="number"
-                                            className={NUM}
                                             min={IX_STAGGER_COLS_MIN}
                                             max={IX_STAGGER_COLS_MAX}
                                             step={1}
                                             value={track.stagger.cols}
                                             onChange={(e) =>
-                                                write(setStaggerCols(draft, Number(e.target.value), undefined, active))
+                                            write(setStaggerCols(draft, Number(e.target.value), undefined, active))
                                             }
                                         />
                                     </div>
@@ -907,19 +834,17 @@ export default function PresetEditor({
                                         </div>
                                     )}
                                     <div className="min-w-0 flex-1">
-                                        <label className={LABEL} htmlFor={`ixp-range-${which}-pct`}>
-                                            {which === "from" ? t("interactions.editor.rangeFromPct") : t("interactions.editor.rangeToPct")}
-                                        </label>
-                                        <input
+                                        <Input
                                             id={`ixp-range-${which}-pct`}
+                                            size="sm"
+                                            label={which === "from" ? t("interactions.editor.rangeFromPct") : t("interactions.editor.rangeToPct")}
                                             type="number"
-                                            className={NUM}
                                             min={0}
                                             max={100}
                                             step={5}
                                             value={range[which].pct}
                                             onChange={(e) =>
-                                                write(setRangeEdge(draft, which, { pct: Number(e.target.value) }))
+                                            write(setRangeEdge(draft, which, { pct: Number(e.target.value) }))
                                             }
                                         />
                                     </div>
@@ -949,43 +874,37 @@ export default function PresetEditor({
                         <legend className="px-1 text-sm font-bold text-gray-900">{t("interactions.editor.playback")}</legend>
                         <div className="mt-2 flex flex-wrap items-end gap-4">
                             <div className="w-36">
-                                <label className={LABEL} htmlFor="ixp-repeat">
-                                    {t("interactions.editor.repetition")}
-                                </label>
-                                <input
+                                <Input
                                     id="ixp-repeat"
+                                    size="sm"
+                                    label={t("interactions.editor.repetition")}
                                     type="number"
-                                    className={NUM}
                                     min={1}
                                     max={IX_REPEAT_MAX}
                                     step={1}
                                     value={infinite ? "" : repeatCount}
                                     disabled={infinite}
                                     onChange={(e) =>
-                                        write(setRepeat(draft, Number(e.target.value), undefined, active))
+                                    write(setRepeat(draft, Number(e.target.value), undefined, active))
                                     }
                                 />
                             </div>
-                            <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
-                                <input
-                                    type="checkbox"
-                                    checked={infinite}
-                                    onChange={(e) =>
-                                        write(setRepeat(draft, e.target.checked ? "inf" : 1, undefined, active))
-                                    }
-                                />
-                                {t("interactions.editor.infinite")}
-                            </label>
-                            <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
-                                <input
-                                    type="checkbox"
-                                    checked={track.alt === true}
-                                    onChange={(e) =>
-                                        write(setAlternate(draft, e.target.checked, undefined, active))
-                                    }
-                                />
-                                {t("interactions.editor.alternate")}
-                            </label>
+                            <Checkbox
+                                containerClassName="mb-2.5"
+                                label={t("interactions.editor.infinite")}
+                                checked={infinite}
+                                onChange={(e) =>
+                                write(setRepeat(draft, e.target.checked ? "inf" : 1, undefined, active))
+                                }
+                            />
+                            <Checkbox
+                                containerClassName="mb-2.5"
+                                label={t("interactions.editor.alternate")}
+                                checked={track.alt === true}
+                                onChange={(e) =>
+                                write(setAlternate(draft, e.target.checked, undefined, active))
+                                }
+                            />
                         </div>
                     </fieldset>
                 )}
@@ -1021,19 +940,17 @@ export default function PresetEditor({
                         )}
                         {showPersp && (
                             <div>
-                                <label className={LABEL} htmlFor="ixp-persp">
-                                    {t("interactions.editor.perspective")}
-                                </label>
-                                <input
+                                <Input
                                     id="ixp-persp"
+                                    size="sm"
+                                    label={t("interactions.editor.perspective")}
                                     type="number"
-                                    className={NUM}
                                     min={IX_PERSP_MIN}
                                     max={IX_PERSP_MAX}
                                     step={50}
                                     value={track.persp ?? IX_PERSP_DEFAULT}
                                     onChange={(e) =>
-                                        write(setPersp(draft, Number(e.target.value), undefined, active))
+                                    write(setPersp(draft, Number(e.target.value), undefined, active))
                                     }
                                 />
                             </div>
@@ -1063,7 +980,7 @@ export default function PresetEditor({
                             onDelay={(t, ms) => write(setDelay(draft, ms, undefined, t))}
                             onDur={(t, ms) => write(setDuration(draft, ms, undefined, t))}
                             onSelectTrack={setTrackSel}
-                            onFocusStep={(t, i) => focusStepRow(i)}
+                            onFocusStep={(_t, i) => focusStepRow(i)}
                         />
                     </div>
                     <ol className="mt-4 space-y-4">
@@ -1102,19 +1019,17 @@ export default function PresetEditor({
                                             que el dato va a ignorar sería mentirle al autor. */}
                                         {!isFirst && !isLast && (
                                             <div>
-                                                <label className={LABEL} htmlFor={`ixp-at-${i}`}>
-                                                    {t("interactions.editor.stepAt")}
-                                                </label>
-                                                <input
+                                                <Input
                                                     id={`ixp-at-${i}`}
+                                                    size="sm"
+                                                    label={t("interactions.editor.stepAt")}
                                                     type="number"
-                                                    className={NUM}
                                                     min={1}
                                                     max={99}
                                                     step={1}
                                                     value={step.at}
                                                     onChange={(e) =>
-                                                        write(setStepAt(draft, i, Number(e.target.value), undefined, active))
+                                                    write(setStepAt(draft, i, Number(e.target.value), undefined, active))
                                                     }
                                                 />
                                             </div>
@@ -1158,29 +1073,23 @@ export default function PresetEditor({
                                         {used.map((key) => (
                                             <div key={key} className="flex items-end gap-2">
                                                 <div className="min-w-0 flex-1">
-                                                    <label className={LABEL} htmlFor={`ixp-${i}-${key}`}>
-                                                        {trStr(IX_PROP_LABELS[key], language)}
-                                                        {IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}
-                                                    </label>
                                                     {IX_COLOR_PROPS.has(key) ? (
                                                         /* El DATO sigue siendo el entero 0xRRGGBB: la conversión
                                                            hex↔entero vive en el control, nunca en el documento. */
-                                                        <input
+                                                        <ColorInput
                                                             id={`ixp-${i}-${key}`}
-                                                            type="color"
-                                                            className={COLOR}
+                                                            label={trStr(IX_PROP_LABELS[key], language)}
                                                             value={intToHex(step.set[key] ?? IX_PROP_NEUTRAL[key])}
-                                                            onChange={(e) =>
-                                                                write(
-                                                                    setStepProp(draft, i, key, hexToInt(e.target.value), undefined, active),
-                                                                )
-                                                            }
+                                                            onChange={(hex) => {
+                                                                if (hex) write(setStepProp(draft, i, key, hexToInt(hex), undefined, active));
+                                                            }}
                                                         />
                                                     ) : (
-                                                        <input
+                                                        <Input
                                                             id={`ixp-${i}-${key}`}
+                                                            size="sm"
                                                             type="number"
-                                                            className={NUM}
+                                                            label={`${trStr(IX_PROP_LABELS[key], language)}${IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}`}
                                                             min={IX_PROP_INPUT[key].min}
                                                             max={IX_PROP_INPUT[key].max}
                                                             step={IX_PROP_INPUT[key].step}

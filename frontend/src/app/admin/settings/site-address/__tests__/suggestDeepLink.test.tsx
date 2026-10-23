@@ -98,7 +98,7 @@ vi.mock("next/navigation", () => ({
     useSearchParams: () => ({ get: (k: string) => (k === "suggest" ? "http://example.com:3000" : null) }),
 }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: "administrator" }, isLoading: false }) }));
-vi.mock("@/contexts/I18nContext", () => ({ useI18n: () => ({ t: (k: string) => k }) }));
+vi.mock("@/contexts/I18nContext", () => { const i18n = { t: (k: string) => k }; return { useI18n: () => i18n, useOptionalI18n: () => i18n }; });
 vi.mock("@/contexts/ModalContext", () => ({ useModal: () => ({ confirm: () => Promise.resolve(true) }) }));
 vi.mock("@/contexts/ToastContext", () => ({ useToast: () => ({ addToast: () => {} }) }));
 

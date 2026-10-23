@@ -112,6 +112,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **The settings sub-pages use the admin's form kit.** Site address, Interactions (the simple editor and
+  the preset editor), Media storage, Backups, AI, Network setup, Network, Cluster and Tools now use
+  `@/components/ui`:
+  - the preset editor's drop-downs are the kit `Select` (it takes an `id`, so each label names its control),
+    its colour properties a `ColorInput` (still stored as the 0xRRGGBB integer), its sliders `Slider`s that
+    read their value out with the unit, and its track picker a `SegmentedControl`;
+  - Media storage's driver and Site address's «old address» choices are radio groups with a legend;
+  - every checkbox has its label tied to it, and help text such as Tools' note on exporting users is
+    announced with it;
+  - dialog actions are kit buttons, and every form's submit is explicit.
+  These files leave the form kit's allowlist (619 → 551 raw controls left).
 - **Plugins and Security use the admin's form kit.** Admin → Plugins (the cards, the marketplace and every
   plugin dialog) and Admin → Security (gateway, two-factor policy, automatic renewal, certificates, server
   settings) now use `@/components/ui`:

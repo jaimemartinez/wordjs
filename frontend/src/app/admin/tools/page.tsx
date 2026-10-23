@@ -13,14 +13,14 @@
  * barra de progreso ni estado de «descargando»: esta página deja de mandar en cuanto navega.
  */
 
-import React, { useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { exportApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState, Button } from "@/components/ui";
+import { PageHeader, Card, Checkbox, EmptyState, Button } from "@/components/ui";
 import {
     EXPORT_SECTIONS,
     ExportSection,
@@ -183,28 +183,21 @@ export default function ToolsPage() {
                         {EXPORT_SECTIONS.map((section) => {
                             const on = toggles[section];
                             return (
-                                <label
+                                <Checkbox
                                     key={section}
-                                    className={`flex items-start gap-3 px-4 py-3.5 rounded-2xl border-2 cursor-pointer transition-all ${
+                                    containerClassName={`px-4 py-3.5 rounded-2xl border-2 transition-all ${
                                         on ? "border-blue-500 bg-blue-50/40" : "border-gray-100 bg-gray-50/50 hover:border-blue-200"
                                     }`}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={on}
-                                        onChange={() => setToggles((prev) => toggleSection(prev, section))}
-                                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    <span className="min-w-0">
+                                    label={
                                         <span className="flex items-center gap-2 text-sm font-bold text-gray-700">
-                                            <i className={`fa-solid ${SECTION_ICON[section]} text-gray-300`}></i>
+                                            <i className={`fa-solid ${SECTION_ICON[section]} text-gray-400`} aria-hidden="true"></i>
                                             {t(`tools.section.${section}`)}
                                         </span>
-                                        {section === "users" && (
-                                            <span className="block text-[11px] text-gray-400 mt-1 leading-snug">{t("tools.section.usersHint")}</span>
-                                        )}
-                                    </span>
-                                </label>
+                                    }
+                                    help={section === "users" ? t("tools.section.usersHint") : undefined}
+                                    checked={on}
+                                    onChange={() => setToggles((prev) => toggleSection(prev, section))}
+                                />
                             );
                         })}
                     </div>

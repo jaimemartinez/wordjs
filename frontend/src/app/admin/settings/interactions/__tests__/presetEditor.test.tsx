@@ -7,10 +7,10 @@
  * de cada botón.
  *
  * ⚠ EL TEST QUE MÁS VALE ES EL PRIMERO, y existe porque el fallo OCURRIÓ: la primera versión de esta
- * pantalla usaba el `Select` de `@/components/ui`, que es un botón con una lista portaleada y no
- * acepta `id`. Las cinco etiquetas de los desplegables apuntaban a ids inexistentes, así que un
- * lector de pantalla anunciaba «Al entrar en pantalla, botón» sin decir de qué. Se vio leyendo el
- * DOM en el navegador. Este test lo habría cazado antes.
+ * pantalla usaba un `Select` que no aceptaba `id`. Las cinco etiquetas de los desplegables
+ * apuntaban a ids inexistentes, así que un lector de pantalla anunciaba «Al entrar en pantalla,
+ * botón» sin decir de qué. El `Select` del kit (components/ui) toma el `id` y ata la etiqueta a su
+ * botón; este test sigue vigilando que ninguna etiqueta apunte al vacío.
  */
 import { describe, expect, it } from "vitest";
 import React from "react";
@@ -58,20 +58,22 @@ describe("PresetEditor — cada control tiene nombre accesible", () => {
     }
   });
 
-  it("los desplegables son `select` NATIVOS (etiquetables y navegables con teclado)", () => {
+  it("los desplegables son el `Select` del kit, con la etiqueta atada a su botón", () => {
     const html = render();
     // Cuándo, Qué se mueve, Repetición, Curva del paso 0, Añadir propiedad ×2.
-    expect((html.match(/<select /g) ?? []).length).toBeGreaterThanOrEqual(5);
-    expect(html).toContain('id="ixp-trigger"');
-    expect(html).toContain('id="ixp-target"');
-    expect(html).toContain('id="ixp-once"');
+    const triggers = html.match(/<button id="[^"]+" type="button" aria-haspopup="listbox"/g) ?? [];
+    expect(triggers.length).toBeGreaterThanOrEqual(5);
+    for (const id of ["ixp-trigger", "ixp-target", "ixp-once"]) {
+      expect(html).toContain(`<button id="${id}" type="button" aria-haspopup="listbox"`);
+      expect(html).toContain(`for="${id}"`);
+    }
   });
 
   it("todo lo interactivo es nativo y enfocable; ningún div con onClick", () => {
     const html = render();
     expect(html).toMatch(/<button/);
     expect(html).toMatch(/<input/);
-    expect(html).toMatch(/<select/);
+    expect(html).toMatch(/aria-haspopup="listbox"/);
     expect(html).not.toMatch(/<div[^>]*role="button"/);
     expect(html).not.toMatch(/tabindex="-1"/i);
   });
@@ -127,7 +129,9 @@ describe("PresetEditor — lo que distingue un alta de una edición", () => {
  */
 describe("PresetEditor — evento a medida, suavizado del scrub y trazo SVG", () => {
   it("«Cuándo» ofrece «Con un evento a medida»", () => {
-    expect(render()).toContain("Con un evento a medida");
+    // The kit's list is portalled and drawn only when open: the chosen option is what the trigger shows.
+    const evento: IxSpec = { ...defaultIxSpec(), trigger: { on: "event", name: "abrir-menu" } };
+    expect(render(evento)).toMatch(/<button id="ixp-trigger"[^>]*>(?:(?!<\/button>)[\s\S])*Con un evento a medida/);
   });
 
   it("con `event`: nombre etiquetado por id, prefijo real, regla del slug y conmutación", () => {
@@ -142,12 +146,12 @@ describe("PresetEditor — evento a medida, suavizado del scrub y trazo SVG", ()
 
   it("la conmutación refleja el dato", () => {
     const base: IxSpec = { ...defaultIxSpec(), trigger: { on: "event", name: "abrir-menu" } };
-    expect(render(base)).toMatch(/<input type="checkbox"\/>[^<]*Cada evento alterna/);
+    expect(render(base)).toMatch(/<input(?![^>]*checked)[^>]*type="checkbox"[^>]*>(?:(?!<input)[\s\S])*?Cada evento alterna/);
     const conToggle: IxSpec = {
       ...defaultIxSpec(),
       trigger: { on: "event", name: "abrir-menu", toggle: true },
     };
-    expect(render(conToggle)).toMatch(/<input type="checkbox" checked=""\/>[^<]*Cada evento alterna/);
+    expect(render(conToggle)).toMatch(/<input(?=[^>]*checked="")[^>]*type="checkbox"[^>]*>(?:(?!<input)[\s\S])*?Cada evento alterna/);
   });
 
   it("con `scrub` se ofrece el suavizado (P10) con su nota de honestidad", () => {
@@ -160,7 +164,6 @@ describe("PresetEditor — evento a medida, suavizado del scrub y trazo SVG", ()
   });
 
   it("«El trazo SVG» se ofrece y, elegido, la ayuda dice su contrato", () => {
-    expect(render()).toContain("El trazo SVG");
     const svg: IxSpec = {
       ...defaultIxSpec(),
       tracks: [
@@ -174,6 +177,8 @@ describe("PresetEditor — evento a medida, suavizado del scrub y trazo SVG", ()
       ],
     };
     const html = render(svg);
+    // Chosen, the kit Select's trigger shows it (its list is drawn only when open).
+    expect(html).toMatch(/<button id="ixp-target"[^>]*>(?:(?!<\/button>)[\s\S])*El trazo SVG/);
     expect(html).toContain("wjs-ixd");
     expect(html).toContain("pathLength");
     expect(html).toContain("no se anima nada");

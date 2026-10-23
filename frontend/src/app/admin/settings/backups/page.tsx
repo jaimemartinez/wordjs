@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PageHeader, Card, Button, Select, TimePicker, DataTable, EmptyState } from "@/components/ui";
+import { PageHeader, Card, Button, Input, Select, TimePicker, DataTable, EmptyState } from "@/components/ui";
 import { backupsApi, settingsApi, BackupFile } from "@/lib/api";
 import { format } from "date-fns";
 import { useModal } from "@/contexts/ModalContext";
@@ -282,20 +282,20 @@ export default function BackupsPage() {
                             )}
 
                             {/* How many backups to keep */}
-                            <label className="flex items-center gap-2 text-sm text-gray-600">
-                                <span>{t('backups.retention.label')}</span>
-                                <input
-                                    type="number"
-                                    min={0}
-                                    max={365}
-                                    inputMode="numeric"
-                                    value={retention}
-                                    onChange={(e) => setRetention(e.target.value)}
-                                    className="w-20 rounded-xl border border-gray-200 px-3 py-2 text-sm"
-                                    data-testid="backup-retention"
-                                />
-                                <span className="text-xs text-gray-400">{t('backups.retention.help')}</span>
-                            </label>
+                            <Input
+                                type="number"
+                                size="sm"
+                                min={0}
+                                max={365}
+                                inputMode="numeric"
+                                label={t('backups.retention.label')}
+                                help={t('backups.retention.help')}
+                                value={retention}
+                                onChange={(e) => setRetention(e.target.value)}
+                                containerClassName="max-w-xs"
+                                className="w-24"
+                                data-testid="backup-retention"
+                            />
 
                             {/* Time Picker for Daily/Weekly */}
                             {(schedule === 'daily' || schedule === 'weekly') && (

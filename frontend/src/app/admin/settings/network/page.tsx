@@ -7,7 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useOptionalAuth } from "@/contexts/AuthContext";
-import { PageHeader, Button, Card, EmptyState, Input } from "@/components/ui";
+import { PageHeader, Button, Card, Checkbox, EmptyState, Input } from "@/components/ui";
 import { registerTranslations } from "@/lib/i18n";
 
 /*
@@ -428,16 +428,13 @@ export default function NetworkSettingsPage() {
                     <fieldset className="space-y-2">
                         <legend className="sr-only">{t("networkSetup.adminsTitle")}</legend>
                         {setup.administrators.map((a) => (
-                            <label key={a.id} className="flex items-center gap-3 rounded-xl border border-gray-100 px-4 py-3 hover:bg-gray-50 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    className="h-4 w-4"
-                                    checked={chosen.includes(a.id)}
-                                    onChange={(e) => setChosen((c) => (e.target.checked ? [...c, a.id] : c.filter((x) => x !== a.id)))}
-                                />
-                                <span className="font-bold text-gray-900">{a.displayName}</span>
-                                <span className="text-xs text-gray-500">@{a.login}</span>
-                            </label>
+                            <Checkbox
+                                key={a.id}
+                                containerClassName="rounded-xl border border-gray-100 px-4 py-3 hover:bg-gray-50"
+                                label={<><span className="font-bold text-gray-900">{a.displayName}</span> <span className="text-xs font-normal text-gray-500">@{a.login}</span></>}
+                                checked={chosen.includes(a.id)}
+                                onChange={(e) => setChosen((c) => (e.target.checked ? [...c, a.id] : c.filter((x) => x !== a.id)))}
+                            />
                         ))}
                     </fieldset>
                 </div>
