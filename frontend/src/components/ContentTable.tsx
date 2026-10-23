@@ -24,7 +24,7 @@ import { buildDuplicatePayload } from "@/lib/duplicateContent";
 import { parseServerDate } from "@/lib/serverDate";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
-import { Button, DataTable, EmptyState, Pagination, StatusBadge } from "@/components/ui";
+import { Button, DataTable, EmptyState, Pagination, StatusBadge, Input, UnstyledButton } from "@/components/ui";
 import { avatarInitial } from "@/lib/avatarInitial";
 import type { DataTableAction, DataTableColumn } from "@/components/ui";
 
@@ -225,20 +225,19 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
         <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">
             {/* Toolbar: search + status filter. Wraps on a phone instead of scrolling. */}
             <div className="px-4 sm:px-8 pt-5 pb-4 flex flex-wrap items-center gap-3 border-b border-gray-100/50 bg-gray-50/30">
-                <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-[220px] sm:max-w-sm">
-                    <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 text-xs" aria-hidden="true"></i>
-                    <input
-                        type="search"
-                        value={searchInput}
-                        onChange={(e) => setSearchInput(e.target.value)}
-                        placeholder={t('search') || 'Search…'}
-                        aria-label={t('search') || 'Search…'}
-                        className="w-full h-11 pl-10 pr-4 rounded-xl border border-gray-200 bg-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300"
-                    />
-                </div>
+                <Input
+                    size="md"
+                    type="search"
+                    icon="fa-magnifying-glass"
+                    containerClassName="w-full sm:w-auto sm:flex-1 sm:min-w-[220px] sm:max-w-sm"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder={t('search') || 'Search…'}
+                    aria-label={t('search') || 'Search…'}
+                />
                 <div role="group" aria-label={t('posts.status')} className="w-full sm:w-auto flex flex-wrap items-center gap-1 bg-white border border-gray-100 rounded-xl p-1">
                     {STATUS_TABS.map((tab) => (
-                        <button
+                        <UnstyledButton
                             key={tab.key}
                             type="button"
                             aria-pressed={status === tab.key}
@@ -246,7 +245,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                             className={`flex-auto sm:flex-none min-h-11 px-3 sm:px-4 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${status === tab.key ? 'bg-blue-600 text-white shadow' : 'text-gray-500 hover:text-gray-700'}`}
                         >
                             {t(tab.labelKey)}
-                        </button>
+                        </UnstyledButton>
                     ))}
                 </div>
                 <span className="ml-auto text-[11px] font-black text-gray-500 uppercase tracking-widest" aria-live="polite">{total} {t('table.total')}</span>
@@ -257,25 +256,20 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                 <div className="px-4 sm:px-8 py-3 bg-blue-50/60 border-b border-blue-100 flex flex-wrap items-center gap-3 animate-in fade-in duration-200">
                     <span className="text-xs font-bold text-blue-700">{selected.size} {t('table.selected')}</span>
                     {inTrash && (
-                        <button
-                            type="button"
-                            onClick={() => handleRestore(Array.from(selected))}
-                            disabled={busy}
-                            className="min-h-11 px-4 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-50 transition-all"
-                        >
-                            <i className="fa-solid fa-rotate-left mr-1.5" aria-hidden="true"></i>{t('table.restore.action')}
-                        </button>
+                        <Button size="sm" icon="fa-rotate-left" onClick={() => handleRestore(Array.from(selected))} disabled={busy}>
+                            {t('table.restore.action')}
+                        </Button>
                     )}
-                    <button
-                        type="button"
+                    <Button
+                        variant="danger"
+                        size="sm"
+                        icon={inTrash ? 'fa-fire' : 'fa-trash'}
                         onClick={() => (inTrash ? handleDeleteForever(Array.from(selected)) : handleTrash(Array.from(selected)))}
                         disabled={busy}
-                        className="min-h-11 px-4 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50 transition-all"
                     >
-                        <i className={`fa-solid ${inTrash ? 'fa-fire' : 'fa-trash'} mr-1.5`} aria-hidden="true"></i>
                         {inTrash ? t('table.deleteForever.action') : t('table.trash.action')}
-                    </button>
-                    <button type="button" onClick={() => setSelected(new Set())} className="min-h-11 px-3 text-xs font-bold text-gray-500 hover:text-gray-700">{t('table.clear')}</button>
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>{t('table.clear')}</Button>
                 </div>
             )}
 

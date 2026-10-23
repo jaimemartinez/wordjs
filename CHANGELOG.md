@@ -122,6 +122,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **The admin shell and the editor's side panels use the admin's form kit.** The dashboard, the admin
+  shell (banners, the connection screen, the sidebar and its language menu), the notification centre, the
+  posts and pages list, Hooks and its live timeline, AI suggestions, and the editor's revisions, review
+  comments and accessibility panels now draw their controls from `@/components/ui`:
+  - the list and Hooks searches are kit inputs with their icon; the list's bulk actions and the connection
+    screen's retry are kit buttons;
+  - toggles say their state: the dashboard's weekly/monthly switch and the live timeline's pause are pressed
+    or not, and the notification bell and the sidebar's language menu say whether they are open;
+  - the shell, the dark sidebar and the editor panels keep their own look through the kit's unstyled button.
+  The review comments composer moves with the editor's fields in a later batch. An unused SEO panel
+  component is removed. These files leave the form kit's allowlist (509 → 456 raw controls left).
 - **The content admin screens use the admin's form kit.** Tags, Categories, Comments, Fonts, Forms, Import
   from WordPress, Notices, API tokens, Webhooks, Widgets and AI agents now use `@/components/ui`:
   - fields have their labels tied to them (the widget settings too), and the tag and font searches are kit

@@ -8,6 +8,7 @@ import { trStr, trFmt } from "@/lib/editorI18n";
 import MSym from "@/components/editor/MSym";
 import { buildRevisionRestoreMessage } from "@/lib/revisionRestoreDescription";
 import { parseServerDate } from "@/lib/serverDate";
+import { UnstyledButton } from "@/components/ui";
 
 interface RevisionsSidebarProps {
     postId: number;
@@ -263,9 +264,9 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                             <p className="text-[11px] text-[var(--ed-on-surface-variant)]">{tr("Control de versiones")}</p>
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label={tr("Cerrar historial de revisiones")} className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors">
+                    <UnstyledButton type="button" onClick={onClose} aria-label={tr("Cerrar historial de revisiones")} className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors">
                         <MSym name="close" size={20} />
-                    </button>
+                    </UnstyledButton>
                 </div>
 
                 <div aria-live="polite" className="sr-only">
@@ -274,9 +275,9 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
 
                 {diffRev && (
                     <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 custom-scrollbar">
-                        <button type="button" onClick={() => setDiffRev(null)} className="mb-5 min-h-11 inline-flex items-center gap-2 px-3 rounded-xl border border-[var(--ed-outline-variant)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">
+                        <UnstyledButton type="button" onClick={() => setDiffRev(null)} className="mb-5 min-h-11 inline-flex items-center gap-2 px-3 rounded-xl border border-[var(--ed-outline-variant)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">
                             <MSym name="chevron_left" size={18} /> {tr("Todas las revisiones")}
-                        </button>
+                        </UnstyledButton>
                         <div className="mb-5">
                             <p className="text-[11px] text-[var(--ed-on-surface-variant)] font-semibold uppercase tracking-wider mb-2">{tr("Comparando")}</p>
                             <p className="text-xs text-[var(--ed-on-surface-variant)] leading-relaxed">
@@ -308,9 +309,9 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                                                 : <p className="text-sm text-[var(--ed-on-surface-variant)]">{tr("Las versiones difieren demasiado para compararlas aquí; restáurala para inspeccionarla.")}</p>}
                                         </div>
                                     </section>
-                                    <button type="button" disabled={restoringId !== null} onClick={() => handleRestoreClick(diffRev)} className="w-full min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-2">
+                                    <UnstyledButton type="button" disabled={restoringId !== null} onClick={() => handleRestoreClick(diffRev)} className="w-full min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-2">
                                         <MSym name={restoringId === diffRev.id ? "sync" : "history"} size={18} className={restoringId === diffRev.id ? "animate-spin" : ""} /> {tr("Restaurar esta versión")}
-                                    </button>
+                                    </UnstyledButton>
                                 </div>
                             );
                         })()}
@@ -327,7 +328,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                             <span className="w-12 h-12 shrink-0 rounded-2xl bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] flex items-center justify-center"><MSym name="info" size={24} /></span>
                             <p className="text-sm font-semibold text-[var(--ed-on-surface)]">{tr("No se pudieron cargar las revisiones")}</p>
                             <p className="max-w-xs text-xs text-[var(--ed-on-surface-variant)]">{tr("Comprueba la conexión y vuelve a intentarlo.")}</p>
-                            <button type="button" onClick={loadRevisions} className="min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">{tr("Reintentar")}</button>
+                            <UnstyledButton type="button" onClick={loadRevisions} className="min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">{tr("Reintentar")}</UnstyledButton>
                         </div>
                     ) : revisions.length === 0 ? (
                         <div className="h-full min-h-64 flex flex-col items-center justify-center gap-3 text-center">
@@ -360,13 +361,13 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                                         <p className="text-[11px] text-[var(--ed-outline)] mt-1 tabular-nums" style={{ fontFamily: "var(--ed-font-family-monospaced)" }}>{revisionWhen(rev)?.toLocaleString()}</p>
                                     </div>
                                     <div className="flex flex-wrap gap-2 mt-4">
-                                        <button type="button" disabled={restoringId !== null || rev.restore?.compatible === false} title={rev.restore?.compatible === false ? tr("Esta revisión usa un formato no compatible") : undefined} onClick={() => handleRestoreClick(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5">
+                                        <UnstyledButton type="button" disabled={restoringId !== null || rev.restore?.compatible === false} title={rev.restore?.compatible === false ? tr("Esta revisión usa un formato no compatible") : undefined} onClick={() => handleRestoreClick(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5">
                                             <MSym name={restoringId === rev.id ? "sync" : "history"} size={16} className={restoringId === rev.id ? "animate-spin" : ""} /> {tr("Restaurar")}
-                                        </button>
+                                        </UnstyledButton>
                                         {index > 0 && (
-                                            <button type="button" onClick={() => setDiffRev(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors inline-flex items-center justify-center gap-1.5">
+                                            <UnstyledButton type="button" onClick={() => setDiffRev(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors inline-flex items-center justify-center gap-1.5">
                                                 <MSym name="content_copy" size={16} /> {tr("Cambios")}
-                                            </button>
+                                            </UnstyledButton>
                                         )}
                                     </div>
                                 </li>

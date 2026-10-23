@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import NotificationCenter from "./NotificationCenter";
 import { firstAllowedAdminPath, visibleSidebarSections, type AdminMenuItem } from "@/lib/adminAccess";
 import { roleDisplayName } from "@/lib/roleOptions";
+import { UnstyledButton } from "@/components/ui";
 
 // The core entries, their capabilities and the section split live in lib/adminAccess.ts: the admin
 // layout's route guard reads the SAME map, so a page you cannot see here is a page you cannot open.
@@ -214,9 +215,9 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                         <div className="hidden lg:block">
                             <NotificationCenter variant="inline" isCollapsed={isCollapsed} />
                         </div>
-                        <button ref={closeRef} type="button" onClick={onClose} aria-label={t("nav.closeMenu")} className="lg:hidden w-11 h-11 shrink-0 flex items-center justify-center text-gray-400 hover:text-white transition-colors hover:bg-white/10 rounded-xl">
+                        <UnstyledButton ref={closeRef} type="button" onClick={onClose} aria-label={t("nav.closeMenu")} className="lg:hidden w-11 h-11 shrink-0 flex items-center justify-center text-gray-400 hover:text-white transition-colors hover:bg-white/10 rounded-xl">
                             <i className="fa-solid fa-xmark text-xl" aria-hidden="true"></i>
-                        </button>
+                        </UnstyledButton>
                     </div>
                 </div>
 
@@ -269,8 +270,9 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                 <div className="fixed inset-0 z-10" onClick={() => setIsLangMenuOpen(false)}></div>
                                 <div className="absolute bottom-full left-0 w-full mb-2 bg-[#1e293b] border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-20 animate-in slide-in-from-bottom-2 fade-in duration-200">
                                     {languages.map((lang) => (
-                                        <button
+                                        <UnstyledButton
                                             key={lang.code}
+                                            aria-pressed={language === lang.code}
                                             onClick={() => {
                                                 setLanguage(lang.code as any);
                                                 setIsLangMenuOpen(false);
@@ -280,12 +282,13 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                             <span className="text-[11px] font-black uppercase tracking-wider w-7 text-center px-1.5 py-0.5 rounded-md bg-white/10">{lang.code.toUpperCase()}</span>
                                             <span>{lang.label}</span>
                                             {language === lang.code && <i className="fa-solid fa-check ml-auto text-blue-400"></i>}
-                                        </button>
+                                        </UnstyledButton>
                                     ))}
                                 </div>
                             </>
                         )}
-                        <button
+                        <UnstyledButton
+                            aria-expanded={isLangMenuOpen}
                             onClick={() => setIsLangMenuOpen(!isLangMenuOpen)}
                             className="w-full px-4 py-3 bg-white/5 hover:bg-white/10 text-white text-sm rounded-2xl border border-white/5 flex items-center justify-between transition-all group hover:border-white/20"
                         >
@@ -294,10 +297,10 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                 <span className="font-bold text-gray-400 group-hover:text-white transition-colors text-[11px] uppercase tracking-wider">{currentLang.label}</span>
                             </div>
                             <i className={`fa-solid fa-chevron-up text-[11px] text-gray-600 transition-transform duration-200 ${isLangMenuOpen ? 'rotate-180 text-blue-400' : ''}`}></i>
-                        </button>
+                        </UnstyledButton>
                     </div>
 
-                    <button
+                    <UnstyledButton
                         onClick={logout}
                         title={isCollapsed ? t('nav.sign.out') : undefined}
                         className={`
@@ -307,7 +310,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                     >
                         <i className="fa-solid fa-right-from-bracket transition-transform group-hover:translate-x-1"></i>
                         <span className={`transition-all duration-300 opacity-100 translate-x-0 font-bold text-[11px] uppercase tracking-widest ${isCollapsed ? "lg:hidden block" : "block"}`}>{t('nav.sign.out')}</span>
-                    </button>
+                    </UnstyledButton>
                 </div>
             </aside >
 

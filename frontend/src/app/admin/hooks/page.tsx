@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button } from "@/components/ui";
+import { PageHeader, Button, Input, UnstyledButton } from "@/components/ui";
 import { plural } from "@/lib/i18n";
 import LiveTimeline from "./LiveTimeline";
 
@@ -189,23 +189,23 @@ export default function HooksPage() {
             {/* Controls */}
             <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 justify-between items-stretch md:items-center sticky top-0 sm:top-4 z-10 w-full">
                 <div role="group" className="flex flex-wrap p-1 bg-slate-100 rounded-xl max-w-full">
-                    <button
+                    <UnstyledButton
                         type="button"
                         aria-pressed={activeTab === 'actions'}
                         onClick={() => setActiveTab('actions')}
                         className={`flex-1 md:flex-none min-h-11 px-4 sm:px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'actions' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                         {t('hooks.admin.tabActions')}
-                    </button>
-                    <button
+                    </UnstyledButton>
+                    <UnstyledButton
                         type="button"
                         aria-pressed={activeTab === 'filters'}
                         onClick={() => setActiveTab('filters')}
                         className={`flex-1 md:flex-none min-h-11 px-4 sm:px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'filters' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                         {t('hooks.admin.tabFilters')}
-                    </button>
-                    <button
+                    </UnstyledButton>
+                    <UnstyledButton
                         type="button"
                         aria-pressed={activeTab === 'live'}
                         onClick={() => setActiveTab('live')}
@@ -213,21 +213,20 @@ export default function HooksPage() {
                     >
                         <i className={`fa-solid fa-satellite-dish ${activeTab === 'live' ? 'animate-pulse' : ''}`}></i>
                         {t('hooks.admin.tabLive')}
-                    </button>
+                    </UnstyledButton>
                 </div>
 
-                <div className="relative w-full md:w-96">
-                    <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
-                    <input
-                        type="text"
-                        placeholder={t('hooks.admin.searchPlaceholder')}
-                        aria-label={t('hooks.admin.searchPlaceholder')}
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
-                        disabled={activeTab === 'live'}
-                    />
-                </div>
+                <Input
+                    size="md"
+                    type="search"
+                    icon="fa-magnifying-glass"
+                    containerClassName="w-full md:w-96"
+                    placeholder={t('hooks.admin.searchPlaceholder')}
+                    aria-label={t('hooks.admin.searchPlaceholder')}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    disabled={activeTab === 'live'}
+                />
             </div>
 
             {/* Content Switcher */}
@@ -260,12 +259,9 @@ export default function HooksPage() {
                                             : t('hooks.admin.emptyNoneFilters'))}
                                 </p>
                                 {search && (
-                                    <button
-                                        onClick={() => setSearch('')}
-                                        className="mt-4 text-indigo-600 text-sm font-bold hover:underline"
-                                    >
+                                    <Button variant="link" className="mt-4" onClick={() => setSearch('')}>
                                         {t('hooks.admin.clearSearch')}
-                                    </button>
+                                    </Button>
                                 )}
                             </div>
                         ) : (
