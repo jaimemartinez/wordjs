@@ -13,7 +13,8 @@ import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
 
-const SRC = fs.readFileSync(path.resolve(__dirname, '../../../marketplace/plugins/mail-server/index.js'), 'utf8');
+// Line endings normalized: a Windows checkout (core.autocrlf) has CRLF, and the slice below ends at '\n}\n'.
+const SRC = fs.readFileSync(path.resolve(__dirname, '../../../marketplace/plugins/mail-server/index.js'), 'utf8').replace(/\r\n/g, '\n');
 const start = SRC.indexOf('const DNSBL_ZONE');
 const end = SRC.indexOf('\n}\n', SRC.indexOf('async function dnsblListed')) + 3;
 assert.ok(start > 0 && end > start, 'dnsblListed was not found in the plugin source');

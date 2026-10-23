@@ -26,8 +26,9 @@ import { makeDb, PREFIX } from './fixtures/mail-server-db';
 
 const PLUGIN_DIR = path.resolve(__dirname, '../../../marketplace/plugins/mail-server');
 const PLUGIN_SRC = path.join(PLUGIN_DIR, 'index.js');
-const SOURCE = fs.readFileSync(PLUGIN_SRC, 'utf8');
-const UI_SRC = fs.readFileSync(path.join(PLUGIN_DIR, 'client/admin/ui.tsx'), 'utf8');
+// Line endings normalized: a Windows checkout (core.autocrlf) has CRLF, and the slices below end at '\n}\n'.
+const SOURCE = fs.readFileSync(PLUGIN_SRC, 'utf8').replace(/\r\n/g, '\n');
+const UI_SRC = fs.readFileSync(path.join(PLUGIN_DIR, 'client/admin/ui.tsx'), 'utf8').replace(/\r\n/g, '\n');
 
 // Appended to the shipped source so it closes over the module's own bindings; nothing is altered.
 const SUITE_HOOK = `
