@@ -42,7 +42,7 @@ import { Overlay, useShortTouch } from "./Overlay";
 import { ProofThumb, forgetProof } from "./ProofViewer";
 import { StatusPill, SumState, Spinner, factsOf, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
-import { paymentMethodLabel, switchLabel } from "../lib/labels";
+import { paymentMethodLabel } from "../lib/labels";
 
 /** The people of a payment (to refresh their rows after an action). */
 const idsOf = (t: any): number[] => (t && Array.isArray(t.allocations) ? t.allocations.map((a) => Number(a.inscription_id)) : []);

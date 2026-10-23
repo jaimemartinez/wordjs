@@ -43,7 +43,7 @@ import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, PAYMENT_METHODS, fmtMoney } from "../lib/conference";
 import { DateField } from "../lib/DateField";
-import { paymentMethodLabel, switchLabel } from "../lib/labels";
+import { paymentMethodLabel } from "../lib/labels";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { displayName, exportFilename } from "../lib/exports";
 import { feeLineTitle, filterLedger, summarizeLedger, buildLedgerWorkbook, ledgerDay, linePeople } from "../lib/accounting";

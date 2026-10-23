@@ -28,7 +28,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, feePaymentsApi, PAYMENT_METHODS } from "../lib/conference";
 import { DateField } from "../lib/DateField";
-import { paymentMethodLabel, switchLabel } from "../lib/labels";
+import { paymentMethodLabel } from "../lib/labels";
 import { COARSE_FIELDS_CSS, LAYER } from "../lib/overlay";
 import { toCents } from "../lib/feeSplit";
 import {
