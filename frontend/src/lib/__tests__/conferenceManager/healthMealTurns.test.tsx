@@ -65,7 +65,9 @@ describe('<HealthConditionsInput>', () => {
     it('«Otros» reveals its box; an error is said under the field', () => {
         const html = render({ conditions: [HEALTH_OTHER], other: '', answer: 'list' }, 'Escribe cuál es la otra condición.');
         expect(html).toContain('data-health-other');
-        expect(html).toMatch(/role="alert"[^>]*>Escribe cuál es la otra condición\./);
+        expect(html).toContain('data-field-error');
+        expect(html).toContain('role="alert"');
+        expect(html).toContain('Escribe cuál es la otra condición.');
         expect(html).toContain('aria-invalid="true"');
     });
 });

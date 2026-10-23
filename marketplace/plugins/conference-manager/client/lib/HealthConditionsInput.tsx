@@ -5,10 +5,12 @@
  * «Condiciones de salud» (2.32.0): the multiple-choice input of the registration form, shared by the admin's
  * inscription form and the coordinators' portal. Conditions as checkboxes, «Otros» reveals its text box, and
  * «Ninguna» / «Prefiero no responder» as two exclusive choices. A consent line says what the answers are for.
- * Errors are shown in place (`error`), never with the browser's `required` bubbles or a native dialog.
+ * Errors are shown in place (`error`, with the same FieldError as every other field since 2.31.1), never with the
+ * browser's `required` bubbles or a native dialog.
  */
 import React from "react";
 import { HEALTH_OTHER, HEALTH_OTHER_MAX, chooseSpecial, healthOptions, setOtherText, toggleCondition, type HealthAnswer } from "./health";
+import { FieldError } from "./useFieldErrors";
 
 export type HealthLabels = {
     consent: string; other: string; otherPlaceholder: string; none: string; declined: string;
@@ -63,7 +65,7 @@ export function HealthConditionsInput({ id, field, value, onChange, error, label
                 {special('none', labels.none)}
                 {special('declined', labels.declined)}
             </div>
-            {error && <p id={errId} role="alert" className="text-xs font-semibold text-rose-600" data-health-error="">{error}</p>}
+            <FieldError id={errId} message={error} />
         </fieldset>
     );
 }
