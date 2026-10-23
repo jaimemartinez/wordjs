@@ -90,6 +90,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Security → Automatic Certificate Renewal reads correctly.** The HTTP-01 note was glued from fragments,
+  so it read "runs in the every deployment mode" and "Port 80 listenerabove" in English, "en el todos los modos"
+  and "HTTP-01 ; por eso" in Spanish, and "na todos os modos" in Portuguese. Each language now has the whole
+  sentence, with its own word order and punctuation.
 - **Admin → Updates no longer offers an in-place update inside a Kubernetes pod.** containerd and CRI-O write
   no `/.dockerenv`, and the Helm chart did not say it was a container, so the screen offered the one-click update,
   which rewrites code the next pod restart replaces with the image. A pod is now recognised by
