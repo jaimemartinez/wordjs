@@ -620,7 +620,7 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                     {tokenLabels && tokenLabels['@meal_group'] && (
                         <button type="button" disabled={!editable} onClick={addMealGroup} data-ed-meal-group=""
                             className="w-full text-left rounded-xl border-2 border-violet-100 bg-violet-50/60 hover:border-violet-400 px-3 py-2">
-                            <span className="flex items-center gap-2 text-sm font-black text-violet-800"><span className="inline-flex w-7 h-7 items-center justify-center rounded-lg bg-violet-700 text-white text-base">C</span>{tx('badges.ed.meal', 'Grupo de comida (letra)')}</span>
+                            <span className="flex items-center gap-2 text-sm font-black text-violet-800"><span className="inline-flex w-7 h-7 shrink-0 items-center justify-center rounded-lg bg-violet-700 text-white text-base">C</span>{tx('badges.ed.meal', 'Grupo de comida (letra)')}</span>
                             <span className="block text-[11px] text-violet-700/80 mt-0.5">{tx('badges.ed.meal.hint', 'La letra del grupo (A–F) de cada persona, en grande. Si aún no tiene grupo, no se muestra nada.')}</span>
                         </button>
                     )}
