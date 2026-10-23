@@ -8,6 +8,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Plugin updates without a core release.** A new *Publish marketplace* workflow rebuilds the marketplace catalog and plugin zips, runs the same integrity gate as a release, and replaces the marketplace assets on the latest release, so a plugin update reaches every site's Marketplace tab without a new WordJS version (see `documentation/deployment.md`).
 - **conference-manager 2.33.2: «Copiar mensaje» for the data consent request.** Next to «Enviar / Reenviar
   enlace», in the admin's «Autorizaciones» tab and in the coordinators' person sheet, a button copies the consent
   request as a message to paste into WhatsApp or any chat. The message carries a new personal link and the policy
