@@ -37,6 +37,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - Health answers are deleted a set number of days after the conference ends (30 by default). The evidence
     stays.
   - The plugin now requests the `email` permission to send these messages through the site's mail plugin.
+- **One form kit for the admin, and a gate that keeps it that way.** The admin drew its fields and buttons
+  in several ways: ~720 raw `<input>`, `<select>`, `<textarea>` and `<button>` across 114 files, each with its
+  own borders, focus ring and label wiring, and two different selects. `@/components/ui` is now the single source:
+  - **One field contract:** `Input`, `Textarea`, `Select`, `Checkbox`, `Radio`/`RadioGroup`, `Switch`,
+    `ColorInput`, `Slider` and the pickers all take `label`, `help`, `error` and `required`; the label is tied to
+    the control, and help and error are announced (`aria-describedby`, `aria-invalid`, `aria-required`).
+  - **One select:** `Select` is ModernSelect's implementation with a value-based `onChange`, option descriptions,
+    disabled options and an optional search box; `ModernSelect` is now a shim over it.
+  - **Buttons:** `Button` (a `pending` state with its own label, a `link` variant, `type="button"` unless a submit
+    is asked for), `IconButton` (its name is required), `ButtonLink`, `FileButton`, `SegmentedControl`, `Tabs`
+    and `UnstyledButton` for bespoke clickables.
+  - **The gate:** ESLint refuses a raw form element in the admin, and a test counts every admin file exactly
+    against an allowlist that only shrinks, so the screens move to the kit batch by batch and none goes back.
+    Public and theme-rendered code is out of scope: a theme never ships admin JavaScript.
 - **Folders in the media library.** Admin → Media has a folder tree beside the library (a panel on phones): create, rename and nest folders, browse them (the address keeps the folder), upload straight into the current one, and move files by dragging them onto a folder or with *Move to…* — one file from its details, or many at once. Deleting a folder asks where its files and subfolders go; no file is ever deleted with it or left in a folder that no longer exists. The editor's media picker browses by folder too. Folders are organisation only: moving a file never changes its URL, so content that links to it keeps working. Anyone who uploads can create folders and move the files they may edit; renaming and deleting folders is for editors. (`GET`/`POST /api/v1/media/folders`, `PUT`/`DELETE /api/v1/media/folders/:id`, `POST /api/v1/media/folders/move`, `?folder=` on `GET /api/v1/media` and on uploads.)
 - **conference-manager 2.32.0: health conditions and meal turns.**
   - A new **«Condiciones de salud»** field template asks about health conditions: several can be ticked,

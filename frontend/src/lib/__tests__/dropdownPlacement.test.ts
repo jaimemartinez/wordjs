@@ -329,8 +329,9 @@ describe("dropdownContext: the dialog a list stays in", () => {
 });
 
 describe("both portalled selects use it", () => {
-    it("ModernSelect and ui/Select place their list through useDropdownPlacement, not their own arithmetic", () => {
-        for (const file of ["../../components/ModernSelect.tsx", "../../components/ui/Select.tsx"]) {
+    it("the select (ui/Select; ModernSelect is a shim over it) places its list through useDropdownPlacement, not its own arithmetic", () => {
+        expect(fs.readFileSync(path.resolve(__dirname, "../../components/ModernSelect.tsx"), "utf8")).toContain('from "./ui/Select"');
+        for (const file of ["../../components/ui/Select.tsx"]) {
             const src = fs.readFileSync(path.resolve(__dirname, file), "utf8");
             expect(src, file).toMatch(/useDropdownPlacement\(isOpen,/);
             expect(src, file).not.toMatch(/window\.innerHeight/);
@@ -342,8 +343,8 @@ describe("both portalled selects use it", () => {
         const tokens = OPTION_LABEL_CLASS.split(/\s+/);
         expect(tokens).toEqual(expect.arrayContaining(["whitespace-normal", "break-words", "min-w-0"]));
         expect(tokens).not.toContain("truncate");
-        const src = fs.readFileSync(path.resolve(__dirname, "../../components/ModernSelect.tsx"), "utf8");
-        expect(src).toContain("<span className={OPTION_LABEL_CLASS}>{opt.label}</span>");
+        const src = fs.readFileSync(path.resolve(__dirname, "../../components/ui/Select.tsx"), "utf8");
+        expect(src).toMatch(/<span className=\{OPTION_LABEL_CLASS\}>\s*\{opt\.label\}/);
     });
 
     // Live finding: the group headings «ROLES DEL SISTEMA» / «ROLES DE PLUGINS» of the role dropdown were
@@ -354,7 +355,7 @@ describe("both portalled selects use it", () => {
         expect(contrastOf(text, "white")).toBeGreaterThanOrEqual(AA);
         expect(contrastOf(text, "black", "white/95")).toBeGreaterThanOrEqual(AA);
         expect(contrastOf("text-gray-500", "black", "white/95")).toBeLessThan(AA); // why gray-600 and not gray-500
-        const src = fs.readFileSync(path.resolve(__dirname, "../../components/ModernSelect.tsx"), "utf8");
+        const src = fs.readFileSync(path.resolve(__dirname, "../../components/ui/Select.tsx"), "utf8");
         expect(src).toContain('<div role="presentation" className={GROUP_HEADING_CLASS} data-option-group="">');
         // the surface the heading is measured on (a template literal: inside the Verso editor the menu
         // also joins the editor's palette, components/editor-theme.css)
@@ -364,9 +365,9 @@ describe("both portalled selects use it", () => {
     it("ModernSelect's empty-list line (same menu surface) and the trigger's placeholder meet AA", () => {
         expect(contrastOf(textClassOf(EMPTY_LIST_CLASS), "black", "white/95")).toBeGreaterThanOrEqual(AA);
         expect(contrastOf(textClassOf(PLACEHOLDER_CLASS), "gray-50")).toBeGreaterThanOrEqual(AA);
-        const src = fs.readFileSync(path.resolve(__dirname, "../../components/ModernSelect.tsx"), "utf8");
+        const src = fs.readFileSync(path.resolve(__dirname, "../../components/ui/Select.tsx"), "utf8");
         expect(src).toContain("<div className={EMPTY_LIST_CLASS}>");
-        expect(src).toContain("!selectedOption ? PLACEHOLDER_CLASS : ''");
-        expect(src).not.toMatch(/text-gray-400 (?:italic|break-words)|'text-gray-400'/);
+        expect(src).toContain('!selectedOption ? PLACEHOLDER_CLASS : ""');
+        expect(src).not.toMatch(/text-gray-400 (?:italic|break-words)|['"]text-gray-400['"]/);
     });
 });

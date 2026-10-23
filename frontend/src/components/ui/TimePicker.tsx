@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { Select } from './Select';
+import { useKitText } from './Field';
 
 interface TimePickerProps {
     value: string;
@@ -7,7 +8,9 @@ interface TimePickerProps {
     disabled?: boolean;
 }
 
+/** TimePicker — "HH:mm" (24h) as an hours select and a minutes select, each named for screen readers. */
 export function TimePicker({ value, onChange, disabled }: TimePickerProps) {
+    const t = useKitText();
     // Parse HH:mm (24h)
     const [hours, minutes] = value ? value.split(':') : ['00', '00'];
 
@@ -42,16 +45,18 @@ export function TimePicker({ value, onChange, disabled }: TimePickerProps) {
                     onChange={handleHourChange}
                     options={hourOptions}
                     disabled={disabled}
+                    aria-label={t('datePicker.hours')}
                     className="text-center"
                 />
             </div>
-            <span className="text-gray-400 font-bold">:</span>
+            <span className="text-gray-400 font-bold" aria-hidden="true">:</span>
             <div className="w-20">
                 <Select
                     value={minutes}
                     onChange={handleMinuteChange}
                     options={minuteOptions}
                     disabled={disabled}
+                    aria-label={t('datePicker.minutes')}
                     className="text-center"
                 />
             </div>

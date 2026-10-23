@@ -8,6 +8,12 @@ import nextTs from "eslint-config-next/typescript";
 // longer registers it); `jsx-a11y`/`@next/next`/`@typescript-eslint` are still provided by the presets.
 import reactHooks from "eslint-plugin-react-hooks";
 import react from "eslint-plugin-react";
+import { eslintGlobs } from "./scripts/form-controls-gate.mjs";
+
+// One form kit for the admin (scripts/form-controls-gate.mjs): the files still on its shrink-only
+// allowlist are ignored here and held at their count by the formControlsGate test; every other admin
+// file may not add a raw control.
+const formControls = eslintGlobs();
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -66,6 +72,19 @@ const eslintConfig = defineConfig([
           object, property, message: "The browser's native dialogs are not used: use useModal() or a toast.",
         }))),
       ],
+    },
+  },
+  // The admin's fields and buttons come from @/components/ui (Input, Textarea, Select, Checkbox, Radio,
+  // Switch, ColorInput, Slider, the pickers, Button, IconButton, ButtonLink, FileButton, SegmentedControl,
+  // Tabs, UnstyledButton). Public/theme-rendered code is out of scope: a theme never ships admin JS.
+  {
+    files: formControls.files,
+    ignores: formControls.ignores,
+    rules: {
+      "no-restricted-syntax": ["error", {
+        selector: "JSXOpeningElement[name.name=/^(input|select|textarea|button)$/]",
+        message: "Use the admin form kit (@/components/ui: Input, Textarea, Select, Checkbox, Radio, Switch, Button, IconButton, UnstyledButton…) instead of a raw form element.",
+      }],
     },
   },
 ]);
