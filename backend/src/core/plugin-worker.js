@@ -400,7 +400,9 @@ function tolerateRefusal(method, call) {
         if (!m) throw e;
         if (!reportedRefusals.has(method)) {
             reportedRefusals.add(method);
-            console.warn(`[${slug}] ${method} skipped: the permission "${m[1]}:${m[2]}" is not granted (Plugins → ${slug} → Permissions). The plugin keeps running without it.`);
+            // stderr: the worker's own log channel (the host relays it as `[plugin <slug>]` lines), as the
+            // fatal-error report above uses — module-logger is a host module this child does not load.
+            try { process.stderr.write(`[${slug}] ${method} skipped: the permission "${m[1]}:${m[2]}" is not granted (Plugins → ${slug} → Permissions). The plugin keeps running without it.\n`); } catch { /* stderr gone */ }
         }
         return null;
     });
