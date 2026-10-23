@@ -218,7 +218,7 @@ The wizard and the migration screen take the CA as **PEM text** only; a file pat
 #### Upgrade note: database TLS is verified by default
 
 > ⚠️ **Read this before upgrading a site with `"dbSsl": true`.** Releases up to and including 2.7.0 did
-> not verify the database server's certificate. From this release on they do, and a backend whose
+> not verify the database server's certificate. From 2.8.0 on they do, and a backend whose
 > database presents a certificate signed by a CA that is **not in Node.js's built-in trust store** stops
 > at boot. Most managed databases are in that case: Amazon RDS / Aurora, DigitalOcean Managed Databases,
 > and Azure Database for PostgreSQL / MySQL (depending on server generation and region) sign their
