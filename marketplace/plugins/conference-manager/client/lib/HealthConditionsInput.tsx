@@ -16,7 +16,7 @@ export type HealthLabels = {
     consent: string; other: string; otherPlaceholder: string; none: string; declined: string;
 };
 export const HEALTH_LABELS_ES: HealthLabels = {
-    consent: 'Usaremos esta información solo para atenderte mejor (por ejemplo, el turno de comida). Solo la ve el equipo autorizado. Puedes no responder.',
+    consent: 'Usaremos esta información solo para atenderte mejor. Solo la ve el equipo autorizado. Puedes no responder.',
     other: 'Otros', otherPlaceholder: '¿Cuál?', none: 'Ninguna', declined: 'Prefiero no responder',
 };
 

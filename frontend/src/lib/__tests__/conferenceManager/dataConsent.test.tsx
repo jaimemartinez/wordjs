@@ -13,7 +13,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONSENT_KEYS, consentLangOf, consentT } from '../../../../../marketplace/plugins/conference-manager/client/lib/consentI18n';
 import { ConsentChip } from '../../../../../marketplace/plugins/conference-manager/client/portal/ConsentBits';
-import { consentMessage, copyText, whatsappUrl } from '../../../../../marketplace/plugins/conference-manager/client/lib/consentMessage';
+import { consentMessage, copyLangOf, copyText, rememberCopyLang, whatsappUrl } from '../../../../../marketplace/plugins/conference-manager/client/lib/consentMessage';
+import { CopyLangPicker } from '../../../../../marketplace/plugins/conference-manager/client/lib/CopyLangPicker';
+import { HEALTH_LABELS_ES } from '../../../../../marketplace/plugins/conference-manager/client/lib/HealthConditionsInput';
+import { translations as cmTranslations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
 import * as phone from '../../../../../marketplace/plugins/conference-manager/client/lib/phone';
 import { PhoneInput } from '../../../../../marketplace/plugins/conference-manager/client/lib/PhoneInput';
 import { waNumber as badgeWa } from '../../../../../marketplace/plugins/conference-manager/client/lib/badges';
@@ -59,7 +62,7 @@ describe('the signed text', () => {
 });
 
 describe('no native dialogs, no required bubbles', () => {
-    for (const rel of ['client/portal/consent/ConsentPage.tsx', 'client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx', 'client/lib/consentMessage.ts', 'client/lib/PhoneInput.tsx', 'client/admin/PhoneCountrySetting.tsx', 'client/lib/Select.tsx', 'client/lib/CountrySelect.tsx', 'client/lib/Flag.tsx']) {
+    for (const rel of ['client/portal/consent/ConsentPage.tsx', 'client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx', 'client/lib/consentMessage.ts', 'client/lib/PhoneInput.tsx', 'client/admin/PhoneCountrySetting.tsx', 'client/lib/Select.tsx', 'client/lib/CountrySelect.tsx', 'client/lib/Flag.tsx', 'client/lib/CopyLangPicker.tsx']) {
         it(rel, () => {
             const s = src(rel).replace(/^\s*(\/\/|\*).*$/gm, '');
             expect(s).not.toMatch(/\b(window\.)?(alert|confirm|prompt)\s*\(/);
@@ -227,5 +230,49 @@ describe('no e-mail on file (2.33.3)', () => {
         expect(page).toContain('{view.needs_email && (');
         expect(page).toContain('...(view.needs_email ? { email: email.trim() } : {})');
         expect(page).toContain('err("email")');
+    });
+});
+
+describe('languages (2.33.4)', () => {
+    it('the health justification carries no example, in any language', () => {
+        expect(HEALTH_LABELS_ES.consent).toBe('Usaremos esta información solo para atenderte mejor. Solo la ve el equipo autorizado. Puedes no responder.');
+        for (const lang of ['es', 'en', 'pt'] as const) expect(cmTranslations[lang]['health.consent']).not.toMatch(/ejemplo|example|exemplo|turno|turn/i);
+        expect(src('client/portal/consent/ConsentPage.tsx')).not.toMatch(/for example|por exemplo|por ejemplo/);
+    });
+    it('the copied message language: the e-mail language first, then the last one chosen on this device', () => {
+        const store = new Map<string, string>();
+        const ls = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
+        const prev = (globalThis as any).localStorage;
+        (globalThis as any).localStorage = ls;
+        try {
+            expect(copyLangOf('pt')).toBe('pt');
+            expect(copyLangOf('fr')).toBe('es');
+            rememberCopyLang('en');
+            expect(copyLangOf('pt')).toBe('en');
+        } finally { (globalThis as any).localStorage = prev; }
+        // Private mode: no storage at all still answers.
+        (globalThis as any).localStorage = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+        try { expect(copyLangOf('pt')).toBe('pt'); expect(() => rememberCopyLang('en')).not.toThrow(); } finally { (globalThis as any).localStorage = prev; }
+    });
+    it('the picker is labelled, says which is chosen, and both dialogs use it', () => {
+        const html = renderToStaticMarkup(React.createElement(CopyLangPicker, { value: 'en', onChange: () => {}, label: 'Idioma del mensaje' }));
+        expect(html).toContain('aria-label="Idioma del mensaje"');
+        expect(html).toMatch(/lang="en" aria-pressed="true"/);
+        expect(html).toMatch(/lang="pt" aria-pressed="false"/);
+        for (const rel of ['client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx']) {
+            const s = src(rel);
+            expect(s).toContain('<CopyLangPicker');
+            expect(s).toContain('copyLangOf(');
+            expect(s).toContain('consentMessage(share.lang, share.info)');
+        }
+    });
+    it('the consent page: starts in the conference language, the person may switch, server refusals in its language', () => {
+        const page = src('client/portal/consent/ConsentPage.tsx');
+        expect(page).toContain('const lang = picked || serverLang || langNow();');
+        expect(page).toContain('data-consent-lang-option={l}');
+        for (const l of ['es', 'en', 'pt']) {
+            const t = consentT(l);
+            for (const code of ['general', 'representative', 'nocode', 'code_expired', 'code_bad', 'code_burnt', 'email', 'wait', 'throttled', 'mail']) expect(t(`err.${code}`)).not.toBe(`err.${code}`);
+        }
     });
 });

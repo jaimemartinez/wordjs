@@ -47,6 +47,7 @@
 
 const crypto = require('crypto');
 const { waDigits } = require('./phone');
+const mails = require('./consent-mail');
 
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -122,7 +123,6 @@ function maskEmail(email) {
 
 const fill = (text, vars) => String(text || '').replace(/\{(responsable|conferencia|correo)\}/g, (_, k) => vars[k] || '');
 const clean = (v, max = 200) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const isoUtc = (ms = Date.now()) => new Date(ms).toISOString();
 const serverTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } };
 
@@ -157,7 +157,7 @@ const policyBody = (s) => Object.fromEntries(POLICY_KEYS.map(k => [k, String(s[k
 const policyHashOf = (s) => sha256(canon(policyBody(s)));
 
 function createConsent(base) {
-    const { db, T, P, createIndex, createUniqueIndex } = base;
+    const { db, T, P, createIndex, createUniqueIndex, addColumnIfMissing } = base;
     T.consentSettings = `${P}consent_settings`;
     T.consentRequests = `${P}consent_requests`;
     T.consentEvents = `${P}consent_events`;
@@ -181,7 +181,10 @@ function createConsent(base) {
             'link_days INT',
             'health_purged_s INT',
             'updated_s INT',
+            'email_lang VARCHAR(8)',
         ]);
+        // 2.33.4: «Idioma de los correos» ('' / NULL = the site's language). Older installs get the column here.
+        if (addColumnIfMissing) await addColumnIfMissing(T.consentSettings, 'email_lang', 'VARCHAR(8)');
         await createUniqueIndex(`${P}uidx_consent_settings_conf`, T.consentSettings, 'conference_id');
         // The current state of each person (a projection of the log, for lists): mutable. The log is not.
         await db.createTable(T.consentRequests, [
@@ -335,8 +338,33 @@ function createConsent(base) {
             purge_days: intOr(r.purge_days, DEFAULTS.purge_days, 0, 3650),
             link_days: intOr(r.link_days, DEFAULTS.link_days, 1, 90),
             health_purged_at: r.health_purged_s ? isoUtc(Number(r.health_purged_s) * 1000) : null,
+            // «Idioma de los correos» (2.33.4): the e-mails, the copied message and the consent page start in it.
+            email_lang: mails.langOf(r.email_lang) || '',
+            site_lang: await siteLang(),
+            plugin_email_lang: await pluginLang(),
+            mail_lang: mails.langOf(r.email_lang) || await pluginLang(),
         };
     }
+    // The plugin's own default (owner: «en el plugin se configure en qué idioma se envían los correos de consentimiento
+    // by default»): the row conference_id = 0 of consent_settings (no conference has id 0), never set = the site's.
+    const PLUGIN_ROW = 0;
+    async function pluginLang() {
+        let r = null;
+        try { r = await db.get(`SELECT email_lang FROM ${T.consentSettings} WHERE conference_id = ?`, [PLUGIN_ROW]); } catch { r = null; }
+        return (r && mails.langOf(r.email_lang)) || await siteLang();
+    }
+    async function setPluginLang(lang) {
+        const v = lang ? String(lang).toLowerCase() : '';
+        const r = await db.run(`UPDATE ${T.consentSettings} SET email_lang = ?, updated_s = ? WHERE conference_id = ?`, [v, nowS(), PLUGIN_ROW]);
+        if (!r || !r.changes) await db.run(`INSERT INTO ${T.consentSettings} (conference_id, enabled, email_lang, updated_s) VALUES (?, 0, ?, ?)`, [PLUGIN_ROW, v, nowS()]);
+    }
+    /** The site's language (WPLANG, «es_ES» → es) when it is es / en / pt; else Spanish, the plugin's own. */
+    async function siteLang() {
+        let raw = '';
+        try { raw = D && D.siteLang ? await D.siteLang() : ''; } catch { raw = ''; }
+        return mails.langOf(raw) || 'es';
+    }
+    const mailLangOf = async (cid) => (await settingsOf(cid)).mail_lang;
     const isEnabled = async (cid) => {
         if (!await ensureReady()) return false;
         const r = await settingsRow(cid);
@@ -361,7 +389,9 @@ function createConsent(base) {
             text_image: txt('text_image', MAX_TEXT),
             purge_days: b.purge_days === undefined ? undefined : Number(b.purge_days),
             link_days: b.link_days === undefined ? undefined : Number(b.link_days),
+            email_lang: b.email_lang === undefined ? undefined : String(b.email_lang || '').trim().toLowerCase(),
         };
+        if (vals.email_lang && !mails.LANGS.includes(vals.email_lang)) throw httpError(400, 'Idioma de los correos inválido (es, en o pt).');
         if (vals.policy_url && !/^https?:\/\/[^\s<>"']+$/i.test(vals.policy_url)) throw httpError(400, 'La dirección de la política debe empezar por https://');
         if (vals.contact_email && !EMAIL_RE.test(vals.contact_email)) throw httpError(400, 'El correo de contacto no es válido.');
         if (vals.purge_days !== undefined && !(Number.isInteger(vals.purge_days) && vals.purge_days >= 0 && vals.purge_days <= 3650)) throw httpError(400, 'Los días para borrar los datos de salud deben ser un número entero entre 0 y 3650.');
@@ -438,47 +468,16 @@ function createConsent(base) {
         try { await D.mail(msg); return true; }
         catch (e) { console.warn('[conference-manager] consent e-mail not sent:', e && e.message); return false; }
     }
-    const shell = (title, inner) => `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:560px;margin:0 auto;color:#111827;line-height:1.55">`
-        + `<h2 style="margin:0 0 12px;font-size:20px">${esc(title)}</h2>${inner}</div>`;
-
+    // The three e-mails, in the conference's e-mail language (server/consent-mail.js, 2.33.4).
     async function mailLink(conf, email, link, name, days) {
-        const subject = `Autoriza el uso de tus datos · ${conf.name}`;
-        const text = `Hola${name ? ` ${name}` : ''}:\n\nTu coordinador te inscribió en «${conf.name}». Para confirmar la inscripción, lee la política de datos y da tu autorización en este enlace (vale ${days} días y se usa una sola vez):\n\n${link}\n\nSi no esperabas este correo, ignóralo.`;
-        const html = shell(subject, `<p>Hola${name ? ` ${esc(name)}` : ''}:</p><p>Tu coordinador te inscribió en «${esc(conf.name)}». Para confirmar la inscripción, lee la política de datos y da tu autorización:</p>`
-            + `<p><a href="${esc(link)}" style="display:inline-block;background:#111827;color:#fff;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:600">Revisar y autorizar</a></p>`
-            + `<p style="color:#6b7280;font-size:13px">El enlace vale ${days} días y se usa una sola vez. Si no esperabas este correo, ignóralo.</p>`);
-        return sendMail({ to: email, subject, text, html });
+        return sendMail({ to: email, ...mails.linkMail(await mailLangOf(conf.id), { conference: conf.name, name, link, days }) });
     }
     async function mailCode(conf, email, code) {
-        const subject = `Tu código de autorización: ${code}`;
-        const text = `Tu código para firmar la autorización de datos de «${conf.name}» es: ${code}\n\nVence en 10 minutos. No lo compartas con nadie: ni tu coordinador ni los organizadores te lo pedirán.`;
-        const html = shell('Tu código de autorización', `<p>Tu código para firmar la autorización de datos de «${esc(conf.name)}» es:</p>`
-            + `<p style="font-size:30px;font-weight:700;letter-spacing:6px;margin:8px 0">${esc(code)}</p>`
-            + `<p style="color:#6b7280;font-size:13px">Vence en 10 minutos. No lo compartas con nadie: ni tu coordinador ni los organizadores te lo pedirán.</p>`);
-        return sendMail({ to: email, subject, text, html });
+        return sendMail({ to: email, ...mails.codeMail(await mailLangOf(conf.id), { conference: conf.name, code }) });
     }
     async function mailConfirmation(conf, email, ev) {
-        const yes = (v) => (v ? 'Sí' : 'No');
-        const d = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
-        const subject = `Autorización registrada · ${conf.name}`;
-        const rows = [
-            ['Persona inscrita', d.subject.name],
-            ...(d.representative ? [['Representante legal', `${d.representative.name} (${d.representative.relationship})`]] : []),
-            ['Tratamiento de datos personales', yes(ev.general)],
-            ['Datos sensibles de salud', yes(ev.health)],
-            ['Uso de imagen', yes(ev.image)],
-            ['Política', `versión ${d.policy.version} · ${d.policy.url}`],
-            ...(d.policy.sha256 ? [['Huella de la versión de la política (SHA-256)', d.policy.sha256]] : []),
-            ['Fecha y hora (UTC)', ev.at_utc],
-            ['Huella del texto aceptado (SHA-256)', ev.text_sha256],
-        ];
-        const text = `Registramos tu autorización para «${conf.name}»:\n\n${rows.map(([k, v]) => `${k}: ${v}`).join('\n')}\n\nTexto que aceptaste:\n${d.text}\n\nPuedes consultar la política en ${d.policy.url}. Para revocar tu autorización o ejercer tus derechos, escribe a ${d.contact || 'los organizadores'}.`;
-        const html = shell(subject, `<p>Registramos tu autorización para «${esc(conf.name)}»:</p><table style="border-collapse:collapse;font-size:14px">`
-            + rows.map(([k, v]) => `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;vertical-align:top">${esc(k)}</td><td style="padding:4px 0;word-break:break-all">${esc(v)}</td></tr>`).join('')
-            + `</table><p style="margin-top:16px;font-weight:600">Texto que aceptaste</p><p style="white-space:pre-wrap;font-size:13px;color:#374151">${esc(d.text)}</p>`
-            + `<p>Política: <a href="${esc(d.policy.url)}">${esc(d.policy.url)}</a></p>`
-            + `<p style="color:#6b7280;font-size:13px">Para revocar tu autorización o ejercer tus derechos, escribe a ${esc(d.contact || 'los organizadores')}.</p>`);
-        return sendMail({ to: email, subject, text, html });
+        const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+        return sendMail({ to: email, ...mails.confirmationMail(await mailLangOf(conf.id), { conference: conf.name, ev, d }) });
     }
 
     // ── links ──
@@ -562,6 +561,7 @@ function createConsent(base) {
         return {
             state: now.state, link, email_masked: email ? maskEmail(email) : '', first_name: String(name).split(' ')[0] || '',
             conference: conf ? conf.name : '', policy_version: s.policy_version, policy_url: s.policy_url, link_days: s.link_days,
+            email_lang: s.mail_lang,
             phone: await phoneOf(ins, form),
             // The number wa.me wants: its stored country code, or the conference's default for an older national one.
             phone_wa: waDigits(await phoneOf(ins, form), conf && conf.phone_country) || '',
@@ -612,6 +612,8 @@ function createConsent(base) {
                 email_masked: req.email ? maskEmail(req.email) : '',
                 // 2.33.3: no e-mail on file — the page asks for one, and the code is sent there.
                 needs_email: !req.email,
+                // 2.33.4: the page starts in the conference's e-mail language (the person may switch).
+                lang: s.mail_lang,
                 minor, // true / false by «Edad»; null = the person says
                 policy: { url: s.policy_url, version: s.policy_version },
                 responsible: s.responsible || '',
@@ -836,6 +838,25 @@ function createConsent(base) {
                 if (!cid || !await conferenceOf(cid)) return res.status(404).json({ error: 'Conferencia no encontrada.' });
                 if (!await ensureReady()) return res.status(503).json({ error: MSG.unavailable });
                 res.json({ settings: await saveSettings(cid, req.body, httpError) });
+            } catch (e) { sendError(res, e); }
+        });
+        // GET / PUT /consent/defaults { email_lang } — the plugin-wide default e-mail language (2.33.4): '' = the site's.
+        http.route('get', '/consent/defaults', { auth: true }, async (req, res) => {
+            if (!await allow(req, res, 'settings', 'view')) return;
+            try {
+                if (!await ensureReady()) return res.status(503).json({ error: MSG.unavailable });
+                const r = await db.get(`SELECT email_lang FROM ${T.consentSettings} WHERE conference_id = ?`, [PLUGIN_ROW]);
+                res.json({ email_lang: (r && mails.langOf(r.email_lang)) || '', site_lang: await siteLang(), effective: await pluginLang() });
+            } catch (e) { sendError(res, e); }
+        });
+        http.route('put', '/consent/defaults', { auth: true }, async (req, res) => {
+            if (!await allow(req, res, 'settings', 'manage')) return;
+            try {
+                if (!await ensureReady()) return res.status(503).json({ error: MSG.unavailable });
+                const v = String(((req.body || {}).email_lang) || '').trim().toLowerCase();
+                if (v && !mails.LANGS.includes(v)) return res.status(400).json({ error: 'Idioma de los correos inválido (es, en o pt).' });
+                await setPluginLang(v);
+                res.json({ email_lang: v, site_lang: await siteLang(), effective: await pluginLang() });
             } catch (e) { sendError(res, e); }
         });
         // POST /consent/purge { conference_id } → { purged } — runs the due purge now (settings:manage).
