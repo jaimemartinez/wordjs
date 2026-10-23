@@ -1,0 +1,8 @@
+{
+  "plugins/conference-manager/client/admin/BadgeEditor.tsx": 1,
+  "plugins/conference-manager/client/admin/MealsPage.tsx": 1,
+  "plugins/conference-manager/client/admin/RegisterPaymentSheet.tsx": 1,
+  "plugins/mail-server/client/admin/Composer.tsx": 1,
+  "plugins/restaurant-menu/client/admin/qr.ts": 1,
+  "plugins/restaurant-menu/client/admin/v2tabs.tsx": 1
+}
