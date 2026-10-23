@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.1] - 2026-10-23
+
 ### Security
 
 - **body-parser 1.20.9 (gateway, backend) and 2.4.0 (backend, via the MCP SDK)** for [GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828) (high): a compressed request body followed by trailing bytes could tie up the process. Lockfile-only change.
