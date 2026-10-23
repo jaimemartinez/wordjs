@@ -20,10 +20,10 @@ import { scanRepository, scanText, countByFile } from "./helpers/nativeDialogSca
  * useModal() in its own PR, and that PR REMOVES its entries here (or lowers the count, file by file). This
  * list only shrinks: the test fails on a file not listed, on a count above the one listed, and on a count
  * BELOW it (a fixed call must also be taken off the list, so it cannot quietly come back).
+ *
+ * Empty since conference-manager 2.31.1: no plugin calls a native dialog. Nothing is ever added here.
  */
-const PENDING_PLUGIN_FILES: Record<string, number> = {
-    "marketplace/plugins/conference-manager/client/admin/BadgeEditor.tsx": 1,
-};
+const PENDING_PLUGIN_FILES: Record<string, number> = {};
 
 describe("the scanner (its own controls)", () => {
     const calls = (code: string, file = "x.tsx") => scanText(code, file).length;
