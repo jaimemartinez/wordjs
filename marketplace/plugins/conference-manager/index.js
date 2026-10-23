@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.0',
+    version: '2.36.1',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -8418,11 +8418,15 @@ exports.init = async function (wordjs) {
 
             // `features.fee_payments` (2.18.0) tells a core portal that «Pagos de cuotas» exists here (an older
             // plugin sends no flag and the portal keeps its previous payment flow); `fees` = the badge counters.
-            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) } });
+            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, conference_name: await conferenceNameOf(location.conference_id), capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) } });
         } catch (e) { sendError(res, e); }
     });
 
     // 4. Get Current Location Info
+    // The portal's header names the conference (2.36.1): its name, or '' when it is gone.
+    const conferenceNameOf = async (cid) => {
+        try { const c = await db.get(`SELECT name FROM ${T.conferences} WHERE id = ?`, [cid]); return (c && c.name) || ''; } catch (e) { return ''; }
+    };
     http.route('get', '/portal/me', async (req, res) => {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
@@ -8435,7 +8439,7 @@ exports.init = async function (wordjs) {
         const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until,
             lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes, ...safe } = location;
         try {
-            res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
+            res.json({ ...safe, conference_name: await conferenceNameOf(location.conference_id), inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
         } catch (e) { sendError(res, e); }
     });
 

@@ -913,3 +913,13 @@ test('the meal group is offered to the designer as a data field', async () => {
     const fields = ok(await w.p.call('get', `/badges/config?conference_id=${w.cid}`)).available_fields;
     assert.ok(fields.some((f: any) => f.key === '@meal_group' && f.builtin));
 });
+
+test('the portal session names its conference (the header shows it after a reload too)', async () => {
+    const w = await world();
+    const code = w.p.one(`SELECT code FROM ${T('locations')} WHERE id = ?`, w.norte).code;
+    const login = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: w.norte, code } }));
+    assert.strictEqual(login.location.conference_name, 'Congreso Nacional de Jóvenes');
+    const me = ok(await portal(w.p, 'get', '/portal/me', login.token));
+    assert.strictEqual(me.conference_name, 'Congreso Nacional de Jóvenes');
+    assert.strictEqual(me.code, undefined, 'the access code never leaves');
+});

@@ -132,6 +132,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Changed
 
+- **conference-manager 2.36.1: a clearer coordinators' portal.**
+  - **Sign-in**:
+    - With a single published conference, it is already chosen.
+    - The device remembers the conference and the locality last used to sign in. It never stores the access
+      code, and the code field is emptied after signing in.
+    - The code opens a number pad, has a show/hide button, and says where to get it.
+    - The card shows the chosen conference.
+  - **Header**: the sticky bar names the conference and the locality, so the context stays in view after the
+    summary scrolls away.
+  - **Summary**: tiles for registered, paid, unpaid and awaiting validation. While the conference asks for it, a
+    tile also counts who has not authorized the processing of their data. Each tile opens the list on its filter.
+  - **Tools**: «Herramientas de la localidad» folds the badge tools and the paper consent behind one row, so on a
+    phone the list comes first. The device remembers whether it was left open.
+  - **Fix**: the cards' background glow no longer lets a card slide sideways when a control near its edge is
+    focused, which cut off the login form on phones.
 - **conference-manager 2.33.4: the consent e-mails, page and copied message in the e-mail language.**
   - A new plugin setting, **«Idioma de los correos de consentimiento»** (Autorizaciones, for all conferences:
     Español, English or Português), starts as the site's language (WPLANG). A conference can choose its own. The
