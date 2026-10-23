@@ -1,9 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+
+/**
+ * One translated sentence with styled parts in it: `{name}` in the text is replaced by parts[name]. Each
+ * language orders and punctuates the whole sentence itself; gluing fragments together left "in the every
+ * deployment mode" and "listenerabove" (FALLOS 137).
+ */
+export function withParts(text: string, parts: Record<string, ReactNode>): ReactNode[] {
+    return text.split(/(\{\w+\})/).map((piece, i) => {
+        const name = /^\{(\w+)\}$/.exec(piece)?.[1];
+        return <Fragment key={i}>{name && name in parts ? parts[name] : piece}</Fragment>;
+    });
+}
 
 interface AcmeConfig {
     enabled: boolean;
@@ -196,11 +208,15 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
             {/* HTTP-01 reachability note */}
             <div className="flex items-start gap-3 p-4 bg-blue-50/60 rounded-xl border border-blue-100 text-sm text-blue-800">
                 <i className="fa-solid fa-circle-info mt-0.5"></i>
-                <p>
-                    {t('ssl.auto.note.runsIn')} <span className="font-semibold">{t('ssl.auto.note.splitDeployment')}</span> {t('ssl.auto.note.usesThe')}
-                    <span className="font-semibold"> HTTP-01</span> {t('ssl.auto.note.challengeSo')}
-                    <span className="font-mono"> http://&lt;domain&gt;/.well-known/acme-challenge/</span> {t('ssl.auto.note.reachable')} <span className="font-semibold">{t('ssl.auto.port80')}</span>
-                    {t('ssl.auto.note.proxy')} <span className="font-semibold">DNS</span> {t('ssl.auto.note.or')} <span className="font-semibold">{t('ssl.auto.note.customUpload')}</span> {t('ssl.auto.note.flowsAbove')}
+                <p data-testid="acme-http01-note">
+                    {withParts(t('ssl.auto.note.http01'), {
+                        modes: <span className="font-semibold">{t('ssl.auto.note.everyMode')}</span>,
+                        challenge: <span className="font-semibold">HTTP-01</span>,
+                        path: <span className="font-mono break-all">http://&lt;domain&gt;/.well-known/acme-challenge/</span>,
+                        port80: <span className="font-semibold">{t('ssl.auto.port80')}</span>,
+                        dns: <span className="font-semibold">DNS</span>,
+                        custom: <span className="font-semibold">{t('ssl.auto.note.customUpload')}</span>,
+                    })}
                 </p>
             </div>
 
