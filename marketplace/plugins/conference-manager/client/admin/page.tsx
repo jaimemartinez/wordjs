@@ -49,6 +49,9 @@ import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
 import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
 import { DateField } from "../lib/DateField";
+import { PhoneInput } from "../lib/PhoneInput";
+import { PhoneCountrySetting } from "./PhoneCountrySetting";
+import { isPhoneField } from "../lib/phone";
 import { HEALTH_FIELD, healthAnswerError, healthAnswerText, healthPayload, isHealthField, sameHealthAnswer } from "../lib/health";
 // Inscription tables + «Pagos de cuotas» (2.18.0): browser-side search / filters / paging, the person sheet
 // (⋮), split fee payments.
@@ -68,6 +71,7 @@ import TransferSheet from "./TransferSheet";
 import FeePaymentsPage from "./FeePaymentsPage";
 import { money as feeMoney } from "./FeeBits";
 import LodgingPlan from "./LodgingPlan";
+import { Select } from "../lib/Select";
 
 // Register plugin translations
 registerTranslations(translations);
@@ -1093,20 +1097,20 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div className="space-y-1.5">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('excel.filter.location') || 'Localidad'}</label>
-                                <select value={locationId} onChange={e => setLocationId(e.target.value)} className={input}>
+                                <Select value={locationId} onChange={e => setLocationId(e.target.value)} className={input}>
                                     <option value="">{t('excel.filter.all') || 'Todas'}</option>
                                     {locs.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
-                                </select>
+                                </Select>
                             </div>
                             <div className="space-y-1.5">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('excel.filter.payment') || 'Estado de pago'}</label>
-                                <select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)} className={input}>
+                                <Select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)} className={input}>
                                     <option value="">{t('excel.filter.all') || 'Todas'}</option>
                                     {/* The roster pill's words (2.18.0): Pagado / Abono / Sin pagar. */}
                                     <option value="paid">{tx('fees.pill.paid', 'Pagado')}</option>
                                     <option value="partial">{tx('fees.pill.partial', 'Abono')}</option>
                                     <option value="unpaid">{tx('fees.pill.unpaid', 'Sin pagar')}</option>
-                                </select>
+                                </Select>
                             </div>
                             <label className="flex items-center gap-3 sm:mt-6 px-4 py-2.5 rounded-xl border-2 border-gray-100 cursor-pointer">
                                 <input type="checkbox" checked={excludeCancelled} onChange={e => setExcludeCancelled(e.target.checked)} className="accent-blue-600 w-4 h-4" />
@@ -1601,7 +1605,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                     <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1 mb-1.5">
                                         {t('location') || 'Localidad'} <span className="text-rose-500">*</span>
                                     </label>
-                                    <select
+                                    <Select
                                         data-field="location_id" aria-invalid={fe.invalid('location_id')} aria-describedby={fe.describedBy('location_id')}
                                         required
                                         className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
@@ -1612,7 +1616,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                         {confLocations.map((loc: any) => (
                                             <option key={loc.id} value={loc.id}>{loc.name}</option>
                                         ))}
-                                    </select>
+                                    </Select>
                                     {(() => {
                                         // Moving someone who holds a bed OUT of a submitted / validated arrangement, or
                                         // INTO one with the bed they keep (2.17.0): an administration adjustment — and
@@ -1688,8 +1692,14 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                     </span>
                                                     {switchLabel(tx, isSwitchOn(formData[field.name]))}
                                                 </button>
+                                            ) : isPhoneField(field) ? (
+                                                // 2.33.2: the country's calling code next to the number; E.164 is sent.
+                                                <PhoneInput dataField={field.name} label={field.label} lang={language} defaultCountry={excelConf?.phone_country}
+                                                    invalid={fe.invalid(field.name)} describedBy={fe.describedBy(field.name)}
+                                                    selectClassName="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm" inputClassName="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                                    value={formData[field.name] ?? ''} onChange={v => handleFormChange(field.name, v)} />
                                             ) : field.type === 'select' ? (
-                                                <select
+                                                <Select
                                                     data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
@@ -1700,7 +1710,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                     {field.options?.split(',').map(opt => (
                                                         <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>
                                                     ))}
-                                                </select>
+                                                </Select>
                                             ) : field.type === 'date' ? (
                                                 <DateField dataField={field.name} required={!!field.is_required} ariaLabel={field.label}
                                                     value={formData[field.name] ?? ''} onChange={v => handleFormChange(field.name, v)} />
@@ -2602,14 +2612,14 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2 lg:ml-auto">
-                                    <select
+                                    <Select
                                         value={allotTarget[hotel.id] || ''}
                                         onChange={e => setAllotTarget({ ...allotTarget, [hotel.id]: e.target.value })}
                                         className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-xs"
                                     >
                                         <option value="">{t('allot.pool') || 'Sin asignar (pool)'}</option>
                                         {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
-                                    </select>
+                                    </Select>
                                     <button
                                         type="button"
                                         disabled={allotting === hotel.id}
@@ -2657,7 +2667,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     className="flex flex-wrap items-center gap-2 lg:ml-auto"
                                     {...fe.form(e => { e.preventDefault(); giveBeds(hotel); })}
                                 >
-                                    <select
+                                    <Select
                                         value={bedsTarget[hotel.id] || ''}
                                         onChange={e => setBedsTarget({ ...bedsTarget, [hotel.id]: e.target.value })}
                                         aria-label={tx('beds.give.location', 'Localidad')}
@@ -2665,7 +2675,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     >
                                         <option value="">{tx('beds.give.location.pick', 'Elige localidad…')}</option>
                                         {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
-                                    </select>
+                                    </Select>
                                     <input
                                         data-field="beds_count" aria-invalid={fe.invalid('beds_count')} aria-describedby={fe.describedBy('beds_count')}
                                         type="number"
@@ -3197,16 +3207,16 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
                                 <div className="sm:col-span-1">
                                     <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Campo</label>
-                                    <select value={form.field_name} onChange={e => setForm({ ...form, field_name: e.target.value, operator: e.target.value ? (form.operator === 'any' ? 'eq' : form.operator) : 'any' })} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm">
+                                    <Select value={form.field_name} onChange={e => setForm({ ...form, field_name: e.target.value, operator: e.target.value ? (form.operator === 'any' ? 'eq' : form.operator) : 'any' })} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm">
                                         <option value="">(Siempre)</option>
                                         {fields.map(f => <option key={f.id} value={f.name}>{f.label}</option>)}
-                                    </select>
+                                    </Select>
                                 </div>
                                 <div className="sm:col-span-1">
                                     <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Condición</label>
-                                    <select value={form.operator} onChange={e => setForm({ ...form, operator: e.target.value })} disabled={!form.field_name} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm disabled:opacity-50">
+                                    <Select value={form.operator} onChange={e => setForm({ ...form, operator: e.target.value })} disabled={!form.field_name} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm disabled:opacity-50">
                                         {FEE_OPERATORS.filter(o => form.field_name ? o.value !== 'any' : o.value === 'any').map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                                    </select>
+                                    </Select>
                                 </div>
                                 <div className="sm:col-span-1">
                                     <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Valor</label>
@@ -3637,6 +3647,11 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
             <ReadOnlyNotice section="settings" />
+            {/* «Indicativo por defecto» (2.33.2), while the form has a phone field. */}
+            {conference && fields.some(isPhoneField) && (
+                <PhoneCountrySetting conference={conference} language={language} canManage={canManage}
+                    onSaved={(iso) => setConference({ ...conference, phone_country: iso })} />
+            )}
             {/* Premium Publisher Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 max-sm:p-6 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
@@ -4197,12 +4212,12 @@ function PredicateEditor({ fields, value, onChange, label }: any) {
             {preds.length === 0 && <p className="text-[10px] text-gray-400 italic px-1">Sin condición (aplica a todos).</p>}
             {preds.map((p: any, i: number) => (
                 <div key={i} className="flex items-center gap-2">
-                    <select className="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white" value={p.field} onChange={e => set(i, { field: e.target.value })}>
+                    <Select className="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white" value={p.field} onChange={e => set(i, { field: e.target.value })}>
                         {fields.map((f: any) => <option key={f.name} value={f.name}>{f.label}</option>)}
-                    </select>
-                    <select className="border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white" value={p.op} onChange={e => set(i, { op: e.target.value })}>
+                    </Select>
+                    <Select className="border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white" value={p.op} onChange={e => set(i, { op: e.target.value })}>
                         {PRED_OPS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
-                    </select>
+                    </Select>
                     {!opNeedsNoValue(p.op) && <input className="w-20 border border-gray-200 rounded-lg px-2 py-2 text-xs" value={p.value || ''} onChange={e => set(i, { value: e.target.value })} placeholder="valor" />}
                     <button type="button" onClick={() => remove(i)} className="text-gray-300 hover:text-rose-500 px-1"><i className="fa-solid fa-xmark"></i></button>
                 </div>
@@ -4475,14 +4490,14 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
     const fieldSelect = (
         <div className="space-y-1.5">
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.field') || 'Campo'}</label>
-            <select
+            <Select
                 className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
                 value={ruleForm.config}
                 onChange={e => setRuleForm({ ...ruleForm, config: e.target.value })}
             >
                 <option value="">{t('select.field') || 'Seleccionar...'}</option>
                 {fields.map(f => (<option key={f.name} value={f.name}>{f.label}</option>))}
-            </select>
+            </Select>
         </div>
     );
 
@@ -4750,13 +4765,13 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
 
                             <div className="space-y-1.5">
                                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Tipo de regla</label>
-                                <select
+                                <Select
                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
                                     value={ruleForm.type}
                                     onChange={e => setRuleForm({ ...ruleForm, type: e.target.value as any })}
                                 >
                                     {RULE_TYPES.map(rt => <option key={rt.v} value={rt.v}>{rt.label}</option>)}
-                                </select>
+                                </Select>
                                 <p className="text-[10px] text-gray-400 italic px-1">{ruleTypeMeta(ruleForm.type as string).desc}</p>
                             </div>
 
@@ -4801,11 +4816,11 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                                 </div>
                                 <div className="space-y-1.5">
                                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Cumplimiento</label>
-                                    <select className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                    <Select className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
                                         value={ruleForm.hard ? '1' : '0'} onChange={e => setRuleForm({ ...ruleForm, hard: e.target.value === '1' ? 1 : 0 })}>
                                         <option value="0">Preferente</option>
                                         <option value="1">Obligatoria</option>
-                                    </select>
+                                    </Select>
                                 </div>
                             </div>
                             <p id="rule-priority-help" className="text-[11px] text-gray-500 px-1">{tx('rules.priority.help', 'Prioridad: el número MÁS ALTO se aplica primero (una regla de 90 manda sobre una de 10) y dos reglas no pueden tener el mismo número. «Obligatoria» nunca se incumple; «preferente» se intenta y, si no se logra, se reporta.')}</p>
@@ -5584,12 +5599,12 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                 return (
                                                     <div className="space-y-1 min-w-0">
                                                         <label htmlFor={`own-${which}-${loc.id}`} className="block text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">{isOpens ? (t('lodging.dates.opens') || 'Apertura') : (t('lodging.dates.closes') || 'Cierre')}</label>
-                                                        <select id={`own-${which}-${loc.id}`} value={mode} className={selectCls}
+                                                        <Select id={`own-${which}-${loc.id}`} value={mode} className={selectCls}
                                                             onChange={ev => set(isOpens ? { opensMode: ev.target.value as any } : { closesMode: ev.target.value as any })}>
                                                             <option value="general">{(t('lodging.dates.general') || 'La general ({date})').replace('{date}', gen ? fmtDeadline(gen) : (isOpens ? (t('lodging.dates.opens.none') || 'sin esperar') : (t('lodging.dates.closes.none') || 'sin cierre')))}</option>
                                                             <option value="date">{t('lodging.dates.other') || 'Otra fecha'}</option>
                                                             <option value="none">{isOpens ? (t('lodging.dates.opens.nowait') || 'Sin esperar') : (t('lodging.dates.closes.never') || 'Sin cierre')}</option>
-                                                        </select>
+                                                        </Select>
                                                         {mode === 'date' && (
                                                             <DateField value={day} ariaLabel={`${isOpens ? (t('lodging.dates.opens') || 'Apertura') : (t('lodging.dates.closes') || 'Cierre')} · ${loc.name}`}
                                                                 onChange={v => set(isOpens ? { opens: v } : { closes: v })} />

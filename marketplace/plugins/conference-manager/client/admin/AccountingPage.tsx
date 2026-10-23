@@ -54,6 +54,7 @@ import { peopleLabel } from "../lib/feePayments";
 import { TransferSheet } from "./TransferSheet";
 import { useTx } from "./MealScanner";
 import { factsOf, kpiValueFit } from "./FeeBits";
+import { Select } from "../lib/Select";
 
 const money = (n: unknown) => { const v = Number(n) || 0; return (v < 0 ? '-$' : '$') + fmtMoney(Math.abs(v)); };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -240,21 +241,21 @@ export default function AccountingPage({ conferenceId, slug, onOpenFees }: { con
                 <div className="space-y-1"><label htmlFor="acc-from" className={labelCls}>{t('accounting.from') || 'Desde'}</label><DateField id="acc-from" value={filter.from} max={filter.to || undefined} onChange={v => setFilter({ ...filter, from: v })} /></div>
                 <div className="space-y-1"><label htmlFor="acc-to" className={labelCls}>{t('accounting.to') || 'Hasta'}</label><DateField id="acc-to" value={filter.to} min={filter.from || undefined} onChange={v => setFilter({ ...filter, to: v })} /></div>
                 <div className="space-y-1"><label htmlFor="acc-kind" className={labelCls}>{t('accounting.kind') || 'Tipo'}</label>
-                    <select id="acc-kind" className={inputCls} value={filter.kind} onChange={e => setFilter({ ...filter, kind: e.target.value })}>
+                    <Select id="acc-kind" className={inputCls} value={filter.kind} onChange={e => setFilter({ ...filter, kind: e.target.value })}>
                         <option value="">{t('excel.filter.all') || 'Todas'}</option><option value="income">{t('accounting.income') || 'Ingresos'}</option><option value="expense">{t('accounting.expense') || 'Egresos'}</option>
-                    </select></div>
+                    </Select></div>
                 <div className="space-y-1"><label htmlFor="acc-cat" className={labelCls}>{t('accounting.category') || 'Categoría'}</label>
-                    <select id="acc-cat" className={inputCls} value={filter.category} onChange={e => setFilter({ ...filter, category: e.target.value })}>
+                    <Select id="acc-cat" className={inputCls} value={filter.category} onChange={e => setFilter({ ...filter, category: e.target.value })}>
                         <option value="">{t('excel.filter.all') || 'Todas'}</option>{allCategories.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select></div>
+                    </Select></div>
                 <div className="space-y-1"><label htmlFor="acc-src" className={labelCls}>{t('accounting.source') || 'Origen'}</label>
-                    <select id="acc-src" className={inputCls} value={filter.source} onChange={e => setFilter({ ...filter, source: e.target.value })}>
+                    <Select id="acc-src" className={inputCls} value={filter.source} onChange={e => setFilter({ ...filter, source: e.target.value })}>
                         <option value="">{t('excel.filter.all') || 'Todas'}</option><option value="manual">{sourceLabel('manual')}</option><option value="inscription">{sourceLabel('inscription')}</option><option value="transport">{sourceLabel('transport')}</option>
-                    </select></div>
+                    </Select></div>
                 <div className="space-y-1"><label htmlFor="acc-loc" className={labelCls}>{tx('location', 'Localidad')}</label>
-                    <select id="acc-loc" className={inputCls} value={filter.location} onChange={e => setFilter({ ...filter, location: e.target.value })}>
+                    <Select id="acc-loc" className={inputCls} value={filter.location} onChange={e => setFilter({ ...filter, location: e.target.value })}>
                         <option value="">{t('excel.filter.all') || 'Todas'}</option>{locations.map((l: any) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}<option value="none">{tx('no.location', 'Sin localidad')}</option>
-                    </select></div>
+                    </Select></div>
                 <div className="space-y-1" data-ledger-search=""><label htmlFor="acc-q" className={labelCls}>{t('accounting.search') || 'Buscar'}</label><input id="acc-q" className={inputCls} value={filter.search} onChange={e => setFilter({ ...filter, search: e.target.value })} placeholder={t('accounting.search.placeholder') || 'Descripción, referencia, participante…'} /></div>
                 {filtered && <button onClick={() => setFilter({ from: '', to: '', kind: '', category: '', source: '', search: '', location: '' })} className="min-h-[44px] text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-gray-700 px-3" data-ledger-clear=""><i className="fa-solid fa-xmark mr-1"></i>{t('accounting.clear.filters') || 'Quitar filtros'}</button>}
             </div>
@@ -401,9 +402,9 @@ export default function AccountingPage({ conferenceId, slug, onOpenFees }: { con
                                 <datalist id="acc-categories">{formCategories.map((c: string) => <option key={c} value={c} />)}</datalist></div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1.5"><label htmlFor="acc-method" className={labelCls}>{tx('payment.method', 'Forma de pago')}</label>
-                                    <select id="acc-method" className={inputCls} value={form.method} onChange={e => setForm({ ...form, method: e.target.value })}>
+                                    <Select id="acc-method" className={inputCls} value={form.method} onChange={e => setForm({ ...form, method: e.target.value })}>
                                         <option value="">—</option>{PAYMENT_METHODS.map(m => <option key={m} value={m}>{paymentMethodLabel(tx, m)}</option>)}
-                                    </select></div>
+                                    </Select></div>
                                 <div className="space-y-1.5"><label htmlFor="acc-ref" className={labelCls}>{t('reference') || 'Referencia (opcional)'}</label>
                                     <input id="acc-ref" className={inputCls} value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} /></div>
                             </div>

@@ -166,10 +166,10 @@ describe("the pager's size select starts with its visible word and says what it 
         expect(pagerSizeLabel("pagos")).toBe("Mostrar pagos por página");
         const tr = Array.from({ length: 25 }, (_, i) => parseTransfer(T(i + 1, { status: "pending" }))!);
         const pagos = html(<FeeTransfers transfers={tr} nameOf={nameOf} onOpen={() => {}} personId={null} onClearPerson={() => {}} onRegister={() => {}} canRecord />);
-        expect(pagos).toContain('aria-label="Mostrar pagos por página"');
+        expect(pagos).toContain('aria-label="Mostrar pagos por página: 20"');
         expect(pagos).not.toContain("Personas por página");
         const many = Array.from({ length: 25 }, (_, i) => ({ ...people[0], id: i + 1 }));
-        expect(html(<ParticipantList people={many} fields={fields} onOpen={() => {}} />)).toContain('aria-label="Mostrar participantes por página"');
+        expect(html(<ParticipantList people={many} fields={fields} onOpen={() => {}} />)).toContain('aria-label="Mostrar participantes por página: ');
     });
 });
 

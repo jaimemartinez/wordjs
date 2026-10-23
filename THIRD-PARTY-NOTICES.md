@@ -47,6 +47,7 @@ with its license next to it.
 |---|---|---|---|
 | `jsQR` 1.4.0 (`dist/jsQR.js` of the npm package `jsqr`) | `Apache-2.0` | `marketplace/plugins/conference-manager/client/lib/vendor/jsQR.js` (license: `jsQR.LICENSE.txt` beside it) | The QR reader of the meal scanner on phones whose browser has no `BarcodeDetector` for QR (iPhone Safari). Bundled into the plugin's admin script. |
 | Badge typefaces: Montserrat, Poppins, Lato, Raleway, Open Sans, Roboto, Nunito, Oswald, Bebas Neue, Playfair Display, Merriweather, Lora, Dancing Script (static TrueType files, unmodified) | `OFL-1.1` | `marketplace/plugins/conference-manager/fonts/` (one base64 module per face; copyright lines in `fonts/README.md`, licence in `fonts/OFL.txt`) | The free-form badge designer (2.29.0): drawn by the browser and embedded in the badge PDFs. |
+| Country flags of `flag-icons` 7.2.3 (the `flags/4x3/*.svg` of the npm package, whitespace and comments collapsed, nothing else changed) | `MIT` | `marketplace/plugins/conference-manager/server/flags.js` (license: `flags.LICENSE.txt` beside it, and in the file's header) | The phone country selector (2.33.2): Windows has no flag emoji. Served in batches by the plugin's `GET /public/flags`. |
 
 ## Network-copyleft
 

@@ -37,10 +37,12 @@ const { createMealPriority } = require('./server/meal-priority');
 // «Autorización de datos» (2.33.0): each person's consent, signed with a code sent to their e-mail.
 const { createConsent } = require('./server/consent');
 const { docFieldsOf: selfDocFieldsOf } = require('./server/selfpage');
+// Phone numbers with their country (2.33.2): E.164 on write, the conference's default country for national numbers.
+const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.33.1',
+    version: '2.33.2',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -669,12 +671,20 @@ exports.init = async function (wordjs) {
     // Dynamic-field canonicalisation. ONE function for every write path and for /public/quote.
     // Returns the canonical STRING to store, '' for "empty", or undefined when the key was absent.
     // Throws HttpError(400) for a value that cannot be canonicalised.
-    function canonicalFieldValue(field, raw) {
+    function canonicalFieldValue(field, raw, opts = {}) {
         if (raw === undefined) return undefined;
         if (raw === null) return '';
         if (typeof raw === 'object' || typeof raw === 'function') throw httpError(400, `El campo «${field.label || field.name}» tiene un formato inválido.`);
         const s = String(raw).trim();
         if (s === '') return '';
+        // A phone (role 'phone' or type 'tel', 2.33.2) is stored in E.164: «+» / «00» keep their country, a national
+        // number takes the conference's default country (opts.phoneCountry) and loses its leading «0».
+        if (field.role === 'phone' || field.type === 'tel') {
+            const e164 = phoneMod.toE164(s, opts.phoneCountry);
+            if (!e164 && opts.lenientPhone) return s;
+            if (!e164) throw httpError(400, `El campo «${field.label || field.name}» debe ser un número de teléfono válido (con su indicativo de país).`);
+            return e164;
+        }
         if (field.type === 'number') {
             const canon = canonicalNumber(s);   // textual: "30.0"→"30", "0030"→"30", "12.50"→"12.5"; 20 digits stay 20 digits
             if (canon === null) throw httpError(400, `El campo «${field.label || field.name}» debe ser un número.`);
@@ -697,13 +707,13 @@ exports.init = async function (wordjs) {
     // Apply canonicalisation to a body over the DEFINED fields of a conference. Only defined, writable
     // field names are taken from the body (unknown keys and reserved columns are ignored). Iterates the
     // defined fields, never the body keys, so a 50 000-key body costs O(fields).
-    function canonicalFieldValues(confFields, body) {
+    function canonicalFieldValues(confFields, body, opts = {}) {
         const src = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
         const out = {};
         for (const f of confFields) {
             if (!isFieldColumn(f.name)) continue;
             const raw = Object.prototype.hasOwnProperty.call(src, f.name) ? src[f.name] : undefined;
-            const v = canonicalFieldValue(f, raw);
+            const v = canonicalFieldValue(f, raw, opts);
             if (v !== undefined) out[f.name] = v;
         }
         return out;
@@ -731,6 +741,8 @@ exports.init = async function (wordjs) {
         }
     }
     const FIELD_COLUMNS_SQL = `SELECT name, label, type, options, is_required, is_unique, role FROM ${T.fields} WHERE conference_id = ?`;
+    // The default country of a conference's phone numbers (2.33.2; Campos › «Indicativo por defecto»).
+    const phoneCountryOf = (conf) => (conf && phoneMod.isCountry(conf.phone_country) ? String(conf.phone_country).toUpperCase() : phoneMod.DEFAULT_COUNTRY);
 
     // Resolve the admin-supplied location for an inscription. `location_id` (preferred) must belong to
     // the conference; a legacy caller may still send the `location` NAME. Returns { id, name } or null
@@ -915,6 +927,8 @@ exports.init = async function (wordjs) {
         // DATETIME) keeps a bare date bare on every driver.
         await addColumnIfMissing(T.conferences, 'lodging_opens', 'TEXT');
         await addColumnIfMissing(T.conferences, 'lodging_tz', 'TEXT');
+        // 2.33.2: the default country (ISO 3166 alpha-2) of the conference's phone numbers; NULL = CO.
+        await addColumnIfMissing(T.conferences, 'phone_country', 'TEXT');
         await addColumnIfMissing(T.locations, 'lodging_opens', 'TEXT');
         await addColumnIfMissing(T.locations, 'lodging_closes', 'TEXT');
         await addColumnIfMissing(T.locations, 'lodging_order', 'INT');
@@ -2421,7 +2435,7 @@ exports.init = async function (wordjs) {
     http.route('put', '/:id', { auth: true }, async (req, res) => {
         // Only the lodging dates (the «fechas» of Localidades) → locations:manage suffices too.
         const LODGING_DATE_KEYS = ['lodging_opens', 'lodging_deadline', 'lodging_tz'];
-        const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', ...LODGING_DATE_KEYS].filter(k => (req.body || {})[k] !== undefined);
+        const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', 'phone_country', ...LODGING_DATE_KEYS].filter(k => (req.body || {})[k] !== undefined);
         const datesOnly = editKeys.length > 0 && editKeys.every(k => LODGING_DATE_KEYS.includes(k));
         if (!await (datesOnly ? allowAny(req, res, [['settings', 'manage'], ['locations', 'manage']]) : allow(req, res, 'settings', 'manage'))) return;
         const { name, slug, date_start, date_end, fee_default, description, status, lodging_opens, lodging_deadline, lodging_tz } = req.body;
@@ -2466,6 +2480,13 @@ exports.init = async function (wordjs) {
                 if (lodging_deadline !== undefined) { sets.push('lodging_deadline = ?'); params.push(closes); }
             }
             if (lodging_tz !== undefined) { sets.push('lodging_tz = ?'); params.push(tz); }
+            // «Indicativo por defecto» (2.33.2): the country national phone numbers belong to.
+            const phoneCountry = (req.body || {}).phone_country;
+            if (phoneCountry !== undefined) {
+                const iso = String(phoneCountry || '').trim().toUpperCase();
+                if (!phoneMod.isCountry(iso)) return res.status(400).json({ error: 'País inválido para el indicativo por defecto.' });
+                sets.push('phone_country = ?'); params.push(iso);
+            }
             if (status !== undefined) {
                 if (!CONFERENCE_STATUSES.has(status)) return res.status(400).json({ error: 'Estado inválido (draft, active o archived).' });
                 sets.push('status = ?'); params.push(status);
@@ -2935,7 +2956,8 @@ exports.init = async function (wordjs) {
             const conf = await db.get(`SELECT fee_default, is_form_published FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf || !conf.is_form_published) return res.status(403).json({ error: 'Formulario no disponible.' });
             const confFields = await db.all(FIELD_COLUMNS_SQL, [conference_id]);
-            const vals = canonicalFieldValues(confFields, fields);
+            // A phone still being typed never fails a quote (phones do not price).
+            const vals = canonicalFieldValues(confFields, fields, { lenientPhone: true });
             const total = await computeFee(conference_id, vals, conf.fee_default);
             res.json({ total });
         } catch (e) { sendError(res, e); }
@@ -2989,14 +3011,14 @@ exports.init = async function (wordjs) {
         if (!confId || !Number.isFinite(confId)) return res.status(400).json({ error: 'Missing or invalid conference_id' });
 
         try {
-            const conf = await db.get(`SELECT fee_default FROM ${T.conferences} WHERE id = ?`, [confId]);
+            const conf = await db.get(`SELECT fee_default, phone_country FROM ${T.conferences} WHERE id = ?`, [confId]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
 
             // The form is the source of truth: write each DEFINED field's canonical value into its own
             // column. Values for keys that aren't defined (writable) fields are ignored.
             const confFields = await db.all(FIELD_COLUMNS_SQL, [confId]);
             const values = { conference_id: confId };
-            Object.assign(values, canonicalFieldValues(confFields, fieldValues));
+            Object.assign(values, canonicalFieldValues(confFields, fieldValues, { phoneCountry: phoneCountryOf(conf) }));
             assertRequired(confFields, values, false);
             const healthIn = await healthFromBody(confId, fieldValues, { mayWrite: canWriteHealth(perms), creating: true });
             const consentOn = await consent.isEnabled(confId);
@@ -5243,7 +5265,7 @@ exports.init = async function (wordjs) {
             // Write each DEFINED field's canonical value to its column (schema follows the form) + the
             // operational edits the admin is allowed to change directly (status, notes, location_id).
             const confFields = await db.all(FIELD_COLUMNS_SQL, [existing.conference_id]);
-            const vals = canonicalFieldValues(confFields, fieldValues);
+            const vals = canonicalFieldValues(confFields, fieldValues, { phoneCountry: phoneCountryOf(await db.get(`SELECT phone_country FROM ${T.conferences} WHERE id = ?`, [existing.conference_id])) });
             assertRequired(confFields, vals, true);
             await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
             const healthIn = await healthFromBody(existing.conference_id, fieldValues, { mayWrite: canWriteHealth(perms), creating: false, inscriptionId: id });
@@ -8238,8 +8260,22 @@ exports.init = async function (wordjs) {
 
     http.route('get', '/public/list', async (req, res) => {
         try {
-            const list = await db.all(`SELECT id, name, slug, date_start, date_end, description, status, is_form_published FROM ${T.conferences} WHERE is_form_published = 1 ORDER BY id DESC`);
+            const list = await db.all(`SELECT id, name, slug, date_start, date_end, description, status, is_form_published, phone_country FROM ${T.conferences} WHERE is_form_published = 1 ORDER BY id DESC`);
             res.json(list);
+        } catch (e) { sendError(res, e); }
+    });
+
+    // GET /public/flags?iso=CO,EC → { flags: { CO: '<svg…>' } } — the phone selector's flags (2.33.2), a batch at a
+    // time (≤ 48), from the bundled flag-icons set (server/flags.js, read on first use). Unknown codes are left out.
+    let flagSet = null;
+    http.route('get', '/public/flags', async (req, res) => {
+        try {
+            if (!flagSet) flagSet = require('./server/flags');
+            const isos = [...new Set(String((req.query || {}).iso || '').toUpperCase().split(',').map(x => x.trim()).filter(x => /^[A-Z]{2}$/.test(x)))].slice(0, 48);
+            const flags = {};
+            for (const iso of isos) if (Object.prototype.hasOwnProperty.call(flagSet, iso)) flags[iso] = flagSet[iso];
+            try { res.set({ 'Cache-Control': 'public, max-age=604800' }); } catch (e) { /* a bridge without headers */ }
+            res.json({ flags });
         } catch (e) { sendError(res, e); }
     });
 
@@ -8434,7 +8470,7 @@ exports.init = async function (wordjs) {
         const conference_id = location.conference_id;
 
         try {
-            const conf = await db.get(`SELECT is_form_published, fee_default, date_end FROM ${T.conferences} WHERE id = ?`, [conference_id]);
+            const conf = await db.get(`SELECT is_form_published, fee_default, date_end, phone_country FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf || !conf.is_form_published) {
                 return res.status(403).json({ error: 'El formulario no está publicado.' });
             }
@@ -8461,7 +8497,7 @@ exports.init = async function (wordjs) {
 
             // Write each DEFINED form field's canonical value to its own column (schema follows the form).
             const confFields = await db.all(FIELD_COLUMNS_SQL, [conference_id]);
-            Object.assign(values, canonicalFieldValues(confFields, fieldValues));
+            Object.assign(values, canonicalFieldValues(confFields, fieldValues, { phoneCountry: phoneCountryOf(conf) }));
             // «Condiciones de salud» (2.32.0): the coordinator answers it while registering — write-only.
             const healthIn = await healthFromBody(conference_id, fieldValues, { mayWrite: true, creating: true });
             const consentOn = await consent.isEnabled(conference_id);

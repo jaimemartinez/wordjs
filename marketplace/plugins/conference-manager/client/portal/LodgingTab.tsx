@@ -63,6 +63,7 @@ import {
     SectionDivider,
     Spinner,
 } from "./ui";
+import { Select } from "../lib/Select";
 
 const API = '/api/v1/plugin/conference-manager';
 
@@ -616,13 +617,13 @@ function PredicateRow({ label, value, fields, onChange }: { label: string; value
         <fieldset className="space-y-1.5 min-w-0">
             <legend className={labelCls}>{label}</legend>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <select className={inputIndigoCls} aria-label="Campo" value={value.field} onChange={(e) => onChange({ ...value, field: e.target.value })}>
+                <Select className={inputIndigoCls} aria-label="Campo" value={value.field} onChange={(e) => onChange({ ...value, field: e.target.value })}>
                     <option value="">Campo…</option>
                     {fields.map((f) => <option key={f.name} value={f.name}>{f.label}</option>)}
-                </select>
-                <select className={inputIndigoCls} aria-label="Operador" value={value.op} onChange={(e) => onChange({ ...value, op: e.target.value, value: opNeedsNoValue(e.target.value) ? '' : value.value })}>
+                </Select>
+                <Select className={inputIndigoCls} aria-label="Operador" value={value.op} onChange={(e) => onChange({ ...value, op: e.target.value, value: opNeedsNoValue(e.target.value) ? '' : value.value })}>
                     {PRED_OPS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-                </select>
+                </Select>
                 <input className={inputIndigoCls} aria-label="Valor" placeholder="Valor" maxLength={200} disabled={opNeedsNoValue(value.op)} value={value.value} onChange={(e) => onChange({ ...value, value: e.target.value })} />
             </div>
         </fieldset>
@@ -666,12 +667,12 @@ function RuleEditorForm({ editor, rules, fields, busy, onChange, onCancel, onSav
                     </Field>
                     <Field label="Tipo" help={typeMeta ? typeMeta.desc : undefined}>
                         {(id) => (
-                            <select id={id} className={inputIndigoCls} value={form.type} onChange={(e) => {
+                            <Select id={id} className={inputIndigoCls} value={form.type} onChange={(e) => {
                                 const type = e.target.value as RuleType;
                                 set({ type, subject: type === 'require_companion' ? form.subject : emptyPredicate(), needs: type === 'require_companion' ? form.needs : emptyPredicate() });
                             }}>
                                 {RULE_TYPE_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-                            </select>
+                            </Select>
                         )}
                     </Field>
                 </div>
@@ -679,10 +680,10 @@ function RuleEditorForm({ editor, rules, fields, busy, onChange, onCancel, onSav
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <Field label="Campo" error={fe.error('rule_field')} errorId={fe.errorId('rule_field')}>
                             {(id) => (
-                                <select id={id} className={inputIndigoCls} value={form.config} onChange={(e) => set({ config: e.target.value })} required data-field="rule_field" aria-invalid={fe.invalid('rule_field')} aria-describedby={fe.describedBy('rule_field')}>
+                                <Select id={id} className={inputIndigoCls} value={form.config} onChange={(e) => set({ config: e.target.value })} required data-field="rule_field" aria-invalid={fe.invalid('rule_field')} aria-describedby={fe.describedBy('rule_field')}>
                                     <option value="">Elige un campo…</option>
                                     {options.map((f) => <option key={f.name} value={f.name}>{f.label}</option>)}
-                                </select>
+                                </Select>
                             )}
                         </Field>
                         {form.type === 'keep_together' && (

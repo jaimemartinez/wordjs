@@ -7,7 +7,10 @@
  *     its e-mail, the three authorization texts, the link's validity and the health purge delay;
  *   - Personas (inscriptions:view): each person's state, what they authorized and when; «Enviar / Reenviar
  *     enlace» and «Registrar revocación» (inscriptions:manage, a NEW log row); «Exportar evidencia» (WordJS
- *     administrators: the person's whole log, chain-checked, as a JSON file for a data protection request).
+ *     administrators: the person's whole log, chain-checked, as a JSON file for a data protection request);
+ *   - «Copiar mensaje» (2.33.2): a new link and the request as a message in the admin's language, for WhatsApp —
+ *     copied with the Clipboard API (toast «Mensaje copiado»), always shown in a dialog to select by hand when the
+ *     clipboard is unavailable, with «Abrir en WhatsApp». No e-mail is sent; the log records «link_shared».
  * Every message is in place (a notice or a field error) or a host toast; the revocation is an in-app dialog.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -17,6 +20,7 @@ import { apiGet, apiPost, apiPut } from "../../../../../frontend/src/lib/api";
 import { usePerms } from "./perms";
 import { Overlay } from "./Overlay";
 import { consentT } from "../lib/consentI18n";
+import { consentMessage, copyText, whatsappUrl } from "../lib/consentMessage";
 
 const BASE = "/plugin/conference-manager";
 const STATE_TONE: Record<string, string> = { pending: "bg-amber-50 text-amber-800 border-amber-200", granted: "bg-emerald-50 text-emerald-800 border-emerald-200", revoked: "bg-rose-50 text-rose-800 border-rose-200" };
@@ -71,6 +75,19 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
             load();
         } catch (e: any) { setFieldErr(e?.message || "Error"); }
         finally { setSaving(false); }
+    };
+    const [share, setShare] = useState<{ name: string; text: string; phone: string; copied: boolean } | null>(null);
+    const shareMessage = async (p: any) => {
+        setBusyId(p.id);
+        try {
+            const info = await apiPost<any>(`${BASE}/consent/share`, { inscription_id: p.id });
+            const text = consentMessage(language, info);
+            const copied = await copyText(text);
+            if (copied) addToast(t("copy.done"), "success");
+            setShare({ name: nameOf(p), text, phone: info.phone_wa || "", copied });
+            load();
+        } catch (e: any) { addToast(e?.message || "Error", "error"); }
+        finally { setBusyId(null); }
     };
     const send = async (id: number) => {
         setBusyId(id);
@@ -228,6 +245,11 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                                                         {st ? t("portal.resend") : t("portal.send")}
                                                     </button>
                                                 )}
+                                                {enabled && canManage && state !== "granted" && (
+                                                    <button type="button" disabled={busyId === p.id} onClick={() => shareMessage(p)} className="px-3 py-1.5 rounded-lg border border-emerald-200 text-xs font-semibold text-emerald-800 hover:bg-emerald-50" data-consent-copy={p.id}>
+                                                        <i className="fa-regular fa-copy mr-1" aria-hidden="true"></i>{t("copy.button")}
+                                                    </button>
+                                                )}
                                                 {canManage && state === "granted" && (
                                                     <button type="button" onClick={() => setRevoke({ p, general: false, health: false, image: false, note: "", err: {} })} className="px-3 py-1.5 rounded-lg border border-rose-200 text-xs font-semibold text-rose-700 hover:bg-rose-50" data-consent-revoke={p.id}>{t("admin.revoke")}</button>
                                                 )}
@@ -246,6 +268,26 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                     </table>
                 </div>
             </section>
+
+            {share && (
+                <Overlay layer={2} onBackdrop={() => setShare(null)} onEscape={() => setShare(null)}>
+                    <div role="dialog" aria-modal="true" aria-labelledby="cm-share-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4" data-consent-share-dialog="">
+                        <h3 id="cm-share-title" className="text-lg font-bold text-gray-900">{share.copied ? t("copy.done") : t("copy.fallback.title")} · {share.name}</h3>
+                        {!share.copied && <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2" role="status">{t("copy.fallback.hint")}</p>}
+                        <textarea readOnly rows={9} value={share.text} aria-label={t("copy.fallback.title")} onFocus={(e) => e.currentTarget.select()}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-800 font-sans" data-consent-share-text="" />
+                        <p className="text-[11px] text-gray-500">{t("copy.replaces")}</p>
+                        <div className="flex flex-wrap justify-end gap-2">
+                            <button type="button" onClick={(e) => { const box = (e.currentTarget.closest('[role="dialog"]') as HTMLElement)?.querySelector('textarea'); if (box) { box.focus(); box.select(); } }}
+                                className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700">{t("copy.select")}</button>
+                            <a href={whatsappUrl(share.text, share.phone)} target="_blank" rel="noopener noreferrer" className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold" data-consent-whatsapp="">
+                                <i className="fa-brands fa-whatsapp mr-1" aria-hidden="true"></i>{t("copy.whatsapp")}
+                            </a>
+                            <button type="button" onClick={() => setShare(null)} className="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-bold">{t("copy.close")}</button>
+                        </div>
+                    </div>
+                </Overlay>
+            )}
 
             {revoke && (
                 <Overlay layer={2} onBackdrop={() => setRevoke(null)} onEscape={() => setRevoke(null)}>

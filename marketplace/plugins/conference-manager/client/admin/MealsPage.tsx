@@ -65,6 +65,7 @@ import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStr
 import { usePerms, ReadOnlyNotice } from "./perms";
 import MealTurnsTab from "./MealTurnsTab";
 import { DateField } from "../lib/DateField";
+import { Select } from "../lib/Select";
 
 type Tab = 'plan' | 'people' | 'turns' | 'delivery' | 'report';
 // «Turnos» (2.32.0): the meal groups A–F and each service's call times (MealTurnsTab.tsx).
@@ -244,7 +245,7 @@ function ServiceSelect({ services, serviceId, setServiceId, id }: any) {
     const { language } = useI18n();
     const days = groupByDay(services);
     return (
-        <select id={id} className={inputCls} value={serviceId ?? ''} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : null)}>
+        <Select id={id} className={inputCls} value={serviceId ?? ''} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : null)}>
             {!services.length && <option value="">{tx('meals.services.none', 'Todavía no hay servicios de comida.')}</option>}
             {/* Nothing selected (e.g. the service was deleted): say so instead of showing the first one. */}
             {services.length > 0 && serviceId == null && <option value="">{tx('meals.scanner.pick', 'Elige un servicio')}</option>}
@@ -253,7 +254,7 @@ function ServiceSelect({ services, serviceId, setServiceId, id }: any) {
                     {d.services.map((s) => <option key={s.id} value={s.id}>{serviceName(tx, s, language)}</option>)}
                 </optgroup>
             ))}
-        </select>
+        </Select>
     );
 }
 
@@ -651,11 +652,11 @@ function PeopleTab({ conferenceId, data, services, reload }: any) {
                 <div className="md:col-span-2 space-y-1"><label htmlFor="mp-q" className={labelCls}>{tx('meals.search.label', 'Buscar participante')}</label>
                     <input id="mp-q" type="search" className={inputCls} value={q} onChange={(e) => setQ(e.target.value)} placeholder={tx('meals.search.placeholder', 'Nombre, documento o código…')} /></div>
                 <div className="space-y-1"><label htmlFor="mp-loc" className={labelCls}>{tx('meals.location', 'Localidad')}</label>
-                    <select id="mp-loc" className={inputCls} value={loc} onChange={(e) => setLoc(e.target.value)}>
+                    <Select id="mp-loc" className={inputCls} value={loc} onChange={(e) => setLoc(e.target.value)}>
                         <option value="">{tx('meals.location.all', 'Todas')}</option>
                         {(data.locations || []).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                         <option value="none">{tx('meals.no.location', 'Sin localidad')}</option>
-                    </select></div>
+                    </Select></div>
             </div>
             {!res && loading && <Spinner label={tx('loading', 'Cargando…')} />}
             {loadErr && (

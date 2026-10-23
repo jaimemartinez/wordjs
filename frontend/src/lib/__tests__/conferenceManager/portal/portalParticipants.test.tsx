@@ -236,7 +236,7 @@ describe("ui.tsx: phones first", () => {
         const html = flat(renderToStaticMarkup(<Pager page={2} count={3} from={21} to={40} total={45} windowPages={[1, 2, 3]} size={20} sizes={[10, 20, 50, 100]} onPage={() => {}} onSize={() => {}} />));
         expect(html).toMatch(/data-pager-phone=""[\s\S]*Anterior[\s\S]*2 \/ 3[\s\S]*Siguiente/);
         expect(html).toContain('aria-live="polite">Página 2 de 3');
-        expect(html).toMatch(/<select class="min-h-11[^"]*text-base sm:text-xs/);
+        expect(html).toMatch(/<button[^>]*class="min-h-11[^"]*text-base sm:text-xs[^"]*"[^>]*data-select=""/);
     });
 });
 

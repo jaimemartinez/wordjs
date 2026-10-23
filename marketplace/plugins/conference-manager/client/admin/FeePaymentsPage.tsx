@@ -49,6 +49,7 @@ import { TransferPanel, TransferSheet } from "./TransferSheet";
 import { RegisterPaymentSheet, buildPersonOptions } from "./RegisterPaymentSheet";
 import { PersonSheet } from "./PersonSheet";
 import { useTx } from "./MealScanner";
+import { Select } from "../lib/Select";
 
 /**
  * The review queue's list column on a desktop: 32 % of the section, between 17rem and 380 px. At its
@@ -555,22 +556,22 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
     const tfFolded = foldedTransferFilterCount(nav.tf);
     const tfFields = [
         { key: 'location', el: (
-            <select aria-label={tx('location', 'Localidad')} value={nav.tf.location} onChange={(e) => setTf({ location: e.target.value })} className={selectCls}>
+            <Select aria-label={tx('location', 'Localidad')} value={nav.tf.location} onChange={(e) => setTf({ location: e.target.value })} className={selectCls}>
                 <option value="">{tx('all.locations', 'Todas las localidades')}</option>
                 {locOptions.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}
-            </select>) },
+            </Select>) },
         { key: 'method', el: (
-            <select aria-label={tx('payment.method', 'Forma de pago')} value={nav.tf.method} onChange={(e) => setTf({ method: e.target.value })} className={selectCls}>
+            <Select aria-label={tx('payment.method', 'Forma de pago')} value={nav.tf.method} onChange={(e) => setTf({ method: e.target.value })} className={selectCls}>
                 <option value="">{tx('fees.filter.method.all', 'Todas las formas de pago')}</option>
                 {methods.map((m) => <option key={m} value={m}>{paymentMethodLabel(tx, m)}</option>)}
-            </select>) },
+            </Select>) },
         { key: 'via', el: (
-            <select aria-label={tx('fees.filter.via', 'Registrado por')} value={nav.tf.via} onChange={(e) => setTf({ via: e.target.value })} className={selectCls}>
+            <Select aria-label={tx('fees.filter.via', 'Registrado por')} value={nav.tf.via} onChange={(e) => setTf({ via: e.target.value })} className={selectCls}>
                 <option value="">{tx('fees.filter.via.all', 'Registrado por: todos')}</option>
                 <option value="portal">{tx('fees.by.portal.short', 'Portal')}</option>
                 <option value="admin">{tx('fees.by.admin', 'Administración')}</option>
                 <option value="legacy">{tx('fees.filter.via.legacy', 'Sistema anterior')}</option>
-            </select>) },
+            </Select>) },
         { key: 'from', el: <label className="flex items-center gap-2 min-w-0"><span className="text-[10px] font-black uppercase tracking-widest text-gray-500 w-14 shrink-0">{tx('accounting.from', 'Desde')}</span><div className="min-w-0 flex-1"><DateField ariaLabel={tx('accounting.from', 'Desde')} value={nav.tf.from} max={nav.tf.to || undefined} onChange={(v) => setTf({ from: v })} /></div></label> },
         { key: 'to', el: <label className="flex items-center gap-2 min-w-0"><span className="text-[10px] font-black uppercase tracking-widest text-gray-500 w-14 shrink-0">{tx('accounting.to', 'Hasta')}</span><div className="min-w-0 flex-1"><DateField ariaLabel={tx('accounting.to', 'Hasta')} value={nav.tf.to} min={nav.tf.from || undefined} onChange={(v) => setTf({ to: v })} /></div></label> },
     ];
@@ -678,10 +679,10 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
             {section === 'queue' && (
                 <div className="space-y-4" data-fees-section="queue">
                     <div className="flex flex-wrap gap-2" data-queue-filters="">
-                        <select aria-label={tx('location', 'Localidad')} value={qLoc} onChange={(e) => setQLoc(e.target.value)} className={`${selectCls} sm:w-auto`}>
+                        <Select aria-label={tx('location', 'Localidad')} value={qLoc} onChange={(e) => setQLoc(e.target.value)} className={`${selectCls} sm:w-auto`}>
                             <option value="">{tx('all.locations', 'Todas las localidades')}</option>
                             {locOptions.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}
-                        </select>
+                        </Select>
                         {methods.map((m) => <button key={m} type="button" onClick={() => setQMethod(qMethod === m ? '' : m)} aria-pressed={qMethod === m ? 'true' : 'false'} className={chipCls(qMethod === m)}>{paymentMethodLabel(tx, m)}</button>)}
                     </div>
                     {wide && queueNotice && (

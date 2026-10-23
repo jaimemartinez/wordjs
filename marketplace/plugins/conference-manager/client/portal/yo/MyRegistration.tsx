@@ -14,6 +14,7 @@ import { csrfHeaders } from "@/lib/csrf";
 import { BadgeCard, type DisplayList } from "../badge/BadgeCard";
 import { OsmMap } from "./OsmMap";
 import { BusAlerts, dropPushSubscription, type Bus } from "./BusAlerts";
+import { Select } from "../../lib/Select";
 
 type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null; turn_start?: string; turn_end?: string };
 type View = {
@@ -221,10 +222,10 @@ export default function MyRegistrationPage() {
                     {form.conference && form.needsType && (
                         <div>
                             <label htmlFor="self-type" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-1">Tipo de documento</label>
-                            <select id="self-type" className={input} value={docType} onChange={(e) => setDocType(e.target.value)} aria-required="true">
+                            <Select id="self-type" className={input} value={docType} onChange={(e) => setDocType(e.target.value)} aria-required="true">
                                 <option value="">Elige…</option>
                                 {(form.docTypes || []).map((t) => <option key={t} value={t}>{t}</option>)}
-                            </select>
+                            </Select>
                         </div>
                     )}
                     {form.conference && (

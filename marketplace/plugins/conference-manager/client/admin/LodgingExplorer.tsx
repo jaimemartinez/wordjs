@@ -46,6 +46,7 @@ import {
 } from "../lib/lodgingView";
 import { hasGenderField } from "../lib/fields";
 import { adjustText } from "./LodgingAdjust";
+import { Select } from "../lib/Select";
 
 // ---------------------------------------------------------------------------------------------
 // Small pure helpers (module level: nothing here is a component defined inside another one)
@@ -680,7 +681,7 @@ export default function LodgingExplorer({
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                     <label className="sr-only" htmlFor={`cm-explorer-loc-${conferenceId}`}>{tx('explorer.filter.location.label', 'Localidad')}</label>
-                    <select
+                    <Select
                         id={`cm-explorer-loc-${conferenceId}`}
                         value={viewFilters.location}
                         onChange={e => setFilters({ location: e.target.value })}
@@ -689,7 +690,7 @@ export default function LodgingExplorer({
                         <option value="">{tx('board.all.locations', 'Todas las localidades')}</option>
                         <option value={POOL_FILTER}>{tx('explorer.location.pool', 'Pool (sin localidad)')}</option>
                         {locs.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
-                    </select>
+                    </Select>
                     {!loading && (
                         <button
                             type="button"
@@ -1106,7 +1107,7 @@ function HotelLevel({ hotel, stats, rooms, counts, total, setFilters, clearFilte
                             )}
                         </div>
                         {env.genderOn && (
-                            <select
+                            <Select
                                 value={filters.gender}
                                 onChange={e => setFilters({ gender: e.target.value })}
                                 aria-label={tx('explorer.filter.gender.label', 'Tipo de habitación')}
@@ -1116,7 +1117,7 @@ function HotelLevel({ hotel, stats, rooms, counts, total, setFilters, clearFilte
                                 <option value="M">{roomGenderLabel(tx, 'M')}</option>
                                 <option value="F">{roomGenderLabel(tx, 'F')}</option>
                                 <option value="Mixed">{roomGenderLabel(tx, 'Mixed')}</option>
-                            </select>
+                            </Select>
                         )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2" role="group" aria-label={tx('explorer.filter.state.label', 'Ocupación')}>

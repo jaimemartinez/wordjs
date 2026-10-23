@@ -13,6 +13,7 @@ import { OWED_PENDING, owedWords } from "../lib/feePayments";
 import { foldText, matchesQuery } from "../lib/roster";
 import { factsOf, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
+import { Select } from "../lib/Select";
 
 /** One person as the payment sheets need them (cents). */
 export type PersonOption = {
@@ -63,12 +64,12 @@ export function PersonPicker({ options, chosen, onAdd, onDone, locations, lockLo
                 <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={tx('fees.picker.search', 'Buscar persona')}
                     aria-label={tx('fees.picker.search.hint', 'Buscar persona por nombre, grupo o localidad')} data-picker-search=""
                     className="min-w-0 flex-[2_1_20rem] min-h-[44px] border-2 border-gray-100 rounded-xl px-3 bg-white focus:border-blue-500 outline-none text-base text-gray-900" />
-                <select value={loc} onChange={(e) => setLoc(e.target.value)} aria-label={tx('location', 'Localidad')} disabled={lockLocationId != null}
+                <Select value={loc} onChange={(e) => setLoc(e.target.value)} aria-label={tx('location', 'Localidad')} disabled={lockLocationId != null}
                     className="min-w-0 flex-[1_1_12rem] min-h-[44px] border-2 border-gray-100 rounded-xl px-3 bg-white focus:border-blue-500 outline-none text-base text-gray-900 disabled:opacity-70">
                     <option value="">{tx('all.locations', 'Todas las localidades')}</option>
                     {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
                     <option value="none">{tx('no.location', 'Sin localidad')}</option>
-                </select>
+                </Select>
             </div>
             <label className="inline-flex items-center gap-3 min-h-[44px] cursor-pointer">
                 <input type="checkbox" checked={onlyOwing} onChange={(e) => setOnlyOwing(e.target.checked)} className="w-5 h-5 accent-blue-600" />

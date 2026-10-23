@@ -18,6 +18,7 @@ import { csrfHeaders } from "@/lib/csrf";
 import { HealthConditionsInput, HEALTH_LABELS_ES } from "../../lib/HealthConditionsInput";
 import { healthAnswerError, healthPayload, type HealthAnswer } from "../../lib/health";
 import { consentLangOf, consentT } from "../../lib/consentI18n";
+import { Select } from "../../lib/Select";
 
 type View = {
     conference: string; first_name: string; email_masked: string; minor: boolean | null;
@@ -267,10 +268,10 @@ export default function ConsentPage() {
                             </div>
                             <div>
                                 <label htmlFor="rep-rel" className="block text-xs font-bold text-gray-600 mb-1">{t("page.rep.relationship")}</label>
-                                <select id="rep-rel" className={input(!!errors.rep && !rep.relationship)} value={rep.relationship} onChange={(e) => setRep({ ...rep, relationship: e.target.value })}>
+                                <Select id="rep-rel" className={input(!!errors.rep && !rep.relationship)} value={rep.relationship} onChange={(e) => setRep({ ...rep, relationship: e.target.value })}>
                                     <option value="">{t("page.rep.choose")}</option>
                                     {view.relationships.map((r) => <option key={r} value={r}>{r}</option>)}
-                                </select>
+                                </Select>
                             </div>
                         </div>
                         {repOk && <p className="text-xs text-gray-600 bg-gray-50 rounded-xl px-3 py-2" data-consent-rep-line="">{repLine({ name: rep.name.trim().replace(/\s+/g, " "), document: rep.document.trim().replace(/\s+/g, " "), relationship: rep.relationship })}</p>}

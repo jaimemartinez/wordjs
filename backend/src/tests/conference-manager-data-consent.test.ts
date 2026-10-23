@@ -15,7 +15,9 @@
  *     a person form a hash chain that the export checks, and deleting the person keeps the log;
  *   - health purge N days after the conference ends, keeping the evidence;
  *   - each signature names the policy version in force (version + SHA-256 of an append-only snapshot), and a
- *     version someone signed cannot change its texts without a new version number.
+ *     version someone signed cannot change its texts without a new version number;
+ *   - «Copiar mensaje» (2.33.2): a new link to share by hand — no e-mail, not marked e-mailed, logged
+ *     «link_shared»; the old link stops working; signing still needs the e-mailed code.
  */
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
@@ -50,10 +52,10 @@ async function portal(p: Plugin, method: string, url: string, token: string, bod
 }
 
 let seq = 0;
-async function world({ enable = true } = {}) {
+async function world({ enable = true, extra = [] as string[] } = {}) {
     const p = await bootPlugin();
     const cid = ok(await p.call('post', '/create', { body: { name: 'Asume el Riesgo', slug: `dc-${++seq}`, date_start: '2030-01-10', date_end: '2030-01-12' } })).id as number;
-    for (const template of ['first_name', 'last_name', 'email', 'age', 'health']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }), template);
+    for (const template of ['first_name', 'last_name', 'email', 'age', 'health', ...extra]) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }), template);
     ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Tipo de documento', type: 'select', options: 'Cédula, Tarjeta de identidad' } }));
     ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Número de documento', type: 'text' } }));
     ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
@@ -362,4 +364,93 @@ test('each signature names the policy version in force; a signed version cannot 
     // The confirmation e-mail names it.
     const mail = [...w.p.mails].reverse().find((m: any) => m.to === 'ana.perez@example.org' && /registrada/.test(m.subject));
     assert.ok(mail.text.includes(g1.policy_sha256));
+});
+
+test('«Copiar mensaje»: a new link to share by hand — no e-mail, not marked e-mailed, logged, signing unchanged', async () => {
+    const w = await world({ extra: ['phone'] });
+    w.p.setMailFail(true);
+    const r = await w.register({ phone: '+57 300 123 4567' });
+    const id = r.body.id as number;
+    assert.strictEqual(r.body.consent.sent, false);
+    w.p.setMailFail(false);
+    const mailsBefore = w.p.mails.length;
+    const before = w.p.one(`SELECT link_sent_s, mail_failed FROM ${PREFIX}consent_requests WHERE inscription_id = ?`, id);
+    // Admin.
+    const share = ok(await w.p.call('post', '/consent/share', { body: { inscription_id: id } }));
+    assert.ok(/\/portal\/conference\/autorizacion#t=[0-9a-f]{32}$/.test(share.link), share.link);
+    assert.deepStrictEqual({ v: share.policy_version, url: share.policy_url, days: share.link_days, phone: share.phone, wa: share.phone_wa, name: share.first_name, conf: share.conference, email: share.email_masked },
+        { v: '1.0', url: 'https://example.org/politica-de-datos', days: 14, phone: '+573001234567', wa: '573001234567', name: 'Ana', conf: 'Asume el Riesgo', email: 'a***@e***.org' });
+    assert.strictEqual(w.p.mails.length, mailsBefore, 'no e-mail leaves');
+    assert.deepStrictEqual({ ...w.p.one(`SELECT link_sent_s, mail_failed FROM ${PREFIX}consent_requests WHERE inscription_id = ?`, id) }, { ...before }, 'not marked as e-mailed');
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/inscriptions', w.ptoken))[0].consent.mail_failed, true, 'the coordinator still sees the e-mail failed');
+    const shared = w.events(id).filter(e => e.kind === 'link_shared');
+    assert.strictEqual(shared.length, 1);
+    assert.deepStrictEqual({ via: JSON.parse(shared[0].data).via, channel: JSON.parse(shared[0].data).channel, actor: shared[0].actor }, { via: 'admin', channel: 'manual', actor: 'boss' });
+    // Coordinator: its own location only; the new link replaces the previous one.
+    const p2 = ok(await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: id }));
+    assert.notStrictEqual(p2.link, share.link);
+    const oldToken = share.link.split('#t=')[1], token = p2.link.split('#t=')[1];
+    assert.strictEqual((await w.pub('open', { token: oldToken })).status, 410, 'the previous link stops working');
+    assert.strictEqual(JSON.parse(w.events(id).filter(e => e.kind === 'link_shared')[1].data).via, 'portal');
+    assert.strictEqual((await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: 999 })).status, 404);
+    // Signing is unchanged: the code goes to the e-mail, and then the coordinator can no longer share.
+    ok(await w.pub('open', { token }));
+    ok(await w.pub('code', { token }));
+    assert.ok(w.lastCode(), 'the code was e-mailed');
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    assert.strictEqual((await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: id })).status, 409);
+    // Off, or without the section: refused.
+    const staff = { id: 78, role: 'conference_manager_team', userLogin: 'viewer', extra: { pluginCapabilities: ['conference_manager_access'] } };
+    assert.strictEqual((await w.p.call('post', '/consent/share', { body: { inscription_id: id }, user: staff as any })).status, 403);
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, enabled: false } }));
+    assert.strictEqual((await w.p.call('post', '/consent/share', { body: { inscription_id: id } })).status, 409);
+});
+
+test('phones (2.33.2): E.164 on write, the conference default for national numbers, WhatsApp digits, legacy rows read on the fly', async () => {
+    const P = require(path.join(PLUGIN_DIR, 'server/phone.js'));
+    // The rules.
+    assert.strictEqual(P.toE164('+57 300 123 4567', 'CO'), '+573001234567');
+    assert.strictEqual(P.toE164('300 123 4567', 'CO'), '+573001234567');
+    assert.strictEqual(P.toE164('0057 300 123 4567', 'CO'), '+573001234567');
+    assert.strictEqual(P.toE164('573001234567', 'CO'), '+573001234567', 'a code already there is not added twice');
+    assert.strictEqual(P.toE164('020 7946 0958', 'GB'), '+442079460958', 'the trunk 0 goes');
+    assert.strictEqual(P.toE164('(305) 555-0100', 'US'), '+13055550100');
+    assert.strictEqual(P.toE164('099 123 4567', 'EC'), '+593991234567');
+    for (const bad of ['12', 'abc', '+57', '+1234567890123456', '300-ABC']) assert.strictEqual(P.toE164(bad, 'CO'), null, bad);
+    assert.deepStrictEqual(P.parseE164('+18095551234', 'DO'), { iso: 'DO', dial: '1', national: '8095551234' });
+    assert.strictEqual(P.parseE164('+18095551234').iso, 'US', 'a shared code reads as its primary country');
+    assert.strictEqual(P.waDigits('+57 300 123 4567', 'EC'), '573001234567', 'a stored code wins over the default');
+    assert.strictEqual(P.waDigits('300 123 4567', 'CO'), '573001234567');
+
+    const w = await world({ extra: ['phone'] });
+    // Admin and portal writes store E.164; a bad number is refused in place.
+    const r1 = await w.register({ phone: '300 123 4567' });
+    assert.strictEqual(w.p.one(`SELECT phone FROM ${PREFIX}inscriptions WHERE id = ?`, r1.body.id).phone, '+573001234567');
+    assert.strictEqual((await w.register({ email: 'x@example.org', phone: '12' })).status, 400);
+    const a = ok(await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'Li', last_name: 'Wei', email: 'li@example.org', location_id: w.norte, phone: '+1 (305) 555-0100' } }));
+    assert.strictEqual(w.p.one(`SELECT phone FROM ${PREFIX}inscriptions WHERE id = ?`, a.id).phone, '+13055550100');
+    // The default country: validated, stored, used for national numbers from then on.
+    assert.strictEqual((await w.p.call('put', `/${w.cid}`, { body: { phone_country: 'ZZ' } })).status, 400);
+    ok(await w.p.call('put', `/${w.cid}`, { body: { phone_country: 'ec' } }));
+    assert.strictEqual(w.p.one(`SELECT phone_country FROM ${PREFIX}conferences WHERE id = ?`, w.cid).phone_country, 'EC');
+    assert.ok(ok(await w.p.call('get', '/public/list', { anonymous: true })).some((c: any) => c.id === w.cid && c.phone_country === 'EC'), 'the portal learns the default');
+    ok(await w.p.call('put', `/inscriptions/${a.id}`, { body: { phone: '099 123 4567' } }));
+    assert.strictEqual(w.p.one(`SELECT phone FROM ${PREFIX}inscriptions WHERE id = ?`, a.id).phone, '+593991234567');
+    // An older row without a code is never rewritten; WhatsApp reads it with the default.
+    w.p.exec(`UPDATE ${PREFIX}inscriptions SET phone = '0991234567' WHERE id = ?`, r1.body.id);
+    const share = ok(await w.p.call('post', '/consent/share', { body: { inscription_id: r1.body.id } }));
+    assert.strictEqual(share.phone, '0991234567');
+    assert.strictEqual(share.phone_wa, '593991234567');
+    assert.strictEqual(w.p.one(`SELECT phone FROM ${PREFIX}inscriptions WHERE id = ?`, r1.body.id).phone, '0991234567', 'read, not rewritten');
+    // A phone half typed never fails the live quote.
+    assert.strictEqual((await w.p.call('post', '/public/quote', { anonymous: true, body: { conference_id: w.cid, fields: { phone: '30' } } })).status, 200);
+    // The selector's flags (images: Windows has no flag emoji), a batch at a time, unknown codes left out.
+    const flags = ok(await w.p.call('get', '/public/flags?iso=CO,ec,ZZ,xx1,CO', { anonymous: true })).flags;
+    assert.deepStrictEqual(Object.keys(flags).sort(), ['CO', 'EC']);
+    assert.ok(flags.CO.startsWith('<svg') && !/<script|\son[a-z]+=/i.test(flags.CO));
+    const many = P.COUNTRIES.map((c: any) => c.iso).join(',');
+    assert.strictEqual(Object.keys(ok(await w.p.call('get', `/public/flags?iso=${many}`, { anonymous: true })).flags).length, 48, 'at most 48 per request');
+    // Badge WhatsApp links follow the default once chosen.
+    const links = ok(await w.p.call('post', '/badges/links', { body: { conference_id: w.cid, inscription_id: a.id } }));
+    assert.strictEqual(links.country_code, '593');
 });

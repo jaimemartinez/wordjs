@@ -20,6 +20,7 @@ import { conferenceApi } from "../lib/conference";
 import { lockText } from "../lib/lodgingView";
 import { Overlay } from "./Overlay";
 import { useTx } from "./MealScanner";
+import { Select } from "../lib/Select";
 
 const btn = 'min-h-[44px] px-4 rounded-2xl font-black text-[11px] uppercase tracking-widest inline-flex items-center justify-center gap-2 disabled:opacity-50';
 const ghost = `${btn} bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-400`;
@@ -170,11 +171,11 @@ export default function LodgingPlan({ conferenceId, hotels, onClose, onApplied }
                         <Switch on={fresh} disabled={!!busy || applied} onChange={setFresh} title={tx('plan.fresh', 'Rehacer todo el reparto')}
                             hint={tx('plan.fresh.hint', 'Vuelve a pensar todas las habitaciones y personas de las localidades en borrador, como si nadie tuviera cama — por ejemplo, después de cambiar una regla. Al aplicarlo, quien ya tenía cama puede cambiar de habitación. Las localidades enviadas o validadas no se tocan.')} />
                         <div className="flex flex-wrap items-center gap-2">
-                            <select value={hotelId} disabled={!!busy || applied} onChange={(e) => setHotelId(e.target.value)} aria-label={tx('plan.hotel', 'Hotel')}
+                            <Select value={hotelId} disabled={!!busy || applied} onChange={(e) => setHotelId(e.target.value)} aria-label={tx('plan.hotel', 'Hotel')}
                                 className="flex-1 min-w-[12rem] border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/40 text-sm font-medium text-gray-900" data-plan-hotel="">
                                 <option value="">{tx('plan.hotel.all', 'Todos los hoteles')}</option>
                                 {(hotels || []).map((h: any) => <option key={h.id} value={String(h.id)}>{h.name}</option>)}
-                            </select>
+                            </Select>
                             {!applied && <button type="button" className={ghost} onClick={() => calculate()} disabled={!!busy} data-plan-calc="">
                                 <i className={`fa-solid ${busy === 'plan' ? 'fa-spinner animate-spin' : 'fa-rotate'}`} aria-hidden="true"></i>{tx('plan.calc', 'Volver a calcular')}
                             </button>}

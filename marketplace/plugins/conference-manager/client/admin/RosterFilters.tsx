@@ -18,6 +18,7 @@ import { scrollBoxOf } from "../lib/paging";
 import { ROSTER_MAX_COLUMNS, activeFilterCount } from "../lib/roster";
 import { Overlay } from "./Overlay";
 import { useTx } from "./MealScanner";
+import { Select } from "../lib/Select";
 
 const selectCls = 'min-h-[44px] border-2 border-gray-100 rounded-xl px-3 bg-white focus:border-blue-500 outline-none text-sm font-bold text-gray-800';
 const chip = (on: boolean) => `min-h-[44px] px-4 rounded-xl border-2 text-xs font-black uppercase tracking-widest inline-flex items-center gap-2 ${on ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-gray-100 bg-white text-gray-700 hover:border-gray-300'}`;
@@ -101,24 +102,24 @@ function FilterFields({ filters, setFilters, locationOptions, pendingTotal, size
         </div>
     );
     const payment = (
-        <select aria-label={tx('roster.filter.payment', 'Pago')} value={filters.payment} onChange={(e) => setFilters({ ...filters, payment: e.target.value })} className={selectCls}>
+        <Select aria-label={tx('roster.filter.payment', 'Pago')} value={filters.payment} onChange={(e) => setFilters({ ...filters, payment: e.target.value })} className={selectCls}>
             <option value="">{tx('roster.filter.payment.all', 'Pago: todos')}</option>
             <option value="unpaid">{tx('fees.pill.unpaid', 'Sin pagar')}</option>
             <option value="partial">{tx('fees.pill.partial', 'Abono')}</option>
             <option value="paid">{tx('fees.pill.paid', 'Pagado')}</option>
-        </select>
+        </Select>
     );
     const room = (
-        <select aria-label={tx('roster.filter.room', 'Alojamiento')} value={filters.room} onChange={(e) => setFilters({ ...filters, room: e.target.value })} className={selectCls}>
+        <Select aria-label={tx('roster.filter.room', 'Alojamiento')} value={filters.room} onChange={(e) => setFilters({ ...filters, room: e.target.value })} className={selectCls}>
             <option value="">{tx('roster.filter.room.all', 'Alojamiento: todos')}</option>
             <option value="with">{tx('roster.filter.room.with', 'Con habitación')}</option>
             <option value="without">{tx('roster.room.none', 'Sin habitación')}</option>
-        </select>
+        </Select>
     );
     const sizeSel = (
-        <select aria-label={tx('roster.page.size', 'Mostrar')} value={String(size)} onChange={(e) => onSize(Number(e.target.value))} className={selectCls} data-page-size="">
+        <Select aria-label={tx('roster.page.size', 'Mostrar')} value={String(size)} onChange={(e) => onSize(Number(e.target.value))} className={selectCls} data-page-size="">
             {PAGE_SIZES.map((n) => <option key={n} value={String(n)}>{tx('roster.page.size.n', 'Mostrar {n}', { n })}</option>)}
-        </select>
+        </Select>
     );
     const pending = (
         <button type="button" onClick={() => setFilters({ ...filters, pending: !filters.pending })} aria-pressed={filters.pending ? 'true' : 'false'} className={chip(filters.pending)} data-filter-pending="">

@@ -9,6 +9,31 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ### Added
 
 - **Plugin updates without a core release.** A new *Publish marketplace* workflow rebuilds the marketplace catalog and plugin zips, runs the same integrity gate as a release, and replaces the marketplace assets on the latest release, so a plugin update reaches every site's Marketplace tab without a new WordJS version (see `documentation/deployment.md`).
+- **conference-manager 2.33.2: «Copiar mensaje» for the data consent request.** Next to «Enviar / Reenviar
+  enlace», in the admin's «Autorizaciones» tab and in the coordinators' person sheet, a button copies the consent
+  request as a message to paste into WhatsApp or any chat. The message carries a new personal link and the policy
+  version, in the screen's language. A dialog shows the text to copy by hand when the browser does not allow
+  copying, and offers «Abrir en WhatsApp». No e-mail is sent, the request is not marked as e-mailed, and the
+  evidence log records «link shared manually». The previous link stops working, as with a resend. Signing still
+  needs the code sent to the person's e-mail. The consent screens are now also in Portuguese.
+- **conference-manager 2.33.2: phone numbers carry their country code.**
+  - Phone fields in the admin's inscription form and in the coordinators' portal get a small flag box in the
+    same row as the number. It opens a list of every country, with its flag, its name in the screen's language
+    and its calling code, which can be searched by name, ISO code or calling code. Flags are bundled images
+    (flag-icons, MIT), so they show on Windows too, and only the flags on screen are loaded.
+  - Numbers are stored in E.164 (`+573001234567`). The server builds the same form from whatever an API caller
+    sends: «+» and «00» keep their code, and a national number takes the conference's default country and loses
+    its leading «0». An invalid number is refused next to its field.
+  - **Campos › «Indicativo de país por defecto»** (Colombia unless changed) sets the country the selector starts
+    on and the one a number without a code belongs to.
+  - Existing numbers are never rewritten. WhatsApp links read a stored code, or the default when there is none,
+    and send digits only. The badge WhatsApp links follow the new default once it is chosen; any national number
+    gets the code now, not only 10-digit Colombian mobiles.
+- **conference-manager 2.33.2: every dropdown of the plugin is the same styled select.** The browser's native
+  selects across the admin, the coordinators' portal, «Mi inscripción» and the consent page now open a styled
+  panel with a scrolling list. Lists of eight or more options also get a search box that ignores accents. The
+  panel opens next to its field, above it only when there is no room below, and appears over dialogs. It works
+  with the keyboard (arrows, Enter, Escape, typing to jump) and a screen reader.
 
 ## [2.10.0] - 2026-10-23
 

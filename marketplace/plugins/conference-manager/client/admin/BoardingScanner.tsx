@@ -20,6 +20,7 @@ import {
     AimFrame, SCANNER_CSS, SCANNER_ROOT_STYLE, SCANNER_BAR_STYLE, SAFE_LEFT, SAFE_RIGHT,
     cameraAvailability, cameraFailure, createFeedback, decodeCameraFrame, getNativeDetector, useTx,
 } from "./MealScanner";
+import { Select } from "../lib/Select";
 
 const SAME_CODE_MS = 3000;
 const money = (n: number) => { try { return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0); } catch { return `$${Math.round(n || 0)}`; } };
@@ -185,10 +186,10 @@ export function BoardingScanner({ buses, busId: initialBus, onClose }: any) {
             <style>{SCANNER_CSS}</style>
             <div style={{ ...SCANNER_BAR_STYLE, padding: `12px ${SAFE_RIGHT} 10px ${SAFE_LEFT}`, paddingTop: 'max(12px, env(safe-area-inset-top))', display: 'flex', gap: 10, alignItems: 'center' }}>
                 <i className="fa-solid fa-bus" aria-hidden="true" style={{ color: '#7dd3fc' }}></i>
-                <select value={busId} onChange={(e) => setBusId(Number(e.target.value))} aria-label={tx('transport.board.bus', 'Bus que aborda')} data-boarding-bus=""
+                <Select value={busId} onChange={(e) => setBusId(Number(e.target.value))} aria-label={tx('transport.board.bus', 'Bus que aborda')} data-boarding-bus=""
                     style={{ flex: 1, minWidth: 0, minHeight: 44, borderRadius: 12, padding: '0 10px', fontSize: 16, fontWeight: 800, color: '#111', background: '#fff' }}>
                     {buses.map((b) => <option key={b.id} value={b.id}>{b.name}{b.origin || b.destination ? ` · ${[b.origin, b.destination].filter(Boolean).join(' → ')}` : ''}</option>)}
-                </select>
+                </Select>
                 <button type="button" onClick={onClose} aria-label={tx('transport.board.close', 'Cerrar')}
                     style={{ minWidth: 44, minHeight: 44, borderRadius: 12, background: 'rgba(255,255,255,0.12)', color: '#fff', fontSize: 18 }}>
                     <i className="fa-solid fa-xmark" aria-hidden="true"></i>
