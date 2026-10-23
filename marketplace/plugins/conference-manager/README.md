@@ -48,3 +48,62 @@ it ends (30 by default); the evidence stays.
 Links, codes and confirmations go out through the site's mail plugin (`wordjs.mail`); Conference Manager needs
 the **email** permission. Without it registrations still work, the coordinator sees «No se pudo enviar el
 correo», and the link can be shared by hand (it is useless without the code sent to the e-mail).
+
+## «Consentimiento en papel» (2.34.0)
+
+For people who sign by hand. It sits alongside the e-mailed code and does not replace it. Coordinators use it in
+the portal, for their own locality. Administrators use it in **Conference › Autorizaciones**, for any locality.
+
+1. **Descargar plantilla** makes a sheet for the locality:
+   - page 1 has the policy in force (version, address and SHA-256), the controller, the contact, the purpose and
+     the rights;
+   - it also holds ONE authorization, the three configured texts in a single block, which says that health and
+     image are voluntary;
+   - the next pages list the people without an authorization yet, then blank rows;
+   - every page has the sheet id, the page number and a QR code.
+
+   Print it, and have each person write their document and sign once. Whoever does not authorize health data or
+   the use of their image marks that box («No autorizo datos de salud» / «No autorizo uso de imagen»); the
+   registration goes ahead either way. A minor's parent or legal representative signs for them.
+2. **Subir hoja firmada**: upload a photo of each page, or one PDF. Files are kept in the plugin's own table, never
+   at a public address, each with the SHA-256 of its bytes. They cannot be replaced or deleted.
+3. **Marcar quién firmó**: tick each person who signed. Health and image start authorized; tick the opt-out a
+   person marked. Each tick is a signature in the evidence log with `method: 'paper'` and its `opt_outs`, naming
+   the sheet, the row, the policy version, the files' hashes, and who uploaded and who ticked. **Deshacer** undoes a wrong tick with a reason. It is a new row; nothing
+   is edited.
+
+**Keep the paper originals.** The upload is a copy, and its SHA-256 proves the copy has not changed since. It does
+not replace the signed paper. Store the sheets for as long as you keep the evidence.
+
+**Legal basis.** The sheet shows the same authorization texts, policy version and rights as the consent page. It
+tells each person that health and image are voluntary, and the separate opt-out boxes let them refuse either one
+without affecting their registration. Whether a
+handwritten signature on this sheet, plus the uploaded copy, meets your obligations depends on your jurisdiction
+and your own policy, so consult your lawyer before relying on it.
+
+## Verbal health authorization (2.34.0)
+
+While a conference asks for «Autorización de datos», coordinators and administrators may enter a person's
+«Condiciones de salud» at registration. Administrators also need *Datos de salud › gestionar*. Each entry
+requires ticking «La persona me autorizó verbalmente el tratamiento de sus datos de salud, tras informarle que es
+voluntario». Without the tick the answer is not saved.
+
+- **What is recorded.**
+  - A `verbal_granted` row in the person's evidence log: method `verbal`, scope health, the staff member, the time
+    and the policy version, pending written confirmation.
+  - Every later entry or change is logged as `health_entered`, with who made it. The answer itself is never in
+    the log.
+- **It is used at once.** «Datos de salud» holders see it, and meal turns and priority groups use it.
+- **Written confirmation.** The person's later signature confirms it: the code, or a paper sheet without the health
+  opt-out. This adds a `verbal_confirmed` row linked to the signature. If they sign without health, the answer is
+  deleted at once (`health_deleted`), and no later verbal tick can override that written «no».
+- **Never confirmed.**
+  - Past **Días para confirmar por escrito** (Autorizaciones › Configuración, 15 by default), the person is flagged
+    «Autorización verbal sin confirmar por escrito» (in Autorizaciones and in the portal). Nothing is deleted.
+  - Autorizaciones counts these and can list only them, so you can follow up.
+  - The health purge after the conference still deletes every answer.
+- **What the person writes wins.** An answer the person writes on their own consent page replaces the one entered
+  for them.
+
+A verbal authorization has to be provable. The written confirmation is that proof, so ask for it promptly.
+Whether a verbal authorization meets your obligations is for your own policy and your lawyer to decide.

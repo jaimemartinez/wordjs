@@ -13,6 +13,7 @@ import Hospedajes from "./LodgingTab";
 import ParticipantList from "./ParticipantList";
 import ParticipantSheet from "./ParticipantSheet";
 import { consentT } from "../lib/consentI18n";
+import { PortalPaperConsent } from "./ConsentBits";
 import { familyGroupsOf, isCancelled, personName, pruneSelection, type PortalPerson } from "./participants";
 // «Pagos de cuotas» (conference-manager ≥ 2.18.0): the tab, its data hub and its sheets (feePayments.ts holds the rules).
 import FeePaymentsTab, { FeeSheets, useFeeHub } from "./FeePaymentsTab";
@@ -26,6 +27,7 @@ import { useFieldErrors } from "../lib/useFieldErrors";
 import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Notice, Spinner, captionCls, captionWideCls, cx, headingCls, inputBoldCls, inputCls, selectCls } from "./ui";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
 import { HEALTH_FIELD, healthAnswerError, healthPayload, isHealthField } from "../lib/health";
+import { VerbalHealthConsent } from "../lib/VerbalHealthConsent";
 import { DateField } from "../lib/DateField";
 import { PhoneInput } from "../lib/PhoneInput";
 import { isPhoneField } from "../lib/phone";
@@ -181,6 +183,9 @@ function LocationPortalContent() {
     // search and the price quote work on the other fields.
     const listFields = fields.filter((f) => !isHealthField(f));
     const [healthError, setHealthError] = useState<string | null>(null);
+    // 2.34.0: with «Autorización de datos» on, a health answer needs the person's verbal authorization (ticked here).
+    const [verbalOk, setVerbalOk] = useState(false);
+    const [verbalError, setVerbalError] = useState<string | null>(null);
     const [groups, setGroups] = useState<any[]>([]);
     // Live fee quote for the form being filled (POST /public/quote). `null` = not available yet, or the
     // current values are not quotable (a 400 for an invalid number just hides the line until it is fixed).
@@ -466,6 +471,12 @@ function LocationPortalContent() {
             }
         }
         setHealthError(null);
+        const verbalNeeded = !!healthField && !!(healthField as any).verbal_consent && !!healthPayload(healthField, formData[HEALTH_FIELD] || null);
+        if (verbalNeeded && !verbalOk) {
+            setVerbalError(consentT('es')('verbal.missing'));
+            if (typeof document !== 'undefined') document.getElementById('cm-health-verbal')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            return;
+        }
         setLoading(true);
         try {
             const { [HEALTH_FIELD]: healthValue, ...rest } = formData;
@@ -474,7 +485,7 @@ function LocationPortalContent() {
                 headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
                 // Strings only, trimmed, '' kept — the server canonicalises and runs the required checks. The health
                 // answer travels as its own object.
-                body: JSON.stringify({ ...formBody(rest), ...(healthField ? { [HEALTH_FIELD]: healthPayload(healthField, healthValue || null) } : {}) }),
+                body: JSON.stringify({ ...formBody(rest), ...(healthField ? { [HEALTH_FIELD]: healthPayload(healthField, healthValue || null) } : {}), ...(verbalNeeded ? { health_verbal_consent: true } : {}) }),
                 credentials: 'include'
             });
             if (res.ok) {
@@ -486,6 +497,7 @@ function LocationPortalContent() {
                 setView('list');
                 // Reset form with initials
                 setFormData(initialFormValues(fields));
+                setVerbalOk(false);
                 loadInscriptions();
                 refreshMyLocation();
             } else {
@@ -779,6 +791,10 @@ function LocationPortalContent() {
                     {view === 'list' && badgesOn && inscriptions.length > 0 && (
                         <PortalBadgeBulk authHeaders={portalAuthHeaders} nameOf={nameOf} />
                     )}
+                    {/* «Consentimiento en papel» (2.34.0): only while the conference asks for the authorization. */}
+                    {view === 'list' && inscriptions.some((i: any) => i.consent) && (
+                        <PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} />
+                    )}
                     {view === 'list' ? (
                         <ParticipantList
                             people={inscriptions}
@@ -818,13 +834,19 @@ function LocationPortalContent() {
                                             >
                                                 {(id) => isHealthField(field) ? (
                                                     // «Condiciones de salud» (2.32.0): write-only here — the portal never reads an answer back.
-                                                    <HealthConditionsInput
-                                                        id="cm-health-input"
-                                                        field={field}
-                                                        value={formData[field.name] || null}
-                                                        onChange={(v) => { setFormData({ ...formData, [field.name]: v }); setHealthError(null); }}
-                                                        error={healthError}
-                                                    />
+                                                    <div className="space-y-2">
+                                                        <HealthConditionsInput
+                                                            id="cm-health-input"
+                                                            field={field}
+                                                            value={formData[field.name] || null}
+                                                            onChange={(v) => { setFormData({ ...formData, [field.name]: v }); setHealthError(null); }}
+                                                            error={healthError}
+                                                        />
+                                                        {(field as any).verbal_consent && healthPayload(field, formData[field.name] || null) && (
+                                                            <VerbalHealthConsent id="cm-health-verbal" label={consentT('es')('verbal.statement')} checked={verbalOk}
+                                                                error={verbalError} onChange={(c) => { setVerbalOk(c); setVerbalError(null); }} />
+                                                        )}
+                                                    </div>
                                                 ) : field.is_group ? (
                                                     <GroupPicker
                                                         id={id}
