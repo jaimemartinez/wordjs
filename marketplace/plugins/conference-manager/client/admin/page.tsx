@@ -50,6 +50,8 @@ import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
 import { VerbalHealthConsent } from "../lib/VerbalHealthConsent";
 import { DateField } from "../lib/DateField";
+import { FeeRuleBuilder } from "./FeeRuleBuilder";
+import { FEE_PERSON, describeCondition, draftForField, fromDraft, toDraft } from "../lib/feeRules";
 import { PhoneInput } from "../lib/PhoneInput";
 import { PhoneCountrySetting } from "./PhoneCountrySetting";
 import { isPhoneField } from "../lib/phone";
@@ -3049,19 +3051,6 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
 
 // Pricing Component — base fee + field-driven pricing rules (each rule 'set's or 'add's an amount
 // when the attendee's field value matches a condition). Evaluated server-side on registration.
-const FEE_OPERATORS = [
-    { value: 'eq', label: 'es igual a', needsValue: true },
-    { value: 'neq', label: 'no es igual a', needsValue: true },
-    { value: 'contains', label: 'contiene', needsValue: true },
-    { value: 'gt', label: 'mayor que', needsValue: true },
-    { value: 'gte', label: 'mayor o igual que', needsValue: true },
-    { value: 'lt', label: 'menor que', needsValue: true },
-    { value: 'lte', label: 'menor o igual que', needsValue: true },
-    { value: 'filled', label: 'tiene valor', needsValue: false },
-    { value: 'empty', label: 'está vacío', needsValue: false },
-    { value: 'any', label: 'siempre (sin condición)', needsValue: false },
-];
-
 function PricingPage({ conferenceId }: { conferenceId: number }) {
     const tx = useTx();
     const { language } = useI18n();
@@ -3077,6 +3066,10 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
     const [savingBase, setSavingBase] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [form, setForm] = useState<any>(null);
+    // 2.36.4: the condition being built (lib/feeRules), its error in place, and who a «Personas» rule names.
+    const [draft, setDraft] = useState<any>(null);
+    const [draftErr, setDraftErr] = useState<string | null>(null);
+    const [peopleNames, setPeopleNames] = useState<Map<string, string>>(() => new Map());
     const [repricing, setRepricing] = useState(false);
 
     const load = async () => {
@@ -3089,6 +3082,12 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
             ]);
             setFields(flds || []);
             setRules(rls || []);
+            // A rule on chosen people is listed with their names.
+            if ((rls || []).some((r: any) => r.field_name === FEE_PERSON)) {
+                conferenceApi.feeRuleValues(conferenceId, FEE_PERSON)
+                    .then((r) => setPeopleNames(new Map((r.people || []).map((x: any) => [String(x.id), x.name]))))
+                    .catch(() => { /* listed by number */ });
+            }
             const conf = (confs || []).find((c: any) => c.id === conferenceId);
             setBaseFee(String(conf?.fee_default ?? 0));
         } catch (e: any) { addToast(e?.message || 'Error al cargar precios', 'error'); }
@@ -3103,15 +3102,21 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
         finally { setSavingBase(false); }
     };
 
-    const openNew = () => { setForm({ label: '', field_name: '', operator: 'any', value: '', action: 'set', amount: '', priority: (rules.length + 1) * 10, enabled: 1 }); setShowModal(true); };
-    const openEdit = (r: any) => { setForm({ ...r, amount: String(r.amount) }); setShowModal(true); };
+    const openNew = () => { setForm({ label: '', action: 'set', amount: '', priority: (rules.length + 1) * 10, enabled: 1 }); setDraft(draftForField('', fields)); setDraftErr(null); setShowModal(true); };
+    const openEdit = (r: any) => { setForm({ ...r, amount: String(r.amount) }); setDraft(toDraft(r, fields)); setDraftErr(null); setShowModal(true); };
+    const closeModal = () => { setShowModal(false); setForm(null); setDraft(null); setDraftErr(null); };
 
     const saveRule = async (e: any) => {
         e.preventDefault();
         try {
-            await conferenceApi.saveFeeRule({ ...form, conference_id: conferenceId, amount: Number(form.amount) || 0, priority: Number(form.priority) || 0 });
-            setShowModal(false); setForm(null); addToast('Regla guardada', 'success'); load();
-        } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+            await conferenceApi.saveFeeRule({ ...form, ...fromDraft(draft), conference_id: conferenceId, amount: Number(form.amount) || 0, priority: Number(form.priority) || 0 });
+            closeModal(); addToast('Regla guardada', 'success'); load();
+        } catch (e: any) {
+            // A value the server refuses (an empty list, a backwards range…) is said under the condition.
+            const body = e?.body || e?.data || {};
+            if (body.field === 'value') setDraftErr(e?.message || 'Error');
+            else addToast(e?.message || 'Error', 'error');
+        }
     };
     const toggleRule = async (r: any) => { try { await conferenceApi.saveFeeRule({ ...r, conference_id: conferenceId, enabled: r.enabled ? 0 : 1 }); load(); } catch (e: any) { addToast(e?.message || 'Error', 'error'); } };
     const delRule = async (r: any) => { if (!await confirm(`¿Eliminar la regla "${r.label || 'sin nombre'}"?`, 'Eliminar', true)) return; try { await conferenceApi.deleteFeeRule(r.id); load(); } catch (e: any) { addToast(e?.message || 'Error', 'error'); } };
@@ -3127,9 +3132,7 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
     };
 
     const fieldLabel = (name: string) => fields.find(f => f.name === name)?.label || name;
-    const opLabel = (op: string) => FEE_OPERATORS.find(o => o.value === op)?.label || op;
     const money = (n: any) => '$' + fmtMoney(n);
-    const opNeedsValue = (op: string) => FEE_OPERATORS.find(o => o.value === op)?.needsValue;
 
     if (loading) return <div className="text-center py-20"><div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>;
 
@@ -3188,10 +3191,8 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                                                 {r.action === 'add' ? 'Suma' : 'Fija'} {money(r.amount)}
                                             </span>
                                         </div>
-                                        <div className="text-xs text-gray-500">
-                                            {r.operator === 'any' || !r.field_name
-                                                ? 'Siempre'
-                                                : <>Si <span className="font-bold text-gray-700">{fieldLabel(r.field_name)}</span> {opLabel(r.operator)} {opNeedsValue(r.operator) && <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{r.value}</span>}</>}
+                                        <div className="text-xs text-gray-500" data-fee-rule-cond={r.id}>
+                                            {describeCondition(r, (n) => (n === 'location' ? tx('fee.field.location', 'Localidad') : fieldLabel(n)), tx, (id) => peopleNames.get(id) || `#${id}`)}
                                             <span className="ml-2 text-gray-300">· prioridad {r.priority}</span>
                                         </div>
                                         {isOrphanFeeRule(r, fields) && (
@@ -3216,37 +3217,19 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
             </div>
 
             {/* Rule modal */}
-            {showModal && form && (
+            {showModal && form && draft && (
                 <Overlay layer={1}>
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
-                        <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[92dvh]" data-fee-rule-modal="">
+                        <div className="bg-gray-50/50 px-5 sm:px-8 py-5 border-b border-gray-100 flex items-center justify-between">
                             <h3 className="font-bold text-xl text-gray-900 italic">{form.id ? 'Editar regla' : 'Nueva regla de precio'}</h3>
-                            <button onClick={() => { setShowModal(false); setForm(null); }} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-lg"><i className="fa-solid fa-xmark text-lg"></i></button>
+                            <button type="button" onClick={closeModal} aria-label={tx('close', 'Cerrar')} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-lg"><i className="fa-solid fa-xmark text-lg"></i></button>
                         </div>
-                        <form {...fe.form(saveRule)} className="p-8 space-y-5">
+                        <form {...fe.form(saveRule)} className="p-5 sm:p-8 space-y-5 overflow-y-auto">
                             <div>
                                 <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Nombre de la regla</label>
                                 <input value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="Ej. Estudiantes" className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                                <div className="sm:col-span-1">
-                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Campo</label>
-                                    <Select value={form.field_name} onChange={e => setForm({ ...form, field_name: e.target.value, operator: e.target.value ? (form.operator === 'any' ? 'eq' : form.operator) : 'any' })} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm">
-                                        <option value="">(Siempre)</option>
-                                        {fields.map(f => <option key={f.id} value={f.name}>{f.label}</option>)}
-                                    </Select>
-                                </div>
-                                <div className="sm:col-span-1">
-                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Condición</label>
-                                    <Select value={form.operator} onChange={e => setForm({ ...form, operator: e.target.value })} disabled={!form.field_name} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm disabled:opacity-50">
-                                        {FEE_OPERATORS.filter(o => form.field_name ? o.value !== 'any' : o.value === 'any').map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                                    </Select>
-                                </div>
-                                <div className="sm:col-span-1">
-                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Valor</label>
-                                    <input value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} disabled={!opNeedsValue(form.operator)} placeholder="—" className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm disabled:opacity-40" />
-                                </div>
-                            </div>
+                            <FeeRuleBuilder conferenceId={conferenceId} fields={fields} draft={draft} onChange={(d) => { setDraft(d); setDraftErr(null); }} tx={tx} error={draftErr} />
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div>
                                     <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Acción</label>
@@ -3270,7 +3253,7 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                                 <FieldError message={fe.error('price_priority')} id={fe.errorId('price_priority')} />
                             </div>
                             <div className="flex justify-end gap-3 pt-4 border-t border-gray-50" data-cm-sheet-foot="">
-                                <button type="button" onClick={() => { setShowModal(false); setForm(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">Cancelar</button>
+                                <button type="button" onClick={closeModal} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">Cancelar</button>
                                 <button type="submit" className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition">Guardar regla</button>
                             </div>
                         </form>

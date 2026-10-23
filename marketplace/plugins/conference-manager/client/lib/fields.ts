@@ -122,7 +122,8 @@ export const hasGenderField = (fields: readonly FormFieldLike[] | null | undefin
     (fields || []).some(f => f.name === 'gender');
 
 /** Base columns an assignment rule may name without them being form fields (index.js BASE_RULE_FIELDS ∖ form). */
-const ALWAYS_THERE = new Set(['location']);
+// The locality every person has, and «Personas» (2.36.4: a price rule on chosen people).
+const ALWAYS_THERE = new Set(['location', '__person']);
 
 /** A rule field the form no longer has: the rule reads an always-empty value, so it no longer does anything. */
 export function isMissingField(fieldName: string | null | undefined, fields: readonly FormFieldLike[] | null | undefined): boolean {
