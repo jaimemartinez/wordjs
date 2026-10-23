@@ -29,13 +29,15 @@ registerTranslations({
 // who have no access to the admin Users editor. Lets any user update their profile + personal/recovery
 // email and change their own password (verifying the current one).
 export default function AccountPage() {
-    const { user, logout } = useAuth();
+    const { user, logout, refreshUser } = useAuth();
     const { addToast } = useToast();
     const { t } = useI18n();
     const router = useRouter();
 
     const [displayName, setDisplayName] = useState("");
     const [personalEmail, setPersonalEmail] = useState("");
+    // The primary address is the user's own too (it was editable only by an administrator, from Users).
+    const [email, setEmail] = useState("");
     // The recovery address is sudo-gated on the backend, so this form needs its OWN password field —
     // the one below belongs to the change-password form and never travels with a profile save. Without
     // it, writing a recovery address (which for most accounts is EMPTY, so the first write is already a
@@ -44,7 +46,7 @@ export default function AccountPage() {
     // What the account HELD when the form was seeded — the comparison base for "did a gated field really
     // change". Seeded by the same effect as the inputs, so the two can never disagree for a render (a
     // freshly-mounted form must never look like an edit).
-    const [loaded, setLoaded] = useState<{ personalEmail: string }>({ personalEmail: "" });
+    const [loaded, setLoaded] = useState<{ personalEmail: string; email: string }>({ personalEmail: "", email: "" });
     const [savingProfile, setSavingProfile] = useState(false);
 
     const [currentPassword, setCurrentPassword] = useState("");
@@ -57,24 +59,94 @@ export default function AccountPage() {
     const [sessionsPassword, setSessionsPassword] = useState("");
     const [endingSessions, setEndingSessions] = useState(false);
 
+    // Profile picture, data export and deleting the account (M2-13 / X2-06).
+    const [avatarBusy, setAvatarBusy] = useState(false);
+    const [exporting, setExporting] = useState(false);
+    const [deletePassword, setDeletePassword] = useState("");
+    const [deleteConfirm, setDeleteConfirm] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+
+    const changeAvatar = async (file: File | undefined) => {
+        if (!file) return;
+        setAvatarBusy(true);
+        try {
+            await usersApi.uploadAvatar(file);
+            await refreshUser();
+            addToast(t('account.avatar.updated'), "success");
+        } catch (err: any) {
+            addToast(apiErrorText(t, err, 'account.avatar.error'), "error");
+        } finally {
+            setAvatarBusy(false);
+        }
+    };
+
+    const removeAvatar = async () => {
+        setAvatarBusy(true);
+        try {
+            await usersApi.removeAvatar();
+            await refreshUser();
+        } catch (err: any) {
+            addToast(apiErrorText(t, err, 'account.avatar.error'), "error");
+        } finally {
+            setAvatarBusy(false);
+        }
+    };
+
+    const exportData = async () => {
+        setExporting(true);
+        try {
+            const blob = await usersApi.exportMe();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "account-" + String(user?.id ?? "me") + ".json";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (err: any) {
+            addToast(apiErrorText(t, err, 'account.export.error'), "error");
+        } finally {
+            setExporting(false);
+        }
+    };
+
+    const deleteAccount = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!deleteConfirm) return;
+        setDeleting(true);
+        try {
+            await usersApi.deleteMe(deletePassword);
+            addToast(t('account.delete.done'), "success");
+            setTimeout(() => { logout(); router.replace("/login"); }, 900);
+        } catch (err: any) {
+            addToast(isBadCurrentPassword(err)
+                ? apiErrorText(t, err, 'account.currentPassword')
+                : apiErrorText(t, err, 'account.delete.error'), "error");
+            setDeleting(false);
+        }
+    };
+
     useEffect(() => {
         if (user) {
             setDisplayName(user.displayName || "");
             setPersonalEmail(user.personalEmail || "");
-            setLoaded({ personalEmail: user.personalEmail || "" });
+            setEmail(user.email || "");
+            setLoaded({ personalEmail: user.personalEmail || "", email: user.email || "" });
         }
     }, [user]);
 
     // ONE source for "does this save need the password?" — shared with the user editor and the user
     // modal (see selfEditNeedsCurrentPassword in lib/api). Renaming yourself still needs nothing.
-    const profileNeedsPassword = selfEditNeedsCurrentPassword(loaded, { personalEmail });
+    const profileNeedsPassword = selfEditNeedsCurrentPassword(loaded, { personalEmail, email });
 
     const saveProfile = async (e: React.FormEvent) => {
         e.preventDefault();
         setSavingProfile(true);
         try {
-            await usersApi.updateMe(withSudoProof(loaded, { displayName, personalEmail }, profilePassword));
-            setLoaded({ personalEmail });
+            await usersApi.updateMe(withSudoProof(loaded, { displayName, personalEmail, email }, profilePassword));
+            setLoaded({ personalEmail, email });
+            await refreshUser();
             setProfilePassword("");
             addToast(t('account.profileUpdated'), "success");
         } catch (err: any) {
@@ -145,8 +217,26 @@ export default function AccountPage() {
                     {/* Identity summary (sticky on desktop) */}
                     <aside className={`${cardCls} lg:sticky lg:top-4`}>
                         <div className="flex flex-col items-center text-center">
-                            <div className="w-20 h-20 shrink-0 rounded-3xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-3xl font-black shadow-lg shadow-blue-500/30">
-                                {initials}
+                            {user?.avatarUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element -- a 256px WebP the server made
+                                <img src={user.avatarUrl} alt="" className="w-20 h-20 shrink-0 rounded-3xl object-cover shadow-lg shadow-blue-500/30" />
+                            ) : (
+                                <div className="w-20 h-20 shrink-0 rounded-3xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-3xl font-black shadow-lg shadow-blue-500/30">
+                                    {initials}
+                                </div>
+                            )}
+                            <div className="mt-3 flex flex-wrap justify-center gap-2" data-testid="account-avatar-controls">
+                                <label className={"min-h-11 inline-flex items-center px-3 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 cursor-pointer " + (avatarBusy ? "opacity-50 pointer-events-none" : "")}>
+                                    <i className="fa-solid fa-camera mr-1.5" aria-hidden="true"></i>{t('account.avatar.change')}
+                                    <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" className="sr-only" disabled={avatarBusy}
+                                        onChange={(e) => { changeAvatar(e.target.files?.[0]); e.target.value = ""; }} />
+                                </label>
+                                {user?.avatarUrl && (
+                                    <button type="button" onClick={removeAvatar} disabled={avatarBusy}
+                                        className="min-h-11 px-3 rounded-xl text-xs font-bold text-gray-500 hover:text-red-600 disabled:opacity-50">
+                                        {t('account.avatar.remove')}
+                                    </button>
+                                )}
                             </div>
                             <h2 className="mt-4 text-lg font-black text-gray-900 tracking-tight break-words">{user?.displayName || user?.username}</h2>
                             {/* The role's NAME, as the sidebar's user chip shows it (lib/roleOptions.ts roleDisplayName):
@@ -178,6 +268,10 @@ export default function AccountPage() {
                                 <div>
                                     <label htmlFor="account-field-1" className={labelCls}>{t('account.displayName')}</label>
                                     <input id="account-field-1" type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
+                                </div>
+                                <div>
+                                    <label htmlFor="account-field-email" className={labelCls}>{t('account.email')}</label>
+                                    <input id="account-field-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" className={inputCls} />
                                 </div>
                                 <div>
                                     <label htmlFor="account-field-2" className={labelCls}>{t('account.personalEmail')}</label>
@@ -239,6 +333,39 @@ export default function AccountPage() {
                                 </button>
                             </div>
                         </form>
+
+                        {/* Your data: take it with you, or close the account */}
+                        <div className={cardCls + " space-y-6"} data-testid="account-data">
+                            <div>
+                                <h2 className="font-bold text-gray-800">{t('account.data.title')}</h2>
+                                <p className="text-sm text-gray-500 mt-2 leading-relaxed">{t('account.export.help')}</p>
+                                <div className="mt-4">
+                                    <button type="button" onClick={exportData} disabled={exporting} className={btnCls}>
+                                        <i className="fa-solid fa-download mr-2" aria-hidden="true"></i>{exporting ? t('account.saving') : t('account.export.action')}
+                                    </button>
+                                </div>
+                            </div>
+                            <form onSubmit={deleteAccount} className="pt-6 border-t border-gray-100 space-y-4">
+                                <div>
+                                    <h3 className="font-bold text-red-700">{t('account.delete.title')}</h3>
+                                    <p className="text-sm text-gray-500 mt-2 leading-relaxed">{t('account.delete.help')}</p>
+                                </div>
+                                <div className="max-w-md">
+                                    <label htmlFor="account-field-delete" className={labelCls}>{t('account.currentPassword')}</label>
+                                    <input id="account-field-delete" type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
+                                </div>
+                                <label className="flex items-start gap-2 text-sm text-gray-700 min-h-11">
+                                    <input type="checkbox" checked={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.checked)} className="mt-1" />
+                                    <span>{t('account.delete.confirm')}</span>
+                                </label>
+                                <div className="flex justify-end">
+                                    <button type="submit" disabled={deleting || !deletePassword || !deleteConfirm}
+                                        className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-50">
+                                        {deleting ? t('account.saving') : t('account.delete.action')}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
                     </div>
                 </div>
             </div>

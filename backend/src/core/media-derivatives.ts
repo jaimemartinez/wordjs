@@ -258,9 +258,17 @@ async function generateImageDerivatives(filePath: string, mimeType: string): Pro
                 // Ladder files are named by width alone: with fit:'inside' the height is derived
                 // from the source ratio, so a `<w>x<h>` name built from the TARGET would claim a
                 // height the file does not have.
+                // The same holds for a fitted (not cropped) w×h size: «medium» 300×300 of a 3:2 photo IS
+                // 300×200, and its name said 300x300 (QA S1-23). Name it by the dimensions fit:'inside'
+                // produces; a cropped size really is w×h.
+                const fitted = (() => {
+                    if (s.h === null || s.crop) return { w: s.w, h: s.h };
+                    const scale = Math.min(s.w / width, (s.h as number) / height, 1);
+                    return { w: Math.max(1, Math.round(width * scale)), h: Math.max(1, Math.round(height * scale)) };
+                })();
                 const sizeFilename = s.h === null
                     ? `${baseName}-${s.w}w${ext}`
-                    : `${baseName}-${s.w}x${s.h}${ext}`;
+                    : `${baseName}-${fitted.w}x${fitted.h}${ext}`;
                 const sizePath = path.join(dir, sizeFilename);
 
                 const resizeOp = s.crop

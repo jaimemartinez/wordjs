@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { menusApi, pluginsApi, postsApi, Menu, MenuItem, Post } from "@/lib/api";
+import { menusApi, pluginsApi, postsApi, categoriesApi, tagsApi, Menu, MenuItem, Post, Category, Tag } from "@/lib/api";
+import MenuSourcePicker, { type MenuSourceEntry } from "./MenuSourcePicker";
+import { flattenMenu, indent, moveWithinSiblings, outdent, parentCandidates, type MenuWrite } from "@/lib/menuTree";
 import { useToast } from "@/contexts/ToastContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
 import ModernSelect from "@/components/ModernSelect";
@@ -14,6 +16,10 @@ export default function MenusPage() {
     const [activeMenuId, setActiveMenuId] = useState<number | null>(null);
     const [activeMenu, setActiveMenu] = useState<Menu | null>(null);
     const [pages, setPages] = useState<Post[]>([]);
+    // The other things a menu can point at (QA S1-14): published posts, categories and tags.
+    const [posts, setPosts] = useState<Post[]>([]);
+    const [categories, setCategories] = useState<Category[]>([]);
+    const [tags, setTags] = useState<Tag[]>([]);
     const [locations, setLocations] = useState<Record<string, number>>({});
 
     // Forms
@@ -94,6 +100,37 @@ export default function MenusPage() {
             setPages(data);
         } catch {
             addToast(t('menus.loadPagesError'), "error");
+        }
+        postsApi.list("post", "publish").then(setPosts).catch(() => setPosts([]));
+        categoriesApi.listAll().then((r) => setCategories(r.data)).catch(() => setCategories([]));
+        tagsApi.list({ perPage: 100, orderby: "name", order: "asc" }).then(setTags).catch(() => setTags([]));
+    };
+
+    /** Add the picked entries at the end of the menu's top level, in the order they were listed. */
+    const addEntries = async (entries: MenuSourceEntry[]) => {
+        if (!activeMenuId || entries.length === 0) return;
+        const topLevel = (activeMenu?.items || []).filter((i) => !(Number(i.parent) > 0)).length;
+        try {
+            for (let i = 0; i < entries.length; i++) {
+                const e = entries[i];
+                await menusApi.addItem(activeMenuId, { title: e.title, url: e.url, type: e.type, objectId: e.objectId, order: topLevel + i });
+            }
+            loadMenu(activeMenuId);
+            addToast(t('menus.pageAddedSuccess'), "success");
+        } catch {
+            addToast(t('menus.pageAddedError'), "error");
+        }
+    };
+
+    /** Persist a tree move (lib/menuTree), then reload. */
+    const applyMove = async (writes: MenuWrite[]) => {
+        if (!activeMenuId || writes.length === 0) return;
+        try {
+            for (const w of writes) await menusApi.updateItem(w.id, { ...(w.order !== undefined ? { order: w.order } : {}), ...(w.parent !== undefined ? { parent: w.parent } : {}) });
+            loadMenu(activeMenuId);
+            addToast(t('menus.reorderSuccess'), "success");
+        } catch {
+            addToast(t('menus.itemUpdatedError'), "error");
         }
     };
 
@@ -222,7 +259,7 @@ export default function MenusPage() {
             setEditingItemId(null);
         } else {
             setEditingItemId(item.id);
-            setEditFormData({ title: item.title, url: item.url, target: item.target });
+            setEditFormData({ title: item.title, url: item.url, target: item.target || "_self", parent: Number(item.parent) || 0 });
         }
     };
 
@@ -245,24 +282,8 @@ export default function MenusPage() {
     // Reorder a menu item by swapping positions with its neighbour and persisting
     // the new `order` values via the existing update API. Index-based so it stays
     // correct even if stored orders are sparse or duplicated.
-    const moveItem = async (item: MenuItem, direction: 'up' | 'down') => {
-        if (!activeMenu || !activeMenuId) return;
-        const sorted = [...activeMenu.items].sort((a, b) => a.order - b.order);
-        const idx = sorted.findIndex(i => i.id === item.id);
-        const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-        if (idx === -1 || swapIdx < 0 || swapIdx >= sorted.length) return;
-        const neighbor = sorted[swapIdx];
-        try {
-            await Promise.all([
-                menusApi.updateItem(item.id, { order: swapIdx }),
-                menusApi.updateItem(neighbor.id, { order: idx }),
-            ]);
-            loadMenu(activeMenuId);
-            addToast(t('menus.reorderSuccess'), "success");
-        } catch {
-            addToast(t('menus.itemUpdatedError'), "error");
-        }
-    };
+    // Up/down among its siblings; indent/outdent change the level (submenus). lib/menuTree computes the writes.
+    const moveItem = (item: MenuItem, direction: 'up' | 'down') => applyMove(moveWithinSiblings(activeMenu?.items || [], item, direction));
 
     return (
         <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 flex flex-col pb-20">
@@ -380,46 +401,15 @@ export default function MenusPage() {
                                 </div>
                             </div>
 
-                            {/* Pages */}
-                            <div className="p-6 group hover:bg-indigo-50/5 transition-colors">
-                                <div className="flex items-center gap-3 mb-4">
-                                    <div className="w-8 h-8 shrink-0 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">
-                                        <i className="fa-regular fa-file-lines"></i>
-                                    </div>
-                                    <h4 className="font-bold text-sm text-gray-700">{t('menus.pages')}</h4>
-                                </div>
-
-                                {pages.length === 0 ? (
-                                    <p className="text-sm text-gray-400 italic font-medium">{t('menus.noPagesAvailable')}</p>
-                                ) : (
-                                    <div className="space-y-4">
-                                        <div className="max-h-48 overflow-y-auto custom-scrollbar border-2 border-gray-100 rounded-xl bg-gray-50/30 p-2">
-                                            {pages.map(page => (
-                                                <label key={page.id} className="flex items-center p-3 hover:bg-white hover:shadow-sm rounded-lg cursor-pointer transition-all mb-1 last:mb-0">
-                                                    <div className="relative flex items-center">
-                                                        <input
-                                                            type="radio"
-                                                            name="pageSelect"
-                                                            value={page.id}
-                                                            checked={selectedPageId === String(page.id)}
-                                                            onChange={e => setSelectedPageId(e.target.value)}
-                                                            className="peer h-4 w-4 cursor-pointer appearance-none rounded-full border-2 border-gray-300 checked:border-indigo-500 checked:bg-indigo-500 transition-all"
-                                                        />
-                                                    </div>
-                                                    <span className="ml-3 text-sm font-medium text-gray-700 truncate">{page.title}</span>
-                                                </label>
-                                            ))}
-                                        </div>
-                                        <button
-                                            onClick={addPageLink}
-                                            disabled={!activeMenuId || !selectedPageId}
-                                            className="w-full py-3 bg-white border-2 border-gray-100 hover:border-indigo-500 hover:text-indigo-600 text-gray-600 rounded-xl transition-all text-sm font-black uppercase tracking-widest disabled:opacity-50 hover:shadow-lg hover:-translate-y-0.5"
-                                        >
-                                            {t('menus.addPage')}
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
+                            {/* Pages, posts, categories, tags — several at once (QA S1-14) */}
+                            <MenuSourcePicker title={t('menus.pages')} icon="fa-file-lines" disabled={!activeMenuId} onAdd={addEntries}
+                                entries={pages.map((p) => ({ key: "page-" + p.id, title: p.title || "#" + p.id, url: "/" + (p.slug || p.id), type: "post", objectId: p.id }))} />
+                            <MenuSourcePicker title={t('menus.posts')} icon="fa-newspaper" disabled={!activeMenuId} onAdd={addEntries}
+                                entries={posts.map((p) => ({ key: "post-" + p.id, title: p.title || "#" + p.id, url: "/" + (p.slug || p.id), type: "post", objectId: p.id }))} />
+                            <MenuSourcePicker title={t('menus.categories')} icon="fa-folder" disabled={!activeMenuId} onAdd={addEntries}
+                                entries={categories.map((c) => ({ key: "cat-" + c.id, title: c.name, url: "/category/" + encodeURIComponent(c.slug), type: "taxonomy", objectId: c.id }))} />
+                            <MenuSourcePicker title={t('menus.tags')} icon="fa-tag" disabled={!activeMenuId} onAdd={addEntries}
+                                entries={tags.map((c) => ({ key: "tag-" + c.id, title: c.name, url: "/tag/" + encodeURIComponent(c.slug), type: "taxonomy", objectId: c.id }))} />
 
                             {/* System Pages */}
                             <div className="p-6 group hover:bg-purple-50/5 transition-colors">
@@ -523,10 +513,12 @@ export default function MenusPage() {
                                 </div>
                             ) : (
                                 <div className="space-y-4 max-w-3xl mx-auto">
-                                    {[...activeMenu.items].sort((a, b) => a.order - b.order).map((item, index, arr) => (
+                                    {flattenMenu(activeMenu.items).map(({ item, depth }) => (
                                         <div
                                             key={item.id}
-                                            className={`group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 ${editingItemId === item.id ? 'border-2 border-blue-500 ring-4 ring-blue-500/10 z-20 relative scale-[1.02]' : 'border border-gray-100 hover:border-blue-200 hover:-translate-y-1'}`}
+                                            style={depth ? { marginInlineStart: Math.min(depth, 4) * 2 + "rem" } : undefined}
+                                            data-menu-depth={depth}
+                                            className={`group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 ${editingItemId === item.id ? 'border-2 border-blue-500 ring-4 ring-blue-500/10 relative' : 'border border-gray-100 hover:border-blue-200'}`}
                                         >
                                             {/* Item Header */}
                                             <div className="p-3 sm:p-4 sm:pl-6 flex items-center justify-between gap-2">
@@ -535,7 +527,7 @@ export default function MenusPage() {
                                                     <div className="flex flex-col pointer-coarse:flex-row shrink-0">
                                                         <button
                                                             onClick={() => moveItem(item, 'up')}
-                                                            disabled={index === 0}
+                                                            disabled={moveWithinSiblings(activeMenu.items, item, 'up').length === 0}
                                                             aria-label={t('menus.moveUp')}
                                                             className="w-7 h-6 flex items-center justify-center text-gray-300 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-gray-300 disabled:cursor-not-allowed transition-colors"
                                                         >
@@ -543,7 +535,7 @@ export default function MenusPage() {
                                                         </button>
                                                         <button
                                                             onClick={() => moveItem(item, 'down')}
-                                                            disabled={index === arr.length - 1}
+                                                            disabled={moveWithinSiblings(activeMenu.items, item, 'down').length === 0}
                                                             aria-label={t('menus.moveDown')}
                                                             className="w-7 h-6 flex items-center justify-center text-gray-300 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-gray-300 disabled:cursor-not-allowed transition-colors"
                                                         >
@@ -559,6 +551,16 @@ export default function MenusPage() {
                                                 </div>
 
                                                 <div className="flex items-center gap-2">
+                                                    <button type="button" onClick={() => applyMove(outdent(activeMenu.items, item))} disabled={outdent(activeMenu.items, item).length === 0}
+                                                        aria-label={t('menus.outdent')} title={t('menus.outdent')}
+                                                        className="w-11 h-11 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all disabled:opacity-30 disabled:pointer-events-none">
+                                                        <i className="fa-solid fa-outdent" aria-hidden="true"></i>
+                                                    </button>
+                                                    <button type="button" onClick={() => applyMove(indent(activeMenu.items, item))} disabled={indent(activeMenu.items, item).length === 0}
+                                                        aria-label={t('menus.indent')} title={t('menus.indent')}
+                                                        className="w-11 h-11 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all disabled:opacity-30 disabled:pointer-events-none">
+                                                        <i className="fa-solid fa-indent" aria-hidden="true"></i>
+                                                    </button>
                                                     <button
                                                         type="button"
                                                         onClick={() => startEditing(item)}
@@ -605,6 +607,22 @@ export default function MenusPage() {
                                                                 />
                                                             </div>
                                                         )}
+                                                        <label className="flex items-center gap-3 text-sm font-medium text-gray-700 min-h-11">
+                                                            <input type="checkbox" checked={editFormData.target === "_blank"}
+                                                                onChange={(e) => setEditFormData({ ...editFormData, target: e.target.checked ? "_blank" : "_self" })} className="h-4 w-4" />
+                                                            {t('menus.openNewTab')}
+                                                        </label>
+                                                        <div>
+                                                            <label htmlFor={`menu-item-parent-${item.id}`} className="block text-[11px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('menus.parentItem')}</label>
+                                                            <select id={`menu-item-parent-${item.id}`} value={String(editFormData.parent ?? 0)}
+                                                                onChange={(e) => setEditFormData({ ...editFormData, parent: Number(e.target.value) })}
+                                                                className="w-full min-h-11 bg-white border-2 border-gray-200 rounded-xl px-3 text-sm font-medium text-gray-700">
+                                                                <option value="0">{t('menus.parentNone')}</option>
+                                                                {parentCandidates(activeMenu.items, item).map((p) => (
+                                                                    <option key={p.id} value={String(p.id)}>{p.title}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
                                                         <div className="flex justify-end gap-3 pt-2">
                                                             <button
                                                                 onClick={cancelEditing}

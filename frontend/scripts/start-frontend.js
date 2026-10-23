@@ -77,28 +77,57 @@ function prepareEnv() {
     return env;
 }
 
-// server.js exits with this code to be started again with freshly prepared wiring: the gateway next to it
-// changed its protocol or certificate (Admin → Security), which the trust bundle and the loopback origin
-// above are derived from. Same convention as the backend's restart from the panel (core/restart).
-const RESTART_EXIT_CODE = 75;
+// server.js exits with RESTART_EXIT_CODE to be started again with freshly prepared wiring: the gateway next
+// to it changed its protocol or certificate (Admin → Security), which the trust bundle and the loopback
+// origin above are derived from. Same convention as the backend's restart from the panel (core/restart).
+// Any other stop that is not a clean exit is a crash and is restarted with a back-off (scripts/frontend-supervisor.js).
+const { STABLE_AFTER_MS, backoffMs, nextAction } = require('./frontend-supervisor');
 
 console.log(`🚀 Starting Autonomous Frontend in ${process.env.NODE_ENV} mode on port ${port}...`);
 
-// 3. Spawn Custom Server
+let child = null;
+let stopping = false;
+let consecutiveCrashes = 0;
+let startedAt = Date.now();
+
+// 3. Spawn Custom Server — this very node binary, no shell in between: a shell parent could be killed alone
+// and leave server.js running with nobody to supervise it (QA S2-03).
 function startServer() {
-    const server = spawn('node', ['server.js'], {
+    startedAt = Date.now();
+    child = spawn(process.execPath, ['server.js'], {
         stdio: 'inherit',
-        shell: true,
         env: prepareEnv(),
     });
 
-    server.on('close', (code) => {
-        if (code === RESTART_EXIT_CODE) {
+    child.on('error', (err) => {
+        console.error('❌ Could not start the frontend server:', err);
+    });
+
+    child.on('close', (code, signal) => {
+        child = null;
+        const next = nextAction(code, signal, stopping);
+        if (next.action === 'exit') process.exit(next.code);
+        if (next.action === 'restart') {
             console.log('🔄 The gateway next to this frontend changed its protocol or certificate: restarting with the new wiring...');
             setTimeout(startServer, 500);
             return;
         }
-        process.exit(code);
+        if (Date.now() - startedAt > STABLE_AFTER_MS) consecutiveCrashes = 0;
+        consecutiveCrashes++;
+        const delay = backoffMs(consecutiveCrashes);
+        console.error(`💥 The frontend server stopped (${signal ? 'signal ' + signal : 'exit code ' + code}); starting it again in ${Math.round(delay / 1000)} s` +
+            (consecutiveCrashes > 1 ? ` (crash ${consecutiveCrashes} in a row)` : '') + '...');
+        setTimeout(() => { if (!stopping) startServer(); }, delay);
     });
 }
+
+// Told to stop (concurrently, systemd, Ctrl+C): pass it on and exit when server.js has, never restart it.
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    process.on(sig, () => {
+        stopping = true;
+        if (child) child.kill(sig);
+        else process.exit(0);
+    });
+}
+
 startServer();

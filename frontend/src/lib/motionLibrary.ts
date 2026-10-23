@@ -269,3 +269,21 @@ export function presetUsageByPage(
 
 /** Where the admin edits a page or a post. */
 export const editorHref = (p: { id: number; type: string }): string => `/admin/${p.type === "post" ? "posts" : "pages"}/${p.id}`;
+
+/**
+ * Every entry of a type, page by page (100 at a time, at most `maxPages`). The usage scan read
+ * `postsApi.list()` — the server's FIRST page of 10 — so a motion used by any older entry showed
+ * «Not used yet» (QA S1-23).
+ */
+export async function listAllEntries<T>(
+    listPage: (page: number) => Promise<{ data: T[]; totalPages: number }>,
+    maxPages = 20,
+): Promise<T[]> {
+    const out: T[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+        const res = await listPage(page);
+        out.push(...res.data);
+        if (page >= (res.totalPages || 1)) break;
+    }
+    return out;
+}

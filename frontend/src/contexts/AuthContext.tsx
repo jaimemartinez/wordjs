@@ -26,6 +26,8 @@ interface User {
     roleName?: string | null;
     capabilities: string[];
     personalEmail?: string | null;
+    /** The uploaded profile picture (a site-relative /uploads/avatars/… path), or null. */
+    avatarUrl?: string | null;
     mfa?: MfaStatus;
     /** Multisite only (GET /auth/me): is this the network's main site, and is the user a network administrator. */
     network?: { mainSite: boolean; networkAdmin: boolean };
@@ -44,7 +46,7 @@ interface LoginResult {
 
 interface AuthContextType {
     user: User | null;
-    login: (username: string, password: string) => Promise<LoginResult>;
+    login: (username: string, password: string, remember?: boolean) => Promise<LoginResult>;
     verifyMfa: (mfaToken: string, code: string) => Promise<LoginResult>;
     logout: () => void;
     refreshUser: () => Promise<void>;
@@ -293,14 +295,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return () => window.removeEventListener(SESSION_ENDED_EVENT, onSessionEnded);
     }, []);
 
-    const login = useCallback(async (username: string, password: string): Promise<LoginResult> => {
+    const login = useCallback(async (username: string, password: string, remember = true): Promise<LoginResult> => {
         try {
             const res = await fetch(`${API_URL}/auth/login`, {
                 method: "POST",
                 // A STALE session cookie from a previous sign-in still makes this a cookie-carrying
                 // mutation as far as the gate is concerned, so the token travels here too.
                 headers: { "Content-Type": "application/json", ...csrfHeaders() },
-                body: JSON.stringify({ username, password }),
+                body: JSON.stringify({ username, password, remember }),
                 credentials: "include", // Receive and store HttpOnly cookie
             });
 

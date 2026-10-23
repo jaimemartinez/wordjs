@@ -61,6 +61,9 @@ const CASES: Case[] = [
     { why: "a blank primary email means 'left alone', never 'cleared'", submitted: { email: "" }, needsPassword: false },
     { why: "a whitespace-only primary email is equally 'left alone'", submitted: { email: "   " }, needsPassword: false },
     { why: "an absent primary email", submitted: { email: undefined }, needsPassword: false },
+    // FALLOS 125: a grant that binds the email (the mail plugin's «Professional email account») rewrites it
+    // in the form to <username>@<mail domain> — a primary-address change like any other.
+    { why: "a primary email rewritten by a plugin grant", submitted: { email: "owner@mail.example.com", personalEmail: "owner@personal.test", accountCapabilities: { mail_server_mailbox: true } } as never, needsPassword: true },
 
     // ── the recovery email ───────────────────────────────────────────────────────────────────────
     { why: "a different recovery email", submitted: { personalEmail: "new@personal.test" }, needsPassword: true },
@@ -150,11 +153,11 @@ function walk(dir: string, out: string[] = []): string[] {
  * entry is a live bug, not an exemption. Adding a screen here instead of wiring it re-creates exactly
  * the "the hardened surface got its UI and the twin did not" pattern this file exists to stop.
  *
- *   • UserFormModal.tsx — the users-list modal is the third editor of the same record and posts the whole
- *     form with no password, so an administrator editing their OWN row from the list is still refused.
- *     Handed off: it is outside the files this change owns.
+ * Empty: UserFormModal.tsx, the users-list modal, was the last one — an administrator editing their OWN
+ * row there (a new password, or «Professional email account», whose plugin rewrites the email) was
+ * refused with «current password incorrect» and no field to type it in (FALLOS 125).
  */
-const KNOWN_UNWIRED = ["UserFormModal.tsx"];
+const KNOWN_UNWIRED: string[] = [];
 
 describe("the screens that submit a user update", () => {
     const CALL = /usersApi\.(update|updateMe)\s*\(/g;

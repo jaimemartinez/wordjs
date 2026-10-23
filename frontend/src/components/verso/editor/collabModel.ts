@@ -239,7 +239,8 @@ export function selectionsByNode(
 export function presenceAnnouncement(status: CollabStatus, members: readonly CollabMember[], lang: Language = "es"): string {
     const view = statusView(status);
     const state = trStr(view.text, lang);
-    if (members.length === 0) return trFmt("{state}. Nadie más está editando esta página.", lang, { state });
+    // «it», not «this page»: the same chip sits on posts too (QA S1-19).
+    if (members.length === 0) return trFmt("{state}. Nadie más lo está editando.", lang, { state });
     const names = members.map((m) => String(m.name || "").trim() || trStr("Alguien", lang));
     if (names.length === 1) return trFmt("{state}. {name} está editando esta página.", lang, { state, name: names[0] });
     return trFmt("{state}. {names} y {last} están editando esta página.", lang, {

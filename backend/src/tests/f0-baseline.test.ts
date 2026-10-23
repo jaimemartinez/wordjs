@@ -162,6 +162,8 @@ describe('F0 live REST characterization', () => {
             fonts: '/api/v1/fonts',
             certificates: '/api/v1/system/certs',
             serverSettings: '/api/v1/system/server',
+            // Added with Settings → Performance (routes/redis-settings.ts): the Redis server from the panel.
+            redisSettings: '/api/v1/system/redis',
             cluster: '/api/v1/system/cluster',
             update: '/api/v1/system/update',
             health: '/api/v1/health',

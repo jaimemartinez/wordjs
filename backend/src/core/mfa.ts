@@ -46,15 +46,18 @@ function generateBackupCodes(n = N_BACKUP): { codes: string[]; hashes: string[] 
  * It is good for ONE session: its id (`jti`) is recorded when a code completes the sign-in, and a used
  * challenge is refused (it used to mint a second session with the next code for as long as it lived).
  */
-function signChallenge(userId: number): string {
+function signChallenge(userId: number, opts: { remember?: boolean } = {}): string {
     const jti = crypto.randomBytes(12).toString('base64url');
-    return require('./site-keys').signForSite({ userId, purpose: 'mfa_challenge', jti }, { algorithm: 'HS256', expiresIn: CHALLENGE_TTL });
+    // «Remember me» from the password step, carried to POST /auth/mfa where the session is issued.
+    const claims: Record<string, unknown> = { userId, purpose: 'mfa_challenge', jti };
+    if (opts.remember === false) claims.rem = false;
+    return require('./site-keys').signForSite(claims, { algorithm: 'HS256', expiresIn: CHALLENGE_TTL });
 }
-function verifyChallenge(token: string): { userId: number; jti?: string; exp?: number } | null {
+function verifyChallenge(token: string): { userId: number; jti?: string; exp?: number; remember: boolean } | null {
     try {
         const d = require('./site-keys').verifyForSite(token);
         if (d.purpose !== 'mfa_challenge' || !d.userId) return null;
-        return { userId: d.userId, jti: typeof d.jti === 'string' ? d.jti : undefined, exp: Number(d.exp) || undefined };
+        return { userId: d.userId, jti: typeof d.jti === 'string' ? d.jti : undefined, exp: Number(d.exp) || undefined, remember: d.rem !== false };
     } catch { return null; }
 }
 

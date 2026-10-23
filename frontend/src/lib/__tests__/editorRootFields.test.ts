@@ -281,17 +281,20 @@ describe("resolveTagsForSave — mismo fail-safe que las categorías", () => {
 });
 
 describe("tagsField — sólo se puede asignar lo que EXISTE, y nada del registro se queda sin opción", () => {
-    const asArrayField = (f: VersoField) =>
-        f as unknown as {
+    // A custom control (chips + pick an existing tag + create one, QA S1-23) whose choices are still
+    // exactly the tags that exist, by id, sorted by name.
+    const asArrayField = (f: VersoField) => {
+        const c = f as unknown as {
             type: string;
-            arrayFields: { tag: { type: string; options: Array<{ label: string; value: string }> } };
+            options: Array<{ label: string; value: string }>;
             getItemSummary: (item: Record<string, unknown>, index?: number) => string;
         };
+        return { ...c, arrayFields: { tag: { type: "select", options: c.options } } };
+    };
 
-    it("es un array de selects con el id como valor, ordenado por nombre", () => {
+    it("es un control propio cuyas opciones son los ids que existen, ordenados por nombre", () => {
         const f = asArrayField(tagsField(TAGS));
-        expect(f.type).toBe("array");
-        expect(f.arrayFields.tag.type).toBe("select");
+        expect(f.type).toBe("custom");
         expect(f.arrayFields.tag.options).toEqual([
             { label: "Elige una etiqueta", value: "" },
             { label: "Astro", value: "12" },
@@ -401,7 +404,7 @@ describe("withRecordRootFields — composición sobre los campos del registro", 
             "og_image",
             "noindex",
         ]);
-        expect(fields.tags.type).toBe("array");
+        expect(fields.tags.type).toBe("custom");
     });
 
     it("sin lista de etiquetas NO se compone el campo (páginas no llevan taxonomía)", () => {

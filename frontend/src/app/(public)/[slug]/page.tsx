@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
-import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
+import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound, getLatestPostsPage } from "@/lib/server-api";
+import BlogRoll from "@/components/public/BlogRoll";
+import { isPostsPage, postsPageHref } from "@/lib/public/postsPage";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
 // The site's hottest route serves from the Full-Route Cache: no request-header/searchParams reads
@@ -58,6 +60,19 @@ export default async function SinglePostPage(
         resolveSiteBase(),
     ]);
     if (!post || !isRoutedEntry(post)) contentNotFound();
+    // The posts page (Settings → Reading) shows the blog roll, page 1 (lib/public/postsPage).
+    if (isPostsPage(post, settings)) {
+        const roll = await getLatestPostsPage(1);
+        const slugOf = post.slug || String(post.id);
+        return (
+            <ThemeTemplate kind="home">
+                <div className="space-y-4">
+                    <h1 className="sr-only">{post.title}</h1>
+                    <BlogRoll posts={roll.posts} page={roll.page} totalPages={roll.totalPages} settings={settings!} hrefFor={(n) => postsPageHref(slugOf, n)} />
+                </div>
+            </ThemeTemplate>
+        );
+    }
     // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
     const withBlocks = await withResolvedBlocks(post);
     return (

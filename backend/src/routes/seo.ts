@@ -340,7 +340,8 @@ router.get('/sitemap-:kind-:page.xml', async (req: Request, res: Response) => {
 router.get('/robots.txt', async (req: Request, res: Response) => {
     try {
         const siteUrl = await linkBase();
-        const robotsTxt = generateRobotsTxt(siteUrl, publicSeoUrl(siteUrl, 'sitemap.xml'));
+        const discourage = !(await require('../core/options').getBooleanOption('blog_public', true));
+        const robotsTxt = generateRobotsTxt(siteUrl, publicSeoUrl(siteUrl, 'sitemap.xml'), discourage);
 
         res.set('Content-Type', 'text/plain');
         res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day

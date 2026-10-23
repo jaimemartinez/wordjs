@@ -47,6 +47,10 @@ export async function rootMetadata(): Promise<Metadata> {
         description,
         icons: { icon, apple: icon },
     };
+    // Settings → Reading «Discourage search engines from indexing this site» (blog_public = '0'): every
+    // page says noindex (robots.txt says Disallow too, backend/src/routes/seo.ts). It was stored and never read.
+    const blogPublic = (settings as Record<string, unknown> | null)?.blog_public;
+    if (blogPublic === 0 || blogPublic === "0" || blogPublic === false) meta.robots = { index: false, follow: false };
 
     // metadataBase absolutizes the relative canonical/OpenGraph URLs (e.g. "/my-post") in the
     // rendered <head>, which crawlers and social unfurlers require. The request Host /
@@ -121,9 +125,8 @@ export default async function RootDocument({
                     rel="stylesheet"
                     href={`/public/vendor/fontawesome/css/all.min.css?v=${ASSET_VERSION}`}
                 />
-                {fontFaceCss && (
-                    <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss }} />
-                )}
+                {/* Always present, even empty: it tells SystemFontsLoader the server already wrote the faces. */}
+                <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss || "" }} />
             </head>
             {/* No font class on <body>: the public tree's body font is owned by the wordjs-ui.css
                 body rule (--wjs-font-family-base → var(--font-inter, …)); putting inter.className

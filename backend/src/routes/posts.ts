@@ -389,7 +389,8 @@ async function categoriesToStore(type: string, categories: unknown, isCreate: bo
     if (!postType || !Array.isArray(postType.taxonomies) || !postType.taxonomies.includes('category')) {
         return Array.isArray(categories) ? categories : null;
     }
-    const fallback = Number(await require('../core/options').getOption('default_category', 1));
+    // An empty setting (Settings → Writing left on «default») is the same as an unset one: category 1.
+    const fallback = Number(await require('../core/options').getOption('default_category', 1)) || 1;
     return Number.isInteger(fallback) && fallback > 0 ? [fallback] : (Array.isArray(categories) ? categories : null);
 }
 
@@ -1489,7 +1490,11 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
             // Same normalization, same reason (minus the authorization): `menu_order: ""` reached
             // menu_order as an empty string and MySQL under STRICT_TRANS_TABLES rejects it with a 500.
             menuOrder: menuOrderValue,
-            commentStatus: comment_status,
+            // Settings → Discussion «Allow comments on new entries» (default_comment_status) when the
+            // request does not say; it was stored but never read, so every new entry was open.
+            commentStatus: comment_status === undefined || comment_status === null
+                ? (String(await require('../core/options').getOption('default_comment_status', 'open')) === 'closed' ? 'closed' : 'open')
+                : comment_status,
             date: requestedDate,
             // MULTILINGUAL (opt-in): the model canonicalizes a BCP-47 tag, or stores NULL. Absent → NULL.
             language,

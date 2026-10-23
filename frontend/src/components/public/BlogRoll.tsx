@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Post } from "@/lib/api";
 import { postCardExcerpt } from "@/lib/postExcerpt";
-import { formatSiteDate, siteDateLanguage, siteTimeZone } from "@/lib/public/siteDate";
+import { formatSiteDate, siteDateLanguage, siteTimeZone, siteDateFormats } from "@/lib/public/siteDate";
 
 /** `/` is page 1 of the blog roll; page n lives at `/page/{n}`. */
 export const blogRollHref = (page: number) => (page <= 1 ? "/" : `/page/${page}`);
@@ -9,7 +9,7 @@ export const blogRollHref = (page: number) => (page <= 1 ? "/" : `/page/${page}`
 /**
  * The «Latest posts» front page: the blog roll and its pager. Shared by `/` and `/page/{n}`.
  */
-export default function BlogRoll({ posts, page, totalPages, settings }: { posts: Post[]; page: number; totalPages: number; settings: Record<string, any> }) {
+export default function BlogRoll({ posts, page, totalPages, settings, hrefFor = blogRollHref }: { posts: Post[]; page: number; totalPages: number; settings: Record<string, any>; hrefFor?: (page: number) => string }) {
     const published = posts.filter((p) => p.status === "publish");
     return (
         <>
@@ -33,7 +33,7 @@ export default function BlogRoll({ posts, page, totalPages, settings }: { posts:
                                 <div className="wjs-post-card-meta flex flex-wrap items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                                     <span className="wjs-post-card-badge bg-[var(--wjs-bg-muted,#eff6ff)] text-[var(--wjs-color-primary,#1d4ed8)] px-3 py-1 rounded-full font-medium">Article</span>
                                     <span>•</span>
-                                    <span>{formatSiteDate(post.date, siteDateLanguage(settings), { gmt: post.dateGmt, timeZone: siteTimeZone(settings) })}</span>
+                                    <span>{formatSiteDate(post.date, siteDateLanguage(settings), { gmt: post.dateGmt, timeZone: siteTimeZone(settings), format: siteDateFormats(settings).format })}</span>
                                     <span>•</span>
                                     <span>{post.author?.displayName || "Admin"}</span>
                                 </div>
@@ -60,7 +60,7 @@ export default function BlogRoll({ posts, page, totalPages, settings }: { posts:
             {totalPages > 1 && (
                 <nav className="wjs-pagination mt-12 flex flex-wrap items-center justify-center gap-2" aria-label="Posts pages">
                     {page > 1 && (
-                        <Link href={blogRollHref(page - 1)} rel="prev" className="wjs-pagination-prev inline-flex items-center gap-2 px-4 py-2 rounded-[var(--wjs-radius-md,0.5rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] text-[var(--wjs-color-text-muted,#4b5563)] hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
+                        <Link href={hrefFor(page - 1)} rel="prev" className="wjs-pagination-prev inline-flex items-center gap-2 px-4 py-2 rounded-[var(--wjs-radius-md,0.5rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] text-[var(--wjs-color-text-muted,#4b5563)] hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
                             <i className="fa-solid fa-arrow-left text-sm" aria-hidden="true"></i> Newer posts
                         </Link>
                     )}
@@ -68,7 +68,7 @@ export default function BlogRoll({ posts, page, totalPages, settings }: { posts:
                         {page} / {totalPages}
                     </span>
                     {page < totalPages && (
-                        <Link href={blogRollHref(page + 1)} rel="next" className="wjs-pagination-next inline-flex items-center gap-2 px-4 py-2 rounded-[var(--wjs-radius-md,0.5rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] text-[var(--wjs-color-text-muted,#4b5563)] hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
+                        <Link href={hrefFor(page + 1)} rel="next" className="wjs-pagination-next inline-flex items-center gap-2 px-4 py-2 rounded-[var(--wjs-radius-md,0.5rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] text-[var(--wjs-color-text-muted,#4b5563)] hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
                             Older posts <i className="fa-solid fa-arrow-right text-sm" aria-hidden="true"></i>
                         </Link>
                     )}

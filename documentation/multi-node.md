@@ -42,7 +42,7 @@ diverge. (A single-replica-per-role split across machines needs none of them —
 | Requirement | Why | How |
 |---|---|---|
 | **A shared network database** | SQLite is a single-host file; every node must share one database. | Set `dbDriver: "postgres"` (recommended) **or** `"mysql"` + `db: { host, port, user, password, name }` in `wordjs-config.json` and point every node at the SAME server. Both engines carry a real distributed lease lock — see below. |
-| **Shared Redis** | Cross-node cache coherence, shared rate limiting, and realtime (SSE) fan-out. | Set `redis: { "enabled": true, host, port, password }` identically on every node, all pointing at ONE Redis. (`db` selects the Redis database index; it defaults to `0`.) |
+| **Shared Redis** | Cross-node cache coherence, shared rate limiting, and realtime (SSE) fan-out. | Set `redis: { "enabled": true, host, port, password }` identically on every node, all pointing at ONE Redis. (`db` selects the Redis database index; it defaults to `0`.) Settings → Performance writes it for the node that serves the panel, and shows whether that node is connected. |
 | **Shared filesystem** | Uploads, themes, plugins, backups, ACME challenge files and certs are written to local disk. | Mount shared storage (NFS / EFS / SMB) at the backend's `uploads/`, `themes/`, `plugins/`, `backups/`, `public/` and `ssl/` directories on every node (see below). |
 
 ### Shared filesystem mount points

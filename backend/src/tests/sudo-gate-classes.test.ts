@@ -96,9 +96,9 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
     'SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key]);
 
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
-const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
+const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword', 'doorDeleteMe'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkAddress', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -932,6 +932,22 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 200 && r.body.restart === null,
         },
+        // Settings → Performance (routes/redis-settings.ts): the same shape — the values first, then the
+        // password; what the file already implies (no Redis, the defaults) changes nothing and restarts nothing.
+        {
+            site: 'redis-settings.ts PUT /', name: 'PUT /system/redis', persona: 'doorRedisSettings',
+            send: (p: string, pw: string) => request(app).put(`${B}/system/redis`).set('Authorization', asUser(p))
+                .send({ enabled: false, host: '127.0.0.1', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200 && r.body.restart === null,
+        },
+        // My Account → delete my account (routes/users.ts DELETE /me): the persona is this door's own, and
+        // the right password does delete it — the last use it has.
+        {
+            site: 'users.ts DELETE /me', name: 'DELETE /users/me', persona: 'doorDeleteMe',
+            send: (p: string, pw: string) => request(app).delete(`${B}/users/me`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200,
+        },
         // Admin → Servers (routes/cluster.ts): the password first; minting a token and removing a node then
         // ask for the second factor (these accounts have none), and revoking reaches the gateway, which this
         // process has no control channel to — nothing is minted, removed or revoked.
@@ -1034,6 +1050,36 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             if (door.cleanup) await door.cleanup(door.persona);
         }
     }
+});
+
+// FALLOS 125 — an administrator turning on a plugin grant that binds the email («Professional email account»)
+// on THEIR OWN record: the mail plugin rewrites the address to <username>@<mail domain> in the form, and the
+// whole form is PUT to /users/:ownId. That is a primary-address change of a self-edit, so it is sudo-gated
+// exactly like typing a new address — and the users-list dialog never asked for the password, so the save
+// failed with no field to type it in. The rule stays one rule: a real change of your own primary address
+// needs the proof, an unchanged resend does not, and an administrator editing SOMEONE ELSE never does.
+test('CLASS 2 — your own primary address moved by a plugin grant asks for the password; someone else’s does not', async () => {
+    await seedUser('selfMailAdmin', 'administrator');
+    await seedUser('selfMailOther', 'author');
+    const me = U.selfMailAdmin;
+    const form = (email: string, extra: Record<string, unknown> = {}) => ({
+        email, displayName: 'selfMailAdmin', personalEmail: '', accountCapabilities: {}, ...extra,
+    });
+    const put = (id: number, body: any) => request(app).put(`${B}/users/${id}`).set('Authorization', asUser('selfMailAdmin')).send(body);
+
+    const unchanged = await put(me, form('selfMailAdmin@example.com'));
+    assert.strictEqual(unchanged.status, 200, `an unchanged resend needs no proof — ${JSON.stringify(unchanged.body)}`);
+
+    const moved = await put(me, form('selfmailadmin@mail.example.test'));
+    assert.strictEqual(moved.status, 403, JSON.stringify(moved.body));
+    assert.strictEqual(moved.body.code, 'rest_bad_current_password');
+
+    const proved = await put(me, form('selfmailadmin@mail.example.test', { currentPassword: PASSWORD }));
+    assert.strictEqual(proved.status, 200, JSON.stringify(proved.body));
+    assert.strictEqual(proved.body.email, 'selfmailadmin@mail.example.test');
+
+    const other = await put(U.selfMailOther, { email: 'selfmailother@mail.example.test', displayName: 'selfMailOther', accountCapabilities: {} });
+    assert.strictEqual(other.status, 200, `editing another user never asks for your password — ${JSON.stringify(other.body)}`);
 });
 
 // ─── CLASS 3 · the sessionOnly doctrine covers the whole router, not two routes ───────────────────

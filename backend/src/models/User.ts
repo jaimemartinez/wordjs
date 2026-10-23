@@ -621,7 +621,9 @@ class User {
             // PREVIOUS_NICENAME_META is an author-archive ALIAS the lookups resolve: writing it would claim
             // another author's old URL.
             // 'revoked_session_tokens' is the per-session logout list (core/session-revocation).
-            const PROTECTED_META = new Set(['role', 'token_valid_after', 'revoked_session_tokens', LEGACY_META_KEY, PREVIOUS_NICENAME_META]);
+            // `avatar_url` is written only by PUT /users/me/avatar (a file this server resized and stored):
+            // a profile save must not point it at an arbitrary address every admin screen would load.
+            const PROTECTED_META = new Set(['role', 'token_valid_after', 'revoked_session_tokens', 'avatar_url', LEGACY_META_KEY, PREVIOUS_NICENAME_META]);
             const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_', 'network_handoff',
                 accountCapabilities.ACCOUNT_CAPABILITY_META_PREFIX];
             const isProtectedMeta = (k: string) =>
@@ -878,6 +880,8 @@ class User {
             // top-level field for the user form; also present in `meta.personal_email`. It is deliberately
             // NON-sensitive (a mere contact address) so it is not stripped by SENSITIVE_META above.
             personalEmail: (this.meta && this.meta.personal_email) || null,
+            // The profile picture the user uploaded (PUT /users/me/avatar), a site-relative /uploads path.
+            avatarUrl: (this.meta && typeof this.meta.avatar_url === 'string' && this.meta.avatar_url.startsWith('/uploads/avatars/')) ? this.meta.avatar_url : null,
             // The granted account capabilities (slugs), so the admin user form can render each plugin's
             // toggle in its true state and send it straight back.
             accountCapabilities: accountCapabilities.grantedAccountCapabilities(this),

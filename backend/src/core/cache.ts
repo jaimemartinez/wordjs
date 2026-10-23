@@ -504,6 +504,8 @@ module.exports = {
     flush,
     setEnabled,
     isAvailable: () => redisAvailable && enabledBySettings,
+    /** Is a Redis server configured for this process, and is the connection up now (Settings → Performance)? */
+    connectionState: () => ({ configured: redisConfigured(), connected: redisConfigured() && redisAvailable }),
     // test/introspection hooks for the L1 tier (not a public API)
     _l1: { size: () => l1.size, clear: () => l1.clear() },
     // Test hook: the bus client's reconnection policy must never surrender (see busRetryStrategy).

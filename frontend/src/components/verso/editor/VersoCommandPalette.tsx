@@ -28,7 +28,7 @@ import { trStr } from "@/lib/editorI18n";
 import { getBlockItems, BLOCK_META } from "@/lib/blockCatalog";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
-import type { PaletteAction } from "./paletteActions";
+import { paletteRowOrder, type PaletteAction } from "./paletteActions";
 
 // Versión real de la app (root package.json, inlined por next.config.ts). ASSET_VERSION es un
 // sello de cache-busting, NO el número de release — el mismo aviso que el legacy.
@@ -106,6 +106,7 @@ function PaletteDialog({
         return q ? actions.filter((a) => a.label.toLowerCase().includes(q)) : actions;
     }, [actions, query]);
     const total = matchedActions.length + items.length;
+    const order = paletteRowOrder(query, matchedActions.length, items.length);
 
     // Índice activo DERIVADO con clamp en lectura: si la lista filtrada encoge, la fila activa
     // cae a la última sin necesitar un setState-en-effect (mismo resultado que el legacy).
@@ -128,13 +129,14 @@ function PaletteDialog({
     }, [active]);
 
     const runRow = (idx: number) => {
-        if (idx < matchedActions.length) {
-            const a = matchedActions[idx];
+        const ai = idx - order.actionOffset;
+        if (ai >= 0 && ai < matchedActions.length) {
+            const a = matchedActions[ai];
             onClose();
             a.run();
             return;
         }
-        const item = items[idx - matchedActions.length];
+        const item = items[idx - order.blockOffset];
         if (!item) return;
         onInsertBlock(item.name);
         onClose();
@@ -194,6 +196,15 @@ function PaletteDialog({
             </div>
         );
     };
+
+    const actionRows = matchedActions.length > 0 && (
+        <>
+            <div role="presentation" className="px-3 py-2 text-[10px] font-semibold text-[var(--ed-outline)] uppercase tracking-widest">
+                {trStr("Acciones", language)}
+            </div>
+            {matchedActions.map((a, i) => row(order.actionOffset + i, a.ms, a.label, a.hint, () => runRow(order.actionOffset + i)))}
+        </>
+    );
 
     return createPortal(
         <div
@@ -257,14 +268,9 @@ function PaletteDialog({
                         </div>
                     ) : (
                         <>
-                            {matchedActions.length > 0 && (
-                                <div role="presentation" className="px-3 py-2 text-[10px] font-semibold text-[var(--ed-outline)] uppercase tracking-widest">
-                                    {trStr("Acciones", language)}
-                                </div>
-                            )}
-                            {matchedActions.map((a, i) => row(i, a.ms, a.label, a.hint, () => runRow(i)))}
+                            {order.actionsFirst && actionRows}
                             {items.map((item, i) => {
-                                const idx = matchedActions.length + i;
+                                const idx = order.blockOffset + i;
                                 // Cabecera solo cuando el grupo cambia respecto al item anterior
                                 // (getBlockItems ya devuelve la lista ordenada por grupo).
                                 const header = item.group !== items[i - 1]?.group ? item.group : null;
@@ -281,6 +287,7 @@ function PaletteDialog({
                                     </React.Fragment>
                                 );
                             })}
+                            {!order.actionsFirst && actionRows}
                         </>
                     )}
                 </div>

@@ -58,6 +58,22 @@ export default function InstallPage() {
     // written to backend/data/install-token) —
     // authorizes the pre-install setup endpoints so a network-exposed instance can't be hijacked first.
     const [installToken, setInstallToken] = useState("");
+    // The token is checked when leaving step 1 (POST /setup/check-token): a wrong one used to pass
+    // here and fail only on the database step, on another screen.
+    const [tokenError, setTokenError] = useState("");
+    const [checkingToken, setCheckingToken] = useState(false);
+    const goToDatabaseStep = async () => {
+        setTokenError("");
+        setCheckingToken(true);
+        try {
+            await apiPost('/setup/check-token', { installToken });
+            setStep(2);
+        } catch (e: unknown) {
+            setTokenError(e instanceof Error && e.message ? e.message : 'Invalid install token.');
+        } finally {
+            setCheckingToken(false);
+        }
+    };
     const [demoContent, setDemoContent] = useState(true);
 
     // Step 2: Database
@@ -310,8 +326,9 @@ export default function InstallPage() {
                                     </div>
                                     <div className="group">
                                         <label htmlFor="install-token" className={labelCls}>Install Token</label>
-                                        <input id="install-token" type="text" required className={inputCls} value={installToken} onChange={(e) => setInstallToken(e.target.value.trim())} placeholder="Paste the token from your terminal or backend/data/install-token" autoComplete="off" spellCheck={false} />
-                                        <p className="text-xs text-gray-500 mt-1">For security, WordJS mints a one-time <span className="font-semibold">install token</span> while it is not yet installed: it is printed in the terminal that started the server and always written to <code>backend/data/install-token</code>. Paste it here to authorize setup.</p>
+                                        <input id="install-token" type="text" required className={inputCls} value={installToken} onChange={(e) => { setInstallToken(e.target.value.trim()); setTokenError(""); }} placeholder="Paste the token from backend/data/install-token" autoComplete="off" spellCheck={false} aria-invalid={!!tokenError} aria-describedby="install-token-help" />
+                                        {tokenError && <p role="alert" className="text-xs text-red-600 mt-1">{tokenError}</p>}
+                                        <p id="install-token-help" className="text-xs text-gray-500 mt-1">For security, WordJS mints a one-time <span className="font-semibold">install token</span> while it is not yet installed. It is always in <code>backend/data/install-token</code> on the server (or it is the <code>WORDJS_INSTALL_TOKEN</code> value, if you set one); a server started from a terminal also prints it there — one run as a service does not. Paste it here to authorize setup.</p>
                                     </div>
                                     <label className="flex items-start gap-3 cursor-pointer select-none rounded-lg border border-gray-200 p-3.5 hover:border-gray-300 transition-colors">
                                         <input type="checkbox" checked={demoContent} onChange={(e) => setDemoContent(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-400" />
@@ -343,7 +360,7 @@ export default function InstallPage() {
                                         </label>
                                     )}
                                     <div className="pt-4">
-                                        <button type="button" onClick={() => setStep(2)} disabled={!siteName.trim() || !installToken.trim() || !chosenSite}
+                                        <button type="button" onClick={goToDatabaseStep} disabled={!siteName.trim() || !installToken.trim() || !chosenSite || checkingToken}
                                             className="w-full flex items-center justify-center bg-gray-900 text-white py-3.5 px-6 rounded-lg font-semibold hover:bg-gray-800 focus:ring-4 focus:ring-gray-300 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:-translate-y-0.5">
                                             Next Step <FaArrowRight className="ml-2" aria-hidden="true" />
                                         </button>

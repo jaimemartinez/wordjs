@@ -32,6 +32,8 @@
  * mandase su valor los habría borrado sin que nadie los llegase a ver.
  */
 import type { Category, Post, PostTermRef, Tag } from "@/lib/api";
+import { createElement } from "react";
+import TagsFieldEditor from "@/components/verso/fields/TagsFieldEditor";
 import type { VersoField } from "@/lib/verso/registry";
 
 /** Lo que el campo `featuredImage` guarda en `root.props` (y viaja dentro de `_puck_data`). */
@@ -383,16 +385,22 @@ export function tagsField(available: readonly Tag[], recordTags: readonly PostTe
             .map(([value, label]) => ({ label, value }))
             .sort((a, b) => a.label.localeCompare(b.label, "es")),
     ];
-    return {
-        type: "array",
+    // A custom control (components/verso/fields/TagsFieldEditor): chips + add an existing tag + CREATE a
+    // new one (POST /tags first, so the value is still a list of existing ids — QA S1-23).
+    const field = {
+        type: "custom" as const,
         label: "Etiquetas",
-        arrayFields: { tag: { type: "select", label: "Etiqueta", options } },
-        defaultItemProps: { tag: "" },
+        // The choices and each entry's summary stay readable off the field (tests, and any caller that
+        // lists the post's tags by name).
+        options,
         getItemSummary: (item: Record<string, unknown>, index?: number) => {
             const value = String(item?.tag ?? "");
             return byId.get(value) || (value ? `#${value}` : `Etiqueta ${(index ?? 0) + 1}`);
         },
+        render: ({ value, onChange, readOnly }: { value: unknown; onChange: (v: unknown) => void; readOnly?: boolean }) =>
+            createElement(TagsFieldEditor, { value, onChange, readOnly, options }),
     };
+    return field as VersoField;
 }
 
 /**

@@ -34,6 +34,7 @@ export default function PublicLayoutShell({
     headerSlot,
     footerSlot,
     stylesheets = true,
+    activePlugins,
 }: {
     children: React.ReactNode;
     layout?: Record<string, unknown>;
@@ -67,6 +68,8 @@ export default function PublicLayoutShell({
     // copy from ThemeLoader made that swap compare against the wrong <link> (the sheet ended up
     // linked three times).
     stylesheets?: boolean;
+    // The active plugins' slugs read by the server layout; omitted (editor preview) → fetched client-side.
+    activePlugins?: string[] | null;
 }) {
     // Normalized structure config (defaults ≡ today's chrome; invalid values fall back silently —
     // the theme doctor reports them in its own lane). All from props → deterministic for hydration.
@@ -95,7 +98,7 @@ export default function PublicLayoutShell({
     } as React.CSSProperties;
 
     return (
-        <ActivePluginsProvider>
+        <ActivePluginsProvider initial={activePlugins || undefined}>
             {/* `wjs-shell` es un GANCHO estable, no un estilo: las transiciones entre páginas (C1)
                 necesitan un selector que alcance la cabecera y el pie SIN poder confundirlos con un
                 <header>/<footer> que un bloque de contenido pinte dentro de <main>. Hijo directo del

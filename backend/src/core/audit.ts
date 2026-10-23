@@ -51,6 +51,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // Security → Server (routes/server-settings.ts): {fields, trustProxy?, logLevel?} — the reverse-proxy
     // trust and the log level, written to wordjs-config.json and applied by a restart.
     SERVER_SETTINGS_UPDATE: 'system.server.update',
+    // Settings → Performance (routes/redis-settings.ts): {enabled, host, port, db, password: kept|changed|removed}
+    // — the Redis server written to wordjs-config.json and applied by a restart. Never the password itself.
+    REDIS_SETTINGS_UPDATE: 'system.redis.update',
     // Admin → Servers (routes/cluster.ts): a join token minted {role, host, expiresAt, mfa} (never the
     // token), every outstanding token revoked, a node taken out of the cluster {url, routes, mfa}, the
     // ports the gateway forwards to the backend node replaced.
@@ -79,6 +82,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // A profile write: {fields} names what the request wrote (never values, never the password).
     USER_UPDATE: 'user.update',
     USER_DELETE: 'user.delete',
+    // My Account (routes/users.ts): a new or removed profile picture, and a download of your own data.
+    USER_AVATAR_UPDATE: 'user.avatar.update',
+    USER_EXPORT: 'user.export',
     USER_ROLE_CHANGE: 'user.role_change',
     USER_SESSIONS_REVOKED: 'user.sessions_revoked',
     // An admin resetting SOMEONE ELSE's second factor. It lives under `user.` (not `auth.`) because
@@ -102,6 +108,10 @@ const AUDIT_ACTIONS = Object.freeze({
     MEDIA_UPLOAD: 'media.upload',
     MEDIA_UPDATE: 'media.update',
     MEDIA_DELETE: 'media.delete',
+    // An image rotated/flipped/cropped/scaled into a new file {rotate, flipH, flipV, crop, width}, and the
+    // uploaded file made current again.
+    MEDIA_EDIT: 'media.edit',
+    MEDIA_RESTORE_ORIGINAL: 'media.restore_original',
     // Categories and tags ({taxonomy}).
     TERM_CREATE: 'term.create',
     TERM_UPDATE: 'term.update',

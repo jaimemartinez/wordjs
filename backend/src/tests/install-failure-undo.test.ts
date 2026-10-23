@@ -217,6 +217,27 @@ describe('the native SQLite driver is checked before anything is written', () =>
     });
 });
 
+describe('the wizard checks the install token on its first step', () => {
+    it('POST /setup/check-token answers ok for the right token and 403 (with where to find it) otherwise', async () => {
+        const app = express();
+        app.use(express.json());
+        app.use('/setup', require('../routes/setup'));
+        const ok = await request(app).post('/setup/check-token').send({ installToken: INSTALL_TOKEN });
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+        assert.strictEqual(ok.body.ok, true);
+        const wrong = await request(app).post('/setup/check-token').send({ installToken: 'nope' });
+        assert.strictEqual(wrong.status, 403);
+        assert.ok(String(wrong.body.error).includes('backend/data/install-token'), wrong.body.error);
+        assert.match(wrong.body.error, /WORDJS_INSTALL_TOKEN/);
+    });
+
+    it('is a CSRF-exempt pre-install door, like install and test-db', () => {
+        const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'middleware', 'auth.ts'), 'utf8');
+        const line = src.split(String.fromCharCode(10)).find((l: string) => l.startsWith('const CSRF_EXEMPT_PATHS = new Set(')) || '';
+        assert.ok(line.includes("'/setup/check-token'"), line);
+    });
+});
+
 describe('a failure before the administrator exists is undone', () => {
     it('on a fresh box: no config is left behind, and the wizard runs again', async () => {
         failAt = 'roles';

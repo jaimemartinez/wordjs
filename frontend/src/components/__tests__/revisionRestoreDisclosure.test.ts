@@ -18,8 +18,9 @@ describe("F4 revision restore disclosure", () => {
                 ],
             },
         }, "today");
-        expect(message).toMatch(/Editorial title/);
-        expect(message).toMatch(/Plugin rating/);
+        // Everyday names, not the schema's developer descriptions (QA S1-19).
+        expect(message).toMatch(/brings back the title/);
+        expect(message).toMatch(/plugin rating/i);
         expect(message).toMatch(/will be cleared/);
         expect(message).toMatch(/snapshot did not declare/);
         expect(message).toMatch(/unsaved changes/);
@@ -27,7 +28,7 @@ describe("F4 revision restore disclosure", () => {
 
     it("falls back to the complete legacy disclosure for an older backend", () => {
         const message = buildRevisionRestoreMessage({}, "yesterday");
-        for (const phrase of ["Page layout", "Theme template", "Featured image", "SEO title", "SEO description", "Social image", "Search indexing preference"]) {
+        for (const phrase of ["page layout", "theme template", "featured image", "SEO title", "SEO description", "social image", "search indexing choice"]) {
             expect(message).toContain(phrase);
         }
         expect(message).toMatch(/review thread/);

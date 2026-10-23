@@ -649,7 +649,7 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 | `WORDJS_GRAPHQL_MAX_DEPTH` | — | `10` | env only | Deepest selection a GraphQL query (`/api/v1/graphql`) may nest; range 2–50. See [graphql.md](graphql.md). |
 | `WORDJS_GRAPHQL_MAX_COST` | — | `1000` | env only | Cost budget of one GraphQL query; range 50–100,000. |
 | `WORDJS_GRAPHQL_MAX_TOKENS` | — | `5000` | env only | Token count of one GraphQL document; range 100–100,000. |
-| `REDIS_ENABLED` | `redis.enabled` | `false` | file | `true` turns on the Redis cache and the cross-node bus ([multi-node.md](multi-node.md)). |
+| `REDIS_ENABLED` | `redis.enabled` | `false` | file | `true` turns on the Redis cache and the cross-node bus ([multi-node.md](multi-node.md)). These four rows can also be set from **Settings → Performance**, which tries the server, writes the `redis` section of the file and restarts the backend (`GET`/`PUT /api/v1/system/redis`, `POST /api/v1/system/redis/test`). |
 | `REDIS_HOST` / `REDIS_PORT` | `redis.host` / `redis.port` | `127.0.0.1` / `6379` | file | Redis address. |
 | `REDIS_PASSWORD` / `REDIS_DB` | `redis.password` / `redis.db` | — / `0` | file | Redis credentials and database index. |
 | `WORDJS_MEDIA_STORAGE` | `mediaStorage.driver` | `local` | env | `s3` offloads public media to an S3-compatible bucket ([media-storage.md](media-storage.md)). |

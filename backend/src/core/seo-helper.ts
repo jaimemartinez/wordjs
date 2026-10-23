@@ -218,7 +218,13 @@ async function generateSitemap(posts: any[], options: SeoOptions = {}) {
  * is exactly how the advertisement and the document that answers it come apart. The default keeps
  * the string this function has always emitted for any caller that supplies only the site URL.
  */
-function generateRobotsTxt(siteUrl = '', sitemapUrl = `${siteUrl}/sitemap.xml`) {
+function generateRobotsTxt(siteUrl = '', sitemapUrl = `${siteUrl}/sitemap.xml`, discourage = false) {
+    // Settings → Reading «Discourage search engines» (blog_public = '0'): the whole site is off limits.
+    if (discourage) {
+        return `User-agent: *
+Disallow: /
+`;
+    }
     return `User-agent: *
 Allow: /
 
