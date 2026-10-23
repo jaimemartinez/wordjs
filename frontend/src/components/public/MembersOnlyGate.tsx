@@ -16,7 +16,7 @@
  */
 import React, { useEffect, useState } from "react";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import CommentsSection from "@/components/CommentsSection";
+import CommentsSection, { type CommentsSectionProps } from "@/components/CommentsSection";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { readCsrfToken } from "@/lib/csrf";
 import type { PublicUiStrings, MembersGateStrings } from "@/lib/public/uiStrings";
@@ -42,13 +42,15 @@ interface MembersOnlyGateProps {
     commentsWhenGranted: boolean;
     /** The «registered users only» comment setting, passed through to CommentsSection. */
     commentsRequireLogin?: boolean;
+    /** The site's language, time zone, date formats and comment texts for CommentsSection. */
+    commentProps?: Omit<CommentsSectionProps, "postId" | "requireLogin">;
     /** The teaser, server-rendered. */
     children: React.ReactNode;
 }
 
 
 export default function MembersOnlyGate(props: MembersOnlyGateProps) {
-    const { postId, mode, htmlClassName, ixPresets, motion, ui, strings, showNotice, commentsWhenGranted, commentsRequireLogin, children } = props;
+    const { postId, mode, htmlClassName, ixPresets, motion, ui, strings, showNotice, commentsWhenGranted, commentsRequireLogin, commentProps, children } = props;
     const [full, setFull] = useState<FullEntry | null>(null);
     const [checking, setChecking] = useState(false);
     // `?redirect=<this page>` for the sign-in / sign-up links, set after mount so the server HTML and the
@@ -84,7 +86,7 @@ export default function MembersOnlyGate(props: MembersOnlyGateProps) {
                 ) : (
                     <div className={htmlClassName} dangerouslySetInnerHTML={{ __html: sanitizeHTML(full.content || "") }} />
                 )}
-                {commentsWhenGranted && <CommentsSection postId={postId} requireLogin={commentsRequireLogin} />}
+                {commentsWhenGranted && <CommentsSection postId={postId} requireLogin={commentsRequireLogin} {...commentProps} />}
             </>
         );
     }

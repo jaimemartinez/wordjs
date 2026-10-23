@@ -7,6 +7,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader } from "@/components/ui";
 import { registerTranslations } from "@/lib/i18n";
 import { importApi, type WxrAnalysis, type ImportSummary, type ImportMediaMode } from "@/lib/api";
+import { locationsNoteKey } from "@/lib/wpImportLocations";
 
 type Phase = "idle" | "analyzing" | "ready" | "importing" | "done";
 
@@ -77,6 +78,7 @@ registerTranslations({
         "wpImport.media.retry": "Vuelve a ejecutar esta importación para reintentar exactamente estos archivos: los que ya llegaron no cuestan nada.",
         "wpImport.menus.title": "Menús",
         "wpImport.menus.noLocation": "La exportación no indicaba ninguna ubicación del tema.",
+        "wpImport.menus.unmatchedLocation": "Algunas ubicaciones del tema de la exportación no corresponden a ningún menú importado.",
         "wpImport.menus.assign": "Asígnalos en {menus}.",
         "wpImport.menus.link": "Menús",
         "wpImport.errors": "{n} elemento(s) tuvieron problemas (la importación continuó)",
@@ -147,6 +149,7 @@ registerTranslations({
         "wpImport.media.retry": "Re-run this import to retry exactly these files — the ones that already landed cost nothing.",
         "wpImport.menus.title": "Menus",
         "wpImport.menus.noLocation": "No theme location was named by the export.",
+        "wpImport.menus.unmatchedLocation": "Some theme locations in the export match no imported menu.",
         "wpImport.menus.assign": "Assign them under {menus}.",
         "wpImport.menus.link": "Menus",
         "wpImport.errors": "{n} item(s) had issues (import continued)",
@@ -217,6 +220,7 @@ registerTranslations({
         "wpImport.media.retry": "Execute esta importação de novo para tentar exatamente estes arquivos outra vez: os que já chegaram não custam nada.",
         "wpImport.menus.title": "Menus",
         "wpImport.menus.noLocation": "A exportação não indicou nenhum local do tema.",
+        "wpImport.menus.unmatchedLocation": "Alguns locais do tema da exportação não correspondem a nenhum menu importado.",
         "wpImport.menus.assign": "Atribua-os em {menus}.",
         "wpImport.menus.link": "Menus",
         "wpImport.errors": "{n} item(ns) tiveram problemas (a importação continuou)",
@@ -529,7 +533,7 @@ export default function ImportPage() {
                             </div>
                             {summary.menus.locations.unassigned > 0 && (
                                 <p className="text-sm text-gray-500 mt-4">
-                                    {summary.menus.locations.reason || t("wpImport.menus.noLocation")}{" "}
+                                    {t(locationsNoteKey(summary.menus.locations.reason))}{" "}
                                     {fill(t("wpImport.menus.assign"), {
                                         menus: <Link href="/admin/menus" className="font-medium text-gray-700 underline">{t("wpImport.menus.link")}</Link>,
                                     })}

@@ -172,10 +172,10 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(hello.post_status, 'publish');
             assert.strictEqual(hello.author_id, jdoe.id, 'post attributed to imported author, not admin');
             assert.strictEqual(hello.post_content, HELLO_CONTENT, 'CDATA body stored byte-for-byte');
-            // The moment is the export's post_date_gmt; post_date is that moment on this server's clock, the
+            // The moment is the export's post_date_gmt; post_date is that moment on the site's clock, the
             // clock Post.create stamps native posts with (QA M3-16: the two used to be mixed in listings).
             assert.strictEqual(hello.post_date_gmt, '2025-01-06 09:30:00', 'original publish moment preserved');
-            assert.strictEqual(hello.post_date, require('../core/formatting').formatDate(new Date(Date.UTC(2025, 0, 6, 9, 30, 0))));
+            assert.strictEqual(hello.post_date, await require('../core/site-time').siteLocalDateTime(new Date(Date.UTC(2025, 0, 6, 9, 30, 0))));
 
             // ---- post meta: skip-list honoured, CDATA value verbatim, _puck_data sanitized -----
             const editLast = await dbAsync.get(
@@ -392,7 +392,7 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(att.post_excerpt, 'The photo caption.', 'excerpt:encoded -> caption');
             assert.strictEqual(att.post_content, 'The photo description.', 'content:encoded -> description');
             assert.strictEqual(att.guid, '/uploads/2025/01/photo.jpg', 'guid is the portable relative path');
-            assert.strictEqual(att.post_date, require('../core/formatting').formatDate(new Date(Date.UTC(2025, 0, 12, 11, 22, 33))), "original upload moment preserved (on this server clock)");
+            assert.strictEqual(att.post_date, await require('../core/site-time').siteLocalDateTime(new Date(Date.UTC(2025, 0, 12, 11, 22, 33))), "original upload moment preserved (on the site clock)");
             const parentPost = await dbAsync.get(`SELECT id FROM posts WHERE post_name = 'media-post'`);
             assert.strictEqual(att.post_parent, parentPost.id, 'wp:post_parent mapped to the imported post');
 
@@ -902,8 +902,8 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             const post = await byName('remap-pour-over', 'post');
             const leo = await dbAsync.get(`SELECT comment_date, comment_date_gmt FROM comments WHERE comment_post_id = ? AND comment_author = 'Leo'`, [post.id]);
             assert.strictEqual(leo.comment_date_gmt, '2024-03-03 07:00:00');
-            // On this server's clock, like a comment written here (QA M3-16).
-            assert.strictEqual(leo.comment_date, require('../core/formatting').formatDate(new Date(Date.UTC(2024, 2, 3, 7, 0, 0))));
+            // On the site's clock (Settings → General → Time zone), like a comment written here (QA M3-16, FALLOS 135).
+            assert.strictEqual(leo.comment_date, await require('../core/site-time').siteLocalDateTime(new Date(Date.UTC(2024, 2, 3, 7, 0, 0))));
             const ana = await dbAsync.get(`SELECT comment_date FROM comments WHERE comment_post_id = ? AND comment_author = 'Ana'`, [post.id]);
             assert.ok(ana, 'a comment with an unreadable date is still imported');
             assert.notStrictEqual(ana.comment_date, 'not a date', 'an unreadable date is never written into the column');
@@ -925,6 +925,9 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(summary.menus.items.created, 0);
             assert.strictEqual(summary.menus.items.relinked, 0);
             assert.strictEqual(await meta(item, '_menu_item_object_id'), String(other.id));
+            // This export names no theme location: the summary says why as a code the panel translates,
+            // never as an English sentence (FALLOS 143).
+            assert.strictEqual(summary.menus.locations.reason, 'no_locations_in_export');
         });
 
         it('re-points a matched menu item whose page was deleted and imported again', async () => {

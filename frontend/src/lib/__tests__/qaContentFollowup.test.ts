@@ -13,6 +13,14 @@ import { listAllEntries } from "@/lib/motionLibrary";
 import { paletteRowOrder } from "@/components/verso/editor/paletteActions";
 import { canEditImage, cropForAspect, dragCrop, editRequest, FULL_CROP, resultSize, turn } from "@/lib/imageEdit";
 import { needsClientFonts } from "@/components/SystemFontsLoader";
+import { isStarterText } from "@/lib/verso/defaultContent";
+import { locationsNoteKey } from "@/lib/wpImportLocations";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import CommentsSection, { DEFAULT_COMMENT_STRINGS } from "@/components/CommentsSection";
+import { COMMENT_STRING_KEYS, commentStrings, commentStringsFor } from "@/lib/public/uiStrings";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 describe("bulk actions run one write per row and report what failed", () => {
     it("keeps going past a failure and names the first reason", async () => {
@@ -184,5 +192,60 @@ describe("public pages do not re-fetch what the server already wrote (page weigh
         expect(needsClientFonts(true, "/admin/fonts")).toBe(true);
         expect(needsClientFonts(true, "/administer-things")).toBe(false);
         expect(needsClientFonts(false, "/welcome")).toBe(true);
+    });
+});
+
+describe("a new block's sample text is replaced, not appended to (FALLOS 136)", () => {
+    it("recognises the starter texts in every language, and nothing an author wrote", () => {
+        expect(isStarterText("Write here...")).toBe(true);
+        expect(isStarterText("  Escribe aquí...\n")).toBe(true);
+        expect(isStarterText("Escreva aqui...")).toBe(true);
+        expect(isStarterText("Write here...my text")).toBe(false);
+        expect(isStarterText("Our story")).toBe(false);
+        expect(isStarterText("")).toBe(false);
+    });
+});
+
+describe("FALLOS 143 — the import summary words the menu-location note itself", () => {
+    it("maps the backend code to a translated sentence, never printing it", () => {
+        expect(locationsNoteKey("no_locations_in_export")).toBe("wpImport.menus.noLocation");
+        expect(locationsNoteKey(null)).toBe("wpImport.menus.unmatchedLocation");
+    });
+    it("registers both sentences in es, en and pt, and the page no longer prints the raw reason", () => {
+        const page = readFileSync(join(__dirname, "../../app/admin/import/page.tsx"), "utf8");
+        expect(page.match(/"wpImport\.menus\.noLocation":/g)).toHaveLength(3);
+        expect(page.match(/"wpImport\.menus\.unmatchedLocation":/g)).toHaveLength(3);
+        expect(page).not.toContain("locations.reason ||");
+    });
+});
+
+describe("FALLOS 138 — CommentsSection texts in the site language", () => {
+    it("keeps its English fallback identical to the catalogue's English", () => {
+        expect(commentStringsFor("en")).toEqual(DEFAULT_COMMENT_STRINGS);
+    });
+
+    it("has every text in es, en and pt, none left as its key", () => {
+        for (const lang of ["es", "en", "pt"] as const) {
+            const s = commentStringsFor(lang);
+            for (const key of COMMENT_STRING_KEYS) {
+                expect(s[key], `${lang}.${key}`).toBeTruthy();
+                expect(s[key]).not.toBe(`public.comments.${key}`);
+            }
+            expect(s.title).toContain("{count}");
+            expect(s.loginRequired).toContain("{link}");
+        }
+    });
+
+    it("follows WPLANG: a Spanish site gets Spanish texts", () => {
+        const es = commentStrings({ WPLANG: "es_ES" });
+        expect(es.formTitle).toBe("Deja un comentario");
+        expect(es.submit).toBe("Publicar comentario");
+        expect(commentStrings({}).formTitle).toBe("Leave a Reply");
+    });
+
+    it("renders the texts it is given, not the English ones", () => {
+        const html = renderToStaticMarkup(React.createElement(CommentsSection, { postId: 1, strings: commentStringsFor("es") }));
+        expect(html).toContain("Cargando comentarios");
+        expect(html).not.toContain("Loading comments");
     });
 });

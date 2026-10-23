@@ -11,7 +11,7 @@ import type React from "react";
 import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
-import { publicUiStrings, membersGateStrings, notFoundStrings, postTermsStrings, protectedEntryStrings } from "@/lib/public/uiStrings";
+import { publicUiStrings, membersGateStrings, notFoundStrings, postTermsStrings, protectedEntryStrings, commentStrings } from "@/lib/public/uiStrings";
 import PostTerms from "@/components/public/PostTerms";
 import { featuredImageSrc } from "@/lib/mediaUsage";
 import { mediaBaseFromSettings } from "@/lib/mediaDelivery";
@@ -88,6 +88,15 @@ export default function PostContent({ post, settings, category, showComments }: 
         && !(Array.isArray((versoData as any)?.content) && (versoData as any).content.length > 0);
     const commentsAllowed = commentsOpen && !membersLocked;
     const commentsRequireLogin = optionEnabled(settings?.comment_registration, false);
+    // The site's language, time zone, date formats and comment texts — the same for the open thread and
+    // for the one a members-only entry reveals once access is confirmed.
+    const commentProps = {
+        lang: siteDateLanguage(settings),
+        timeZone: siteTimeZone(settings),
+        dateFormat: siteDateFormats(settings).format,
+        timeFormat: siteDateFormats(settings).timeFormat,
+        strings: commentStrings(settings),
+    };
     const ixPresets = settings?.wjs_ix_presets;
     const motion = settings?.wjs_motion;
     const gated = (mode: 'verso' | 'html', htmlClassName: string | undefined, body: React.ReactNode) => (
@@ -103,6 +112,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 showNotice={teaserEmpty}
                 commentsWhenGranted={commentsOpen}
                 commentsRequireLogin={commentsRequireLogin}
+                commentProps={commentProps}
             >
                 {body}
             </MembersOnlyGate>
@@ -220,7 +230,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 </article>
             )}
 
-            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} requireLogin={commentsRequireLogin} timeZone={siteTimeZone(settings)} dateFormat={siteDateFormats(settings).format} timeFormat={siteDateFormats(settings).timeFormat} />}
+            {commentsAllowed && <CommentsSection postId={post.id} requireLogin={commentsRequireLogin} {...commentProps} />}
 
             <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)] flex justify-between items-center px-4">
                 <Link href="/" className="text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] font-medium flex items-center gap-2">

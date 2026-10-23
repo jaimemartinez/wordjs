@@ -22,7 +22,10 @@ const LONG_DATE: Intl.DateTimeFormatOptions = { year: "numeric", month: "long", 
  * Still deterministic: the zone comes from the site, never from the server host or the visitor.
  */
 export function formatSiteDate(date: unknown, lang: string | null | undefined, moment?: { gmt?: unknown; timeZone?: string | null; format?: string | null; timeFormat?: string | null }): string {
-    const zoned = moment && moment.timeZone && moment.timeZone !== "UTC" ? zonedDay(moment.gmt, moment.timeZone) : null;
+    // The UTC moment wins whenever the site's zone is known — UTC included: a row written before the
+    // backend stored site-local dates (FALLOS 135) holds the SERVER's wall clock in `date`, a day off
+    // around midnight on a host in another zone, while `dateGmt` was always right.
+    const zoned = moment && moment.timeZone ? zonedDay(moment.gmt, moment.timeZone) : null;
     const m = zoned || /^(\d{4})-(\d{2})-(\d{2})/.exec(String(date ?? ""));
     if (!m) return "";
     const month = parseInt(m[2], 10);

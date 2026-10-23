@@ -92,8 +92,8 @@ test('M3-16: an imported post keeps its moment, stored on this site\'s clock lik
     await importWxr(wxr(item({ id: '10', title: 'Dated', slug: 'dated', date: '2013-03-15 15:41:09', gmt: '2013-03-15 20:41:09' })), { defaultAuthorId: adminId, media: 'skip' });
     const row = await dbAsync.get(`SELECT post_date, post_date_gmt FROM posts WHERE post_name = 'dated'`);
     assert.strictEqual(row.post_date_gmt, '2013-03-15 20:41:09');
-    const expected = require('../core/formatting').formatDate(new Date(Date.UTC(2013, 2, 15, 20, 41, 9)));
-    assert.strictEqual(row.post_date, expected, 'post_date is the gmt moment in the server clock, not the WordPress wall time');
+    const expected = await require('../core/site-time').siteLocalDateTime(new Date(Date.UTC(2013, 2, 15, 20, 41, 9)));
+    assert.strictEqual(row.post_date, expected, 'post_date is the gmt moment on the site clock, not the WordPress wall time');
 });
 
 test('M3-09: sticky posts come over and GET /posts?sticky= lists them', async () => {

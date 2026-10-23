@@ -5,7 +5,7 @@
 
 const { db, dbAsync } = require('../config/database');
 const { clampLimit, clampOffset } = require('../core/pagination');
-const { sanitizeContent, currentTimeGMT, currentTime } = require('../core/formatting');
+const { sanitizeContent } = require('../core/formatting');
 const { doAction } = require('../core/hooks');
 
 class Comment {
@@ -150,8 +150,8 @@ class Comment {
         // Sanitize content
         const sanitizedContent = sanitizeContent(content);
 
-        const now = currentTime();
-        const nowGmt = currentTimeGMT();
+        // The site's wall clock, not the server's (core/site-time — FALLOS 135).
+        const { local: now, gmt: nowGmt } = await require('../core/site-time').siteDatePair();
 
         const result = await dbAsync.run(`
       INSERT INTO comments (

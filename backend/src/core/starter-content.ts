@@ -29,9 +29,11 @@ async function upsertContent(opts: {
     if (existing) {
         postId = existing.id;
     } else {
+        // The site's wall clock and UTC (core/site-time), as Post.create stores them.
+        const stamp = await require('./site-time').siteDatePair();
         const result = await dbAsync.run(
-            "INSERT INTO posts (author_id, post_date, post_date_gmt, post_content, post_title, post_status, post_name, post_type, comment_status, post_excerpt) VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, 'publish', ?, ?, 'open', ?)",
-            [authorId, html, title, slug, type, excerpt]
+            "INSERT INTO posts (author_id, post_date, post_date_gmt, post_content, post_title, post_status, post_name, post_type, comment_status, post_excerpt) VALUES (?, ?, ?, ?, ?, 'publish', ?, ?, 'open', ?)",
+            [authorId, stamp.local, stamp.gmt, html, title, slug, type, excerpt]
         );
         postId = result.lastID;
     }

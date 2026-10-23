@@ -117,6 +117,7 @@ interface MenuImportSummary {
     menus: { created: number; matched: number };
     /** `relinked` counts matched items whose dead target was re-pointed (they are also `skipped`). */
     items: { created: number; skipped: number; relinked: number };
+    /** `reason`: a stable code the panel translates — `no_locations_in_export` — or null. */
     locations: { assigned: number; unassigned: number; reason: string | null };
     errors: string[];
 }
@@ -315,7 +316,8 @@ async function importMenus(input: MenuImportInput): Promise<MenuImportSummary> {
     // the summary says so, rather than guessing which menu belongs in which theme slot.
     if (!input.locations) {
         summary.locations.unassigned = menuIdBySlug.size;
-        summary.locations.reason = 'the WXR carried no readable nav_menu_locations option';
+        // A code, not a sentence: the import page words it in the admin's language (FALLOS 143).
+        summary.locations.reason = 'no_locations_in_export';
     } else {
         for (const [location, ref] of Object.entries(input.locations)) {
             const key = String(ref);

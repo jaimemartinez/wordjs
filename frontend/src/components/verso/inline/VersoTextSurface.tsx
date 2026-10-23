@@ -71,6 +71,7 @@ import VersoBubbleMenu, {
 } from "./VersoBubbleMenu";
 import { mapOffset, reconcileSelection } from "./remoteReconcile";
 import { useEditorTr } from "@/lib/verso/useEditorTr";
+import { isStarterText } from "@/lib/verso/defaultContent";
 
 /**
  * Centinela que VersoBlock inyecta como valor de la prop inline: invisible
@@ -627,11 +628,13 @@ export default function VersoTextSurface({
             host.setAttribute("spellcheck", "false");
             host.style.whiteSpace = "pre-wrap";
             host.style.outline = "none";
-            // Autofocus al final (paridad con autofocus:"end" del legacy).
+            // Autofocus al final (paridad con autofocus:"end" del legacy) — salvo que el bloque aún tenga su
+            // texto de ejemplo («Escribe aquí...»): entonces queda SELECCIONADO y lo que se escribe lo
+            // sustituye, en vez de añadirse detrás (FALLOS 136). El contenido real no cambia nada.
             host.focus();
             const endRange = doc.createRange();
             endRange.selectNodeContents(host);
-            endRange.collapse(false);
+            if (!isStarterText(host.textContent || "")) endRange.collapse(false);
             const sel0 = doc.getSelection();
             sel0?.removeAllRanges();
             sel0?.addRange(endRange);
