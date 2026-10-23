@@ -72,6 +72,12 @@ the portal, for their own locality. Administrators use it in **Conference › Au
    the sheet, the row, the policy version, the files' hashes, and who uploaded and who ticked. **Deshacer** undoes a wrong tick with a reason. It is a new row; nothing
    is edited.
 
+   While ticking, the sheet is on screen too (2.36.2): its rows in the printed order, blank rows included, with the
+   same opt-out columns, or the uploaded photo. On a phone, switch between «Hoja» and «Lista».
+4. **Eliminar** (2.36.2) deletes a sheet that was never used, for example one printed in the wrong language. It is
+   offered only while no signed page has been uploaded. After that the sheet is evidence and stays. The consent log
+   records both the creation and the deletion.
+
 **Keep the paper originals.** The upload is a copy, and its SHA-256 proves the copy has not changed since. It does
 not replace the signed paper. Store the sheets for as long as you keep the evidence.
 

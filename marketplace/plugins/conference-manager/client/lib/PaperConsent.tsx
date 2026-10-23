@@ -18,7 +18,8 @@ import { prepareProof, formatBytes } from "./proofImage";
 
 /** GET with query parameters (the list, a sheet's page, a file), or POST { action, … }. */
 type Req = (method: "get" | "post", params?: Record<string, any>) => Promise<any>;
-type DialogProps = { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string; closeLabel?: string };
+/** `wide`: the checklist, with the sheet next to the list on a wide screen. */
+type DialogProps = { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string; closeLabel?: string; wide?: boolean };
 
 const LANG_NAMES: Record<string, string> = { es: "Español", en: "English", pt: "Português" };
 const btn = "inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50";
@@ -62,6 +63,78 @@ function OptOut({ checked, onChange, label }: { checked: boolean; onChange: (v: 
     );
 }
 
+/** A box of the sheet view, drawn like the printed one (a square that is ticked or not). */
+function Box({ on, tone }: { on: boolean; tone: "ok" | "no" }) {
+    const ticked = tone === "ok" ? "border-emerald-600 bg-emerald-600 text-white" : "border-rose-600 bg-rose-600 text-white";
+    return (
+        <span aria-hidden="true" className={`inline-flex w-5 h-5 shrink-0 items-center justify-center rounded border-2 text-[11px] ${on ? ticked : "border-gray-300 bg-white text-transparent"}`}>
+            <i className={`fa-solid ${tone === "ok" ? "fa-check" : "fa-xmark"}`}></i>
+        </span>
+    );
+}
+
+/**
+ * The sheet itself (2.36.2), so whoever ticks can follow the paper line by line: its rows in the printed order — the
+ * pre-filled names, then the blank rows — with the same «No autorizo» columns. Tapping a row ticks that the person
+ * signed (the same state as the list); tapping an opt-out box ticks it too, since only a signer marks one. Rows
+ * already settled stay in place, greyed, so the numbering always matches the paper.
+ */
+export function SheetView({ t, sheet, rows, people, setRow }: { t: (k: string, v?: any) => string; sheet: any; rows: any[]; people: any[]; setRow: (id: number, patch: any) => void }) {
+    const byId = new Map(rows.map((r: any) => [r.id, r]));
+    const person = new Map(people.map((p: any) => [p.id, p]));
+    const printed = (sheet.roster || []).map((l: any) => ({ row: l.row, id: l.inscription_id, name: l.name || person.get(l.inscription_id)?.name || `#${l.inscription_id}` }));
+    const blanks = Array.from({ length: Number(sheet.blank) || 0 }, (_, i) => ({ row: printed.length + i + 1, id: null, name: "" }));
+    const cell = "px-2 py-2 border-b border-gray-100 align-middle";
+    const tap = "w-full flex items-center justify-center min-h-[2.25rem] rounded hover:bg-gray-50";
+    return (
+        <table className="w-full text-xs border-collapse" data-paper-sheet-view={sheet.code}>
+            <thead>
+                <tr className="text-[10px] uppercase tracking-wide text-gray-500 bg-gray-50">
+                    <th scope="col" className="px-2 py-1.5 text-left w-8">#</th>
+                    <th scope="col" className="px-2 py-1.5 text-left">{t("paper.col.name")}</th>
+                    <th scope="col" className="px-1 py-1.5 w-14">{t("paper.col.signed")}</th>
+                    <th scope="col" className="px-1 py-1.5 w-14">{t("paper.col.health")}</th>
+                    <th scope="col" className="px-1 py-1.5 w-14">{t("paper.col.image")}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {[...printed, ...blanks].map((l: any) => {
+                    // A blank row shows the walk-in ticked on it (the row typed in the list).
+                    const r = l.id != null ? byId.get(l.id) : rows.find((x: any) => x.row == null && x.on && Number(x.typedRow) === l.row);
+                    const settled = l.id != null && !r;
+                    const status = settled ? (person.get(l.id) ? t("paper.row.granted") : t("paper.row.gone")) : null;
+                    return (
+                        <tr key={l.row} className={`${r?.on ? "bg-emerald-50/60" : ""} ${settled ? "text-gray-400" : "text-gray-900"}`} data-paper-sheet-row={l.row}>
+                            <td className={`${cell} font-bold tabular-nums`}>{l.row}</td>
+                            <td className={cell}>
+                                {r && l.id != null ? (
+                                    <button type="button" className="w-full text-left font-semibold min-h-[2.25rem]" aria-pressed={r.on} onClick={() => setRow(r.id, { on: !r.on })}>{l.name}</button>
+                                ) : (
+                                    <span className={l.name || r ? "font-semibold" : "italic text-gray-400"}>{l.name || r?.name || t("paper.row.blank")}</span>
+                                )}
+                                {status && <span className="block text-[10px] font-semibold">{status}</span>}
+                            </td>
+                            {r && l.id != null ? (
+                                <>
+                                    <td className={cell}><button type="button" className={tap} aria-pressed={r.on} aria-label={`${l.row} · ${t("paper.col.signed")}`} onClick={() => setRow(r.id, { on: !r.on })}><Box on={r.on} tone="ok" /></button></td>
+                                    <td className={cell}><button type="button" className={tap} aria-pressed={r.on && r.noHealth} aria-label={`${l.row} · ${t("paper.optout.health")}`} onClick={() => setRow(r.id, r.on && r.noHealth ? { noHealth: false } : { on: true, noHealth: true })}><Box on={r.on && r.noHealth} tone="no" /></button></td>
+                                    <td className={cell}><button type="button" className={tap} aria-pressed={r.on && r.noImage} aria-label={`${l.row} · ${t("paper.optout.image")}`} onClick={() => setRow(r.id, r.on && r.noImage ? { noImage: false } : { on: true, noImage: true })}><Box on={r.on && r.noImage} tone="no" /></button></td>
+                                </>
+                            ) : (
+                                <>
+                                    <td className={`${cell} text-center`}>{r ? <Box on tone="ok" /> : null}</td>
+                                    <td className={`${cell} text-center`}>{r ? <Box on={r.noHealth} tone="no" /> : null}</td>
+                                    <td className={`${cell} text-center`}>{r ? <Box on={r.noImage} tone="no" /> : null}</td>
+                                </>
+                            )}
+                        </tr>
+                    );
+                })}
+            </tbody>
+        </table>
+    );
+}
+
 export function PaperConsent({ t, request, Dialog, addToast, canManage, locationPicker, dateLang = "es" }: {
     t: (k: string, v?: any) => string; request: Req; Dialog: React.ComponentType<DialogProps>; addToast: (m: string, tone?: string) => void;
     canManage: boolean; locationPicker?: React.ReactNode; dateLang?: string;
@@ -75,6 +148,7 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
     const [check, setCheck] = useState<any>(null);
     const [undo, setUndo] = useState<any>(null);
     const [view, setView] = useState<any>(null);
+    const [del, setDel] = useState<any>(null);
 
     const load = useCallback(async () => {
         try { const d = await request("get", {}); setData(d); setErr(null); }
@@ -147,11 +221,31 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         const people = (data.people || []).filter((p: any) => p.state !== "granted");
         people.sort((a: any, b: any) => (rowOf.get(a.id) ?? 1e9) - (rowOf.get(b.id) ?? 1e9) || a.name.localeCompare(b.name));
         setCheck({
-            sheet: s, err: null,
+            sheet: s, err: null, pane: "sheet", photo: false, pages: null,
             rows: people.map((p: any) => ({ id: p.id, name: p.name, row: rowOf.get(p.id) ?? null, typedRow: "", byAge: p.minor, on: false, noHealth: false, noImage: false, minor: p.minor === true, rep: "", repDoc: "", err: {} })),
         });
     };
     const setRow = (id: number, patch: any) => setCheck((c: any) => ({ ...c, err: null, rows: c.rows.map((r: any) => (r.id === id ? { ...r, ...patch, err: {} } : r)) }));
+    // The uploaded pages, next to the sheet view: the photos are loaded once, when first shown; a PDF opens apart.
+    const showPhoto = async (on: boolean) => {
+        setCheck((c: any) => ({ ...c, photo: on }));
+        if (!on || check.pages) return;
+        const pages = [];
+        for (const f of check.sheet.files || []) {
+            if (f.mime === "application/pdf") { pages.push({ ...f, pdf: true }); continue; }
+            try { const r = await request("get", { file_id: f.id }); pages.push({ ...f, data_url: r.data_url }); }
+            catch (e: any) { pages.push({ ...f, error: e?.message || "Error" }); }
+        }
+        setCheck((c: any) => (c && c.sheet.id === check.sheet.id ? { ...c, pages } : c));
+    };
+    const removeSheet = async () => {
+        setDel({ ...del, busy: true, err: null });
+        try {
+            await request("post", { action: "delete", sheet_id: del.sheet.id });
+            addToast(t("paper.deleted", { code: del.sheet.code }), "success");
+            setDel(null); load();
+        } catch (e: any) { setDel({ ...del, busy: false, err: e?.message || "Error" }); }
+    };
     const saveCheck = async () => {
         const chosen = check.rows.filter((r: any) => r.on);
         if (!chosen.length) { setCheck({ ...check, err: t("paper.none.checked") }); return; }
@@ -256,6 +350,11 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                                                 <i className="fa-solid fa-list-check" aria-hidden="true"></i>{t("paper.mark")}
                                             </button>
                                         )}
+                                        {canManage && s.deletable && (
+                                            <button type="button" className={`${btn} text-rose-700 hover:bg-rose-50`} onClick={() => setDel({ sheet: s, busy: false, err: null })} data-paper-delete={s.code}>
+                                                <i className="fa-regular fa-trash-can" aria-hidden="true"></i>{t("paper.delete")}
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                                 {s.files.length === 0 ? <p className="text-[11px] text-amber-800">{t("paper.files.none")}</p> : (
@@ -307,7 +406,7 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
             )}
 
             {check && (
-                <Dialog closeLabel={t("paper.close")} title={t("paper.check.title", { code: check.sheet.code })} onClose={() => setCheck(null)} testId="paper-check"
+                <Dialog wide closeLabel={t("paper.close")} title={t("paper.check.title", { code: check.sheet.code })} onClose={() => setCheck(null)} testId="paper-check"
                     footer={<div className="flex flex-wrap justify-end gap-2 w-full">
                         <button type="button" className={btn} onClick={() => setCheck(null)}>{t("paper.cancel")}</button>
                         <button type="button" className={btnDark} disabled={check.busy} onClick={saveCheck} data-paper-save="">{t("paper.save", { n: check.rows.filter((r: any) => r.on).length })}</button>
@@ -315,7 +414,48 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                     <p className="text-xs text-gray-500">{t("paper.check.hint")}</p>
                     {check.err && <p className="text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2 mt-2" role="alert">{check.err}</p>}
                     {check.rows.length === 0 && <p className="text-sm text-gray-500 mt-3">{t("paper.all.signed")}</p>}
-                    <ul className="divide-y divide-gray-100 mt-2">
+                    {/* A phone shows one pane at a time; a wide screen, the sheet next to the list. */}
+                    <div className="lg:hidden grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 mt-3" role="group" aria-label={t("paper.check.title", { code: check.sheet.code })}>
+                        {(["sheet", "list"] as const).map((k) => (
+                            <button key={k} type="button" aria-pressed={check.pane === k} onClick={() => setCheck((c: any) => ({ ...c, pane: k }))} data-paper-pane-toggle={k}
+                                className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-bold ${check.pane === k ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>
+                                <i className={`fa-solid ${k === "sheet" ? "fa-file-lines" : "fa-list-check"}`} aria-hidden="true"></i>{t(`paper.view.${k}`)}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="mt-3 lg:grid lg:grid-cols-2 lg:gap-5">
+                    <div className={`${check.pane === "sheet" ? "" : "hidden lg:block"} min-w-0`} data-paper-pane="sheet">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                            <h4 className="text-xs font-bold uppercase tracking-wide text-gray-500">{t("paper.sheet", { code: check.sheet.code })}</h4>
+                            {(check.sheet.files || []).length > 0 && (
+                                <div className="inline-flex rounded-lg border border-gray-200 p-0.5 text-[11px] font-bold">
+                                    {[false, true].map((on) => (
+                                        <button key={String(on)} type="button" aria-pressed={check.photo === on} onClick={() => showPhoto(on)} data-paper-photo-toggle={on ? "photo" : "printed"}
+                                            className={`px-2.5 py-1 rounded-md ${check.photo === on ? "bg-gray-900 text-white" : "text-gray-600"}`}>{t(on ? "paper.view.photo" : "paper.view.printed")}</button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        {!check.photo ? (
+                            <>
+                                <p className="text-[11px] text-gray-500 mb-2">{t("paper.view.hint")}</p>
+                                <SheetView t={t} sheet={check.sheet} rows={check.rows} people={data.people || []} setRow={setRow} />
+                            </>
+                        ) : !check.pages ? <p className="text-sm text-gray-500">{t("paper.photo.loading")}</p> : (
+                            <div className="space-y-3" data-paper-photos="">
+                                {check.pages.map((f: any) => f.pdf ? (
+                                    <div key={f.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-700">
+                                        <span className="min-w-0 truncate"><i className="fa-regular fa-file-pdf mr-1.5" aria-hidden="true"></i>{f.name || `#${f.id}`} · {t("paper.photo.pdf")}</span>
+                                        <button type="button" className={btn} onClick={() => openFile(f)}>{t("paper.photo.open")}</button>
+                                    </div>
+                                ) : f.error ? <p key={f.id} className={errCls} role="alert">{f.name || `#${f.id}`}: {f.error}</p> : (
+                                    <img key={f.id} src={f.data_url} alt={f.name || t("paper.view.photo")} className="w-full h-auto rounded-lg border border-gray-100" />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    <div className={`${check.pane === "list" ? "" : "hidden lg:block"} min-w-0`} data-paper-pane="list">
+                    <ul className="divide-y divide-gray-100">
                         {check.rows.map((r: any) => (
                             <li key={r.id} className="py-3 space-y-2" data-paper-person={r.id}>
                                 <label className="flex items-center gap-3 cursor-pointer">
@@ -360,6 +500,22 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                             </li>
                         ))}
                     </ul>
+                    </div>
+                    </div>
+                </Dialog>
+            )}
+
+            {del && (
+                <Dialog closeLabel={t("paper.close")} title={t("paper.delete.title", { code: del.sheet.code })} onClose={() => setDel(null)} testId="paper-delete"
+                    footer={<div className="flex flex-wrap justify-end gap-2 w-full">
+                        <button type="button" className={btn} onClick={() => setDel(null)}>{t("paper.cancel")}</button>
+                        <button type="button" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-bold disabled:opacity-60" disabled={del.busy} onClick={removeSheet} data-paper-delete-confirm="">
+                            <i className="fa-regular fa-trash-can" aria-hidden="true"></i>{t("paper.delete.confirm")}
+                        </button>
+                    </div>}>
+                    <p className="text-sm text-gray-700">{t("paper.delete.hint")}</p>
+                    <p className="text-[11px] text-gray-500 mt-2">{t("paper.sheet.meta", { rows: del.sheet.rows, blank: del.sheet.blank, when: when(del.sheet.created_utc) })}</p>
+                    {del.err && <p className={`${errCls} mt-2`} role="alert">{del.err}</p>}
                 </Dialog>
             )}
 

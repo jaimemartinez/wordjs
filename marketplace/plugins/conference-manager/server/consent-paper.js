@@ -70,6 +70,7 @@ const MSG = {
     cancelled: 'La inscripción está cancelada.',
     notPaper: 'Esta persona no tiene una autorización en papel para deshacer.',
     reason: 'Escribe por qué se deshace la marca (por ejemplo, «se marcó a la persona equivocada»).',
+    inUse: 'Esta hoja ya tiene la foto o el PDF firmado: se conserva como evidencia y no se puede eliminar.',
 };
 
 /**
@@ -104,7 +105,7 @@ function createPaper(core) {
         if (addColumnIfMissing) await addColumnIfMissing(T.consentSheets, 'paper', 'VARCHAR(8)');
         await createUniqueIndex(`${P}uidx_consent_sheets_code`, T.consentSheets, 'code');
         await createIndex(`${P}idx_consent_sheets_loc`, T.consentSheets, 'conference_id, location_id');
-        // Never updated, never deleted: each file is evidence.
+        // Never updated, never deleted: each file is evidence (and a sheet with a file is never deleted either).
         await db.createTable(T.consentSheetFiles, [
             'id INT_PK',
             'sheet_id INT NOT NULL',
@@ -153,10 +154,13 @@ function createPaper(core) {
         const out = [];
         for (const s of rows) {
             const marked = await db.get(`SELECT COUNT(*) AS n FROM ${T.consentRequests} WHERE sheet_id = ? AND state = 'granted' AND method = 'paper'`, [s.id]);
+            const files = await filesOf(s.id);
             out.push({
                 id: Number(s.id), code: s.code, lang: s.lang, paper: s.paper || 'letter', policy_version: s.policy_version, created_by: s.created_by || null, created_utc: s.created_utc,
-                rows: rosterOf(s).length, blank: Number(s.blank) || 0, files: await filesOf(s.id), marked: Number(marked && marked.n) || 0,
-                roster: rosterOf(s).map(p => ({ row: p.row, inscription_id: p.id })),
+                rows: rosterOf(s).length, blank: Number(s.blank) || 0, files, marked: Number(marked && marked.n) || 0,
+                // The printed rows, in the sheet's order, with the names as printed (2.36.2: the checklist shows the sheet).
+                roster: rosterOf(s).map(p => ({ row: p.row, inscription_id: p.id, name: p.name })),
+                deletable: !files.length && !Number(marked && marked.n),
             });
         }
         return out;
@@ -244,6 +248,25 @@ function createPaper(core) {
     const locked = (fn) => { const run = markLock.then(fn, fn); markLock = run.then(() => {}, () => {}); return run; };
     const mark = (scope, sheet, body, httpError) => locked(() => markNow(scope, sheet, body, httpError));
     const unmark = (scope, ins, body, httpError) => locked(() => unmarkNow(scope, ins, body, httpError));
+
+    const removeSheet = (scope, sheet, httpError) => locked(() => removeSheetNow(scope, sheet, httpError));
+
+    /**
+     * Delete a sheet that was never used (2.36.2): printed by mistake, or with the wrong language or paper. Only while it
+     * has no signed page uploaded — a file is evidence, and ticks need one first, so no one was ever marked on it — and
+     * nobody's authorization names it. The hash chain keeps both the creation and the deletion.
+     */
+    async function removeSheetNow(scope, sheet, httpError) {
+        const files = await db.get(`SELECT COUNT(*) AS n FROM ${T.consentSheetFiles} WHERE sheet_id = ?`, [sheet.id]);
+        const named = await db.get(`SELECT COUNT(*) AS n FROM ${T.consentRequests} WHERE sheet_id = ?`, [sheet.id]);
+        if (Number(files && files.n) || Number(named && named.n)) throw httpError(409, MSG.inUse);
+        await db.run(`DELETE FROM ${T.consentSheets} WHERE id = ?`, [sheet.id]);
+        await core.append({ conference_id: sheet.conference_id, inscription_id: null, kind: 'paper_sheet_deleted', actor: scope.actor,
+            policy_version: sheet.policy_version, policy_sha256: sheet.policy_sha256, text_sha256: sheet.text_sha256,
+            data: { sheet_id: Number(sheet.id), code: sheet.code, location_id: Number(sheet.location_id), rows: rosterOf(sheet).length, blank: Number(sheet.blank) || 0,
+                printed_utc: sheet.created_utc, printed_by: sheet.created_by || null, via: scope.via } });
+        return { deleted: Number(sheet.id) };
+    }
 
     /** Tick who signed (all checked first, then each one logged). Returns { marked: [ids] }. */
     async function markNow(scope, sheet, body, httpError) {
@@ -438,6 +461,7 @@ function createPaper(core) {
             //   upload { sheet_id, data_url, name? } → the file (its SHA-256)
             //   marks  { sheet_id, marks: [{ inscription_id, health, image, minor?, representative?, row? }] } → { marked }
             //   unmark { inscription_id, reason } → { state: 'pending' }
+            //   delete { sheet_id } → { deleted } (only a sheet with no signed page uploaded; else 409)
             route('post', async (req, res) => {
                 try {
                     const b = req.body || {};
@@ -446,9 +470,10 @@ function createPaper(core) {
                         if (!scope) return;
                         return res.json(await createSheet(scope, b, httpError));
                     }
-                    if (b.action === 'upload' || b.action === 'marks') {
+                    if (b.action === 'upload' || b.action === 'marks' || b.action === 'delete') {
                         const s = await sheetScope(req, res, 'manage', portal, positiveInt(b.sheet_id));
                         if (!s) return;
+                        if (b.action === 'delete') return res.json(await removeSheet(s.scope, s.sheet, httpError));
                         return res.json(b.action === 'upload' ? await upload(s.scope, s.sheet, b, httpError) : await mark(s.scope, s.sheet, b, httpError));
                     }
                     if (b.action === 'unmark') {

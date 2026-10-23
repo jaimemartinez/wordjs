@@ -6,6 +6,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **conference-manager 2.36.2: paper consent sheets.**
+  - **Delete an unused sheet.** A sheet made by mistake (wrong language, paper or locality) can be deleted, after a
+    confirmation in the app's own dialog. Only while it has no signed page uploaded: an uploaded page is evidence and
+    is never deleted, and ticks need one, so nobody was ever recorded on a sheet that can go. The consent log keeps
+    both the sheet's creation and its deletion.
+  - **See the sheet while ticking who signed.** «Marcar quién firmó» shows the sheet itself: the printed rows in the
+    paper's order, then the blank rows, with the same «No autorizo» columns. Tapping a row ticks it, and the list
+    follows. Rows already settled stay in place, greyed, so the numbers always match the paper. «Hoja subida» shows
+    the uploaded photo instead. A wide screen shows the sheet next to the list; a phone switches between «Hoja» and
+    «Lista».
+
 ## [2.11.0] - 2026-10-23
 
 ### Added
