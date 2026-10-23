@@ -15,7 +15,7 @@
 
 exports.metadata = {
     name: 'FAQ',
-    version: '1.0.4',
+    version: '1.0.5',
     description: 'FAQ with categories + Verso accordion block with FAQPage JSON-LD rich-results markup',
     author: 'WordJS',
 };
@@ -203,18 +203,34 @@ exports.init = async function (wordjs) {
         res.json({ faqs: rows });
     }));
 
-    adminMenu.add({
-        href: '/admin/plugin/faq',
-        label: 'FAQ',
-        // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
-        labels: { en: 'FAQ', es: 'Preguntas frecuentes', pt: 'Perguntas frequentes' },
-        icon: 'fa-circle-question',
-        order: 63,
-        cap: 'manage_options',
-    });
+    // The sidebar entry needs the `admin_menu:register` grant. An administrator may leave it off (the
+    // permission screen, or the consent dialog of a Marketplace update): the FAQ then runs without its menu
+    // entry — its routes and its block keep working — instead of the refused call ending the plugin
+    // (an unhandled rejection is fatal in the sandbox, so it crash-looped).
+    registerAdminMenu(adminMenu);
 
     console.log('[faq] plugin initialized');
 };
+
+/** Add the FAQ sidebar entry; a refusal (the grant is off) is logged, never thrown. */
+function registerAdminMenu(adminMenu) {
+    const warn = (err) => console.warn(`[faq] admin menu not added (grant admin_menu:register to show it): ${err && err.message ? err.message : err}`);
+    try {
+        const pending = adminMenu.add({
+            href: '/admin/plugin/faq',
+            label: 'FAQ',
+            // Shown in the admin's language (sidebar); `label` stays for cores without per-language labels.
+            labels: { en: 'FAQ', es: 'Preguntas frecuentes', pt: 'Perguntas frequentes' },
+            icon: 'fa-circle-question',
+            order: 63,
+            cap: 'manage_options',
+        });
+        if (pending && typeof pending.catch === 'function') pending.catch(warn);
+    } catch (err) {
+        warn(err);
+    }
+}
+exports._registerAdminMenu = registerAdminMenu;
 
 exports.deactivate = function () {
     // Nothing to tear down — no timers, no servers.

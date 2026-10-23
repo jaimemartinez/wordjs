@@ -70,6 +70,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **faq 1.0.5: the FAQ keeps running without the *Add admin menu* permission.** With `admin_menu:register` off
+  (on the permission screen, or in the consent dialog of an update), the plugin crashed and restarted in a loop,
+  taking its pages and its block down with it. It now runs without its sidebar entry and logs why.
 - **conference-manager 2.33.3: «Copiar mensaje» works for people with no e-mail on file.** It used to refuse with
   «se requiere un correo válido». The message is now copied anyway, and the consent page asks the person for their
   e-mail. The signing code goes there, and the e-mail is kept as verified in the evidence (noted as typed on the
