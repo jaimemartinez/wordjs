@@ -102,6 +102,7 @@ vi.mock("../MarketplaceTab", () => ({ default: () => null }));
 
 import PluginsPage from "../page";
 import { PluginToggleButton } from "../PluginActionButtons";
+import { Button } from "@/components/ui";
 
 /**
  * The permissions dialog's own copy — present in the markup only while the dialog is open. The dialog is
@@ -206,7 +207,8 @@ function findButton(node: unknown, label: string): { onClick?: () => unknown } |
     }
     if (!React.isValidElement(node)) return null;
     const props = node.props as { children?: unknown; onClick?: () => unknown };
-    if (node.type === "button" && textOf(props.children).includes(label)) return props;
+    // A raw <button>, or the form kit's Button (components/ui), which the page uses for its actions.
+    if ((node.type === "button" || node.type === Button) && textOf(props.children).includes(label)) return props;
     // The card's Activate/Deactivate button is a component (PluginActionButtons): its label is its state.
     if (node.type === PluginToggleButton) {
         const toggle = node.props as { active: boolean; t: (key: string) => string; onClick: () => unknown };

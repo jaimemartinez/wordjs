@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { Button, FileButton, Input } from "@/components/ui";
 import { singleCertificateNameProblem, certificateNameProblemFromCode, CERTIFICATE_NAME_MESSAGE_KEY, type CertificateNameProblem } from "@/lib/certificateName";
 
 interface CertInfo {
@@ -221,31 +222,28 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                        <label htmlFor="ssl-field-1" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.domainName')}</label>
-                        <input id="ssl-field-1"
-                            type="text"
-                            value={domain}
-                            onChange={e => setDomain(e.target.value)}
-                            placeholder="example.com"
-                            className="w-full px-5 py-3 bg-white/70 border border-blue-100 rounded-xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all placeholder-gray-400"
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <label htmlFor="ssl-field-2" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.email')} <span className="text-gray-500 font-normal">{t('ssl.forLetsEncrypt')}</span></label>
-                        <input id="ssl-field-2"
-                            type="email"
-                            value={email}
-                            onChange={e => setEmail(e.target.value)}
-                            placeholder="admin@example.com"
-                            className="w-full px-5 py-3 bg-white/70 border border-blue-100 rounded-xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all placeholder-gray-400"
-                        />
-                    </div>
+                    <Input
+                        id="ssl-field-1"
+                        size="md"
+                        label={t('ssl.domainName')}
+                        value={domain}
+                        onChange={e => setDomain(e.target.value)}
+                        placeholder="example.com"
+                    />
+                    <Input
+                        id="ssl-field-2"
+                        size="md"
+                        type="email"
+                        label={<>{t('ssl.email')} <span className="font-normal normal-case tracking-normal text-gray-500">{t('ssl.forLetsEncrypt')}</span></>}
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                        placeholder="admin@example.com"
+                    />
                 </div>
             </div>
 
             <div className="space-y-4 pt-4">
-                <label htmlFor="ssl-field-3" className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('ssl.validationMethod')}</label>
+                <p className="text-sm font-bold text-gray-700 uppercase tracking-wide">{t('ssl.validationMethod')}</p>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div
                         onClick={() => setMethod("http")}
@@ -299,47 +297,29 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.upload.keyLabel')}</label>
-                            <input id="ssl-field-3"
-                                type="file"
+                            <FileButton
+                                variant="secondary"
+                                size="md"
+                                icon="fa-file-arrow-up"
                                 accept=".key,.pem,.txt"
-                                onChange={async (e) => {
-                                    if (e.target.files?.[0]) {
-                                        const content = await readFile(e.target.files[0]);
-                                        setKeyContent(content);
-                                    }
-                                }}
-                                className="w-full text-sm text-gray-600
-                                file:mr-4 file:py-2.5 file:px-4
-                                file:rounded-xl file:border-0
-                                file:text-sm file:font-bold
-                                file:bg-emerald-100 file:text-emerald-700
-                                hover:file:bg-emerald-200
-                                cursor-pointer"
-                            />
-                            {keyContent && <p className="text-xs text-emerald-600 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.keyLoaded')}</p>}
+                                onFiles={async (files) => setKeyContent(await readFile(files[0]))}
+                            >
+                                {t('ssl.upload.keyLabel')}
+                            </FileButton>
+                            {keyContent && <p role="status" className="text-xs text-emerald-600 font-bold ml-1"><i className="fa-solid fa-check mr-1" aria-hidden="true"></i>{t('ssl.upload.keyLoaded')}</p>}
                         </div>
 
                         <div className="space-y-2">
-                            <label htmlFor="ssl-field-4" className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">{t('ssl.upload.certLabel')}</label>
-                            <input id="ssl-field-4"
-                                type="file"
+                            <FileButton
+                                variant="secondary"
+                                size="md"
+                                icon="fa-file-arrow-up"
                                 accept=".crt,.pem,.txt"
-                                onChange={async (e) => {
-                                    if (e.target.files?.[0]) {
-                                        const content = await readFile(e.target.files[0]);
-                                        setCertContent(content);
-                                    }
-                                }}
-                                className="w-full text-sm text-gray-600
-                                file:mr-4 file:py-2.5 file:px-4
-                                file:rounded-xl file:border-0
-                                file:text-sm file:font-bold
-                                file:bg-emerald-100 file:text-emerald-700
-                                hover:file:bg-emerald-200
-                                cursor-pointer"
-                            />
-                            {certContent && <p className="text-xs text-emerald-600 font-bold ml-1 animate-pulse"><i className="fa-solid fa-check mr-1"></i>{t('ssl.upload.certLoaded')}</p>}
+                                onFiles={async (files) => setCertContent(await readFile(files[0]))}
+                            >
+                                {t('ssl.upload.certLabel')}
+                            </FileButton>
+                            {certContent && <p role="status" className="text-xs text-emerald-600 font-bold ml-1"><i className="fa-solid fa-check mr-1" aria-hidden="true"></i>{t('ssl.upload.certLoaded')}</p>}
                         </div>
                     </div>
                 </div>
@@ -376,13 +356,9 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     </div>
 
                     <div className="flex gap-3 pt-2">
-                        <button
-                            onClick={handleDNSCheck}
-                            className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
-                        >
-                            <i className="fa-solid fa-rotate-right mr-2"></i>
+                        <Button size="md" icon="fa-rotate-right" onClick={handleDNSCheck}>
                             {t('ssl.dns.checkPropagation')}
-                        </button>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -404,20 +380,15 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
 
             <div className="flex justify-end">
                 {status !== "step1_dns" && (
-                    <button
+                    <Button
+                        size="md"
                         onClick={handleProvision}
-                        disabled={status === "loading" || !domain || !email}
-                        className={`px-6 py-3 rounded-xl font-bold flex items-center gap-2 text-white ${status === "loading" || !domain || !email
-                            ? "bg-gray-300 cursor-not-allowed"
-                            : "bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all"
-                            }`}
+                        disabled={!domain || !email}
+                        pending={status === "loading"}
+                        pendingLabel={t('ssl.processing')}
                     >
-                        {status === "loading" ? (
-                            <><i className="fa-solid fa-circle-notch fa-spin"></i> {t('ssl.processing')}</>
-                        ) : (
-                            t('ssl.startProvisioning')
-                        )}
-                    </button>
+                        {t('ssl.startProvisioning')}
+                    </Button>
                 )}
             </div>
         </div>

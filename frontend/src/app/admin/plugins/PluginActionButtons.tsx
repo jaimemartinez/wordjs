@@ -10,6 +10,7 @@
  * plugin is disabled until the server has answered.
  */
 import { FaCheck, FaPowerOff, FaSyncAlt } from "react-icons/fa";
+import { UnstyledButton } from "@/components/ui";
 
 export type PluginPendingAction = "activating" | "deactivating" | "deleting";
 
@@ -29,9 +30,9 @@ export function PluginToggleButton({ active, pending, onClick, t }: {
     t: (key: string) => string;
 }) {
     const busy = !!pending;
+    // Bespoke on purpose: green to activate, red to deactivate, with the pending label (UnstyledButton keeps type, focus ring).
     return (
-        <button
-            type="button"
+        <UnstyledButton
             onClick={onClick}
             disabled={busy}
             aria-busy={busy || undefined}
@@ -57,7 +58,7 @@ export function PluginToggleButton({ active, pending, onClick, t }: {
                     <FaCheck className="text-[11px]" /> {t('plugins.activate')}
                 </>
             )}
-        </button>
+        </UnstyledButton>
     );
 }
 
