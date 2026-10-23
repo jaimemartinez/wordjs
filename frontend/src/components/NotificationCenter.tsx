@@ -7,6 +7,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import Link from "next/link";
 import { csrfHeaders } from "@/lib/csrf";
 import { claimNotification, subscribeNotifications } from "@/lib/notificationStream";
+import { UnstyledButton } from "@/components/ui";
 
 interface Notification {
     uuid: string;
@@ -211,7 +212,8 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             {isOpen && variant === 'inline' && (
                 <div className="fixed inset-0 bg-black/10 backdrop-blur-[1px] z-[9998]" onClick={() => setIsOpen(false)}></div>
             )}
-            <button
+            <UnstyledButton
+                aria-expanded={isOpen}
                 onClick={() => setIsOpen(!isOpen)}
                 className={`${buttonClasses} ${isOpen ? 'hidden md:flex' : 'flex'}`}
                 title={variant === 'inline' ? t('notif.title') : undefined}
@@ -231,7 +233,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                         </span>
                     </span>
                 )}
-            </button>
+            </UnstyledButton>
 
             {isOpen && (
                 <div className={panelClasses}>
@@ -248,31 +250,31 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                             </p>
                         </div>
                         <div className="flex items-center gap-3">
-                            <button
+                            <UnstyledButton
                                 onClick={markAllRead}
                                 title={t('notif.markAllRead')}
                                 aria-label={t('notif.markAllRead')}
                                 className="w-11 h-11 shrink-0 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group"
                             >
                                 <i className="fa-solid fa-check-double text-sm transition-transform group-hover:scale-110"></i>
-                            </button>
-                            <button
+                            </UnstyledButton>
+                            <UnstyledButton
                                 onClick={() => fetchNotifications()}
                                 title={t('notif.refresh')}
                                 aria-label={t('notif.refresh')}
                                 className={`w-11 h-11 shrink-0 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group ${isRefreshing ? 'animate-spin text-blue-500' : ''}`}
                             >
                                 <i className="fa-solid fa-arrows-rotate text-sm transition-transform group-hover:rotate-45"></i>
-                            </button>
+                            </UnstyledButton>
                             {variant === 'inline' && (
-                                <button
+                                <UnstyledButton
                                     onClick={() => setIsOpen(false)}
                                     className="w-11 h-11 shrink-0 flex items-center justify-center rounded-2xl bg-gray-50 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all active:scale-95 border border-gray-100/50 shadow-sm"
                                     title={t('notif.close')}
                                     aria-label={t('notif.close')}
                                 >
                                     <i className="fa-solid fa-xmark text-lg"></i>
-                                </button>
+                                </UnstyledButton>
                             )}
                         </div>
                     </div>
@@ -328,14 +330,14 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
 
                                                 {/* Delete button: always visible in the bottom-right corner on screens without hover (phones,
                                                     tablets), revealed on hover (or keyboard focus) at the middle of the right edge elsewhere. */}
-                                                <button
+                                                <UnstyledButton
                                                     onClick={(e) => deleteNotification(e, n.uuid)}
                                                     className="absolute right-4 bottom-4 [@media(hover:hover)]:bottom-auto [@media(hover:hover)]:top-1/2 [@media(hover:hover)]:-translate-y-1/2 [@media(hover:hover)]:-right-2 w-10 h-10 rounded-full bg-rose-50 text-rose-500 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-hover:right-4 focus-visible:opacity-100 focus-visible:right-4 transition-all duration-300 flex items-center justify-center hover:bg-rose-500 hover:text-white shadow-lg shadow-rose-200"
                                                     title={t('notif.delete')}
                                                     aria-label={t('notif.delete')}
                                                 >
                                                     <i className="fa-solid fa-trash-can text-sm"></i>
-                                                </button>
+                                                </UnstyledButton>
                                             </div>
                                             {!n.is_read && (
                                                 <div className="absolute right-6 top-6 group-hover:opacity-0 transition-opacity">

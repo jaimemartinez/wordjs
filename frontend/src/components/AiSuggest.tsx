@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { aiApi, AiSuggestTask } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import { UnstyledButton } from "@/components/ui";
 
 /**
  * "Suggest with AI" — the editor's first-party use of the AI provider layer (backend routes/ai.ts).
@@ -93,25 +94,25 @@ export default function AiSuggestion({
 
     return (
         <div className="mb-3" data-ai-suggest={task}>
-            <button type="button" className={BTN[tone]} onClick={run} disabled={busy} aria-busy={busy}>
+            <UnstyledButton type="button" className={BTN[tone]} onClick={run} disabled={busy} aria-busy={busy}>
                 <i className={`fa-solid ${busy ? "fa-spinner fa-spin" : "fa-wand-magic-sparkles"}`} aria-hidden="true"></i>
                 {busy ? t("ai.suggesting") : t("ai.suggest")}
-            </button>
+            </UnstyledButton>
             {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
             {suggestion !== null && (
                 <div className={BOX[tone]} role="status" aria-live="polite">
                     <p className="text-[11px] font-bold uppercase tracking-wider opacity-60 mb-1">{t("ai.suggestionLabel")}</p>
                     <p className="whitespace-pre-wrap break-words">{suggestion}</p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                        <button type="button" className={BTN[tone]} onClick={() => { onAccept(suggestion); setSuggestion(null); }}>
+                        <UnstyledButton type="button" className={BTN[tone]} onClick={() => { onAccept(suggestion); setSuggestion(null); }}>
                             <i className="fa-solid fa-check" aria-hidden="true"></i>{t("ai.use")}
-                        </button>
-                        <button type="button" className={BTN[tone]} onClick={run} disabled={busy}>
+                        </UnstyledButton>
+                        <UnstyledButton type="button" className={BTN[tone]} onClick={run} disabled={busy}>
                             <i className="fa-solid fa-rotate" aria-hidden="true"></i>{t("ai.retry")}
-                        </button>
-                        <button type="button" className={BTN[tone]} onClick={() => setSuggestion(null)}>
+                        </UnstyledButton>
+                        <UnstyledButton type="button" className={BTN[tone]} onClick={() => setSuggestion(null)}>
                             <i className="fa-solid fa-xmark" aria-hidden="true"></i>{t("ai.dismiss")}
-                        </button>
+                        </UnstyledButton>
                     </div>
                 </div>
             )}

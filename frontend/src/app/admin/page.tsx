@@ -26,6 +26,7 @@ interface ChartData {
 }
 
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { UnstyledButton } from "@/components/ui";
 
 // Local initials avatar — no external avatar-service request. Deterministic gradient pick
 // via a simple char-code hash (Tailwind needs literal class names, hence the map).
@@ -370,18 +371,20 @@ export default function DashboardPage() {
                                 <p className="text-[11px] font-bold uppercase tracking-widest text-gray-500 mt-1">{t('dashboard.traffic.engagement')}</p>
                             </div>
                             <div className="flex gap-2">
-                                <button
+                                <UnstyledButton
+                                    aria-pressed={chartPeriod === 'weekly'}
                                     onClick={() => setChartPeriod('weekly')}
                                     className={`px-3 py-1 rounded-lg text-[11px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                                 >
                                     {t('dashboard.weekly')}
-                                </button>
-                                <button
+                                </UnstyledButton>
+                                <UnstyledButton
+                                    aria-pressed={chartPeriod === 'monthly'}
                                     onClick={() => setChartPeriod('monthly')}
                                     className={`px-3 py-1 rounded-lg text-[11px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'monthly' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
                                 >
                                     {t('dashboard.monthly')}
-                                </button>
+                                </UnstyledButton>
                             </div>
                         </div>
 

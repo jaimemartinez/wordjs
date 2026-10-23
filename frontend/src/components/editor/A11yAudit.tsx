@@ -17,6 +17,7 @@ import MSym from "./MSym";
 import { BLOCK_ATTR, SCAFFOLD_ATTR } from "./canvasGuides";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
+import { UnstyledButton } from "@/components/ui";
 
 export type A11yIssue = {
     severity: "error" | "warning";
@@ -363,7 +364,7 @@ export function A11yPanel({
                         </span>
                     </span>
                 )}
-                <button
+                <UnstyledButton
                     type="button"
                     title={trStr("Volver a analizar", language)}
                     aria-label={trStr("Volver a analizar", language)}
@@ -376,7 +377,7 @@ export function A11yPanel({
                     }`}
                 >
                     <MSym name="refresh" size={18} className={running ? "animate-spin" : ""} />
-                </button>
+                </UnstyledButton>
             </div>
 
             {running ? (
@@ -409,7 +410,7 @@ export function A11yPanel({
                         <ul>
                             {list.map((issue, i) => (
                                 <li key={i} className={i > 0 ? "border-t border-[var(--ed-outline-variant)]" : ""}>
-                                    <button
+                                    <UnstyledButton
                                         type="button"
                                         onClick={() => onSelect(issue.blockId)}
                                         title={trStr("Seleccionar el bloque", language)}
@@ -424,7 +425,7 @@ export function A11yPanel({
                                         >
                                             {issue.snippet}
                                         </span>
-                                    </button>
+                                    </UnstyledButton>
                                 </li>
                             ))}
                         </ul>

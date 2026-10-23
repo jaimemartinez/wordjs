@@ -35,6 +35,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { trStr } from "@/lib/editorI18n";
 import MSym from "./MSym";
+import { UnstyledButton } from "@/components/ui";
 
 const META_KEY = "_wjs_review_comments";
 const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -286,7 +287,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                     )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                    <button
+                    <UnstyledButton
                         type="button"
                         onClick={load}
                         title={tr("Actualizar")}
@@ -294,8 +295,8 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                     >
                         <MSym name="refresh" size={20} className={loading ? "animate-spin" : ""} />
-                    </button>
-                    <button
+                    </UnstyledButton>
+                    <UnstyledButton
                         type="button"
                         onClick={onClose}
                         title={tr("Cerrar")}
@@ -303,7 +304,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                     >
                         <MSym name="close" size={20} />
-                    </button>
+                    </UnstyledButton>
                 </div>
             </div>
 
@@ -318,13 +319,13 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                     <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--ed-on-surface-variant)]">
                         <span className="text-[var(--ed-error)]"><MSym name="info" size={28} /></span>
                         <span className="text-xs text-center">{tr("No se pudieron cargar los comentarios")}</span>
-                        <button
+                        <UnstyledButton
                             type="button"
                             onClick={load}
                             className="px-4 h-9 rounded-full border border-[var(--ed-outline)] text-xs font-medium text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                         >
                             {tr("Reintentar")}
-                        </button>
+                        </UnstyledButton>
                     </div>
                 ) : (comments ?? []).length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--ed-on-surface-variant)] opacity-70">
@@ -363,7 +364,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                                         </p>
                                     </div>
                                     <div className="flex flex-col gap-1 shrink-0">
-                                        <button
+                                        <UnstyledButton
                                             type="button"
                                             onClick={() => handleToggleResolved(c.id)}
                                             title={c.resolved ? tr("Reabrir") : tr("Marcar como resuelto")}
@@ -372,9 +373,9 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                                             className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center transition-colors hover:bg-[var(--ed-surface-container-high)] ${c.resolved ? "text-[var(--ed-success)]" : "text-[var(--ed-on-surface-variant)]"}`}
                                         >
                                             <MSym name="check_circle" size={18} fill={!!c.resolved} />
-                                        </button>
+                                        </UnstyledButton>
                                         {canDelete(c) && (
-                                            <button
+                                            <UnstyledButton
                                                 type="button"
                                                 onClick={() => handleDelete(c.id)}
                                                 title={tr("Eliminar comentario")}
@@ -382,7 +383,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                                                 className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-error)] hover:bg-[var(--ed-error-container)] transition-colors"
                                             >
                                                 <MSym name="delete" size={18} />
-                                            </button>
+                                            </UnstyledButton>
                                         )}
                                     </div>
                                 </div>
@@ -410,7 +411,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                     className="w-full resize-none rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-[13px] text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] p-2.5 outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)] transition-colors"
                 />
                 <div className="flex justify-end mt-2">
-                    <button
+                    <UnstyledButton
                         type="button"
                         onClick={handleAdd}
                         disabled={!text.trim() || saving || !user}
@@ -418,7 +419,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                     >
                         <MSym name="add_circle" size={18} />
                         {tr("Añadir comentario")}
-                    </button>
+                    </UnstyledButton>
                 </div>
             </div>
         </aside>

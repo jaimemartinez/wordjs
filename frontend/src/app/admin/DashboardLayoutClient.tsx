@@ -65,9 +65,9 @@ export function SiteAddressBannerList({ banners, host, isAdmin, onDismissLinkBas
                         </Link>
                     )}
                     {banner.kind === "link-base" && (
-                        <button type="button" onClick={onDismissLinkBase} className="ml-1 w-11 h-11 shrink-0 -my-2 inline-flex items-center justify-center text-sky-700 hover:text-sky-950" aria-label={t("siteBanner.dismiss")} title={t("siteBanner.dismiss")}>
+                        <UnstyledButton type="button" onClick={onDismissLinkBase} className="ml-1 w-11 h-11 shrink-0 -my-2 inline-flex items-center justify-center text-sky-700 hover:text-sky-950" aria-label={t("siteBanner.dismiss")} title={t("siteBanner.dismiss")}>
                             <i className="fa-solid fa-xmark" aria-hidden="true"></i>
-                        </button>
+                        </UnstyledButton>
                     )}
                 </div>
             ))}
@@ -123,9 +123,9 @@ function AdminConnectionIssueScreen({ issue, onRetry }: { issue: ConnectionIssue
                 <h1 className="text-xl font-black text-gray-900">{t(limited ? "admin.connection.limited.title" : "admin.connection.down.title")}</h1>
                 <p className="text-sm text-gray-500 mt-2">{t(limited ? "admin.connection.limited.body" : "admin.connection.down.body")}</p>
                 <p className="text-xs text-gray-400 mt-4">{t("admin.connection.retrying").replace("{s}", String(seconds))}</p>
-                <button type="button" onClick={onRetry} className="mt-6 min-h-11 px-6 rounded-2xl bg-gray-900 hover:bg-blue-600 text-white text-xs font-black uppercase tracking-widest">
+                <Button size="md" className="mt-6" onClick={onRetry}>
                     {t("admin.connection.retryNow")}
-                </button>
+                </Button>
             </div>
         </div>
     );
@@ -283,9 +283,9 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                     </div>
                     <MfaSetup onEnabled={refreshUser} />
                     <div className="text-center mt-6">
-                        <button onClick={logout} className="text-sm text-gray-400 hover:text-blue-600 font-medium">
-                            <i className="fa-solid fa-arrow-right-from-bracket mr-1"></i> {t("mfaGate.signOut")}
-                        </button>
+                        <Button variant="ghost" size="sm" icon="fa-arrow-right-from-bracket" onClick={logout}>
+                            {t("mfaGate.signOut")}
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -338,7 +338,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
             />
 
             {/* Collapse Toggle Button (Desktop) */}
-            <button
+            <UnstyledButton
                 data-wjs-host-ui=""
                 onClick={toggleCollapsed}
                 className={`
@@ -349,7 +349,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                 aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
             >
                 <i className={`fa-solid fa-chevron-${collapsed ? 'right' : 'left'} text-xs`}></i>
-            </button>
+            </UnstyledButton>
 
             <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
                 {/* Mobile Header. `relative`, not `sticky`: the nearest scroller is this overflow-hidden
@@ -360,7 +360,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                     also showed, sharp, through the edge of every dialog's blurred backdrop. */}
                 <header className="lg:hidden bg-white border-b border-gray-100 px-2 sm:px-4 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] flex items-center justify-between gap-2 relative z-[5000] flex-shrink-0" data-wjs-host-ui="">
                     <div className="flex items-center gap-1 sm:gap-2 min-w-0">
-                        <button
+                        <UnstyledButton
                             type="button"
                             onClick={() => setSidebarOpen(true)}
                             aria-label={t("nav.openMenu")}
@@ -369,7 +369,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                             className="w-11 h-11 shrink-0 flex items-center justify-center rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100"
                         >
                             <i className="fa-solid fa-bars text-xl" aria-hidden="true"></i>
-                        </button>
+                        </UnstyledButton>
                         <span className="font-bold text-gray-800 flex items-center gap-2 min-w-0 truncate">
                             {logoUrl ? (
                                 <img src={logoUrl} alt={siteTitle} className="h-8 w-8 object-contain" />
@@ -394,9 +394,9 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                                 time: new Date(user.handoff.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
                             })}
                         </span>
-                        <button type="button" onClick={logout} className="text-violet-900 font-bold underline underline-offset-2 hover:text-violet-950 whitespace-nowrap">
+                        <UnstyledButton type="button" onClick={logout} className="text-violet-900 font-bold underline underline-offset-2 hover:text-violet-950 whitespace-nowrap">
                             {t("handoff.bannerEnd")}
-                        </button>
+                        </UnstyledButton>
                     </div>
                 )}
 
@@ -433,6 +433,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
 import { MenuProvider, useMenu } from "@/contexts/MenuContext";
 import { ToastProvider } from "@/contexts/ToastContext";
 import { I18nProvider } from "@/contexts/I18nContext";
+import { Button, UnstyledButton } from "@/components/ui";
 
 export default function DashboardLayoutClient({
     children,
