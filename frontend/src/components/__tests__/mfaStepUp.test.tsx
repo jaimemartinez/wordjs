@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
-vi.mock("@/contexts/I18nContext", () => ({ useI18n: () => ({ t: (k: string) => k, language: "en", setLanguage: () => undefined }) }));
+vi.mock("@/contexts/I18nContext", () => { const i18n = ({ t: (k: string) => k, language: "en", setLanguage: () => undefined }); return { useI18n: () => i18n, useOptionalI18n: () => i18n }; });
 
 import { stepUpAsk, stepUpPayload, MfaStepUpFields, type MfaStepUp } from "../MfaStepUp";
 import { translations } from "@/lib/i18n";

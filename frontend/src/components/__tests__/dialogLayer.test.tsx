@@ -28,7 +28,7 @@ vi.mock("react-dom", async (importOriginal) => {
         },
     };
 });
-vi.mock("@/contexts/I18nContext", () => ({ useI18n: () => ({ t: (k: string) => k, language: "es", setLanguage: () => undefined }) }));
+vi.mock("@/contexts/I18nContext", () => { const i18n = ({ t: (k: string) => k, language: "es", setLanguage: () => undefined }); return { useI18n: () => i18n, useOptionalI18n: () => i18n }; });
 vi.mock("@/lib/api", () => ({ usersApi: {}, rolesApi: { list: async () => ({}) } }));
 
 import DialogLayer, { DialogDirectionContext } from "../DialogLayer";
