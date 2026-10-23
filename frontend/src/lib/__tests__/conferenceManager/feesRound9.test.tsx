@@ -224,7 +224,8 @@ describe('UX6-4: «Contabilidad» never leaves a «·» alone either; a name nev
     it('the ledger line\'s origin / people / reference and its folded «Categoría · Forma de pago» are facts', () => {
         const acc = read('admin/AccountingPage.tsx');
         expect(acc).toContain("{factsOf([lineSource(e), shared ? peopleLabel(who.map((id) => ({ inscription_id: id })), (id) => names.get(id) || `#${id}`) : who.length === 1 ? (names.get(who[0]) || '#' + who[0]) : null], e.reference || null, { long: true })}");
-        expect(acc).toContain('data-ledger-inline-meta="">{factsOf([e.category || null, e.method || null], null, { long: true })}</span>');
+        // 2.33.1: the form of payment in the admin's language (FALLOS 141).
+        expect(acc).toContain('data-ledger-inline-meta="">{factsOf([e.category || null, e.method ? paymentMethodLabel(tx, e.method) : null], null, { long: true })}</span>');
         expect(acc).not.toMatch(/\.join\(' · '\)/);
         expect(LEDGER_CSS).toContain('[data-ledger-inline-meta] { display: flex; flex-wrap: wrap; column-gap: 0.25rem; }');
         expect([shortName('Carlos Gómez'), peopleLabel([{ inscription_id: 1 }, { inscription_id: 2 }, { inscription_id: 3 }], (id) => ['', 'Carlos Gómez', 'Elena Gil', 'Sol Pérez'][id])])

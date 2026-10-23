@@ -82,6 +82,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `KUBERNETES_SERVICE_HOST`, a podman container by `/run/.containerenv`, and the image and the chart set
   `WORDJS_DOCKER=1`. On Kubernetes the screen says to change the release's image tag (`helm upgrade`).
 
+- **conference-manager 2.33.1: the admin speaks its language, and dates use the WordJS calendar.**
+  - The field dialog's title and subtitle, a switch field's «Sí» / «No», and the forms of payment
+    («Efectivo» / «Transferencia») now follow the admin language (English: *Yes* / *No*, *Cash* / *Bank
+    transfer*; Portuguese: *Sim* / *Não*, *Dinheiro* / *Transferência*). The stored values do not change.
+  - Every date in Conference Manager uses WordJS's own calendar instead of the browser's: the inscription
+    form, conference dates, lodging dates, badge expiry, meal services, fee and transport payments,
+    accounting, and the coordinators' portal. A required date is still checked in place, under the field.
+
 - **Plugin screens use the WordJS dialogs instead of the browser's pop-ups.** Every delete, cancel, revoke
   and send confirmation in the marketplace plugins (auctions, bookings, contact forms, digital downloads,
   donations, event tickets, events calendar, FAQ, invoices, job board, mail server, memberships, newsletter,

@@ -153,11 +153,12 @@ describe('what fits is decided by the room a block has, not the window', () => {
     });
     it('«Pagos» filters: as many columns as the box holds (17rem each); the dates shrink and never run under the next label', () => {
         expect(FEES_CSS).toContain('[data-fees-tfilters] { display: grid; gap: 0.5rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); }');
-        expect(FEES_CSS).toContain('[data-fees-tfilters] input[type="date"] { min-width: 0; max-width: 100%; }');
         const html = fees('transfers');
         expect(html).toContain('data-fees-tfilters=""');
         expect(html).not.toMatch(/sm:grid-cols-2 lg:grid-cols-3/);
-        expect((html.match(/<label class="flex items-center gap-2 min-w-0"[^>]*><span class="[^"]* w-14 shrink-0">[^<]+<\/span><input type="date" class="[^"]* min-w-0 flex-1"/g) || []).length).toBe(2);
+        // 2.33.1: each date is the host's calendar in a box that shrinks (min-w-0 flex-1), never a native input.
+        expect((html.match(/<label class="flex items-center gap-2 min-w-0"[^>]*><span class="[^"]* w-14 shrink-0">[^<]+<\/span><div class="min-w-0 flex-1"><div class="relative w-full min-w-0" data-cm-date-field="">/g) || []).length).toBe(2);
+        expect(html).not.toMatch(/<input[^>]*type="date"/);
     });
     it('«Contabilidad» totals: three side by side only while each holds 12rem; each figure on one line, sized by its tile', () => {
         expect(LEDGER_CSS).toContain('[data-ledger-totals] { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }');

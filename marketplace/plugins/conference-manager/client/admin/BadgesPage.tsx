@@ -28,6 +28,7 @@ import { useTx } from "./MealScanner";
 import { BadgeActions, phoneOfRow } from "./BadgeActions";
 import { BadgeEditor } from "./BadgeEditor";
 import { TEMPLATES, fromLegacy, sampleData } from "../lib/badgeEditor";
+import { DateField } from "../lib/DateField";
 
 const card = 'bg-white rounded-3xl border border-gray-100 shadow-sm p-5 sm:p-6 space-y-4';
 const label = 'block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1.5';
@@ -191,8 +192,10 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
                         <div>
                             <label className={label} htmlFor="badge-expires">{tx('badges.expires', 'Los enlaces vencen el')}</label>
                             <div className="flex flex-wrap items-center gap-2">
-                                <input id="badge-expires" type="date" className={`${input} max-w-[220px]`} value={policy.expires_on || ''} disabled={locked}
-                                    onChange={(e) => patchPolicy({ expires_on: e.target.value || null })} />
+                                <div className="w-full max-w-[220px]">
+                                    <DateField id="badge-expires" value={policy.expires_on || ''} disabled={locked} clearable={false}
+                                        onChange={(v) => patchPolicy({ expires_on: v || null })} />
+                                </div>
                                 {canManage && policy.expires_on && <button type="button" className={ghost} onClick={() => patchPolicy({ expires_on: null })}>{tx('badges.expires.none', 'Sin vencimiento')}</button>}
                             </div>
                             <p className="text-[10px] text-gray-400 mt-1">{policy.expires_on ? tx('badges.expires.hint', 'Funcionan hasta ese día, inclusive.') : tx('badges.expires.never', 'Sin fecha: funcionan mientras la inscripción esté activa.')}</p>

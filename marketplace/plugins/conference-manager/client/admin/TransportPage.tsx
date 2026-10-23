@@ -17,6 +17,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, PAYMENT_METHODS, fmtMoney } from "../lib/conference";
+import { DateField } from "../lib/DateField";
+import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import type { Bus, BusNotice, NoticeResult, TransportPackage, PackageSale, PackagePayment, Inscription, ConferenceField, Location } from "../lib/conference";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { buildBusManifest, displayName, exportFilename, withoutColumn } from "../lib/exports";
@@ -522,7 +524,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-1.5"><label htmlFor="bus-departure" className={labelCls}>{tt('transport.departure', 'Salida')}</label>
-                            <input id="bus-departure" type="datetime-local" className={inputCls} value={busForm.departure} onChange={e => setBusForm({ ...busForm, departure: e.target.value })} /></div>
+                            <DateField id="bus-departure" withTime value={busForm.departure} onChange={v => setBusForm({ ...busForm, departure: v })} /></div>
                         <div className="space-y-1.5"><label htmlFor="bus-capacity" className={labelCls}>{tt('transport.capacity', 'Capacidad (puestos)')} *</label>
                             <input id="bus-capacity" type="number" min={1} step={1} className={inputCls} value={busForm.capacity} onChange={e => setBusForm({ ...busForm, capacity: e.target.value })} /></div>
                     </div>
@@ -669,7 +671,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                         {payments.map(p => (
                             <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-black text-gray-800">{money(p.amount)} <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{p.method}</span></div>
+                                    <div className="text-sm font-black text-gray-800">{money(p.amount)} <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{paymentMethodLabel(tt, p.method)}</span></div>
                                     <div className="text-[10px] text-gray-400 font-bold">{fmtWhen(p.date)}{p.reference ? ` · ${p.reference}` : ''}</div>
                                 </div>
                                 {canManage && <button onClick={() => deletePayment(p)} title={tt('delete', 'Eliminar')} className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-[10px]"></i></button>}
@@ -682,10 +684,10 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <input type="number" min={0} step="0.01" className={inputCls} value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} aria-label={tt('amount', 'Monto')} />
                                 <select className={inputCls} value={payForm.method} onChange={e => setPayForm({ ...payForm, method: e.target.value })} aria-label={tt('payment.methods', 'Forma de pago')}>
-                                    {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                                    {PAYMENT_METHODS.map(m => <option key={m} value={m}>{paymentMethodLabel(tt, m)}</option>)}
                                 </select>
                                 <input className={inputCls} value={payForm.reference} onChange={e => setPayForm({ ...payForm, reference: e.target.value })} placeholder={tt('reference', 'Referencia (opcional)')} aria-label={tt('reference', 'Referencia')} />
-                                <input type="date" className={inputCls} value={payForm.date} onChange={e => setPayForm({ ...payForm, date: e.target.value })} aria-label={tt('transport.payment.date', 'Fecha del pago')} />
+                                <DateField value={payForm.date} onChange={v => setPayForm({ ...payForm, date: v })} ariaLabel={tt('transport.payment.date', 'Fecha del pago')} />
                             </div>
                             <button onClick={addPayment} disabled={busy || !(Number(payForm.amount) > 0)} className="w-full px-6 py-3 bg-emerald-600 text-white rounded-2xl hover:bg-emerald-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-500/30 disabled:opacity-50">
                                 <i className="fa-solid fa-check mr-1.5"></i>{tt('transport.payment.save', 'Registrar pago')}

@@ -31,6 +31,7 @@ import { fieldDisplayValue, rawFieldValue, rosterColWidth } from "../lib/roster"
 import { Pager, MoreButton, SoftWrap } from "./RosterBits";
 import { BalanceChips, PayPill, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
+import { shownFieldValue } from "../lib/labels";
 import { needsLodging } from "../lib/lodgingView";
 
 // «Requiere hospedaje: No» (2.31.0) is no «Sin habitación»: nobody is looking for a bed for them.
@@ -158,12 +159,12 @@ export function RosterGroup({ group, page, size, onPage, collapsed, onToggle, co
                                                 </button>
                                                 {/* A chosen column the card has no room for: its value here (ROSTER_CSS shows it then). */}
                                                 {columns.map((f, i) => {
-                                                    const v = fieldDisplayValue(rawFieldValue(p, f.name), f.type);
+                                                    const v = shownFieldValue(tx, f, fieldDisplayValue(rawFieldValue(p, f.name), f.type));
                                                     return v ? <span key={f.name} data-cm-ffold={i + 1} className="mt-0.5 text-[11px] font-medium text-gray-600 break-words"><span className="font-black text-gray-500">{f.label || f.name}:</span> <SoftWrap text={v} /></span> : null;
                                                 })}
                                             </td>
                                             {columns.map((f, i) => {
-                                                const v = fieldDisplayValue(rawFieldValue(p, f.name), f.type);
+                                                const v = shownFieldValue(tx, f, fieldDisplayValue(rawFieldValue(p, f.name), f.type));
                                                 return <td key={f.name} data-cm-fcol={i + 1} className="px-3 py-2.5 text-xs font-medium text-gray-700 break-words">{v ? <SoftWrap text={v} /> : <span className="text-gray-400">—</span>}</td>;
                                             })}
                                             {canSeeCodes && (

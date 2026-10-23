@@ -27,6 +27,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, feePaymentsApi, PAYMENT_METHODS } from "../lib/conference";
+import { DateField } from "../lib/DateField";
+import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import { COARSE_FIELDS_CSS, LAYER } from "../lib/overlay";
 import { toCents } from "../lib/feeSplit";
 import {
@@ -161,7 +163,6 @@ export const FEES_CSS = `
   [data-fees-desk] { display: block; }
 }
 [data-fees-tfilters] { display: grid; gap: 0.5rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); }
-[data-fees-tfilters] input[type="date"] { min-width: 0; max-width: 100%; }
 [data-fees-tfilters-btn] { display: none; }
 ${TRANSFER_FILTERS_PHONE_CSS}
 [data-fees-kpis] { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
@@ -532,7 +533,7 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
                         the card read «#9 · Transferencia · $50,00 · 1» / «persona»). */}
                     {/* Each «·» starts the fact after it: a wrap never leaves «$250.000,00 ·» / «1 persona» (UX6-3). */}
                     <span className="flex flex-wrap gap-x-1 text-sm font-black text-gray-900" data-queue-facts="">
-                        <span>#{t.id}</span><span>· {t.method}</span><span className="tabular-nums">· {money(toCents(t.amount))}</span>
+                        <span>#{t.id}</span><span>· {paymentMethodLabel(tx, t.method)}</span><span className="tabular-nums">· {money(toCents(t.amount))}</span>
                         <span>· {t.people === 1 ? tx('fees.people.count.one', '{n} persona', { n: 1 }) : tx('fees.people.count', '{n} personas', { n: t.people })}</span>
                     </span>
                     <span className="flex flex-wrap gap-x-1 text-[11px] font-bold text-gray-600" data-queue-meta="">{factsOf([t.mixed ? tx('fees.location.mixed', 'Varias localidades') : (t.location || locName(t.location_id)), tx('fees.queue.recorded', 'registrado {at} por {who}', { at: fmtStamp(t.submitted_at || t.created_at).replace(' ', '\u00a0'), who: by })], t.reference ? tx('fees.ref', 'Ref. {ref}', { ref: t.reference }) : null, { long: true })}</span>
@@ -561,7 +562,7 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
         { key: 'method', el: (
             <select aria-label={tx('payment.method', 'Forma de pago')} value={nav.tf.method} onChange={(e) => setTf({ method: e.target.value })} className={selectCls}>
                 <option value="">{tx('fees.filter.method.all', 'Todas las formas de pago')}</option>
-                {methods.map((m) => <option key={m} value={m}>{m}</option>)}
+                {methods.map((m) => <option key={m} value={m}>{paymentMethodLabel(tx, m)}</option>)}
             </select>) },
         { key: 'via', el: (
             <select aria-label={tx('fees.filter.via', 'Registrado por')} value={nav.tf.via} onChange={(e) => setTf({ via: e.target.value })} className={selectCls}>
@@ -570,8 +571,8 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
                 <option value="admin">{tx('fees.by.admin', 'Administración')}</option>
                 <option value="legacy">{tx('fees.filter.via.legacy', 'Sistema anterior')}</option>
             </select>) },
-        { key: 'from', el: <label className="flex items-center gap-2 min-w-0"><span className="text-[10px] font-black uppercase tracking-widest text-gray-500 w-14 shrink-0">{tx('accounting.from', 'Desde')}</span><input type="date" value={nav.tf.from} onChange={(e) => setTf({ from: e.target.value })} className={`${selectCls} min-w-0 flex-1`} /></label> },
-        { key: 'to', el: <label className="flex items-center gap-2 min-w-0"><span className="text-[10px] font-black uppercase tracking-widest text-gray-500 w-14 shrink-0">{tx('accounting.to', 'Hasta')}</span><input type="date" value={nav.tf.to} onChange={(e) => setTf({ to: e.target.value })} className={`${selectCls} min-w-0 flex-1`} /></label> },
+        { key: 'from', el: <label className="flex items-center gap-2 min-w-0"><span className="text-[10px] font-black uppercase tracking-widest text-gray-500 w-14 shrink-0">{tx('accounting.from', 'Desde')}</span><div className="min-w-0 flex-1"><DateField ariaLabel={tx('accounting.from', 'Desde')} value={nav.tf.from} max={nav.tf.to || undefined} onChange={(v) => setTf({ from: v })} /></div></label> },
+        { key: 'to', el: <label className="flex items-center gap-2 min-w-0"><span className="text-[10px] font-black uppercase tracking-widest text-gray-500 w-14 shrink-0">{tx('accounting.to', 'Hasta')}</span><div className="min-w-0 flex-1"><DateField ariaLabel={tx('accounting.to', 'Hasta')} value={nav.tf.to} min={nav.tf.from || undefined} onChange={(v) => setTf({ to: v })} /></div></label> },
     ];
     const tSlice = pageSlice(tFiltered, clampPage(tPage, tFiltered.length, size), size);
     const bPageNow = clampPage(bPage, balanceRows.length, size);
@@ -681,7 +682,7 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
                             <option value="">{tx('all.locations', 'Todas las localidades')}</option>
                             {locOptions.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}
                         </select>
-                        {methods.map((m) => <button key={m} type="button" onClick={() => setQMethod(qMethod === m ? '' : m)} aria-pressed={qMethod === m ? 'true' : 'false'} className={chipCls(qMethod === m)}>{m}</button>)}
+                        {methods.map((m) => <button key={m} type="button" onClick={() => setQMethod(qMethod === m ? '' : m)} aria-pressed={qMethod === m ? 'true' : 'false'} className={chipCls(qMethod === m)}>{paymentMethodLabel(tx, m)}</button>)}
                     </div>
                     {wide && queueNotice && (
                         <p role={queueNotice.type === 'error' ? 'alert' : 'status'} data-queue-notice={queueNotice.type}
@@ -784,12 +785,12 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
                                                     {/* What the hidden columns would say (transferTableCss shows each one when its column goes). */}
                                                     <span className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] font-bold text-gray-600" data-tfolds="">
                                                         <span data-tfold="date"><i className="fa-regular fa-calendar mr-1" aria-hidden="true"></i>{fmtDay(t.paid_on)}</span>
-                                                        <span data-tfold="method">{t.method}</span>
+                                                        <span data-tfold="method">{paymentMethodLabel(tx, t.method)}</span>
                                                         <span data-tfold="location"><i className="fa-solid fa-location-dot mr-1" aria-hidden="true"></i>{t.mixed ? tx('fees.location.mixed', 'Varias localidades') : (t.location || locName(t.location_id))}</span>
                                                         {t.reference && <span data-tfold="reference"><RefText>{tx('fees.ref', 'Ref. {ref}', { ref: t.reference })}</RefText></span>}
                                                     </span>
                                                 </td>
-                                                <td data-tcol="method" className="px-3 py-2.5 text-xs font-bold text-gray-700 break-words">{t.method}</td>
+                                                <td data-tcol="method" className="px-3 py-2.5 text-xs font-bold text-gray-700 break-words">{paymentMethodLabel(tx, t.method)}</td>
                                                 <td data-tcol="reference" className="px-3 py-2.5 text-xs font-mono text-gray-700">{t.reference ? <RefText>{t.reference}</RefText> : '—'}</td>
                                                 <td data-tcol="total" className="px-3 py-2.5 text-right font-black text-gray-900 tabular-nums whitespace-nowrap">{money(toCents(t.amount))}</td>
                                                 <td data-tcol="status" className="px-2 py-2.5"><StatusPill status={t.status} /></td>

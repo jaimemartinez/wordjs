@@ -64,6 +64,7 @@ import { TAB_STRIP_CSS } from "../lib/phoneLayout";
 import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStripOverflow";
 import { usePerms, ReadOnlyNotice } from "./perms";
 import MealTurnsTab from "./MealTurnsTab";
+import { DateField } from "../lib/DateField";
 
 type Tab = 'plan' | 'people' | 'turns' | 'delivery' | 'report';
 // «Turnos» (2.32.0): the meal groups A–F and each service's call times (MealTurnsTab.tsx).
@@ -505,8 +506,8 @@ function CreateServicesDialog({ conferenceId, conference, locations, onClose, on
                 </button>
             </>}>
             <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5"><label htmlFor="ms-from" className={labelCls}>{tx('meals.create.from', 'Desde')}</label><input id="ms-from" type="date" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} /></div>
-                <div className="space-y-1.5"><label htmlFor="ms-to" className={labelCls}>{tx('meals.create.to', 'Hasta')}</label><input id="ms-to" type="date" className={inputCls} value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></div>
+                <div className="space-y-1.5"><label htmlFor="ms-from" className={labelCls}>{tx('meals.create.from', 'Desde')}</label><DateField id="ms-from" value={from} max={to || undefined} onChange={(v) => setFrom(v)} /></div>
+                <div className="space-y-1.5"><label htmlFor="ms-to" className={labelCls}>{tx('meals.create.to', 'Hasta')}</label><DateField id="ms-to" value={to} min={from || undefined} onChange={(v) => setTo(v)} /></div>
             </div>
             {from && to && !dates.length && <p className="text-xs font-bold text-rose-600">{tx('meals.create.bad.range', 'La fecha final debe ser igual o posterior a la inicial.')}</p>}
             {tooMany && <p className="text-xs font-bold text-rose-600">{tx('meals.create.too.many', 'Elige como máximo 366 días.')}</p>}
