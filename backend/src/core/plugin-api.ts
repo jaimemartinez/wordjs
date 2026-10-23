@@ -1116,6 +1116,12 @@ function createPluginApi(slug: string) {
             verifyPermission('email', 'admin');
             const send = require('./mail-provider').sendMailFn();
             if (typeof send !== 'function') throw new Error('Mail server not available');
+            // `priority` is the core's mark for account mail (core/account-mail), which a pacing provider
+            // sends ahead of its queue: a plugin's own mail never carries it.
+            if (msg && typeof msg === 'object' && 'priority' in msg) {
+                const { priority: _dropped, ...rest } = msg;
+                return send(rest);
+            }
             return send(msg);
         },
 

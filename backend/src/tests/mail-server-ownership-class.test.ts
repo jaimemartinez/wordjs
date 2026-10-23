@@ -144,6 +144,8 @@ const ID_ADDRESSED = new Set([
     'deleteManyPermanently', 'addLabelToEmails', 'removeLabelFromEmails', 'getLabelsForEmails',
     'getAttachments', 'getAttachmentsForEmails', 'getAttachmentById', 'saveAttachment', 'markRetry',
     'markFailed', 'markSent', 'findByMessageId',
+    // The sending rate's hold (mail-server 3.2.3): the delivery state machine's own row, like markRetry.
+    'markPaced',
 ]);
 
 // Not row access at all: schema/infra/secrets/per-user label+pref CRUD (those key on user_id
@@ -156,6 +158,9 @@ const NOT_ROW_ACCESS = new Set([
     // verdict (see _isSharedRow), consulted by update() and by the two composer routes. It answers
     // the ownership question; it does not ask it of anybody.
     '_isSharedRow',
+    // How many messages wait for the queue's sending rate: one number for the whole install (the order
+    // rule and the queue screen). It reads no message content and answers no ownership question.
+    'countPaced',
     // Drops both ownership memos in ONE place so they cannot disagree about which write invalidated
     // them. Pure cache management: it reads no row and returns no row.
     '_forgetOwnershipMemos',

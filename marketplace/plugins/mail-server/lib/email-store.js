@@ -265,6 +265,8 @@ const T_SECRETS = 'wjp_mail_server_secrets';
 const T_LABELS = 'wjp_mail_server_labels';
 const T_EMAIL_LABELS = 'wjp_mail_server_email_labels';
 const T_PREFS = 'wjp_mail_server_user_prefs';
+// The general queue's sending rate: messages handed out per calendar minute (lib/send-rate.js).
+const T_SEND_RATE = 'wjp_mail_server_send_rate';
 
 // The light column set every LIST endpoint returns (parameterized by table alias). The old
 // `SELECT *` shipped body_text + body_html + raw_content for every row — megabytes of JSON per
@@ -577,6 +579,13 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 'label_id INT'
             ]);
 
+            // Messages handed to the outside world per calendar minute, shared by every node (lib/send-rate.js).
+            await db.createTable(T_SEND_RATE, [
+                'id INT_PK',
+                'window_start INT DEFAULT 0',
+                'used INT DEFAULT 0'
+            ]);
+
             // Per-user preferences (signature, vacation auto-responder) as a JSON blob.
             await db.createTable(T_PREFS, [
                 'id INT_PK',
@@ -589,6 +598,8 @@ module.exports = function createEmailStore(db, hooks = {}) {
             // ALTER ... ADD COLUMN fails with a "duplicate column" error when it already exists — on
             // every engine — so a swallowed error IS the idempotency check (same pattern as _createIndex).
             await this._ensureColumn(T_EMAILS, 'user_id', 'INT DEFAULT 0');
+            // v3.2.3: 1 while the message waits for the queue's sending rate (not a delivery failure).
+            await this._ensureColumn(T_EMAILS, 'paced', 'INT DEFAULT 0');
             await this._ensureColumn(T_EMAILS, 'is_spam', 'INT DEFAULT 0');
             await this._ensureColumn(T_EMAILS, 'spam_flagged_by', 'INT DEFAULT 0');
             // v2.1.4: persisted SPF verdict. Added as VARCHAR(1024) rather than TEXT because MySQL
@@ -636,6 +647,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
             await this._createIndex('wjp_mail_server_idx_el_email', T_EMAIL_LABELS, 'email_id');
             await this._createIndex('wjp_mail_server_idx_el_label', T_EMAIL_LABELS, 'label_id');
             await this._createIndex('wjp_mail_server_idx_prefs_user', T_PREFS, 'user_id');
+            await this._createIndex('wjp_mail_server_idx_send_rate_window', T_SEND_RATE, 'window_start');
 
             // 5. Uploads are staged in the plugin's own dir since 3.2.0 (see stageUpload); the host's
             //    temp dir, which earlier versions remembered as a root, is never accepted again.
@@ -1205,7 +1217,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
             // clears the state; the delivery state machine (updateRetryState) writes its own outcome
             // AFTER its recipient rewrite, so a genuine retry is re-armed, not lost.
             if (rewritesAddresses || contentChanged) {
-                fields.push("delivery_status = NULL, next_attempt_at = NULL");
+                fields.push("delivery_status = NULL, next_attempt_at = NULL, paced = 0");
             }
 
             // Nothing to update — avoid emitting invalid "SET  WHERE id = ?".
@@ -2462,6 +2474,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 SELECT * FROM ${T_EMAILS}
                 WHERE is_sent = 0 AND is_draft = 0 AND is_trash = 0
                 AND scheduled_at IS NOT NULL AND scheduled_at <= ?
+                ORDER BY scheduled_at, id
             `, [sqlDateTime(new Date())]);
         },
 
@@ -2474,13 +2487,35 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 AND is_draft = 0 AND is_trash = 0
                 AND next_attempt_at IS NOT NULL
                 AND next_attempt_at <= ?
+                ORDER BY next_attempt_at, id
             `, [new Date().toISOString()]);
+        },
+
+        /**
+         * Hold a message for the queue's sending rate: it goes out when its minute comes, in order. Not a
+         * delivery failure: the attempt count is left as it is and the row is marked `paced`.
+         */
+        async markPaced(id, nextAttemptAt, note) {
+            return await db.run(`
+                UPDATE ${T_EMAILS}
+                SET delivery_status = 'retry', paced = 1, next_attempt_at = ?, last_error = ?
+                WHERE id = ?
+            `, [nextAttemptAt, note ? String(note).slice(0, 1000) : null, id]);
+        },
+
+        /** How many messages wait for the sending rate (the order rule: new mail queues behind them). */
+        async countPaced() {
+            const row = await db.get(`
+                SELECT COUNT(*) AS n FROM ${T_EMAILS}
+                WHERE paced = 1 AND delivery_status = 'retry' AND is_trash = 0
+            `);
+            return row ? Number(row.n) || 0 : 0;
         },
 
         async markRetry(id, attempts, nextAttemptAt, lastError) {
             return await db.run(`
                 UPDATE ${T_EMAILS}
-                SET delivery_status = 'retry', delivery_attempts = ?, next_attempt_at = ?, last_error = ?
+                SET delivery_status = 'retry', paced = 0, delivery_attempts = ?, next_attempt_at = ?, last_error = ?
                 WHERE id = ?
             `, [attempts, nextAttemptAt, lastError ? String(lastError).slice(0, 1000) : null, id]);
         },
@@ -2488,7 +2523,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
         async markFailed(id, attempts, lastError) {
             return await db.run(`
                 UPDATE ${T_EMAILS}
-                SET delivery_status = 'failed', delivery_attempts = ?, next_attempt_at = NULL, last_error = ?
+                SET delivery_status = 'failed', paced = 0, delivery_attempts = ?, next_attempt_at = NULL, last_error = ?
                 WHERE id = ?
             `, [attempts, lastError ? String(lastError).slice(0, 1000) : null, id]);
         },
@@ -2496,7 +2531,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
         async markSent(id) {
             return await db.run(`
                 UPDATE ${T_EMAILS}
-                SET delivery_status = 'sent', next_attempt_at = NULL, last_error = NULL
+                SET delivery_status = 'sent', paced = 0, next_attempt_at = NULL, last_error = NULL
                 WHERE id = ?
             `, [id]);
         },

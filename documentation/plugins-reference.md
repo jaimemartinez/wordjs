@@ -77,7 +77,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `hooks.doAction(hook, ...args)` | `hooks.doAction` | Fire an action — but only the plugin's OWN registered callbacks run (`doActionForPlugin`), never core or another plugin's handlers. |
 | `fs.read(path, enc)` | `fs.read` | `filesystem:read` grant. Confined to the plugin's OWN dir (never the shared `uploads/`); `.env`/secret files and the DB files are blocked. |
 | `fs.write(path, data)` | `fs.write` | `filesystem:write` grant. Same confinement, plus a 16 MB per-write cap and a 100 MB per-plugin disk quota; `manifest.json` is immutable. |
-| `mail(msg)` | `mail` | `email:admin` grant. Send through the host-wide mail sender. |
+| `mail(msg)` | `mail` | `email:admin` grant. Send through the host-wide mail sender. A `priority` field is removed: it is the core's mark for its own account mail (password reset, address verification), which a provider that paces its queue sends ahead of the rest. |
 | `notify(notification)` | `notify` | `notifications:send` grant. Dispatch a core notification. |
 | `ai.complete(request)` | `ai.complete` | `ai:use` grant. Text completion through the site's AI provider (`ai-provider.md` §4). |
 | `adminMenu.add(item)` | `adminMenu.add` | `admin_menu:register` grant (an explicit, admin-granted verb — `access: "admin"` does not imply it). Adds a sidebar item; `labels: { en, es, pt, … }` (optional, language tag → text, ≤ 200 chars each) gives its text per admin language — the sidebar uses the admin's language, then its base language, then `label`. Capped at 50 items per plugin, and `href` must be a same-origin relative admin path (single leading `/`, no scheme, no `//`) or the item is dropped with a warning. |

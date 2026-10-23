@@ -425,11 +425,75 @@ function Aliases({ t, toast, confirm }: any) {
 // Queue
 // =================================================================================================
 
+/**
+ * The general queue's sending rate: the setting (messages per minute, 0 = no cap) and what the queue is
+ * doing with it now — this minute's count, how many messages wait, and how long they take at that rate.
+ */
+function SendRateCard({ t, toast, pacing, onSaved }: any) {
+    const [value, setValue] = useState('');
+    const [saved, setSaved] = useState('');
+    const [saving, setSaving] = useState(false);
+    useEffect(() => {
+        api('/plugin/mail-server/settings')
+            .then((s: any) => { const v = String(s?.mail_queue_per_minute ?? '0'); setValue(v); setSaved(v); })
+            .catch(() => { /* the queue list reports load errors */ });
+    }, []);
+    const valid = /^\d{1,6}$/.test(value.trim());
+    const save = async () => {
+        if (!valid) return;
+        setSaving(true);
+        try {
+            await api('/plugin/mail-server/settings', { method: 'POST', body: { mail_queue_per_minute: value.trim() } });
+            const v = String(parseInt(value.trim(), 10));
+            setValue(v); setSaved(v);
+            toast('success', t('srv.rate.saved'));
+            onSaved();
+        } catch (e: any) { toast('error', errorText(e, t)); }
+        finally { setSaving(false); }
+    };
+    const perMinute = pacing ? Number(pacing.perMinute) || 0 : 0;
+    const waiting = pacing ? Number(pacing.waiting) || 0 : 0;
+    return (
+        <Card title={t('srv.rate.title')} icon="fa-solid fa-gauge-high">
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+                <Field label={t('srv.rate.label')} hint={t('srv.rate.hint')} htmlFor="mail-queue-per-minute">
+                    <div className="flex gap-2">
+                        <input id="mail-queue-per-minute" data-testid="mail-queue-per-minute" inputMode="numeric" value={value}
+                            onChange={(e) => setValue(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+                            className={cx(inputCls, 'max-w-[10rem]')} />
+                        <Button icon="fa-solid fa-floppy-disk" loading={saving} disabled={!valid || value.trim() === saved} onClick={save}>{t('common.save')}</Button>
+                    </div>
+                </Field>
+                <dl className="grid grid-cols-3 gap-3 text-center" data-testid="mail-queue-pacing">
+                    <div className="rounded-xl bg-slate-50 p-3">
+                        <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t('srv.rate.now')}</dt>
+                        <dd className="mt-1 text-lg font-semibold text-slate-900">
+                            {pacing ? (perMinute > 0 ? t('srv.rate.nowOf', { n: pacing.sentThisMinute, max: perMinute }) : String(pacing.sentThisMinute || 0)) : '…'}
+                        </dd>
+                        <dd className="text-[11px] text-slate-400">{perMinute > 0 ? t('srv.rate.perMinute') : t('srv.rate.unlimited')}</dd>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-3">
+                        <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t('srv.rate.waiting')}</dt>
+                        <dd className="mt-1 text-lg font-semibold text-slate-900">{pacing ? waiting : '…'}</dd>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-3">
+                        <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t('srv.rate.eta')}</dt>
+                        <dd className="mt-1 text-lg font-semibold text-slate-900">
+                            {!pacing ? '…' : waiting === 0 ? '—' : pacing.etaMinutes > 0 ? t('srv.rate.etaMinutes', { n: pacing.etaMinutes }) : t('srv.rate.etaSoon')}
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+        </Card>
+    );
+}
+
 function Queue({ t, locale, toast, confirm }: any) {
     const [items, setItems] = useState<any[] | null>(null);
+    const [pacing, setPacing] = useState<any>(null);
     const [busy, setBusy] = useState<number | null>(null);
     const load = async () => {
-        try { const d = await api('/plugin/mail-server/admin/queue') as any; setItems(d.items || []); }
+        try { const d = await api('/plugin/mail-server/admin/queue') as any; setItems(d.items || []); setPacing(d.pacing || null); }
         catch (e: any) { toast('error', errorText(e, t)); }
     };
     useEffect(() => { load(); const id = setInterval(load, 20000); return () => clearInterval(id); }, []);
@@ -452,6 +516,7 @@ function Queue({ t, locale, toast, confirm }: any) {
     };
 
     const status = (it: any) => it.delivery_status === 'failed' ? ['red', t('badge.failed'), 'fa-solid fa-circle-exclamation']
+        : it.delivery_status === 'retry' && Number(it.paced) === 1 ? ['blue', t('badge.waitingRate'), 'fa-solid fa-hourglass-half']
         : it.delivery_status === 'retry' ? ['amber', t('badge.retrying'), 'fa-solid fa-rotate']
             : ['violet', t('badge.scheduled'), 'fa-regular fa-clock'];
 
@@ -461,6 +526,7 @@ function Queue({ t, locale, toast, confirm }: any) {
                 <p className="max-w-xl text-sm text-slate-500">{t('srv.queue.hint')}</p>
                 <IconBtn icon="fa-solid fa-rotate-right" label={t('common.refresh')} onClick={load} />
             </div>
+            <SendRateCard t={t} toast={toast} pacing={pacing} onSaved={load} />
             {!items ? <div className="py-16 text-center"><Spinner className="text-2xl" /></div> : items.length === 0 ? (
                 <Card><EmptyState icon="fa-solid fa-circle-check" title={t('srv.queue.empty')} /></Card>
             ) : (
@@ -486,7 +552,7 @@ function Queue({ t, locale, toast, confirm }: any) {
                                         {it.delivery_status !== 'failed' && <Button size="sm" variant="dangerGhost" icon="fa-solid fa-ban" disabled={busy === it.id} onClick={() => cancel(it)}>{t('srv.queue.cancel')}</Button>}
                                     </div>
                                 </div>
-                                {it.last_error && <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] text-slate-600">{it.last_error}</pre>}
+                                {it.last_error && Number(it.paced) !== 1 && <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] text-slate-600">{it.last_error}</pre>}
                             </li>
                         );
                     })}

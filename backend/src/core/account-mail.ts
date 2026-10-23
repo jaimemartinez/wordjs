@@ -239,6 +239,15 @@ async function accountMailReady(): Promise<boolean> {
  * Send an account message ({ to, subject, text, html }). Throws when no transport may carry it — callers
  * keep their answers uniform and swallow it, as they did when no provider was registered.
  */
+/**
+ * Account mail (password reset, address verification…) is what lets someone back into their account, so a
+ * mail provider that paces its queue may send it ahead of the rest. The mark is the core's alone:
+ * plugin-api's wordjs.mail() removes `priority` from anything a plugin sends.
+ */
+function withAccountPriority<T extends object>(msg: T): T & { priority: 'account' } {
+    return { ...msg, priority: 'account' };
+}
+
 async function sendAccountMail(msg: { to: string; subject: string; text: string; html?: string }): Promise<void> {
     const r = await route();
     if (r.kind === 'core') {
@@ -254,7 +263,7 @@ async function sendAccountMail(msg: { to: string; subject: string; text: string;
     if (r.kind === 'provider') {
         const send = require('./mail-provider').sendMailFn();
         if (typeof send !== 'function') throw new AccountMailError('No mail transport', 503, 'account_mail_unavailable');
-        await send(msg);
+        await send(withAccountPriority(msg));
         return;
     }
     throw new AccountMailError('No transport may carry account mail', 503, 'account_mail_unavailable');
@@ -275,7 +284,7 @@ async function handOffAccountMail(msg: { to: string; subject: string; text: stri
             const send = require('./mail-provider').sendMailFn();
             if (typeof send !== 'function') { failed({ code: 'account_mail_unavailable' }); return; }
             // Called now, like the provider always was; its promise is not waited for.
-            try { Promise.resolve(send(msg)).catch(failed); } catch (e) { failed(e); }
+            try { Promise.resolve(send(withAccountPriority(msg))).catch(failed); } catch (e) { failed(e); }
             return;
         }
         // The built-in transport: resolving the relay and the SMTP exchange happen after the answer.

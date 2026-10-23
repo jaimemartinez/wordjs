@@ -8,6 +8,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **mail-server 3.2.3: a sending rate for the general queue.** *Email Center → Server → Queue* has *Messages per
+  minute*: how many messages may leave the server each minute, counting users' mail, scheduled sends, retries, the
+  site's mail and other plugins'. Above it, messages wait in the queue and go out in the following minutes, in order;
+  none is lost and the sender is not told it failed. Password resets and address verification go out at once. The
+  queue screen shows this minute's count, how many messages wait and how long they take to go out. The limit holds for
+  the whole install, however many nodes run the plugin. 0 (the default) is no limit, as before.
 - **Plugin updates without a core release.** A new *Publish marketplace* workflow rebuilds the marketplace catalog and plugin zips, runs the same integrity gate as a release, and replaces the marketplace assets on the latest release, so a plugin update reaches every site's Marketplace tab without a new WordJS version (see `documentation/deployment.md`).
 - **conference-manager 2.33.2: «Copiar mensaje» for the data consent request.** Next to «Enviar / Reenviar
   enlace», in the admin's «Autorizaciones» tab and in the coordinators' person sheet, a button copies the consent

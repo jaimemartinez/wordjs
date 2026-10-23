@@ -42,6 +42,7 @@ const createEmailStore = require('./lib/email-store');
 // Server administration (aliases, quotas, usage, stats, queue) and the per-user filing rules. Both are
 // kept out of email-store.js, which stays the ownership boundary of user mail.
 const createAdminStore = require('./lib/mail-admin-store');
+const { createSendRate, parsePerMinute } = require('./lib/send-rate');
 const MailRules = require('./lib/mail-rules');
 // Inbound DKIM signature verification and DMARC evaluation (node:crypto + the host DNS bridge).
 const MailAuth = require('./lib/mail-auth');
@@ -76,7 +77,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.2.2',
+    version: '3.2.3',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -121,6 +122,7 @@ let wordjs = null;        // the injected capability bridge
 let Email = null;         // plugin-local email store backed by wordjs.db
 let queueTickRunning = false; // see the queue interval below
 let Admin = null;         // aliases / quotas / stats / queue (lib/mail-admin-store)
+let SendRate = null;      // the general queue's messages-per-minute cap (lib/send-rate)
 let getOption = null;     // wordjs.options.get
 let updateOption = null;  // wordjs.options.set
 let classifier = null;    // bayes classifier
@@ -2109,6 +2111,55 @@ function retryDispatchAllowed(email, recipientCount) {
     return ok;
 }
 
+// THE GENERAL QUEUE'S SENDING RATE ("Messages per minute", the queue screen). A cap on every message
+// handed to the outside world — user mail, scheduled sends, retries, the site's and other plugins' mail —
+// counted once per message whatever its recipients, shared by every node (lib/send-rate.js). A message
+// over the cap is not refused and not lost: it waits in the queue (`paced`) and goes out in a later
+// minute, in order. While messages wait, new mail queues behind them. Three kinds go out at once and
+// still count: account mail the core marks (password reset, address verification), the delivery test,
+// and an administrator's "Retry now". 0 = no cap (the default: the behaviour before the setting).
+const SEND_RATE_OPTION = 'mail_queue_per_minute';
+let _sendRateCache = { at: 0, value: 0 };
+async function sendRateLimit() {
+    if (Date.now() - _sendRateCache.at < 5000) return _sendRateCache.value;
+    const value = parsePerMinute(await getOption(SEND_RATE_OPTION, '0'));
+    _sendRateCache = { at: Date.now(), value };
+    return value;
+}
+function forgetSendRateLimit() { _sendRateCache = { at: 0, value: 0 }; }
+
+/**
+ * The rate gate in front of external delivery. Answers null when the message may go out now, or the
+ * moment (ms) it is held until. `data.paceClaimed`: the queue already claimed its slot (in order).
+ */
+async function sendRateGate(data, sentRecordId) {
+    if (!SendRate || data.paceClaimed) return null;
+    const limit = await sendRateLimit();
+    if (!(limit > 0)) return null;
+    // A message with no queue row to wait on (an alias forward) cannot be held: it goes out and counts.
+    const force = data.priority === 'account' || !!data.noRetry || !!data.paceForce || !sentRecordId;
+    // In order: while messages are waiting for the rate, new mail waits behind them.
+    if (!force && await Email.countPaced() > 0) {
+        return (Math.floor(Date.now() / SendRate.MINUTE_MS) + 1) * SendRate.MINUTE_MS;
+    }
+    const c = await SendRate.claim({ force });
+    return c.ok ? null : c.retryAt;
+}
+
+/** Hold a message for the rate: its external recipients wait on its row, in order (see markPaced). */
+async function holdForSendRate(sentRecordId, data, externalRecipients, until) {
+    try {
+        // The recipients still to reach, as a retry would store them. This runs FIRST: the rewrite clears
+        // the delivery state, and markPaced below sets it. NOT-A-USER-PATH: the delivery state machine's
+        // own row (the store refuses a rewrite that would drop a party from an un-attributed row).
+        await Email.update(sentRecordId, { toAddress: externalRecipients.join(', ') });
+    } catch (e) { /* non-fatal */ }
+    // NOT-A-USER-PATH: the same row, mid-delivery.
+    await Email.markPaced(sentRecordId, new Date(until).toISOString(), 'Waiting for the queue\'s sending rate');
+    // Waiting is not a delivery attempt: the pass that sends it later costs nothing more (users and site).
+    noteRetryCharge(sentRecordId, externalRecipients.length);
+}
+
 function isValidEmail(email) {
     if (!email || typeof email !== 'string') return false;
     // Block extremely long addresses (DoS prevention)
@@ -2773,6 +2824,16 @@ async function sendMail(data) {
     // 3. Deliver to External recipients (NOT local users — avoid double-send to our own mailbox)
     const externalRecipients = distinctRecipients.filter(r => !localRecipients.has(r));
 
+    // The general queue's sending rate (see sendRateGate): over the cap, the message waits in the queue.
+    if (externalRecipients.length > 0) {
+        const heldUntil = await sendRateGate(data, sentRecordId);
+        if (heldUntil) {
+            await holdForSendRate(sentRecordId, data, externalRecipients, heldUntil);
+            console.log(`[MailServer] Message ${sentRecordId} waits for the queue's sending rate (${externalRecipients.length} recipient(s)).`);
+            return { success: true, queued: true, delivered, failed: [], waiting: externalRecipients.length };
+        }
+    }
+
     if (externalRecipients.length > 0) {
         // Snapshot the relay ONCE: the same decision must drive both the From-rewrite below and the
         // delivery branch further down (a re-read could disagree if initTransporter() runs in between).
@@ -3361,7 +3422,7 @@ const isSecretOption = (key) => SECRET_OPTION_RE.test(String(key)) || SECRET_OPT
  * same Sent record (no duplicate copy). A manual retry resets the attempt counter (fresh cycle).
  * The CALLER has already authorized the row (owner, or an administrator).
  */
-async function retryFailedDelivery(email, rateKey) {
+async function retryFailedDelivery(email, rateKey, { force = false } = {}) {
     if (email.delivery_status !== 'failed' && email.delivery_status !== 'retry') {
         return { status: 409, body: { error: 'This message is not in a failed state — nothing to retry.' } };
     }
@@ -3394,6 +3455,8 @@ async function retryFailedDelivery(email, rateKey) {
             isAutoReply: Number(email.is_auto_reply) === 1,
             sentRecordId: email.id,
             deliveryAttempts: 0, // manual retry → fresh cycle, not stuck at max attempts
+            // An administrator's "Retry now" goes out at once (it still counts against the sending rate).
+            paceForce: force,
             attachments
         });
         // NOT-A-USER-PATH: re-reads the same, already-authorized row to report its new delivery state.
@@ -3511,6 +3574,7 @@ exports.init = async function (bridge) {
     // Schema first so the secrets table exists before getOption/updateOption touch it.
     await Email.initSchema();
     Admin = createAdminStore(wordjs.db);
+    SendRate = createSendRate(wordjs.db, 'wjp_mail_server_send_rate', sendRateLimit);
     await Admin.initSchema();
 
     // Security Data Directory — the plugin's OWN dir (untrusted plugins can't write shared uploads).
@@ -3551,136 +3615,159 @@ exports.init = async function (bridge) {
     // Guard against double-start (re-activate) leaking a second timer.
     if (queueInterval) clearInterval(queueInterval);
     queueTickRunning = false;
-    const queueTick = async () => {
+    // One due row of the scheduled-send queue. Answers 'stop' when the sending rate is used up for now.
+    const dispatchScheduled = async (email) => {
         try {
-            const pending = await Email.getPendingScheduled();
-            if (pending.length > 0) console.log(`[MailServer] Processing ${pending.length} scheduled emails...`);
-
-            for (const email of pending) {
-                try {
-                    const toList = splitAddresses(email.to_address);
-                    const ccList = splitAddresses(email.cc_address);
-                    const bccList = splitAddresses(email.bcc_address);
-                    if (!queuedDispatchAllowed(email, toList.length + ccList.length + bccList.length)) {
-                        // Over the sender's outbound limit: postpone, never drop.
-                        // NOT-A-USER-PATH: the scheduled-send queue's own row (see below).
-                        await Email.update(email.id, { scheduledAt: new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString() });
-                        console.warn(`[MailServer] Scheduled email ${email.id} postponed: outbound rate limit reached.`);
-                        continue;
-                    }
-                    // NOT-A-USER-PATH: the scheduled-send queue. `email` comes from
-                    // Email.getPendingScheduled() — rows the server selected by scheduled_at — so no
-                    // request supplied this id and nothing here is returned to a caller.
-                    // Load attachments if any
-                    const attachments = await Email.getAttachments(email.id);
-                    const formattedAttachments = attachments.map(att => ({
-                        filename: att.filename,
-                        path: path.join(UPLOAD_DIR, att.storage_path)
-                    }));
-
-                    await sendMail({
-                        // to/cc/bcc are stored as comma-joined lists — split them back into real
-                        // recipient arrays (a joined string would read as ONE malformed address).
-                        to: toList,
-                        cc: ccList,
-                        bcc: bccList,
-                        subject: email.subject,
-                        text: email.body_text,
-                        html: email.body_html,
-                        // THE OWNER'S identity, resolved from user_id — never `email.from_address`,
-                        // which on a pre-v2.1 shared row is a COLLEAGUE'S address that no rewrite can
-                        // clear. A row nobody owns yields null and goes out as the site itself.
-                        identity: await sendingIdentityOfOwner(email.user_id),
-                        parentId: email.parent_id,
-                        threadId: email.thread_id,
-                        userId: email.user_id || 0,
-                        draftId: email.id, // Re-use existing record to mark as sent
-                        attachments: formattedAttachments
-                    });
-                    console.log(`[MailServer] Scheduled email ${email.id} sent.`);
-                } catch (err) {
-                    if (err && err.code === NO_MAILBOX_ADDRESS) {
-                        // The owner has no address to send from (any more): never send it as anyone else. It
-                        // goes back to their Drafts, marked failed with the reason, and they are told.
-                        // NOT-A-USER-PATH: the scheduled-send queue's own row.
-                        await Email.cancelScheduled(email.id).catch(() => null);
-                        // NOT-A-USER-PATH: the same queue row, marked with the reason.
-                        await Email.markFailed(email.id, 0, err.message).catch(() => null);
-                        await notifyNoMailboxAddress(email, err).catch(() => null);
-                        continue;
-                    }
-                    console.error(`[MailServer] Failed to send scheduled email ${email.id}:`, err);
-                    // Optional: increment retry count or mark as failed
-                }
+            const toList = splitAddresses(email.to_address);
+            const ccList = splitAddresses(email.cc_address);
+            const bccList = splitAddresses(email.bcc_address);
+            // The minute's slot first, in queue order: refused, the row stays due and the pass stops here.
+            const slot = await claimQueueSlot();
+            if (!slot) return 'stop';
+            if (!queuedDispatchAllowed(email, toList.length + ccList.length + bccList.length)) {
+                // Over the sender's outbound limit: postpone, never drop.
+                // NOT-A-USER-PATH: the scheduled-send queue's own row (see below).
+                await Email.update(email.id, { scheduledAt: new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString() });
+                console.warn(`[MailServer] Scheduled email ${email.id} postponed: outbound rate limit reached.`);
+                return;
             }
-        } catch (e) {
-            console.error('[MailServer] Scheduled queue error:', e);
+            // NOT-A-USER-PATH: the scheduled-send queue. `email` comes from
+            // Email.getPendingScheduled() — rows the server selected by scheduled_at — so no
+            // request supplied this id and nothing here is returned to a caller.
+            // Load attachments if any
+            const attachments = await Email.getAttachments(email.id);
+            const formattedAttachments = attachments.map(att => ({
+                filename: att.filename,
+                path: path.join(UPLOAD_DIR, att.storage_path)
+            }));
+
+            await sendMail({
+                // to/cc/bcc are stored as comma-joined lists — split them back into real
+                // recipient arrays (a joined string would read as ONE malformed address).
+                to: toList,
+                cc: ccList,
+                bcc: bccList,
+                subject: email.subject,
+                text: email.body_text,
+                html: email.body_html,
+                // THE OWNER'S identity, resolved from user_id — never `email.from_address`,
+                // which on a pre-v2.1 shared row is a COLLEAGUE'S address that no rewrite can
+                // clear. A row nobody owns yields null and goes out as the site itself.
+                identity: await sendingIdentityOfOwner(email.user_id),
+                parentId: email.parent_id,
+                threadId: email.thread_id,
+                userId: email.user_id || 0,
+                draftId: email.id, // Re-use existing record to mark as sent
+                paceClaimed: true,
+                attachments: formattedAttachments
+            });
+            console.log(`[MailServer] Scheduled email ${email.id} sent.`);
+        } catch (err) {
+            if (err && err.code === NO_MAILBOX_ADDRESS) {
+                // The owner has no address to send from (any more): never send it as anyone else. It
+                // goes back to their Drafts, marked failed with the reason, and they are told.
+                // NOT-A-USER-PATH: the scheduled-send queue's own row.
+                await Email.cancelScheduled(email.id).catch(() => null);
+                // NOT-A-USER-PATH: the same queue row, marked with the reason.
+                await Email.markFailed(email.id, 0, err.message).catch(() => null);
+                await notifyNoMailboxAddress(email, err).catch(() => null);
+                return;
+            }
+            console.error(`[MailServer] Failed to send scheduled email ${email.id}:`, err);
         }
+    };
 
-        // Retry queue: re-attempt outbound emails whose temporary failures are now due.
+    // One due row of the retry queue (temporary failures, and messages waiting for the sending rate).
+    const dispatchRetry = async (email) => {
         try {
-            const retries = await Email.getPendingRetries();
+            // to_address holds exactly the still-failed (external) recipients for this row.
+            const recipients = (email.to_address || '').split(',').map(s => s.trim()).filter(Boolean);
+            if (recipients.length === 0) {
+                // NOT-A-USER-PATH: the retry queue, over rows Email.getPendingRetries()
+                // selected by delivery_status/next_attempt_at.
+                await Email.markFailed(email.id, email.delivery_attempts || 0, 'No recipients to retry');
+                return;
+            }
+
+            const slot = await claimQueueSlot();
+            if (!slot) return 'stop';
+
+            if (!retryDispatchAllowed(email, recipients.length)) {
+                // Over the sender's outbound limit: push the attempt back without spending one.
+                // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
+                await Email.markRetry(email.id, email.delivery_attempts || 0,
+                    new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString(),
+                    'Outbound rate limit reached; delivery postponed');
+                return;
+            }
+
+            // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
+            const attachments = await Email.getAttachments(email.id);
+            const formattedAttachments = attachments.map(att => ({
+                filename: att.filename,
+                path: path.join(UPLOAD_DIR, att.storage_path)
+            }));
+
+            await sendMail({
+                to: recipients,
+                subject: email.subject,
+                text: email.body_text,
+                html: email.body_html,
+                // THE OWNER'S identity, resolved from user_id — never `email.from_address`,
+                // which on a pre-v2.1 shared row is a COLLEAGUE'S address that no rewrite can
+                // clear. A row nobody owns yields null and goes out as the site itself.
+                identity: await sendingIdentityOfOwner(email.user_id),
+                parentId: email.parent_id,
+                threadId: email.thread_id,
+                userId: email.user_id || 0,
+                // Reuse the existing Sent record instead of creating a duplicate copy.
+                isRetry: true,
+                isAutoReply: Number(email.is_auto_reply) === 1,
+                sentRecordId: email.id,
+                deliveryAttempts: email.delivery_attempts || 0,
+                paceClaimed: true,
+                attachments: formattedAttachments
+            });
+        } catch (err) {
+            if (err && err.code === NO_MAILBOX_ADDRESS) {
+                // No address to send from: stop retrying (never send as anyone else) and say why.
+                // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
+                await Email.markFailed(email.id, email.delivery_attempts || 0, err.message).catch(() => null);
+                await notifyNoMailboxAddress(email, err).catch(() => null);
+                return;
+            }
+            console.error(`[MailServer] Failed to retry email ${email.id}:`, err);
+        }
+    };
+
+    // The queue's slot for the next row, in order: true = send it now.
+    const claimQueueSlot = async () => {
+        if (!SendRate || !(await sendRateLimit() > 0)) return true;
+        return (await SendRate.claim()).ok;
+    };
+
+    const queueTick = async () => {
+        // Scheduled sends and retries are ONE queue: due rows go out oldest first, whichever list they
+        // are on, so the sending rate (see sendRateGate) hands its slots out in order. When the rate is
+        // used up the pass stops; what is left stays due and is first in line next time.
+        try {
+            const [scheduled, retries] = await Promise.all([Email.getPendingScheduled(), Email.getPendingRetries()]);
+            const dueAt = (v) => { const t = Date.parse(String(v || '').replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(v || '')) ? '' : 'Z')); return Number.isFinite(t) ? t : 0; };
+            const due = [
+                ...scheduled.map((email) => ({ kind: 'scheduled', email, at: dueAt(email.scheduled_at) })),
+                ...retries.map((email) => ({ kind: 'retry', email, at: dueAt(email.next_attempt_at) })),
+            ].sort((a, b) => (a.at - b.at) || ((parseInt(a.email.id, 10) || 0) - (parseInt(b.email.id, 10) || 0)));
+            if (scheduled.length > 0) console.log(`[MailServer] Processing ${scheduled.length} scheduled emails...`);
             if (retries.length > 0) console.log(`[MailServer] Processing ${retries.length} retry emails...`);
-
-            for (const email of retries) {
-                try {
-                    // to_address holds exactly the still-failed (external) recipients for this row.
-                    const recipients = (email.to_address || '').split(',').map(s => s.trim()).filter(Boolean);
-                    if (recipients.length === 0) {
-                        // NOT-A-USER-PATH: the retry queue, over rows Email.getPendingRetries()
-                        // selected by delivery_status/next_attempt_at.
-                        await Email.markFailed(email.id, email.delivery_attempts || 0, 'No recipients to retry');
-                        continue;
-                    }
-
-                    if (!retryDispatchAllowed(email, recipients.length)) {
-                        // Over the sender's outbound limit: push the attempt back without spending one.
-                        // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
-                        await Email.markRetry(email.id, email.delivery_attempts || 0,
-                            new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString(),
-                            'Outbound rate limit reached; delivery postponed');
-                        continue;
-                    }
-
-                    // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
-                    const attachments = await Email.getAttachments(email.id);
-                    const formattedAttachments = attachments.map(att => ({
-                        filename: att.filename,
-                        path: path.join(UPLOAD_DIR, att.storage_path)
-                    }));
-
-                    await sendMail({
-                        to: recipients,
-                        subject: email.subject,
-                        text: email.body_text,
-                        html: email.body_html,
-                        // THE OWNER'S identity, resolved from user_id — never `email.from_address`,
-                        // which on a pre-v2.1 shared row is a COLLEAGUE'S address that no rewrite can
-                        // clear. A row nobody owns yields null and goes out as the site itself.
-                        identity: await sendingIdentityOfOwner(email.user_id),
-                        parentId: email.parent_id,
-                        threadId: email.thread_id,
-                        userId: email.user_id || 0,
-                        // Reuse the existing Sent record instead of creating a duplicate copy.
-                        isRetry: true,
-                        isAutoReply: Number(email.is_auto_reply) === 1,
-                        sentRecordId: email.id,
-                        deliveryAttempts: email.delivery_attempts || 0,
-                        attachments: formattedAttachments
-                    });
-                } catch (err) {
-                    if (err && err.code === NO_MAILBOX_ADDRESS) {
-                        // No address to send from: stop retrying (never send as anyone else) and say why.
-                        // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
-                        await Email.markFailed(email.id, email.delivery_attempts || 0, err.message).catch(() => null);
-                        await notifyNoMailboxAddress(email, err).catch(() => null);
-                        continue;
-                    }
-                    console.error(`[MailServer] Failed to retry email ${email.id}:`, err);
+            for (const item of due) {
+                const r = item.kind === 'scheduled' ? await dispatchScheduled(item.email) : await dispatchRetry(item.email);
+                if (r === 'stop') {
+                    console.log(`[MailServer] Sending rate reached; ${due.length - due.indexOf(item)} message(s) wait for the next minute.`);
+                    break;
                 }
             }
         } catch (e) {
-            console.error('[MailServer] Retry queue error:', e);
+            console.error('[MailServer] Queue error:', e);
         }
 
         // Sweep expired outbound-rate-limit windows so _outboundUsage doesn't grow unbounded.
@@ -3705,6 +3792,7 @@ exports.init = async function (bridge) {
                 if (purged > 0) console.log(`[MailServer] Purged ${purged} spam message(s) older than 30 days.`);
                 // Same cadence: staged uploads nobody sent or saved within a day.
                 await Email.sweepStaging().catch(() => 0);
+                if (SendRate) await SendRate.sweep().catch(() => null);
             }
         } catch (e) {
             console.error('[MailServer] Spam purge error:', e);
@@ -4425,7 +4513,8 @@ exports.init = async function (bridge) {
             mail_security_dnsbl_enabled: '1', mail_security_spf_enabled: '1', mail_security_spf_reject: '1',
             mail_security_dmarc_enabled: '1',
             mail_undo_send_seconds: '10',
-            mail_blocked_senders: '', mail_allowed_senders: '', mail_quota_default_mb: '0', mail_forwarding_allowed: '1'
+            mail_blocked_senders: '', mail_allowed_senders: '', mail_quota_default_mb: '0', mail_forwarding_allowed: '1',
+            [SEND_RATE_OPTION]: '0'
         });
         const mailDomainNow = await getMailDomain().catch(() => '');
         res.json({
@@ -4457,6 +4546,8 @@ exports.init = async function (bridge) {
             mail_user: o.mail_user,
             mail_pass_set: o.mail_pass ? true : false,
             mail_relay_require_tls: o.mail_relay_require_tls,
+            // The general queue's sending rate (messages per minute, 0 = no cap).
+            [SEND_RATE_OPTION]: String(parsePerMinute(o[SEND_RATE_OPTION])),
             // Whether the configured relay answered its last check, and why not (see initTransporter).
             relay_status: relayStatus,
             // The domain mailboxes live on, and whether the internet can deliver to it at all (a site
@@ -4522,13 +4613,15 @@ exports.init = async function (bridge) {
             'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject',
             'mail_security_dmarc_enabled',
             'mail_undo_send_seconds',
-            'mail_blocked_senders', 'mail_allowed_senders', 'mail_quota_default_mb', 'mail_forwarding_allowed'
+            'mail_blocked_senders', 'mail_allowed_senders', 'mail_quota_default_mb', 'mail_forwarding_allowed',
+            SEND_RATE_OPTION
         ];
         // Normalize the policy values before they are stored (bounded, typed, one entry per line).
         if (req.body.mail_blocked_senders !== undefined) req.body.mail_blocked_senders = MailRules.normalizeSenderList(req.body.mail_blocked_senders, 2000).join('\n');
         if (req.body.mail_allowed_senders !== undefined) req.body.mail_allowed_senders = MailRules.normalizeSenderList(req.body.mail_allowed_senders, 2000).join('\n');
         if (req.body.mail_quota_default_mb !== undefined) req.body.mail_quota_default_mb = String(Math.min(Math.max(parseInt(req.body.mail_quota_default_mb, 10) || 0, 0), 1048576));
         if (req.body.mail_forwarding_allowed !== undefined) req.body.mail_forwarding_allowed = req.body.mail_forwarding_allowed === '0' || req.body.mail_forwarding_allowed === false ? '0' : '1';
+        if (req.body[SEND_RATE_OPTION] !== undefined) req.body[SEND_RATE_OPTION] = String(parsePerMinute(req.body[SEND_RATE_OPTION]));
 
         for (const f of fields) {
             if (req.body[f] === undefined) continue;
@@ -4542,6 +4635,7 @@ exports.init = async function (bridge) {
         // effect immediately (previously only initSMTPServer ran, so relay edits needed a full reload).
         invalidateDeliveryPolicy();
         _usageCache.clear();
+        forgetSendRateLimit();
         await initSMTPServer();
         await initTransporter();
         res.json({ success: true, message: 'Server settings updated' });
@@ -5214,7 +5308,14 @@ exports.init = async function (bridge) {
     // GET /admin/queue — every outbound message not yet delivered (scheduled, retrying, failed).
     route('get', '/admin/queue', { auth: true, admin: true }, async (req, res) => {
         try {
-            res.json({ items: await Admin.listQueue(200) });
+            const [items, waiting, rate] = await Promise.all([
+                Admin.listQueue(200),
+                Admin.countWaiting(),
+                SendRate ? SendRate.status() : Promise.resolve({ perMinute: 0, sentThisMinute: 0, sentLastMinute: 0 }),
+            ]);
+            // At the configured rate, how long the waiting messages take to go out (null = no cap).
+            const etaMinutes = rate.perMinute > 0 && waiting > 0 ? Math.ceil(waiting / rate.perMinute) : (waiting > 0 ? 0 : null);
+            res.json({ items, pacing: { ...rate, waiting, etaMinutes } });
         } catch (e) {
             res.status(500).json({ error: 'Failed to load the queue' });
         }
@@ -5226,7 +5327,7 @@ exports.init = async function (bridge) {
         if (!email) return res.status(404).json({ error: 'Message not found' });
         // Administrators may act on any queued row — canAccessEmail is that role-based allowance.
         if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
-        const out = await retryFailedDelivery(email, `admin:${req.user.id}`);
+        const out = await retryFailedDelivery(email, `admin:${req.user.id}`, { force: true });
         res.status(out.status).json(out.body);
     });
 

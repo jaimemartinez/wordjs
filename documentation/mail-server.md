@@ -61,6 +61,16 @@ The outcome of a delivery is reported back to the caller as `{ success, delivere
 *   **Backoff & give-up:** temporary failures (4xx / network) schedule the next attempt at `attempt²` minutes (cap ~6h) up to `MAX_DELIVERY_ATTEMPTS` (5); permanent failures (5xx) never retry. On final failure the sender gets a **bounce notification**.
 *   **Rate limits:** a message is charged against its sender's hourly outbound limit (100 messages / 500 recipients) once — when it is sent — and its automatic retries are not charged again. A retry row with no recorded charge (for example after a restart) is charged once, at its first pass. Site and provider mail (`user_id = 0`: password resets, notifications, other plugins' mail) retries on a budget of its own, 1000 messages / 5000 recipients per hour, so it never competes with mail users send. A retry over its limit is postponed by 5 minutes without spending an attempt.
 
+### Sending rate of the general queue (messages per minute)
+*Email Center → Server → Queue → Sending rate* sets how many messages may leave the server per minute (`mail_queue_per_minute`; whole number, `0` = no limit, which is the default and the behaviour before the setting existed).
+*   **What counts:** every message handed to the outside world (the relay or a remote MX) — mail users send, scheduled sends, retries, the site's own mail and mail other plugins send through the provider (newsletter, forms…). A message counts **once**, whatever its number of external recipients; mail delivered only to local mailboxes does not count.
+*   **Over the limit nothing is lost or refused:** the message is kept in the queue (`delivery_status = 'retry'`, `paced = 1`, shown as *Waiting (sending rate)*) and goes out in a later minute. Waiting is not a failed attempt (the attempt count is unchanged) and does not charge the sender's hourly limits again.
+*   **In order:** scheduled sends and retries are one queue, handed out oldest first; when the minute's budget is used up the pass stops and the rest is first in line the next minute. While messages are waiting, new mail queues behind them.
+*   **Goes out at once, and still counts:** account mail the core marks as such (password reset, address verification — `priority: 'account'`, which only the core can set: `wordjs.mail()` removes it from plugin mail), the delivery test, and an administrator's *Retry now*. An alias forward has no queue row to wait on, so it goes out and counts too.
+*   **The queue screen** shows this minute's count against the limit, how many messages are waiting, and roughly how long they take to go out at that rate.
+*   **Several nodes:** the count is kept per calendar minute in the plugin's own table (`wjp_mail_server_send_rate`), in the shared database, so the limit is **for the whole install**, however many nodes run the plugin. The per-user hourly limits below are counted per node, as before.
+*   The per-user hourly limits still apply on top: the sending rate is the overall cap.
+
 ### Outbound rate limiting
 Per-user, per-rolling-hour caps guard against an authenticated account blasting DKIM-signed spam from your IP: max 50 recipients per message, 100 messages/hour, 500 recipients/hour. Header-bound fields (subject, from-name) are CR/LF-stripped to prevent header injection, and recipient addresses are validated (length, single `@`).
 

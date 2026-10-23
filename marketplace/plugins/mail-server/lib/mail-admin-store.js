@@ -291,7 +291,7 @@ module.exports = function createAdminStore(db) {
         async listQueue(limit = 200) {
             return await db.all(`
                 SELECT id, user_id, from_address, from_name, to_address, cc_address, subject, date_received,
-                       scheduled_at, is_sent, delivery_status, delivery_attempts, next_attempt_at, last_error
+                       scheduled_at, is_sent, delivery_status, delivery_attempts, next_attempt_at, last_error, paced
                 FROM ${T_EMAILS}
                 WHERE is_trash = 0 AND (
                     delivery_status IN ('retry', 'failed')
@@ -299,6 +299,23 @@ module.exports = function createAdminStore(db) {
                 )
                 ORDER BY id DESC
                 LIMIT ?`, [Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500)]);
+        },
+
+        /**
+         * How many messages the queue still has to hand out: those waiting for the sending rate, and the
+         * retries and scheduled sends already due (scheduled_at is stored as UTC 'YYYY-MM-DD HH:MM:SS', see
+         * sqlDateTime; next_attempt_at as an ISO string).
+         */
+        async countWaiting() {
+            const nowIso = new Date().toISOString();
+            const nowSql = nowIso.slice(0, 19).replace('T', ' ');
+            const row = await db.get(`
+                SELECT COUNT(*) AS n FROM ${T_EMAILS}
+                WHERE is_trash = 0 AND (
+                    (delivery_status = 'retry' AND (paced = 1 OR (next_attempt_at IS NOT NULL AND next_attempt_at <= ?)))
+                    OR (is_sent = 0 AND is_draft = 0 AND scheduled_at IS NOT NULL AND scheduled_at <= ?)
+                )`, [nowIso, nowSql]);
+            return row ? Number(row.n) || 0 : 0;
         },
 
         async getQueueItem(id) {
@@ -311,7 +328,7 @@ module.exports = function createAdminStore(db) {
         async abandonRetry(id, note) {
             await db.run(`
                 UPDATE ${T_EMAILS}
-                SET delivery_status = 'failed', next_attempt_at = NULL,
+                SET delivery_status = 'failed', next_attempt_at = NULL, paced = 0,
                     last_error = ?
                 WHERE id = ? AND delivery_status = 'retry'`,
                 [String(note || 'Cancelled by an administrator').slice(0, 1000), parseInt(id, 10) || 0]);
