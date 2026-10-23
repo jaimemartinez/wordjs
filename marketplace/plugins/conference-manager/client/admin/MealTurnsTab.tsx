@@ -18,7 +18,7 @@ import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { conferenceApi } from "../lib/conference";
-import { dayLabel, mealName, useTx } from "./MealScanner";
+import { dayLabel, makeTxn, mealName, useTx } from "./MealScanner";
 import { usePerms } from "./perms";
 import { GROUP_TONES, MEAL_GROUPS, groupSizeSpread, peopleFilter, turnLine } from "../lib/mealTurns";
 
@@ -37,7 +37,10 @@ export function GroupBadge({ g, size = 'md' }: { g: string | null; size?: 'sm' |
 
 export default function MealTurnsTab({ conferenceId }: { conferenceId: number }) {
     const tx = useTx();
+    const txn = makeTxn(tx);
     const { language } = useI18n();
+    // Decimals the reader's way (3,4 in Spanish and Portuguese).
+    const num = (n: number) => { try { return Number(n).toLocaleString(language || 'es', { maximumFractionDigits: 1 }); } catch { return String(n); } };
     const { addToast } = useToast();
     const { confirm } = useModal();
     const perms = usePerms();
@@ -134,7 +137,7 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                 {!data.config.enabled && <p className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">{tx('turns.off.hint', 'Mientras estén desactivados, los grupos solo se ven aquí: no salen en las escarapelas, en «Mi inscripción» ni en el escáner.')}</p>}
                 {!data.has_age_field && <p className="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2" data-turns-warn="age"><i className="fa-solid fa-triangle-exclamation mr-1.5" aria-hidden="true"></i>{tx('turns.warn.noage', 'El formulario no pregunta la edad: añade la plantilla «Edad» en Campos.')}</p>}
                 {!data.has_health_field && <p className="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2" data-turns-warn="health"><i className="fa-solid fa-triangle-exclamation mr-1.5" aria-hidden="true"></i>{tx('turns.warn.nohealth', 'El formulario no pregunta por condiciones de salud: añade la plantilla «Condiciones de salud» en Campos.')}</p>}
-                {data.has_age_field && data.missing_age > 0 && <p className="text-xs text-gray-600">{tx('turns.missing.age', '{n} personas no tienen edad: cuentan como adultos.', { n: data.missing_age })}</p>}
+                {data.has_age_field && data.missing_age > 0 && <p className="text-xs text-gray-600">{txn('turns.missing.age', '{n} personas no tienen edad: cuentan como adultos.', '{n} persona no tiene edad: cuenta como adulta.', data.missing_age)}</p>}
                 <div className="flex flex-wrap items-center gap-3 pt-1">
                     <span className={`inline-flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full ${data.frozen_at ? 'bg-emerald-50 text-emerald-800' : 'bg-blue-50 text-blue-800'}`} data-turns-state={data.frozen_at ? 'frozen' : 'live'}>
                         <i className={`fa-solid ${data.frozen_at ? 'fa-lock' : 'fa-rotate'}`} aria-hidden="true"></i>
@@ -163,7 +166,7 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                     </button>
                 ))}
             </div>
-            {spread > 0 && <p className="text-[11px] text-gray-500 -mt-3">{tx('turns.spread', 'Los grupos difieren en hasta {n} personas (familias que van juntas y cambios hechos a mano).', { n: spread })}</p>}
+            {spread > 0 && <p className="text-[11px] text-gray-500 -mt-3">{txn('turns.spread', 'Los grupos difieren en hasta {n} personas (familias que van juntas y cambios hechos a mano).', 'Los grupos difieren en hasta {n} persona (familias que van juntas y cambios hechos a mano).', spread)}</p>}
 
             {/* Call times per service */}
             <div className={`${card} p-6 space-y-4`}>
@@ -178,7 +181,11 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                         </div>
                         {svc && (
                             <>
-                                <p className="text-xs text-gray-600">{tx('turns.service.summary', '{n} personas con derecho · {lines} filas · {rate} platos/min por fila → unas {k} personas por minuto. Termina a las {end}.', { n: svc.entitled, lines: svc.lines, rate: svc.per_min, k: svc.per_minute, end: svc.end })}</p>
+                                <p className="text-xs text-gray-600">{[
+                                    txn('turns.summary.people', '{n} personas con derecho', '{n} persona con derecho', svc.entitled),
+                                    txn('turns.summary.lines', '{n} filas de entrega', '{n} fila de entrega', svc.lines),
+                                    tx('turns.summary.rate', '{rate} platos/min por fila → unas {k} personas por minuto', { rate: num(svc.per_min), k: num(svc.per_minute) }),
+                                ].join(' · ')}. {tx('turns.summary.end', 'Termina a las {end}.', { end: svc.end })}</p>
                                 {svc.overflow && <p className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2" data-turns-overflow=""><i className="fa-solid fa-clock mr-1.5" aria-hidden="true"></i>{tx('turns.overflow', 'El último grupo termina después de la hora de cierre de esta comida: añade filas de entrega o amplía el horario.')}</p>}
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-sm" data-turns-slots="">
@@ -192,8 +199,8 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                                                     <td className="py-2 pr-3 text-gray-500 tabular-nums">{i + 1}</td>
                                                     <td className="py-2 pr-3"><GroupBadge g={s.group} size="sm" /></td>
                                                     <td className="py-2 pr-3 text-right tabular-nums font-bold">{s.count}</td>
-                                                    <td className="py-2 pr-3 font-black tabular-nums">{turnLine(s)}</td>
-                                                    <td className="py-2 text-gray-600 tabular-nums">{tx('turns.minutes', '{n} min', { n: String(s.minutes).replace('.', ',') })}</td>
+                                                    <td className="py-2 pr-3 font-black tabular-nums whitespace-nowrap">{turnLine(s)}</td>
+                                                    <td className="py-2 text-gray-600 tabular-nums whitespace-nowrap">{tx('turns.minutes', '{n} min', { n: num(s.minutes) })}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -211,7 +218,7 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className={`${card} p-6 space-y-4`}>
                         <h3 className="text-base font-black text-gray-900">{tx('turns.pace', 'Ritmo de la cocina')}</h3>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="grid grid-cols-1 gap-3">
                             <div><label htmlFor="cm-turns-lines" className={labelCls}>{tx('turns.lines', 'Filas de entrega')}</label>
                                 <input id="cm-turns-lines" inputMode="numeric" className={inputCls} value={pace.lines} onChange={(e) => setPace({ ...pace, lines: e.target.value })} /></div>
                             <div><label htmlFor="cm-turns-rate" className={labelCls}>{tx('turns.rate', 'Platos por minuto (cada fila)')}</label>
@@ -228,10 +235,10 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                         {!data.health_options.length ? <p className="text-sm text-gray-500">{tx('turns.weights.none', 'El formulario no tiene «Condiciones de salud».')}</p> : (
                             <>
                                 <p className="text-[11px] text-gray-500">{tx('turns.weights.hint', 'Puntos de 0 a 60. La condición más fuerte de cada persona cuenta completa, la segunda la mitad, la tercera un cuarto (máximo 60). La edad suma aparte: 0–2 años 40, 3–5 años 30, 6–11 años 15, 60–69 años 20, 70–79 años 35, 80 o más 50.')}</p>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <div className="grid grid-cols-1 gap-2">
                                     {data.health_options.map((c) => (
                                         <label key={c} className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 px-3 py-2 text-sm">
-                                            <span className="min-w-0 text-gray-800" style={{ overflowWrap: 'anywhere' }}>{c}</span>
+                                            <span className="min-w-0 text-gray-800 break-words">{c}</span>
                                             <input inputMode="numeric" aria-label={tx('turns.weight.of', 'Peso de «{name}»', { name: c })} className="w-16 shrink-0 border-2 border-gray-100 rounded-lg px-2 py-1.5 text-right tabular-nums text-sm"
                                                 value={weights[c] ?? ''} onChange={(e) => setWeights({ ...weights, [c]: e.target.value })} />
                                         </label>
@@ -267,9 +274,9 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                                         <td className="py-2 pr-3 font-semibold text-gray-900" style={{ overflowWrap: 'anywhere' }}>{p.name}{p.family_group ? <span className="block text-[11px] font-normal text-gray-500">{p.family_group}</span> : null}</td>
                                         <td className="py-2 pr-3 text-gray-600">{p.location || '—'}</td>
                                         {data.sees_health && (
-                                            <td className="py-2 pr-3 text-right tabular-nums" title={tx('turns.score.why', 'Edad {a} + salud {h}', { a: p.age_points, h: p.health_points })}>
-                                                <span className="font-bold">{String(p.score).replace('.', ',')}</span>
-                                                <span className="block text-[10px] text-gray-500">{tx('turns.score.parts', 'edad {a} · salud {h}', { a: p.age_points, h: String(p.health_points).replace('.', ',') })}</span>
+                                            <td className="py-2 pr-3 text-right tabular-nums" title={tx('turns.score.why', 'Edad {a} + salud {h}', { a: p.age_points, h: num(p.health_points) })}>
+                                                <span className="font-bold">{num(p.score)}</span>
+                                                <span className="block text-[10px] text-gray-500">{tx('turns.score.parts', 'edad {a} · salud {h}', { a: p.age_points, h: num(p.health_points) })}</span>
                                             </td>
                                         )}
                                         <td className="py-2">
