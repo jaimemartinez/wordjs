@@ -15,6 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Select } from "./Select";
 import { prepareProof, formatBytes } from "./proofImage";
+import { PageViewer } from "./PageViewer";
 
 /** GET with query parameters (the list, a sheet's page, a file), or POST { action, … }. */
 type Req = (method: "get" | "post", params?: Record<string, any>) => Promise<any>;
@@ -79,7 +80,7 @@ function Box({ on, tone }: { on: boolean; tone: "ok" | "no" }) {
  * signed (the same state as the list); tapping an opt-out box ticks it too, since only a signer marks one. Rows
  * already settled stay in place, greyed, so the numbering always matches the paper.
  */
-export function SheetView({ t, sheet, rows, people, setRow }: { t: (k: string, v?: any) => string; sheet: any; rows: any[]; people: any[]; setRow: (id: number, patch: any) => void }) {
+export function SheetView({ t, sheet, rows, people, setRow, renderDetail }: { t: (k: string, v?: any) => string; sheet: any; rows: any[]; people: any[]; setRow: (id: number, patch: any) => void; renderDetail?: (r: any) => React.ReactNode }) {
     const byId = new Map(rows.map((r: any) => [r.id, r]));
     const person = new Map(people.map((p: any) => [p.id, p]));
     const printed = (sheet.roster || []).map((l: any) => ({ row: l.row, id: l.inscription_id, name: l.name || person.get(l.inscription_id)?.name || `#${l.inscription_id}` }));
@@ -103,8 +104,10 @@ export function SheetView({ t, sheet, rows, people, setRow }: { t: (k: string, v
                     const r = l.id != null ? byId.get(l.id) : rows.find((x: any) => x.row == null && x.on && Number(x.typedRow) === l.row);
                     const settled = l.id != null && !r;
                     const status = settled ? (person.get(l.id) ? t("paper.row.granted") : t("paper.row.gone")) : null;
+                    const detail = r && l.id != null && renderDetail ? renderDetail(r) : null;
                     return (
-                        <tr key={l.row} className={`${r?.on ? "bg-emerald-50/60" : ""} ${settled ? "text-gray-400" : "text-gray-900"}`} data-paper-sheet-row={l.row}>
+                        <React.Fragment key={l.row}>
+                        <tr className={`${r?.on ? "bg-emerald-50/60" : ""} ${settled ? "text-gray-400" : "text-gray-900"}`} data-paper-sheet-row={l.row}>
                             <td className={`${cell} font-bold tabular-nums`}>{l.row}</td>
                             <td className={cell}>
                                 {r && l.id != null ? (
@@ -128,6 +131,8 @@ export function SheetView({ t, sheet, rows, people, setRow }: { t: (k: string, v
                                 </>
                             )}
                         </tr>
+                        {detail && <tr className="bg-emerald-50/60" data-paper-sheet-detail={l.row}><td></td><td colSpan={4} className="px-2 pb-3 border-b border-gray-100">{detail}</td></tr>}
+                        </React.Fragment>
                     );
                 })}
             </tbody>
@@ -205,15 +210,9 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
             load();
         } finally { setBusy(null); }
     };
-    const openFile = async (f: any) => {
-        setBusy(`file-${f.id}`);
-        try {
-            const r = await request("get", { file_id: f.id });
-            if (r.mime === "application/pdf") saveAs(r.name || `hoja-${f.id}.pdf`, r.data_url, r.mime);
-            else setView({ kind: "file", file: r });
-        } catch (e: any) { addToast(e?.message || "Error", "error"); }
-        finally { setBusy(null); }
-    };
+    // A file opens in the viewer, in place: a photo, or a scanned PDF page by page (2.36.3: never a download).
+    const loadFile = useCallback((f: any) => request("get", { file_id: f.id }), [request]);
+    const openFile = (f: any) => setView({ kind: "file", file: f });
 
     // The checklist: the sheet's rows first, then the locality's other people still without an authorization.
     const openCheck = (s: any) => {
@@ -221,23 +220,21 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         const people = (data.people || []).filter((p: any) => p.state !== "granted");
         people.sort((a: any, b: any) => (rowOf.get(a.id) ?? 1e9) - (rowOf.get(b.id) ?? 1e9) || a.name.localeCompare(b.name));
         setCheck({
-            sheet: s, err: null, pane: "sheet", photo: false, pages: null,
+            sheet: s, err: null, viewerH: 40,
             rows: people.map((p: any) => ({ id: p.id, name: p.name, row: rowOf.get(p.id) ?? null, typedRow: "", byAge: p.minor, on: false, noHealth: false, noImage: false, minor: p.minor === true, rep: "", repDoc: "", err: {} })),
         });
     };
     const setRow = (id: number, patch: any) => setCheck((c: any) => ({ ...c, err: null, rows: c.rows.map((r: any) => (r.id === id ? { ...r, ...patch, err: {} } : r)) }));
-    // The uploaded pages, next to the sheet view: the photos are loaded once, when first shown; a PDF opens apart.
-    const showPhoto = async (on: boolean) => {
-        setCheck((c: any) => ({ ...c, photo: on }));
-        if (!on || check.pages) return;
-        const pages = [];
-        for (const f of check.sheet.files || []) {
-            if (f.mime === "application/pdf") { pages.push({ ...f, pdf: true }); continue; }
-            try { const r = await request("get", { file_id: f.id }); pages.push({ ...f, data_url: r.data_url }); }
-            catch (e: any) { pages.push({ ...f, error: e?.message || "Error" }); }
-        }
-        setCheck((c: any) => (c && c.sheet.id === check.sheet.id ? { ...c, pages } : c));
+    // On a phone the viewer sits on top, its height dragged with the bar under it (20–70 % of the screen).
+    const dragH = (e: React.PointerEvent) => {
+        const y0 = e.clientY, h0 = check.viewerH, vh = window.innerHeight || 800;
+        const el = e.currentTarget as any;
+        el.setPointerCapture?.(e.pointerId);
+        const onMove = (ev: PointerEvent) => setCheck((c: any) => (c ? { ...c, viewerH: Math.round(Math.min(70, Math.max(20, h0 + ((ev.clientY - y0) / vh) * 100))) } : c));
+        const onUp = () => { el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointercancel", onUp); };
+        el.addEventListener("pointermove", onMove); el.addEventListener("pointerup", onUp); el.addEventListener("pointercancel", onUp);
     };
+    const nudgeH = (d: number) => setCheck((c: any) => ({ ...c, viewerH: Math.min(70, Math.max(20, c.viewerH + d)) }));
     const removeSheet = async () => {
         setDel({ ...del, busy: true, err: null });
         try {
@@ -288,6 +285,33 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         } catch (e: any) { setUndo({ ...undo, busy: false, err: e?.message || "Error" }); }
     };
 
+    const walkins = check ? check.rows.filter((r: any) => r.row == null) : [];
+    const detailOf = (r: any) => {
+        if (!r.on || (r.byAge != null && !r.minor && !r.err.choice)) return null;
+        return (
+            <div className="space-y-2 pt-1">
+                {r.byAge == null && (
+                    <label className="inline-flex items-center gap-2 text-xs font-bold text-gray-600">
+                        <input type="checkbox" className="w-4 h-4" checked={r.minor} onChange={(e) => setRow(r.id, { minor: e.target.checked })} />{t("paper.minor")}
+                    </label>
+                )}
+                {r.err.choice && <p className={errCls} role="alert">{r.err.choice}</p>}
+                {r.minor && (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                        <div>
+                            <label className={lbl} htmlFor={`cp-rep-${r.id}`}>{t("paper.rep.name")}</label>
+                            <input id={`cp-rep-${r.id}`} className={`${input} ${r.err.rep ? "border-rose-300" : ""}`} maxLength={120} value={r.rep} onChange={(e) => setRow(r.id, { rep: e.target.value })} />
+                            {r.err.rep && <p className={errCls} role="alert">{r.err.rep}</p>}
+                        </div>
+                        <div>
+                            <label className={lbl} htmlFor={`cp-repdoc-${r.id}`}>{t("paper.rep.doc")}</label>
+                            <input id={`cp-repdoc-${r.id}`} className={input} maxLength={60} value={r.repDoc} onChange={(e) => setRow(r.id, { repDoc: e.target.value })} />
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
     const pendingCount = useMemo(() => (data?.people || []).filter((p: any) => p.state !== "granted").length, [data]);
     const paperDone = (s: any) => (data?.people || []).filter((p: any) => p.method === "paper" && p.sheet_id === s.id);
 
@@ -398,9 +422,9 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                 </Dialog>
             )}
             {view?.kind === "file" && (
-                <Dialog closeLabel={t("paper.close")} title={view.file.name || t("paper.files")} onClose={() => setView(null)} testId="paper-file"
+                <Dialog wide closeLabel={t("paper.close")} title={view.file.name || t("paper.files")} onClose={() => setView(null)} testId="paper-file"
                     footer={<div className="flex justify-end w-full"><button type="button" className={btnDark} onClick={() => setView(null)}>{t("paper.close")}</button></div>}>
-                    <img src={view.file.data_url} alt={view.file.name || ""} className="max-w-full h-auto rounded-lg border border-gray-100" />
+                    <div className="h-[60vh]"><PageViewer t={t} files={[view.file]} load={loadFile} /></div>
                     <p className="text-[11px] text-gray-500 mt-2 break-all">SHA-256 {view.file.sha256}</p>
                 </Dialog>
             )}
@@ -414,49 +438,29 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                     <p className="text-xs text-gray-500">{t("paper.check.hint")}</p>
                     {check.err && <p className="text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2 mt-2" role="alert">{check.err}</p>}
                     {check.rows.length === 0 && <p className="text-sm text-gray-500 mt-3">{t("paper.all.signed")}</p>}
-                    {/* A phone shows one pane at a time; a wide screen, the sheet next to the list. */}
-                    <div className="lg:hidden grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 mt-3" role="group" aria-label={t("paper.check.title", { code: check.sheet.code })}>
-                        {(["sheet", "list"] as const).map((k) => (
-                            <button key={k} type="button" aria-pressed={check.pane === k} onClick={() => setCheck((c: any) => ({ ...c, pane: k }))} data-paper-pane-toggle={k}
-                                className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-bold ${check.pane === k ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>
-                                <i className={`fa-solid ${k === "sheet" ? "fa-file-lines" : "fa-list-check"}`} aria-hidden="true"></i>{t(`paper.view.${k}`)}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="mt-3 lg:grid lg:grid-cols-2 lg:gap-5">
-                    <div className={`${check.pane === "sheet" ? "" : "hidden lg:block"} min-w-0`} data-paper-pane="sheet">
-                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                            <h4 className="text-xs font-bold uppercase tracking-wide text-gray-500">{t("paper.sheet", { code: check.sheet.code })}</h4>
-                            {(check.sheet.files || []).length > 0 && (
-                                <div className="inline-flex rounded-lg border border-gray-200 p-0.5 text-[11px] font-bold">
-                                    {[false, true].map((on) => (
-                                        <button key={String(on)} type="button" aria-pressed={check.photo === on} onClick={() => showPhoto(on)} data-paper-photo-toggle={on ? "photo" : "printed"}
-                                            className={`px-2.5 py-1 rounded-md ${check.photo === on ? "bg-gray-900 text-white" : "text-gray-600"}`}>{t(on ? "paper.view.photo" : "paper.view.printed")}</button>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                        {!check.photo ? (
-                            <>
-                                <p className="text-[11px] text-gray-500 mb-2">{t("paper.view.hint")}</p>
-                                <SheetView t={t} sheet={check.sheet} rows={check.rows} people={data.people || []} setRow={setRow} />
-                            </>
-                        ) : !check.pages ? <p className="text-sm text-gray-500">{t("paper.photo.loading")}</p> : (
-                            <div className="space-y-3" data-paper-photos="">
-                                {check.pages.map((f: any) => f.pdf ? (
-                                    <div key={f.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-700">
-                                        <span className="min-w-0 truncate"><i className="fa-regular fa-file-pdf mr-1.5" aria-hidden="true"></i>{f.name || `#${f.id}`} · {t("paper.photo.pdf")}</span>
-                                        <button type="button" className={btn} onClick={() => openFile(f)}>{t("paper.photo.open")}</button>
-                                    </div>
-                                ) : f.error ? <p key={f.id} className={errCls} role="alert">{f.name || `#${f.id}`}: {f.error}</p> : (
-                                    <img key={f.id} src={f.data_url} alt={f.name || t("paper.view.photo")} className="w-full h-auto rounded-lg border border-gray-100" />
-                                ))}
+                    {/* 2.36.3: everything on one screen — the uploaded page (viewer) and the sheet's rows with their ticks. Side by
+                        side on a wide screen; on a phone the viewer stays on top (its height dragged) and the rows scroll under it. */}
+                    <div className="mt-3 lg:grid lg:grid-cols-2 lg:gap-5 lg:items-start">
+                        <div className="sticky top-0 z-10 bg-white pb-1 lg:pb-0" data-paper-viewer-pane="">
+                            <div className="h-[var(--pv-h)] lg:h-[62vh]" style={{ ["--pv-h" as any]: `${check.viewerH}dvh` }}>
+                                <PageViewer t={t} files={check.sheet.files || []} load={loadFile} />
                             </div>
-                        )}
-                    </div>
-                    <div className={`${check.pane === "list" ? "" : "hidden lg:block"} min-w-0`} data-paper-pane="list">
-                    <ul className="divide-y divide-gray-100">
-                        {check.rows.map((r: any) => (
+                            <div className="lg:hidden flex justify-center pt-1">
+                                <button type="button" role="separator" aria-orientation="horizontal" aria-valuemin={20} aria-valuemax={70} aria-valuenow={check.viewerH} aria-label={t("paper.viewer.resize")}
+                                    className="w-full flex justify-center py-1.5 cursor-row-resize" style={{ touchAction: "none" }} onPointerDown={dragH}
+                                    onKeyDown={(e) => { if (e.key === "ArrowUp") { e.preventDefault(); nudgeH(-5); } if (e.key === "ArrowDown") { e.preventDefault(); nudgeH(5); } }} data-paper-viewer-resize="">
+                                    <span className="block w-12 h-1.5 rounded-full bg-gray-300" aria-hidden="true"></span>
+                                </button>
+                            </div>
+                        </div>
+                        <div className="min-w-0 mt-2 lg:mt-0" data-paper-rows="">
+                            <p className="text-[11px] text-gray-500 mb-2">{t("paper.view.hint")}</p>
+                            <SheetView t={t} sheet={check.sheet} rows={check.rows} people={data.people || []} setRow={setRow} renderDetail={detailOf} />
+                            {walkins.length > 0 && (
+                                <div className="mt-4" data-paper-walkins="">
+                                    <h4 className="text-xs font-bold uppercase tracking-wide text-gray-500">{t("paper.walkins.title")}</h4>
+                                    <ul className="divide-y divide-gray-100">
+                        {walkins.map((r: any) => (
                             <li key={r.id} className="py-3 space-y-2" data-paper-person={r.id}>
                                 <label className="flex items-center gap-3 cursor-pointer">
                                     <input type="checkbox" className="w-5 h-5 accent-emerald-600" checked={r.on} onChange={(e) => setRow(r.id, { on: e.target.checked })} />
@@ -499,8 +503,10 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                                 )}
                             </li>
                         ))}
-                    </ul>
-                    </div>
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </Dialog>
             )}

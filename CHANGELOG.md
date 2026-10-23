@@ -21,7 +21,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
-- **conference-manager 2.36.3: the admin's PDF buttons open the file again, and «Imprimir stickers» asks what to print.**
+- **conference-manager 2.36.3: the admin's PDF buttons open the file again, «Imprimir stickers» asks what to print, and
+  «Marcar quién firmó» shows the signed page on the same screen.**
   - **The fix.** Since 2.30.0 every PDF button of the admin opened a page that said «Esta página no existe» instead
     of the file: the sticker buttons, and also the badge PDF of a person, «PDF para imprimir (hoja Carta)» and «PDF
     una por página». The admin still used the conference portal's old file address. It now uses the core's portal
@@ -31,6 +32,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     people you tick, with a search and «Marcar los que se ven» (one person is one tick). It shows how many stickers
     will print, at what label size, before printing. It starts on what the list shows: the search's people already
     ticked, else the chosen locality, else everyone. Each person's own sticker button is unchanged.
+  - **The signed page in place.** An uploaded page of a paper consent sheet opens in a viewer inside the screen,
+    never as a download: a photo as it is, a scanned PDF page by page, its pages taken out of the file in the
+    browser. Zoom with the buttons, the wheel, a pinch or a double tap, and drag to move. A PDF that is not a scan
+    (typed, no picture) says so in place.
+  - **One screen to tick who signed.** The «Hoja / Lista» toggle is gone. The uploaded page and the sheet's rows,
+    with their ticks, are on screen together: side by side on a wide screen; on a phone the page stays on top
+    while the rows scroll under it, and a bar sets its height. A minor's representative is entered under their own
+    row, and who signed on a blank row is ticked below the sheet.
 
 ## [2.11.0] - 2026-10-23
 
