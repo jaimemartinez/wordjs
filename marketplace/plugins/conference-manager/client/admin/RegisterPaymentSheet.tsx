@@ -37,6 +37,7 @@ import { PersonPicker } from "./PersonPicker";
 import type { PersonOption } from "./PersonPicker";
 import { SegmentedControl, SumState, factsOf, money } from "./FeeBits";
 import { useTx } from "./MealScanner";
+import { useFieldErrors, FieldError } from "../lib/useFieldErrors";
 
 const LAST_METHOD_KEY = 'cm:fees:lastMethod';
 const readLastMethod = (methods: string[]) => {
@@ -123,6 +124,7 @@ const sectionTitle = 'text-[11px] font-black uppercase tracking-widest text-gray
  */
 export function RegisterPaymentSheet({ mode = 'create', conferenceId, options, locations = [], ids = [], transfer = null, methods = PAYMENT_METHODS as any, layer = LAYER.modal, onClose, onSaved, onStale, confirm, notify = null }: any) {
     const tx = useTx();
+    const fe = useFieldErrors();
     const { addToast: toast } = useToast();
     // What a send did, once the sheet has closed: the desktop review queue says it above its list (`notify`) —
     // a toast at the bottom right covers the queue's decision bar.
@@ -268,7 +270,7 @@ export function RegisterPaymentSheet({ mode = 'create', conferenceId, options, l
     return (
         <Overlay layer={layer} onEscape={escapeClose}>
             <form role="dialog" aria-modal="true" aria-labelledby={titleId} data-register-sheet={mode}
-                onSubmit={(e) => { e.preventDefault(); submit(false); }}
+                {...fe.form((e) => { e.preventDefault(); submit(false); })}
                 className="bg-white rounded-[32px] shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                 <div className="bg-gray-50/50 px-5 sm:px-8 py-5 border-b border-gray-100 flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -341,7 +343,9 @@ export function RegisterPaymentSheet({ mode = 'create', conferenceId, options, l
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
                                 <label htmlFor="fee-date" className={labelCls}>{tx('fees.register.date', 'Fecha del pago')}</label>
-                                <input id="fee-date" type="date" value={draft.paidOn} max={maxPaidOn()} onChange={(e) => set({ paidOn: e.target.value })} className={inputCls} />
+                                <input id="fee-date" type="date" value={draft.paidOn} max={maxPaidOn()} onChange={(e) => set({ paidOn: e.target.value })} className={inputCls}
+                                    data-field="fee_date" aria-invalid={fe.invalid('fee_date')} aria-describedby={fe.describedBy('fee_date')} />
+                                <FieldError message={fe.error('fee_date')} id={fe.errorId('fee_date')} />
                             </div>
                             {(isTransfer || draft.reference) && (
                                 <div>

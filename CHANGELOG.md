@@ -19,6 +19,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   dialog, in the reader's language. The newsletter's *Send test* address, the mail composer's *Insert link*
   (which keeps the selected text) and the invoice link shown when the clipboard is unavailable use
   `useModal().prompt()`. These plugins are off the native-dialog list; only Conference Manager remains.
+- **conference-manager 2.31.1: no browser-native dialog.** The badge designer asked with the browser's own
+  `confirm()` before replacing a design with a template: a dialog outside the app's language and theme, and one
+  that embedded browsers suppress, answering «no» without showing it, so the template never applied there. It
+  now asks through the admin's in-app dialog, like every other confirmation of the plugin. A test sweeps the
+  plugin's whole interface (admin and portal) so no `alert()`, `confirm()` or `prompt()` of the browser
+  comes back. Nor the browser's validation bubble («Completa este campo»): every form of the plugin now checks
+  its fields itself and shows what is missing or out of range under the field, in the admin's language
+  (Spanish, English or Portuguese; the coordinator portal's screens, Spanish only, in Spanish), and moves the
+  focus to the first field to fix. The same test pins that every form is `noValidate` and every required
+  field has an in-app message.
 
 ## [2.9.0] - 2026-10-23
 

@@ -1028,7 +1028,7 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                         <button type="button" onClick={onScanner} className="px-4 py-3 rounded-xl bg-gray-900 text-white font-black text-[10px] uppercase tracking-widest"><i className="fa-solid fa-camera mr-1.5" aria-hidden="true"></i>{tx('meals.scanner.camera', 'Usar la cámara')}</button>
                     </div>
                     {/* Enter is handled on keydown (onScanKey); the submit is the fallback of a virtual keyboard's «Ir». */}
-                    <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="space-y-2">
+                    <form noValidate onSubmit={(e) => { e.preventDefault(); submit(); }} className="space-y-2">
                         <label htmlFor="md-code" className={labelCls}>{tx('meals.delivery.scan', 'Escanea el código (o escríbelo y pulsa Enter)')}</label>
                         <input id="md-code" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={onScanKey} autoFocus autoComplete="off" spellCheck={false} autoCapitalize="characters"
                             className="w-full border-4 border-orange-200 focus:border-orange-500 rounded-3xl px-6 py-5 text-3xl font-mono font-black tracking-[0.2em] text-gray-900 outline-none bg-orange-50/30"

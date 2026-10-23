@@ -41,6 +41,7 @@ import {
 } from "./lodging";
 import { readOnlyReason } from "./lodgingView";
 import LodgingExplorer from "./LodgingExplorer";
+import { useFieldErrors } from "../lib/useFieldErrors";
 import {
     Badge,
     Button,
@@ -644,6 +645,7 @@ function RuleEditorForm({ editor, rules, fields, busy, onChange, onCancel, onSav
     const typeMeta = RULE_TYPE_OPTIONS.find((o) => o.v === form.type);
     const formId = 'lodging-rule-form';
     const clash = priorityClash(rules, form.priority, editor.id);
+    const fe = useFieldErrors('es'); // the portal's screens are Spanish only
     return (
         <Modal
             size="lg"
@@ -657,10 +659,10 @@ function RuleEditorForm({ editor, rules, fields, busy, onChange, onCancel, onSav
                 </>
             )}
         >
-            <form id={formId} className="space-y-6" onSubmit={(e) => { e.preventDefault(); onSave(); }} data-testid="lodging-rule-editor">
+            <form id={formId} className="space-y-6" {...fe.form((e) => { e.preventDefault(); onSave(); })} data-testid="lodging-rule-editor">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <Field label="Nombre">
-                        {(id) => <input id={id} className={inputIndigoCls} maxLength={100} value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="p. ej. Familias juntas" required />}
+                    <Field label="Nombre" error={fe.error('rule_name')} errorId={fe.errorId('rule_name')}>
+                        {(id) => <input id={id} className={inputIndigoCls} maxLength={100} value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="p. ej. Familias juntas" required data-field="rule_name" aria-invalid={fe.invalid('rule_name')} aria-describedby={fe.describedBy('rule_name')} />}
                     </Field>
                     <Field label="Tipo" help={typeMeta ? typeMeta.desc : undefined}>
                         {(id) => (
@@ -675,17 +677,17 @@ function RuleEditorForm({ editor, rules, fields, busy, onChange, onCancel, onSav
                 </div>
                 {form.type !== 'require_companion' ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <Field label="Campo">
+                        <Field label="Campo" error={fe.error('rule_field')} errorId={fe.errorId('rule_field')}>
                             {(id) => (
-                                <select id={id} className={inputIndigoCls} value={form.config} onChange={(e) => set({ config: e.target.value })} required>
+                                <select id={id} className={inputIndigoCls} value={form.config} onChange={(e) => set({ config: e.target.value })} required data-field="rule_field" aria-invalid={fe.invalid('rule_field')} aria-describedby={fe.describedBy('rule_field')}>
                                     <option value="">Elige un campo…</option>
                                     {options.map((f) => <option key={f.name} value={f.name}>{f.label}</option>)}
                                 </select>
                             )}
                         </Field>
                         {form.type === 'keep_together' && (
-                            <Field label="Tamaño mínimo del grupo">
-                                {(id) => <input id={id} type="number" min={1} step={1} className={inputIndigoCls} value={form.min_size} onChange={(e) => set({ min_size: e.target.value })} placeholder="1" />}
+                            <Field label="Tamaño mínimo del grupo" error={fe.error('rule_min_size')} errorId={fe.errorId('rule_min_size')}>
+                                {(id) => <input id={id} type="number" min={1} step={1} data-field="rule_min_size" aria-invalid={fe.invalid('rule_min_size')} aria-describedby={fe.describedBy('rule_min_size')} className={inputIndigoCls} value={form.min_size} onChange={(e) => set({ min_size: e.target.value })} placeholder="1" />}
                             </Field>
                         )}
                     </div>
@@ -693,14 +695,14 @@ function RuleEditorForm({ editor, rules, fields, busy, onChange, onCancel, onSav
                     <div className="space-y-4">
                         <PredicateRow label="Si en la habitación hay alguien que cumple…" value={form.subject} fields={options} onChange={(subject) => set({ subject })} />
                         <PredicateRow label="…debe haber acompañantes que cumplan" value={form.needs} fields={options} onChange={(needs) => set({ needs })} />
-                        <Field label="Acompañantes mínimos" className="sm:w-48">
-                            {(id) => <input id={id} type="number" min={1} step={1} className={inputIndigoCls} value={form.min} onChange={(e) => set({ min: e.target.value })} placeholder="1" />}
+                        <Field label="Acompañantes mínimos" className="sm:w-48" error={fe.error('rule_companions')} errorId={fe.errorId('rule_companions')}>
+                            {(id) => <input id={id} type="number" min={1} step={1} data-field="rule_companions" aria-invalid={fe.invalid('rule_companions')} aria-describedby={fe.describedBy('rule_companions')} className={inputIndigoCls} value={form.min} onChange={(e) => set({ min: e.target.value })} placeholder="1" />}
                         </Field>
                     </div>
                 )}
                 <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-4">
-                    <Field label="Prioridad" className="sm:w-56" help={clash ? undefined : 'El número más alto se aplica primero. No puede repetirse.'}>
-                        {(id) => <input id={id} type="number" step={1} className={inputIndigoCls} value={form.priority} onChange={(e) => set({ priority: e.target.value })} aria-invalid={!!clash} />}
+                    <Field label="Prioridad" className="sm:w-56" error={fe.error('rule_priority')} errorId={fe.errorId('rule_priority')} help={clash ? undefined : 'El número más alto se aplica primero. No puede repetirse.'}>
+                        {(id) => <input id={id} type="number" step={1} className={inputIndigoCls} value={form.priority} onChange={(e) => set({ priority: e.target.value })} data-field="rule_priority" aria-invalid={!!clash || fe.invalid('rule_priority')} aria-describedby={fe.describedBy('rule_priority')} />}
                     </Field>
                     {clash && <p className="basis-full text-xs font-bold text-rose-600 sm:order-last" role="alert" data-testid="lodging-rule-priority-clash">Ya la usa la regla «{clash.name}»: elige otro número.</p>}
                     <label className="flex items-center gap-2 text-sm font-medium text-gray-700 sm:pb-3 cursor-pointer">

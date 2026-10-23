@@ -23,6 +23,7 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import { tidyMoneyInput } from "./feeSplit";
+import { FieldError } from "../lib/useFieldErrors";
 
 export const cx = (...parts: Array<string | false | null | undefined>): string => parts.filter(Boolean).join(" ");
 
@@ -105,7 +106,8 @@ export function Label({ children, className, htmlFor }: { children: React.ReactN
  * Label + control + optional help line, the admin's `space-y-1.5` field block. Pass the control as a
  * render function to receive the id the label points at: `<Field label="Nombre">{(id) => <input id={id} … />}</Field>`.
  */
-export function Field({ label, help, children, className, htmlFor }: { label: React.ReactNode; help?: React.ReactNode; children: React.ReactNode | ((id: string) => React.ReactNode); className?: string; htmlFor?: string }) {
+/** `error` / `errorId`: the field's in-app validation message (useFieldErrors), shown under the control. */
+export function Field({ label, help, children, className, htmlFor, error, errorId }: { label: React.ReactNode; help?: React.ReactNode; children: React.ReactNode | ((id: string) => React.ReactNode); className?: string; htmlFor?: string; error?: string | null; errorId?: string }) {
     const auto = React.useId();
     const id = htmlFor ?? auto;
     return (
@@ -113,6 +115,7 @@ export function Field({ label, help, children, className, htmlFor }: { label: Re
             <Label htmlFor={typeof children === "function" || htmlFor ? id : undefined}>{label}</Label>
             {typeof children === "function" ? children(id) : children}
             {help ? <p className="text-[11px] text-gray-500 ml-1 leading-relaxed">{help}</p> : null}
+            <FieldError message={error} id={errorId} />
         </div>
     );
 }

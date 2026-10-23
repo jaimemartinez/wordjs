@@ -13,6 +13,7 @@
  * The parent holds the saved state: `onChange(design)` after every edit, `onImages(list)` for the gallery.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useModal } from "@/contexts/ModalContext";
 import { BadgeSvg as BadgeCard } from "./BadgeSvg";
 import { badgesApi } from "../lib/badges";
 import {
@@ -83,6 +84,7 @@ function Num({ label, value, onSet, step = 0.5, min, max, suffix, editable }: an
 }
 
 export function BadgeEditor({ conferenceId, initial, onChange, images, onImages, sample, tokenLabels, tokenShown, qrSample, locked, tx, addToast, canManage, onSave, dirty, saving }: any) {
+    const { confirm } = useModal();
     const [d, setD] = useState(() => normalizeDesignV2(initial));
     const [sel, setSel] = useState<string[]>([]);
     const [tab, setTab] = useState<'templates' | 'text' | 'elements' | 'images' | 'background'>('templates');
@@ -378,8 +380,9 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
         });
         commit({ ...d, layout, elements }, sel);
     };
-    const applyTemplate = (t: any) => {
-        if (d.elements.length > 1 && typeof window !== 'undefined' && !window.confirm(tx('badges.ed.template.confirm', '¿Reemplazar el diseño actual por esta plantilla? Puedes deshacerlo.'))) return;
+    // The host's in-app confirm (never the browser's native dialog).
+    const applyTemplate = async (t: any) => {
+        if (d.elements.length > 1 && !await confirm(tx('badges.ed.template.confirm', '¿Reemplazar el diseño actual por esta plantilla? Puedes deshacerlo.'), tx('badges.ed.template.title', 'Cambiar de plantilla'), false, { confirmText: tx('badges.ed.template.apply', 'Reemplazar') })) return;
         commit(t.make(), []);
     };
 

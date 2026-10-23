@@ -14,6 +14,7 @@
 import React, { useState } from "react";
 import { browserProofEnv, prepareProof, ProofError } from "./proofImage";
 import { Button, Field, Modal, cx, inputBoldCls, inputCls, selectCls } from "./ui";
+import { useFieldErrors, FieldError } from "../lib/useFieldErrors";
 
 const API = "/api/v1/plugin/conference-manager";
 
@@ -43,6 +44,7 @@ export default function LegacyBulkPayment({ ids, methods, defaultAmount = "", au
     const [form, setForm] = useState({ amount_per_person: defaultAmount, method: methods[0] || "", reference: "", proof: "" });
     const [busy, setBusy] = useState(false);
     const [preparing, setPreparing] = useState(false);
+    const fe = useFieldErrors('es'); // the portal's screens are Spanish only
 
     const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -103,16 +105,17 @@ export default function LegacyBulkPayment({ ids, methods, defaultAmount = "", au
                 </>
             )}
         >
-            <form id="bulk-payment-form" onSubmit={submit} className="space-y-5">
+            <form id="bulk-payment-form" {...fe.form(submit)} className="space-y-5">
                 <Field label="Monto por Persona">
                     {(id) => (
                         <div className="relative">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
-                            <input id={id} required type="text" inputMode="decimal" className={cx(inputBoldCls, "pl-10")} value={form.amount_per_person}
+                            <input id={id} required data-field="amount_per_person" aria-invalid={fe.invalid("amount_per_person")} aria-describedby={fe.describedBy("amount_per_person")} type="text" inputMode="decimal" className={cx(inputBoldCls, "pl-10")} value={form.amount_per_person}
                                 onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, amount_per_person: v })); }} placeholder="0.00" />
                         </div>
                     )}
                 </Field>
+                <FieldError message={fe.error("amount_per_person")} id={fe.errorId("amount_per_person")} className="-mt-3" />
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <Field label="Método">
                         {(id) => (

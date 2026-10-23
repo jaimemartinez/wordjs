@@ -219,7 +219,7 @@ export default function MyRegistrationPage() {
                     {form.conference && form.needsType && (
                         <div>
                             <label htmlFor="self-type" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-1">Tipo de documento</label>
-                            <select id="self-type" className={input} value={docType} onChange={(e) => setDocType(e.target.value)} required>
+                            <select id="self-type" className={input} value={docType} onChange={(e) => setDocType(e.target.value)} aria-required="true">
                                 <option value="">Elige…</option>
                                 {(form.docTypes || []).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
@@ -228,7 +228,7 @@ export default function MyRegistrationPage() {
                     {form.conference && (
                         <div>
                             <label htmlFor="self-number" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-1">{form.numberLabel}</label>
-                            <input id="self-number" className={input} value={docNumber} onChange={(e) => setDocNumber(e.target.value)} autoComplete="off" inputMode="text" required />
+                            <input id="self-number" className={input} value={docNumber} onChange={(e) => setDocNumber(e.target.value)} autoComplete="off" inputMode="text" aria-required="true" />
                         </div>
                     )}
                     {form.conference && (
