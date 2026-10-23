@@ -22,6 +22,7 @@ import { PAY_STATE_TONE, SoftWrap } from "./ParticipantList";
 import { Badge, Button, InfoRow, Modal, Notice, SheetNotice, labelCls } from "./ui";
 import type { HubNotice } from "./feePayments";
 import { PortalBadgeSection } from "./PortalBadges";
+import { ConsentChip, PortalConsentSection } from "./ConsentBits";
 
 const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/;
 
@@ -68,9 +69,11 @@ export type ParticipantSheetProps = {
     notice?: HubNotice | null;
     /** «Escarapela» (conference-manager ≥ 2.19.0, while coordinators may share badges): the portal's request headers. */
     badges?: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; conferenceName?: string } | null;
+    /** «Autorización de datos» (2.33.0, while the conference asks for it): the state and «Reenviar enlace». */
+    consent?: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; onChanged?: () => void } | null;
 };
 
-export default function ParticipantSheet({ person, fields, onClose, feesOn, canRecord, onPay, onSeePayments, payBusy, notice, badges }: ParticipantSheetProps) {
+export default function ParticipantSheet({ person, fields, onClose, feesOn, canRecord, onPay, onSeePayments, payBusy, notice, badges, consent }: ParticipantSheetProps) {
     const id = Number(person.id);
     const name = personName(person, fields);
     const cancelled = isCancelled(person);
@@ -86,7 +89,12 @@ export default function ParticipantSheet({ person, fields, onClose, feesOn, canR
             <div className="flex flex-wrap gap-2" data-sheet-chips="">
                 {cancelled && <Badge tone="gray" icon="fa-ban">Cancelada</Badge>}
                 {group && <Badge tone="indigo" icon="fa-people-roof">{group}</Badge>}
+                <ConsentChip consent={person.consent} />
             </div>
+
+            {consent && person.consent && !cancelled && (
+                <PortalConsentSection inscriptionId={id} consent={person.consent} authHeaders={consent.authHeaders} onChanged={consent.onChanged} />
+            )}
 
             <section className="space-y-3" aria-labelledby={`pay-${id}`} data-sheet-section="pago">
                 <h4 id={`pay-${id}`} className={labelCls}>Pago</h4>

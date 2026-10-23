@@ -71,6 +71,7 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
         grant: opts.usersGrant !== false,
         directory: new Map<number, HarnessUser>([[ADMIN.id, ADMIN], ...(opts.users || []).map(u => [u.id, u] as [number, HarnessUser])]),
     };
+    const mailState = { fail: false, sent: [] as any[] };
     const routes: { method: string; path: string; opts: any; handler: (req: any, res: any) => any }[] = [];
     const menu: any[] = [];
     const logs: [string, string][] = [];
@@ -150,6 +151,13 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
             randomInt: async (lo: number, hi: number) => require('crypto').randomInt(lo, hi),
             randomToken: async (bytes = 16) => require('crypto').randomBytes(Math.min(Math.max(Math.floor(Number(bytes) || 16), 8), 64)).toString('hex'),
         },
+        // email:admin's wordjs.mail: every message lands in `mails` (setMailFail(true) makes it throw like a site
+        // without a mail plugin).
+        async mail(msg: any) {
+            if (mailState.fail) throw new Error('Mail server not available');
+            mailState.sent.push(JSON.parse(JSON.stringify(msg)));
+            return { success: true };
+        },
         // settings:read's site info: the link base, or the host's refusal when the grant is off (siteUrl: null).
         site: {
             async url() {
@@ -225,6 +233,9 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
 
     return {
         raw, routes, menu, logs, sqlLog, call,
+        /** Every message sent through wordjs.mail, oldest first. */
+        mails: mailState.sent,
+        setMailFail: (v: boolean) => { mailState.fail = !!v; },
         reboot: init,
         /** Run `fn` before every statement of THIS instance (null removes it); see the header. */
         onSql: (fn: SqlHook | null) => { hook = fn; },

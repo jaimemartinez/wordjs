@@ -12,6 +12,7 @@ import Hospedajes from "./LodgingTab";
 // Participantes: the paged roster with compact rows and the «⋮» participant sheet (participants.ts holds the rules).
 import ParticipantList from "./ParticipantList";
 import ParticipantSheet from "./ParticipantSheet";
+import { consentT } from "../lib/consentI18n";
 import { familyGroupsOf, isCancelled, personName, pruneSelection, type PortalPerson } from "./participants";
 // «Pagos de cuotas» (conference-manager ≥ 2.18.0): the tab, its data hub and its sheets (feePayments.ts holds the rules).
 import FeePaymentsTab, { FeeSheets, useFeeHub } from "./FeePaymentsTab";
@@ -473,7 +474,11 @@ function LocationPortalContent() {
                 credentials: 'include'
             });
             if (res.ok) {
-                addToast('Inscripción creada correctamente', 'success');
+                // «Autorización de datos» (2.33.0): say where the consent link went (or that it did not).
+                const made = await res.json().catch(() => ({}));
+                const ct = consentT('es');
+                if (made && made.consent) addToast(made.consent.sent ? ct('portal.registered', { email: made.consent.email_masked }) : ct('portal.registered.failed'), made.consent.sent ? 'success' : 'warning');
+                else addToast('Inscripción creada correctamente', 'success');
                 setView('list');
                 // Reset form with initials
                 setFormData(initialFormValues(fields));
@@ -919,6 +924,7 @@ function LocationPortalContent() {
                     onPay={payFor}
                     onSeePayments={feesOn ? seePaymentsOf : undefined}
                     badges={badgesOn ? { authHeaders: portalAuthHeaders, conferenceName } : null}
+                    consent={sheetPerson.consent ? { authHeaders: portalAuthHeaders, onChanged: loadInscriptions } : null}
                     payBusy={feeHub.preparing}
                 />
             )}

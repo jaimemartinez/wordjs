@@ -1,7 +1,7 @@
 {
     "id": "conference-manager",
     "name": "Conference Manager",
-    "version": "2.32.0",
+    "version": "2.33.0",
     "description": "Manage conference inscriptions, payments, and lodging assignments.",
     "author": "WordJS",
     "isolated": true,
@@ -34,6 +34,10 @@
                 },
                 "badge": {
                     "title": "Escarapela",
+                    "private": true
+                },
+                "autorizacion": {
+                    "title": "Autorización de datos",
                     "private": true
                 }
             }
@@ -78,6 +82,11 @@
         {
             "scope": "network",
             "reason": "Send the bus notices («Tu bus está embarcando», «Tu bus salió», the transport team's messages) as browser notifications to the passengers who turned them on in «Mi inscripción». Only push services are contacted (fcm.googleapis.com, push.services.mozilla.com, push.apple.com, notify.windows.com). Without it the notices still show on the passengers' open page."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Send each registrant the link and the one-time code to authorize the processing of their personal data, and the copy of what they authorized («Autorización de datos»). Mail goes out through the site's mail plugin. Without it the registrations still work, but the people cannot sign their authorization."
         },
         {
             "scope": "roles",

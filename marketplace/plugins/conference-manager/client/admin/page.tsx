@@ -38,6 +38,8 @@ import { PermsProvider, usePerms, hasAnySection, ReadOnlyNotice, canReadRoster, 
 import type { Perms } from "./perms";
 import StaffPage from "./StaffPage";
 import BadgesPage from "./BadgesPage";
+import ConsentAdmin from "./ConsentAdmin";
+import { consentT } from "../lib/consentI18n";
 import { BadgeActions } from "./BadgeActions";
 import { useFieldErrors, FieldError } from "../lib/useFieldErrors";
 import { useTx } from "./MealScanner";
@@ -68,13 +70,13 @@ import LodgingPlan from "./LodgingPlan";
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'fees' | 'lodging' | 'transport' | 'meals' | 'badges' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing' | 'staff';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'consent' | 'fees' | 'lodging' | 'transport' | 'meals' | 'badges' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing' | 'staff';
 
 /**
  * The conference views in tab order (the first one the role may open is the default). 2.18.0: the money tabs
  * sit together — «Pagos de cuotas» and «Contabilidad» right after «Inscripciones» (D-P16).
  */
-const TAB_VIEWS: View[] = ['dashboard', 'inscriptions', 'fees', 'accounting', 'lodging', 'transport', 'meals', 'badges', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'staff'];
+const TAB_VIEWS: View[] = ['dashboard', 'inscriptions', 'fees', 'accounting', 'consent', 'lodging', 'transport', 'meals', 'badges', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'staff'];
 
 /**
  * View → section (2.15.0). «Inscripciones» opens with Inscripciones › ver — since 2.18.0 no longer with
@@ -89,6 +91,8 @@ export const viewAllowed = (v: View, p: Perms): boolean => {
         case 'list': return true;
         case 'dashboard': return p.can('dashboard');
         case 'inscriptions': return p.can('inscriptions');
+        // «Autorizaciones» (2.33.0): the states with Inscripciones › ver; its settings with Configuración › gestionar.
+        case 'consent': return p.can('inscriptions');
         case 'fees': return p.can('payments');
         case 'lodging': return p.can('lodging');
         case 'assignment': return p.can('lodging');
@@ -112,7 +116,7 @@ const firstAllowedView = (p: Perms): View => TAB_VIEWS.find(v => viewAllowed(v, 
 function ConferenceManagerContent() {
     const { currentConference, setCurrentConference, loading } = useConference();
     // useI18n from global context
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const tx = useTx();
     const perms = usePerms();
     const [view, setViewState] = useState<View>('list');
@@ -122,7 +126,7 @@ function ConferenceManagerContent() {
     // one it may (the conference list stays the start page when nothing was saved).
     useEffect(() => {
         const savedView = localStorage.getItem('conference-manager:view') as View;
-        if (savedView && ['list', 'dashboard', 'inscriptions', 'fees', 'lodging', 'transport', 'meals', 'badges', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting', 'staff'].includes(savedView)) {
+        if (savedView && ['list', 'dashboard', 'inscriptions', 'fees', 'consent', 'lodging', 'transport', 'meals', 'badges', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting', 'staff'].includes(savedView)) {
             setViewState(viewAllowed(savedView, perms) ? savedView : firstView);
         }
     }, []);
@@ -200,6 +204,7 @@ function ConferenceManagerContent() {
         { name: t('inscriptions'), view: 'inscriptions' as View, icon: 'fa-users' },
         { name: tx('fees.title', 'Pagos de cuotas'), view: 'fees' as View, icon: 'fa-file-invoice-dollar' },
         { name: t('accounting') || 'Contabilidad', view: 'accounting' as View, icon: 'fa-scale-balanced' },
+        { name: consentT(language)('admin.tab'), view: 'consent' as View, icon: 'fa-file-signature' },
         { name: t('lodging'), view: 'lodging' as View, icon: 'fa-bed' },
         { name: t('transport') || 'Transporte', view: 'transport' as View, icon: 'fa-bus' },
         { name: t('meals') || 'Alimentación', view: 'meals' as View, icon: 'fa-utensils' },
@@ -279,6 +284,7 @@ function ConferenceManagerContent() {
                     {shown === 'lodging' && <LodgingPage conferenceId={currentConference.id} onOpenExplorer={openLodgingExplorer} />}
                     {shown === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
                     {shown === 'meals' && <MealsPage conferenceId={currentConference.id} slug={currentConference.slug} conference={currentConference} />}
+                    {shown === 'consent' && <ConsentAdmin conferenceId={currentConference.id} />}
                     {shown === 'badges' && <BadgesPage conferenceId={currentConference.id} conference={currentConference} />}
                     {shown === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} onOpenFees={viewAllowed('fees', perms) ? () => setView('fees') : undefined} />}
                     {shown === 'locations' && <LocationsPage conferenceId={currentConference.id} onOpenExplorer={viewAllowed('assignment', perms) ? openLodgingExplorer : undefined} />}

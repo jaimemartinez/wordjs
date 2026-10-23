@@ -8,6 +8,35 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **conference-manager 2.33.0: each registrant authorizes the processing of their data, and signs with a code.**
+  - A new **«Autorizaciones»** tab asks every registrant of a conference for their own data processing
+    consent. It is off until the administrator turns it on, and everything is set there: the policy's address
+    and version, the data controller and its e-mail, the three authorization texts, how long the link lasts,
+    and when health data are deleted.
+  - Registering someone (portal or admin) needs an e-mail, which is a parent's for a minor. The person gets a
+    single-use link. Until they authorize, the registration shows «Autorización pendiente» and cannot be
+    confirmed.
+  - On the link's page the person reads the policy and ticks separate, unticked boxes: general processing
+    (required), sensitive health data (optional) and use of image (optional). They answer «Condiciones de
+    salud» themselves, so the coordinator never handles health data. For a minor, the page asks for the legal
+    representative's name, ID number and relationship.
+  - The person signs with a 6-digit code sent to the same e-mail. The code lasts 10 minutes and allows 5 tries.
+    A new one can be asked once a minute, 5 an hour. The code is never stored.
+  - The evidence is an append-only log, and a revocation is a new entry. It holds the person's identity and
+    verified e-mail, the server's UTC time and time zone, the browser's time zone and user agent, and a keyed
+    hash of the network address. It also keeps the policy version, the SHA-256 of the exact text shown, each
+    box, the code's sent and verified times and the representative of a minor. Each person's entries are
+    hash-chained, and deleting the registration keeps them.
+  - Each signature also names the policy version in force: its number and the SHA-256 of an append-only
+    snapshot of the settings the page was built from. Once a version is signed, its texts can only change under
+    a new version number, so every record still shows which version the person accepted. The plugin's README
+    explains why the site's secret, which keys the network hash, must stay the same.
+  - The person receives a copy of what they authorized, with the policy link.
+  - Coordinators see each person's state and can resend the link. Administrators record revocations and export
+    one person's evidence as a file.
+  - Health answers are deleted a set number of days after the conference ends (30 by default). The evidence
+    stays.
+  - The plugin now requests the `email` permission to send these messages through the site's mail plugin.
 - **Folders in the media library.** Admin → Media has a folder tree beside the library (a panel on phones): create, rename and nest folders, browse them (the address keeps the folder), upload straight into the current one, and move files by dragging them onto a folder or with *Move to…* — one file from its details, or many at once. Deleting a folder asks where its files and subfolders go; no file is ever deleted with it or left in a folder that no longer exists. The editor's media picker browses by folder too. Folders are organisation only: moving a file never changes its URL, so content that links to it keeps working. Anyone who uploads can create folders and move the files they may edit; renaming and deleting folders is for editors. (`GET`/`POST /api/v1/media/folders`, `PUT`/`DELETE /api/v1/media/folders/:id`, `POST /api/v1/media/folders/move`, `?folder=` on `GET /api/v1/media` and on uploads.)
 - **conference-manager 2.32.0: health conditions and meal turns.**
   - A new **«Condiciones de salud»** field template asks about health conditions: several can be ticked,
