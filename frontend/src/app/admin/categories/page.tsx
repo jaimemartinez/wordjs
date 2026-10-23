@@ -5,7 +5,7 @@ import { categoriesApi, Category } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button, EmptyState, Card, DataTable, Input, Select } from "@/components/ui";
+import { PageHeader, Button, EmptyState, Card, DataTable, Input, Select, Textarea } from "@/components/ui";
 import { orderAsTree, selfAndDescendants } from "@/lib/categoryTree";
 import { withServerReason } from "@/lib/errorText";
 
@@ -159,13 +159,10 @@ export default function CategoriesPage() {
                             </div>
                         </div>
                         <div>
-                            <label htmlFor="category-description" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t("categories.description")}</label>
-                            <textarea
+                            <Textarea
                                 id="category-description"
-                                rows={3}
-                                value={draft.description}
-                                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                                className="w-full px-4 py-3 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none text-sm"
+                                label={t("categories.description")}
+                                rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                             />
                         </div>
                         <div className="flex flex-col gap-2">

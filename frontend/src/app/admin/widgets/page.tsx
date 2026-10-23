@@ -25,7 +25,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { widgetsApi, Widget, Sidebar, WidgetField } from "@/lib/api";
 import { widgetIdFromInstanceKey } from "@/lib/widgetInstanceKey";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader } from "@/components/ui";
+import { Button, Checkbox, IconButton, Input, PageHeader, Textarea, UnstyledButton } from "@/components/ui";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
 
@@ -187,7 +187,6 @@ function WidgetSettingsForm({ widgetId, instanceId, fields }: { widgetId: string
             setSaving(false);
         }
     };
-    const inputClass = "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
     return (
         <form className="space-y-3" data-widget-settings={widgetId} onSubmit={(e) => { e.preventDefault(); void save(); }}>
@@ -196,31 +195,25 @@ function WidgetSettingsForm({ widgetId, instanceId, fields }: { widgetId: string
                 const v = values[f.name] ?? f.default;
                 if (f.type === "checkbox") {
                     return (
-                        <label key={f.name} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                            <input id={id} type="checkbox" checked={v === true} onChange={(e) => set(f.name, e.target.checked)} />
-                            {label(f)}
-                        </label>
+                        <Checkbox key={f.name} id={id} label={label(f)} checked={v === true} onChange={(e) => set(f.name, e.target.checked)} />
                     );
                 }
                 return (
-                    <div key={f.name}>
-                        <label htmlFor={id} className="block text-xs font-bold text-gray-600 mb-1">{label(f)}</label>
-                        {f.type === "textarea" || f.type === "html" ? (
-                            <textarea id={id} rows={f.type === "html" ? 6 : 4} className={`${inputClass} ${f.type === "html" ? "font-mono text-xs" : ""}`}
-                                value={v == null ? "" : String(v)} maxLength={f.max} onChange={(e) => set(f.name, e.target.value)} />
-                        ) : (
-                            <input id={id} type={f.type === "number" ? "number" : "text"} className={inputClass}
-                                value={v == null ? "" : String(v)} min={f.min} max={f.type === "number" ? f.max : undefined}
-                                maxLength={f.type === "text" ? f.max : undefined}
-                                onChange={(e) => set(f.name, f.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} />
-                        )}
-                    </div>
+                    f.type === "textarea" || f.type === "html" ? (
+                        <Textarea key={f.name} id={id} label={label(f)} rows={f.type === "html" ? 6 : 4} className={f.type === "html" ? "font-mono text-xs" : ""}
+                            value={v == null ? "" : String(v)} maxLength={f.max} onChange={(e) => set(f.name, e.target.value)} />
+                    ) : (
+                        <Input key={f.name} id={id} size="sm" label={label(f)} type={f.type === "number" ? "number" : "text"}
+                            value={v == null ? "" : String(v)} min={f.min} max={f.type === "number" ? f.max : undefined}
+                            maxLength={f.type === "text" ? f.max : undefined}
+                            onChange={(e) => set(f.name, f.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} />
+                    )
                 );
             })}
             <div className="flex items-center gap-3">
-                <button type="submit" disabled={saving} className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 disabled:opacity-50">
-                    {saving ? t('widgets.settings.saving') : t('widgets.settings.save')}
-                </button>
+                <Button type="submit" size="sm" pending={saving} pendingLabel={t('widgets.settings.saving')}>
+                    {t('widgets.settings.save')}
+                </Button>
                 {status === "saved" && <span className="text-xs font-semibold text-emerald-700" role="status">{t('widgets.settings.saved')}</span>}
                 {status === "error" && <span className="text-xs font-semibold text-rose-700" role="alert">{t('widgets.settings.saveError')}</span>}
             </div>
@@ -263,33 +256,32 @@ function SidebarItem({
         <div ref={setNodeRef} style={style} className="mb-3 bg-white border-2 border-gray-50 rounded-2xl shadow-sm overflow-hidden hover:border-blue-100 transition-all">
             <div className="p-4 flex justify-between items-center bg-gray-50/30 border-b border-gray-100">
                 <div className="flex items-center gap-2">
-                    <button type="button" className="cursor-grab w-11 h-11 shrink-0 -ml-2 flex items-center justify-center text-gray-400 hover:text-gray-600" {...listeners} {...attributes} aria-label={t('common.dragToReorder')}>
+                    <UnstyledButton className="cursor-grab w-11 h-11 shrink-0 -ml-2 flex items-center justify-center text-gray-400 hover:text-gray-600" {...listeners} {...attributes} aria-label={t('common.dragToReorder')}>
                         <i className="fa-solid fa-grip-vertical" aria-hidden="true"></i>
-                    </button>
+                    </UnstyledButton>
                     <span className="font-medium select-none">{coreText(t, "widget", widgetId, "instance", `${displayId} ${t('widgets.widget')}`)}</span>
                 </div>
                 <div className="flex gap-2">
-                    <button
-                        className="text-gray-500 hover:text-blue-600"
-                        aria-label={t('widgets.toggleSettings')}
+                    <IconButton
+                        size="sm"
+                        icon={`fa-chevron-${isExpanded ? 'up' : 'down'}`}
+                        label={t('widgets.toggleSettings')}
                         aria-expanded={isExpanded}
                         onClick={(e) => {
                             e.stopPropagation();
                             setIsExpanded(!isExpanded);
                         }}
-                    >
-                        <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'}`}></i>
-                    </button>
-                    <button
-                        className="text-gray-500 hover:text-red-600"
-                        aria-label={t('widgets.removeWidget')}
+                    />
+                    <IconButton
+                        size="sm"
+                        variant="danger"
+                        icon="fa-trash"
+                        label={t('widgets.removeWidget')}
                         onClick={(e) => {
                             e.stopPropagation();
                             onRemove(sidebarId, instanceKey);
                         }}
-                    >
-                        <i className="fa-solid fa-trash"></i>
-                    </button>
+                    />
                 </div>
             </div>
 

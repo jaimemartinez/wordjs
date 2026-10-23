@@ -4,7 +4,7 @@ import { Fragment, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader } from "@/components/ui";
+import { Button, HiddenFileInput, PageHeader, Radio, RadioGroup, Switch } from "@/components/ui";
 import { registerTranslations } from "@/lib/i18n";
 import { importApi, type WxrAnalysis, type ImportSummary, type ImportMediaMode } from "@/lib/api";
 import { locationsNoteKey } from "@/lib/wpImportLocations";
@@ -333,11 +333,9 @@ export default function ImportPage() {
                 onClick={() => fileInputRef.current?.click()}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
             >
-                <input
+                <HiddenFileInput
                     ref={fileInputRef}
-                    type="file"
                     accept=".xml,.wxr,text/xml,application/xml"
-                    className="hidden"
                     onChange={(e) => onPick(e.target.files?.[0] || null)}
                 />
                 <div className="text-4xl text-blue-500 mb-3"><i className="fa-solid fa-file-arrow-up"></i></div>
@@ -398,30 +396,17 @@ export default function ImportPage() {
                         <Toggle checked={importComments} onChange={setImportComments}
                             label={t("wpImport.comments.label")} hint={t("wpImport.comments.hint")} />
 
-                        <fieldset className="space-y-2">
-                            <legend className="font-medium text-gray-800">{t("wpImport.media.legend")}</legend>
-                            <p className="text-sm text-gray-500">
-                                {fill(t("wpImport.media.help"), { url: <span className="font-medium">URL</span> })}
-                            </p>
-                            <div className="space-y-2 pt-1">
-                                {MEDIA_MODES.map((m) => (
-                                    <label key={m} className="flex items-start gap-3 cursor-pointer">
-                                        <input
-                                            type="radio"
-                                            name="media-mode"
-                                            className="mt-1 h-4 w-4 accent-blue-600"
-                                            value={m}
-                                            checked={media === m}
-                                            onChange={() => setMedia(m)}
-                                        />
-                                        <span>
-                                            <span className="font-medium text-gray-800">{t(`wpImport.media.${m}.label`)}</span>
-                                            <span className="block text-sm text-gray-500">{t(`wpImport.media.${m}.hint`)}</span>
-                                        </span>
-                                    </label>
-                                ))}
-                            </div>
-                        </fieldset>
+                        <RadioGroup
+                            label={t("wpImport.media.legend")}
+                            help={fill(t("wpImport.media.help"), { url: <span className="font-medium">URL</span> })}
+                            name="media-mode"
+                            value={media}
+                            onChange={(v) => setMedia(v as typeof media)}
+                        >
+                            {MEDIA_MODES.map((m) => (
+                                <Radio key={m} value={m} label={t(`wpImport.media.${m}.label`)} description={t(`wpImport.media.${m}.hint`)} />
+                            ))}
+                        </RadioGroup>
 
                         {media === "download" && (
                             <Toggle checked={allowHttp} onChange={setAllowHttp}
@@ -443,18 +428,16 @@ export default function ImportPage() {
                     </div>
 
                     <div className="flex items-center gap-3">
-                        <button
+                        <Button
+                            size="md"
+                            icon="fa-download"
                             onClick={runImport}
-                            disabled={phase === "importing"}
-                            className="px-6 py-3 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-semibold shadow-lg shadow-blue-500/30 hover:opacity-95 disabled:opacity-60 flex items-center gap-2"
+                            pending={phase === "importing"}
+                            pendingLabel={t("wpImport.importing")}
                         >
-                            {phase === "importing" ? (
-                                <><div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div> {t("wpImport.importing")}</>
-                            ) : (
-                                <><i className="fa-solid fa-download"></i> {t("wpImport.start")}</>
-                            )}
-                        </button>
-                        <button onClick={reset} className="px-4 py-3 rounded-xl text-gray-500 hover:bg-gray-100 font-medium">{t("wpImport.cancel")}</button>
+                            {t("wpImport.start")}
+                        </Button>
+                        <Button variant="ghost" size="md" onClick={reset}>{t("wpImport.cancel")}</Button>
                     </div>
                 </div>
             )}
@@ -557,7 +540,7 @@ export default function ImportPage() {
                         <a href="/admin/posts" className="px-6 py-3 rounded-xl bg-gray-900 text-white font-semibold hover:bg-gray-800 flex items-center gap-2">
                             <i className="fa-solid fa-arrow-right"></i> {t("wpImport.viewPosts")}
                         </a>
-                        <button onClick={reset} className="px-4 py-3 rounded-xl text-gray-500 hover:bg-gray-100 font-medium">{t("wpImport.another")}</button>
+                        <Button variant="ghost" size="md" onClick={reset}>{t("wpImport.another")}</Button>
                     </div>
                 </div>
             )}
@@ -578,21 +561,5 @@ function Stat({ label, value, sub, icon, muted }: { label: string; value: number
 }
 
 function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
-    return (
-        <label className="flex items-start gap-3 cursor-pointer">
-            <button
-                type="button"
-                role="switch"
-                aria-checked={checked}
-                onClick={() => onChange(!checked)}
-                className={`mt-0.5 relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${checked ? "bg-blue-600" : "bg-gray-300"}`}
-            >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${checked ? "translate-x-6" : "translate-x-1"}`} />
-            </button>
-            <div>
-                <div className="font-medium text-gray-800">{label}</div>
-                <div className="text-sm text-gray-500">{hint}</div>
-            </div>
-        </label>
-    );
+    return <Switch checked={checked} onChange={onChange} label={label} help={hint} labelPosition="end" />;
 }

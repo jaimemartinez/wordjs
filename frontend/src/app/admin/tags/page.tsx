@@ -22,7 +22,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural, registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState, Button, DataTable, Pagination } from "@/components/ui";
+import { PageHeader, Card, EmptyState, Button, DataTable, IconButton, Input, Pagination, Textarea } from "@/components/ui";
 import {
     TagDraft,
     TagDraftError,
@@ -174,9 +174,6 @@ registerTranslations({
 const PER_PAGE = 20;
 /** Espera antes de buscar, para no lanzar una petición por tecla. */
 const SEARCH_DEBOUNCE_MS = 300;
-
-const inputClass =
-    "w-full px-4 py-3.5 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium text-sm";
 
 export default function TagsPage() {
     const { user } = useAuth();
@@ -339,30 +336,21 @@ export default function TagsPage() {
                     {canManage ? (
                         <form onSubmit={handleCreate} className="space-y-5">
                             <div>
-                                <label htmlFor="tag-name" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">
-                                    {t("tags.field.name")}
-                                </label>
-                                <input
+                                <Input
                                     id="tag-name"
-                                    type="text"
-                                    value={draft.name}
-                                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                                    placeholder={t("tags.field.namePlaceholder")}
-                                    className={inputClass}
+                                    size="md"
+                                    label={t("tags.field.name")}
+                                    type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("tags.field.namePlaceholder")}
                                 />
                             </div>
 
                             <div>
-                                <label htmlFor="tag-slug" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">
-                                    {t("tags.field.slug")}
-                                </label>
-                                <input
+                                <Input
                                     id="tag-slug"
-                                    type="text"
-                                    value={draft.slug}
-                                    onChange={(e) => setDraft({ ...draft, slug: e.target.value })}
-                                    placeholder={t("tags.field.slugPlaceholder")}
-                                    className={`${inputClass} font-mono`}
+                                    size="md"
+                                    label={t("tags.field.slug")}
+                                    type="text" value={draft.slug} onChange={(e) => setDraft({ ...draft, slug: e.target.value })} placeholder={t("tags.field.slugPlaceholder")}
+                                    className="font-mono"
                                 />
                                 {!draft.slug && slugPreview && (
                                     <p className="mt-2 text-[11px] text-gray-400">
@@ -372,16 +360,10 @@ export default function TagsPage() {
                             </div>
 
                             <div>
-                                <label htmlFor="tag-description" className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2">
-                                    {t("tags.field.description")}
-                                </label>
-                                <textarea
+                                <Textarea
                                     id="tag-description"
-                                    value={draft.description}
-                                    onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                                    placeholder={t("tags.field.descriptionPlaceholder")}
-                                    rows={3}
-                                    className={`${inputClass} resize-y`}
+                                    label={t("tags.field.description")}
+                                    value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder={t("tags.field.descriptionPlaceholder")} rows={3}
                                 />
                             </div>
 
@@ -399,28 +381,16 @@ export default function TagsPage() {
 
                 {/* Lista */}
                 <div className="lg:col-span-2 min-w-0 space-y-6">
-                    <div className="relative">
-                        <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
-                        <input
+                    <Input
+                            size="md"
                             type="search"
+                            icon="fa-magnifying-glass"
                             value={searchInput}
                             onChange={(e) => setSearchInput(e.target.value)}
                             placeholder={t("tags.search")}
                             aria-label={t("tags.search")}
-                            className={`${inputClass} pl-11`}
+                            trailing={searchInput ? <IconButton size="sm" icon="fa-xmark" label={t("tags.searchClear")} onClick={() => setSearchInput("")} /> : undefined}
                         />
-                        {searchInput && (
-                            <button
-                                type="button"
-                                onClick={() => setSearchInput("")}
-                                title={t("tags.searchClear")}
-                                aria-label={t("tags.searchClear")}
-                                className="absolute right-1 top-1/2 -translate-y-1/2 w-11 h-11 rounded-lg text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-all"
-                            >
-                                <i className="fa-solid fa-xmark text-xs"></i>
-                            </button>
-                        )}
-                    </div>
 
                     <Card variant="default" padding="none">
                         {loading ? (
@@ -494,39 +464,27 @@ export default function TagsPage() {
                                             </h3>
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                                 <div>
-                                                    <label htmlFor={`tag-edit-name-${tag.id}`} className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
-                                                        {t("tags.field.name")}
-                                                    </label>
-                                                    <input
+                                                    <Input
                                                         id={`tag-edit-name-${tag.id}`}
-                                                        type="text"
-                                                        value={editDraft.name}
-                                                        onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
-                                                        className={`${inputClass} bg-white`}
+                                                        size="md"
+                                                        label={t("tags.field.name")}
+                                                        type="text" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label htmlFor={`tag-edit-slug-${tag.id}`} className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
-                                                        {t("tags.field.slug")}
-                                                    </label>
-                                                    <input
+                                                    <Input
                                                         id={`tag-edit-slug-${tag.id}`}
-                                                        type="text"
-                                                        value={editDraft.slug}
-                                                        onChange={(e) => setEditDraft({ ...editDraft, slug: e.target.value })}
-                                                        className={`${inputClass} bg-white font-mono`}
+                                                        size="md"
+                                                        label={t("tags.field.slug")}
+                                                        type="text" value={editDraft.slug} onChange={(e) => setEditDraft({ ...editDraft, slug: e.target.value })}
+                                                        className="font-mono"
                                                     />
                                                 </div>
                                                 <div className="md:col-span-2">
-                                                    <label htmlFor={`tag-edit-description-${tag.id}`} className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">
-                                                        {t("tags.field.description")}
-                                                    </label>
-                                                    <textarea
+                                                    <Textarea
                                                         id={`tag-edit-description-${tag.id}`}
-                                                        value={editDraft.description}
-                                                        onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })}
-                                                        rows={2}
-                                                        className={`${inputClass} bg-white resize-y`}
+                                                        label={t("tags.field.description")}
+                                                        value={editDraft.description} onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })} rows={2}
                                                     />
                                                 </div>
                                             </div>

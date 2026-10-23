@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { PageHeader } from '@/components/ui';
+import { HiddenFileInput, Input, PageHeader, UnstyledButton } from '@/components/ui';
 import { useI18n } from "@/contexts/I18nContext";
 
 // --- FontFamilyCard Component ---
@@ -109,7 +109,8 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                                 {isProtected ? (
                                     <i className={`fa-solid fa-lock text-[11px] ml-1 ${isActive ? 'text-blue-200' : 'text-gray-300'}`}></i>
                                 ) : (
-                                    <button
+                                    <UnstyledButton
+                                        aria-label={t('fonts.deleteVariant')}
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             onDelete(font.filename);
@@ -123,8 +124,8 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                                         `}
                                         title={t('fonts.deleteVariant')}
                                     >
-                                        <i className="fa-solid fa-xmark text-[11px]"></i>
-                                    </button>
+                                        <i className="fa-solid fa-xmark text-[11px]" aria-hidden="true"></i>
+                                    </UnstyledButton>
                                 )}
                             </div>
                         );
@@ -265,17 +266,14 @@ export default function FontsPage() {
                     title={t('fonts.title')}
                     subtitle={t('fonts.subtitle')}
                     actions={
-                        <div className="relative w-full md:w-72">
-                            <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
-                            <input
-                                type="text"
-                                placeholder={t('fonts.searchPlaceholder')}
-                                aria-label={t('fonts.searchPlaceholder')}
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full pl-12 pr-4 py-4 bg-white border-2 border-gray-100 rounded-2xl focus:outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-500 transition-all font-medium"
-                            />
-                        </div>
+                        <Input
+                            containerClassName="md:w-72"
+                            icon="fa-magnifying-glass"
+                            placeholder={t('fonts.searchPlaceholder')}
+                            aria-label={t('fonts.searchPlaceholder')}
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                        />
                     }
                 />
 
@@ -287,7 +285,7 @@ export default function FontsPage() {
                         : 'border-gray-200 hover:border-gray-300 hover:bg-white shadow-sm'
                         }`}
                 >
-                    <input {...getInputProps()} />
+                    <HiddenFileInput {...getInputProps()} />
                     <div className="w-16 h-16 shrink-0 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
                         <i className="fa-solid fa-cloud-arrow-up text-2xl"></i>
                     </div>

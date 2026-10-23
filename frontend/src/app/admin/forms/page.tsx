@@ -12,7 +12,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState, DataTable, Pagination } from "@/components/ui";
+import { PageHeader, Card, EmptyState, DataTable, Pagination, UnstyledButton } from "@/components/ui";
 
 // The core dictionary (lib/i18n.ts) has no forms.* keys; register them through the same public
 // runtime API plugins use, so this page can call t() exactly like its sibling admin pages.
@@ -206,26 +206,28 @@ export default function FormsPage() {
 
             {/* Form filter chips (from /forms/names, with counts) */}
             <div className="flex flex-wrap gap-2 mb-8">
-                <button
+                <UnstyledButton
                     type="button"
+                    aria-pressed={filter === null}
                     onClick={() => selectFilter(null)}
                     className={`text-xs font-bold px-4 py-2.5 rounded-xl border-2 transition-all ${filter === null ? "bg-blue-500 border-blue-500 text-white shadow-sm" : "bg-white border-gray-100 text-gray-500 hover:border-blue-200"}`}
                 >
                     {t("forms.filterAll")}
                     <span className={`ml-2 text-[11px] font-black px-1.5 py-0.5 rounded-md ${filter === null ? "bg-white/20" : "bg-gray-100 text-gray-400"}`}>{totalAll}</span>
-                </button>
+                </UnstyledButton>
                 {names.map((n) => {
                     const on = filter === n.formName;
                     return (
-                        <button
+                        <UnstyledButton
                             key={n.formName}
                             type="button"
+                            aria-pressed={on}
                             onClick={() => selectFilter(n.formName)}
                             className={`text-xs font-bold px-4 py-2.5 rounded-xl border-2 transition-all ${on ? "bg-blue-500 border-blue-500 text-white shadow-sm" : "bg-white border-gray-100 text-gray-500 hover:border-blue-200"}`}
                         >
                             {n.formName}
                             <span className={`ml-2 text-[11px] font-black px-1.5 py-0.5 rounded-md ${on ? "bg-white/20" : "bg-gray-100 text-gray-400"}`}>{n.count}</span>
-                        </button>
+                        </UnstyledButton>
                     );
                 })}
             </div>

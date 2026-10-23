@@ -5,7 +5,7 @@ import { tokensApi, ApiToken } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge, DataTable } from "@/components/ui";
+import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge, DataTable, UnstyledButton } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
 import ApiAccessCard from "@/components/ApiAccessCard";
 import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
@@ -160,7 +160,7 @@ export default function TokensPage() {
                                                 </span>
                                                 <div className="flex rounded-lg overflow-hidden border border-gray-200 text-[11px] font-black uppercase tracking-wider">
                                                     {(["none", "read", "write"] as const).map((opt) => (
-                                                        <button
+                                                        <UnstyledButton
                                                             type="button"
                                                             key={opt}
                                                             onClick={() => setResScope(r.slug, opt)}
@@ -172,7 +172,7 @@ export default function TokensPage() {
                                                                 : "bg-white text-gray-400 hover:bg-gray-50"}`}
                                                         >
                                                             {opt === "none" ? "—" : opt === "read" ? t("tokens.optRead") : t("tokens.optWrite")}
-                                                        </button>
+                                                        </UnstyledButton>
                                                     ))}
                                                 </div>
                                             </div>

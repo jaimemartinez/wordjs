@@ -6,7 +6,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { formatServerTimestamp } from "@/lib/serverTimestamp";
-import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/components/ui";
+import { PageHeader, Button, Card, EmptyState, IconButton, Input, StatusBadge, UnstyledButton } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
 
 const FALLBACK_EVENTS = ["post.created", "post.published", "post.updated", "post.deleted", "comment.created", "comment.deleted"];
@@ -242,7 +242,7 @@ export default function WebhooksPage() {
                                                 {t(`webhooks.group.${g.entity}`)}
                                             </span>
                                             {g.events.length > 1 && (
-                                                <button
+                                                <UnstyledButton
                                                     type="button"
                                                     onClick={() => toggleFamily(g)}
                                                     aria-pressed={familyOn}
@@ -251,7 +251,7 @@ export default function WebhooksPage() {
                                                     className={`text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-lg transition-all ${familyOn ? "bg-blue-500 text-white" : "bg-gray-50 text-gray-400 hover:text-blue-600"}`}
                                                 >
                                                     {t("webhooks.allInGroup")}
-                                                </button>
+                                                </UnstyledButton>
                                             )}
                                         </div>
                                         <div className="flex flex-wrap gap-2">
@@ -260,7 +260,7 @@ export default function WebhooksPage() {
                                                 const covered = familyOn && !isOptIn;
                                                 const on = covered || selected.has(ev);
                                                 return (
-                                                    <button
+                                                    <UnstyledButton
                                                         key={ev}
                                                         type="button"
                                                         onClick={() => { if (!covered) toggleEvent(ev); }}
@@ -273,7 +273,7 @@ export default function WebhooksPage() {
                                                         <i className={`fa-solid ${on ? "fa-check" : "fa-plus"} mr-1.5 text-[11px]`}></i>
                                                         {ev.slice(g.entity.length + 1) || ev}
                                                         {isOptIn && <span className={`ml-1.5 text-[11px] font-black uppercase tracking-wider ${on ? "text-blue-100" : "text-amber-500"}`}>{t("webhooks.optIn")}</span>}
-                                                    </button>
+                                                    </UnstyledButton>
                                                 );
                                             })}
                                         </div>
@@ -320,22 +320,13 @@ export default function WebhooksPage() {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2 shrink-0">
-                                            <button onClick={() => sendTest(w)} disabled={!w.active || pinging === w.id} title={w.active ? t("webhooks.sendTest") : t("webhooks.testPaused")} aria-label={t("webhooks.sendTest")} className="h-10 shrink-0 px-3 rounded-xl bg-gray-50 text-gray-500 hover:bg-blue-600 hover:text-white disabled:opacity-40 disabled:hover:bg-gray-50 disabled:hover:text-gray-500 flex items-center gap-2 text-xs font-bold transition-all">
-                                                <i className={`fa-solid ${pinging === w.id ? "fa-spinner fa-spin" : "fa-paper-plane"} text-xs`}></i>
+                                            <Button variant="secondary" size="sm" icon="fa-paper-plane" pending={pinging === w.id} disabled={!w.active} title={w.active ? t("webhooks.sendTest") : t("webhooks.testPaused")} aria-label={t("webhooks.sendTest")} onClick={() => sendTest(w)}>
                                                 <span className="hidden sm:inline">{t("webhooks.sendTest")}</span>
-                                            </button>
-                                            <button onClick={() => openDeliveries(w)} title={t("webhooks.deliveries")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all">
-                                                <i className={`fa-solid ${expandedId === w.id ? "fa-chevron-up" : "fa-list"} text-xs`}></i>
-                                            </button>
-                                            <button onClick={() => toggleActive(w)} title={w.active ? t("webhooks.pause") : t("webhooks.resume")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all">
-                                                <i className={`fa-solid ${w.active ? "fa-pause" : "fa-play"} text-xs`}></i>
-                                            </button>
-                                            <button onClick={() => rotate(w)} title={t("webhooks.rotateTitle")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-amber-500 hover:text-white flex items-center justify-center transition-all">
-                                                <i className="fa-solid fa-rotate text-xs"></i>
-                                            </button>
-                                            <button onClick={() => remove(w)} title={t("common.delete")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all">
-                                                <i className="fa-solid fa-trash text-xs"></i>
-                                            </button>
+                                            </Button>
+                                            <IconButton variant="secondary" icon={expandedId === w.id ? "fa-chevron-up" : "fa-list"} label={t("webhooks.deliveries")} aria-expanded={expandedId === w.id} onClick={() => openDeliveries(w)} />
+                                            <IconButton variant="secondary" icon={w.active ? "fa-pause" : "fa-play"} label={w.active ? t("webhooks.pause") : t("webhooks.resume")} onClick={() => toggleActive(w)} />
+                                            <IconButton variant="secondary" icon="fa-rotate" label={t("webhooks.rotateTitle")} onClick={() => rotate(w)} />
+                                            <IconButton variant="danger" icon="fa-trash" label={t("common.delete")} onClick={() => remove(w)} />
                                         </div>
                                     </div>
                                 </div>
@@ -362,9 +353,7 @@ export default function WebhooksPage() {
                                                         <div className="flex items-center gap-3">
                                                             <span className="text-[11px] text-gray-400">{fmtDate(d.createdAt)}</span>
                                                             {(d.status === "success" || d.status === "dead") && (
-                                                                <button onClick={() => redeliver(d, w)} title={t("webhooks.redeliver")} className="text-xs font-bold text-blue-600 hover:text-blue-800">
-                                                                    <i className="fa-solid fa-paper-plane mr-1"></i>{t("webhooks.redeliver")}
-                                                                </button>
+                                                                <Button variant="link" icon="fa-paper-plane" onClick={() => redeliver(d, w)}>{t("webhooks.redeliver")}</Button>
                                                             )}
                                                         </div>
                                                     </div>

@@ -37,6 +37,7 @@ export { IconButton } from "./IconButton";
 export { ButtonLink } from "./ButtonLink";
 export { UnstyledButton } from "./UnstyledButton";
 export { FileButton } from "./FileButton";
+export { HiddenFileInput } from "./HiddenFileInput";
 export { SegmentedControl } from "./SegmentedControl";
 export { Tabs } from "./Tabs";
 
