@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-10-23
+
 ### Added
 
 - **conference-manager 2.35.0: registering without an e-mail.** While a conference asks for «Autorización de
