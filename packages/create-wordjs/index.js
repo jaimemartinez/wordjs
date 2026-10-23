@@ -64,7 +64,7 @@ Options:
   --zip <path-or-url>   Use a local release ZIP (or a direct https:// ZIP URL) instead of asking GitHub.
   --sha256 <hex>        Require the ZIP to have this SHA-256 (pin a checksum for --zip; also checked
                         on top of the release's own .sha256 asset).
-  --version <tag>       Install/upgrade to a specific release tag (e.g. v2.1.0) instead of the latest.
+  --version <tag>       Install/upgrade to a specific release tag (e.g. vX.Y.Z) instead of the latest.
   --http                Serve plain HTTP instead of self-signed HTTPS (sets WORDJS_HTTP=1). (create)
   --no-start            Scaffold + install dependencies only; don't start the server.
   --yes, -y             Skip the confirmation prompt (required when upgrading non-interactively).
@@ -95,7 +95,7 @@ Options:
 
 Examples:
   npx create-wordjs@latest my-site
-  npx create-wordjs@latest my-site --version v2.1.0
+  npx create-wordjs@latest my-site --version vX.Y.Z
   npx create-wordjs@latest upgrade                     # from inside your site directory
   npx create-wordjs@latest upgrade ./my-site --yes
   npx create-wordjs@latest /srv/wordjs --systemd --port 443
@@ -148,7 +148,7 @@ function parseArgs(argv) {
             if (!hex) fail(`--sha256 must be a 64-character hex SHA-256, got "${v}".`);
             opts.sha256 = hex;
         }
-        else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. v2.1.0).'); }
+        else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. vX.Y.Z).'); }
         else if (a === '--http') opts.http = true;
         else if (a === '--no-start') opts.start = false;
         else if (a === '--yes' || a === '-y') opts.yes = true;

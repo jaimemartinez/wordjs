@@ -150,6 +150,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `node_modules` is granted on its real folder. Measured on a OneDrive checkout: an update went from over
   two minutes to 3 s, and an uninstall from a failed 120 s timeout to 11 s with every grant removed.
   Linux and macOS are unchanged.
+- **`create-wordjs --help` no longer suggests installing an old release.** Its examples of a release tag said
+  `v2.1.0` (the README, `v2.9.0`); they now read `vX.Y.Z`, so they cannot go stale.
 - **faq 1.0.5: the FAQ keeps running without the *Add admin menu* permission.** With `admin_menu:register` off
   (on the permission screen, or in the consent dialog of an update), the plugin crashed and restarted in a loop,
   taking its pages and its block down with it. It now runs without its sidebar entry and logs why.
