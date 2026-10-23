@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import DialogLayer from "./DialogLayer";
 import { useDialogFocus } from "./useDialogFocus";
 import { getStoredLanguage, t } from "@/lib/i18n";
@@ -8,12 +8,15 @@ import { getStoredLanguage, t } from "@/lib/i18n";
 interface ConfirmationModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onConfirm: () => void;
+    /** Called with the text box's value when the dialog has one (a prompt). */
+    onConfirm: (value?: string) => void;
     title: string;
     message: string;
     confirmText?: string;
     cancelText?: string;
     isDanger?: boolean;
+    /** A text box under the message: the dialog is then a prompt, and Enter confirms. */
+    input?: { defaultValue: string; placeholder?: string; inputType?: "text" | "email" | "url" | "number" };
 }
 
 export default function ConfirmationModal({
@@ -24,15 +27,26 @@ export default function ConfirmationModal({
     message,
     confirmText,
     cancelText,
-    isDanger = false
+    isDanger = false,
+    input,
 }: ConfirmationModalProps) {
     const titleId = useId();
     const cancelRef = useRef<HTMLButtonElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
+    const [value, setValue] = useState(input?.defaultValue ?? "");
+    // A new prompt starts from its own default (the dialog stays mounted between requests).
+    const [shownFor, setShownFor] = useState(input);
+    if (shownFor !== input) { setShownFor(input); setValue(input?.defaultValue ?? ""); }
 
-    // Escape closes, focus starts on Cancel (the non-destructive default), Tab stays inside, and
-    // closing hands focus back to whatever opened it (it used to land on <body>).
-    useDialogFocus(panelRef, { open: isOpen, onClose, initialFocus: cancelRef });
+    // Escape closes, focus starts on Cancel (the non-destructive default) or in a prompt's text box,
+    // Tab stays inside, and closing hands focus back to whatever opened it (it used to land on <body>).
+    useDialogFocus(panelRef, { open: isOpen, onClose, initialFocus: input ? inputRef : cancelRef });
+
+    const confirmNow = () => {
+        onConfirm(input ? value : undefined);
+        onClose();
+    };
 
     // Lock body scroll while open; restore the prior value on close/unmount.
     useEffect(() => {
@@ -76,9 +90,22 @@ export default function ConfirmationModal({
                     </div>
                     {/* pre-line: callers pass multi-paragraph disclosures (\n\n) — collapsing them into one
                         run-on paragraph buries safety-critical lines (e.g. the port-25 "CAREFUL" warning). */}
-                    <p className="text-gray-600 mb-6 leading-relaxed whitespace-pre-line break-words">
+                    <p className={`text-gray-600 ${input ? "mb-3" : "mb-6"} leading-relaxed whitespace-pre-line break-words`}>
                         {message}
                     </p>
+                    {input && (
+                        <input
+                            ref={inputRef}
+                            type={input.inputType ?? "text"}
+                            value={value}
+                            placeholder={input.placeholder}
+                            aria-labelledby={titleId}
+                            onChange={(e) => setValue(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmNow(); } }}
+                            className="w-full mb-6 px-3 py-2.5 rounded-lg border border-gray-300 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            data-testid="dialog-prompt-input"
+                        />
+                    )}
                     <div className="flex justify-end gap-3">
                         <button
                             ref={cancelRef}
@@ -88,10 +115,7 @@ export default function ConfirmationModal({
                             {cancelText ?? t("dialog.cancel", lang)}
                         </button>
                         <button
-                            onClick={() => {
-                                onConfirm();
-                                onClose();
-                            }}
+                            onClick={confirmNow}
                             className={`px-5 py-2.5 rounded-lg text-white font-medium shadow-sm transition-colors ${isDanger
                                     ? "bg-red-600 hover:bg-red-700"
                                     : "bg-blue-600 hover:bg-blue-700"

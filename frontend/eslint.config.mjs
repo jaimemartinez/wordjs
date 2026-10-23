@@ -48,6 +48,26 @@ const eslintConfig = defineConfig([
       "prefer-const": "warn",
     },
   },
+  // The browser's own alert(), confirm() and prompt() are never used: they block the page, cannot be
+  // styled or translated, and some embedders (and the admin's own iframes) suppress them. Use the host's
+  // useModal() (alert/confirm/prompt) or a toast. A `confirm` destructured from useModal() is a local
+  // binding, so no-restricted-globals leaves it alone; only the browser global is refused.
+  // tests/no-native-dialogs.test.ts scans the whole repo for the same thing.
+  {
+    rules: {
+      "no-alert": "error",
+      "no-restricted-globals": ["error",
+        { name: "alert", message: "Use useModal().alert or a toast, not the browser's alert()." },
+        { name: "confirm", message: "Use useModal().confirm, not the browser's confirm()." },
+        { name: "prompt", message: "Use useModal().prompt, not the browser's prompt()." },
+      ],
+      "no-restricted-properties": ["error",
+        ...["window", "globalThis", "self", "top", "parent"].flatMap((object) => ["alert", "confirm", "prompt"].map((property) => ({
+          object, property, message: "The browser's native dialogs are not used: use useModal() or a toast.",
+        }))),
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;
