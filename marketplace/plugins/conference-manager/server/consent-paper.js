@@ -3,7 +3,7 @@
  * one-time code (server/consent.js), never instead of it.
  *
  * FLOW (a locality's coordinator in the portal, or the admin for any locality):
- *   1. «Descargar plantilla»: a SHEET is made for the locality — its people still without an authorization, frozen
+ *   1. «Abrir hoja para imprimir o guardar como PDF»: a SHEET is made for the locality — its people still without an authorization, frozen
  *      in that order, plus blank rows for walk-ins, under the policy version in force (an append-only snapshot,
  *      consent_policies). The printable page (server/consent-paper-sheet.js) can be downloaded again at any time:
  *      it is always the same sheet, with the same id on every page.

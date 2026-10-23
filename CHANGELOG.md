@@ -12,7 +12,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Paper consent («Consentimiento en papel»).** People who sign by hand can authorize the processing of their
     data on a printed sheet. This sits alongside the e-mailed code; it does not replace it. Coordinators work in
     the portal, for their own locality only. Administrators work in **Autorizaciones**, for any locality.
-    - **Descargar plantilla** makes a sheet for the locality, as a print-ready page:
+    - **Abrir hoja para imprimir o guardar como PDF** makes a sheet for the locality, as a print-ready page that
+      opens in the browser's print window, where it can be printed or saved as PDF:
       - It is printed in Spanish, English or Portuguese, by default the consent e-mail language, on Letter
         («carta», the default) or A4, landscape.
       - **Every page** starts with a compact header: the controller and contact, the purpose, the rights, the

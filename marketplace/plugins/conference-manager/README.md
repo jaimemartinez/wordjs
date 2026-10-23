@@ -54,7 +54,7 @@ correo», and the link can be shared by hand (it is useless without the code sen
 For people who sign by hand. It sits alongside the e-mailed code and does not replace it. Coordinators use it in
 the portal, for their own locality. Administrators use it in **Conference › Autorizaciones**, for any locality.
 
-1. **Descargar plantilla** makes a sheet for the locality, on Letter («carta», the default) or A4, landscape. Every
+1. **Abrir hoja para imprimir o guardar como PDF** makes a sheet for the locality, on Letter («carta», the default) or A4, landscape. Every
    page has:
    - a compact header: the controller, the contact, the purpose, the rights, the policy in force (version, address
      and SHA-256), and ONE authorization, the three configured texts in a single block, which says that health and

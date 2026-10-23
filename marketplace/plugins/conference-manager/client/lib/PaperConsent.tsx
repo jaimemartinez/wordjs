@@ -92,7 +92,8 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         setBusy("create"); setErr(null);
         try {
             const r = await request("post", { action: "create", blank: n, lang: sheetLang || data?.lang, paper });
-            saveAs(fileName(r.sheet.code), r.html);
+            // Straight to the browser's print window, where «Guardar como PDF» is one of the printers.
+            printHtml(r.html);
             addToast(t("paper.downloaded", { code: r.sheet.code }), "success");
             setView({ kind: "printed", code: r.sheet.code, html: r.html });
             load();
@@ -226,7 +227,7 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                                 <input id="cp-blank" type="number" min={0} max={data.limits.max_blank} inputMode="numeric" className={input} placeholder={String(data.limits.default_blank)} value={blank} onChange={(e) => { setBlank(e.target.value); setErr(null); }} />
                             </div>
                             <button type="button" className={btnDark} disabled={busy === "create"} onClick={download} data-paper-download="">
-                                <i className="fa-solid fa-download" aria-hidden="true"></i>{busy === "create" ? "…" : t("paper.download")}
+                                <i className="fa-solid fa-print" aria-hidden="true"></i>{busy === "create" ? "…" : t("paper.download")}
                             </button>
                         </div>
                     )}
