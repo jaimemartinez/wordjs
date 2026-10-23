@@ -1141,6 +1141,8 @@ function createConsent(base) {
     return {
         migrate, ensureReady, install, isEnabled, settingsOf, statesOf, isGranted, hasEmail, healthAllowed, healthWritten, healthRefused, healthEntered, issueLink, shareLink, purgeDue, eventsOf,
         VERBAL_STATEMENT,
+        // 2.36.3: a paper sheet's PDF, for the file ticket the badge route answers.
+        paperPdf: (cid, sheetId) => paper.pdfFile(cid, sheetId),
         MSG, LIMITS,
     };
 }

@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.2',
+    version: '2.36.3',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -5676,9 +5676,12 @@ exports.init = async function (wordjs) {
         // The site's mail plugin (email:admin). Without it, or without the grant, the link is still created and the
         // coordinator sees «correo no enviado».
         mail: (msg) => wordjs.mail(msg),
+        // 2.36.3: a ticket for the portal's file route, which answers the paper sheet's PDF (badges' public route).
+        fileTicket: (cid, scope) => badges.fileTicket(cid, scope),
         // The site's language (WPLANG, settings:read), the default «Idioma de los correos» (2.33.4).
         siteLang: async () => { try { return wordjs.options && wordjs.options.get ? await wordjs.options.get('WPLANG', '') : ''; } catch (e) { return ''; } },
     });
+    badges.fileProvider('consent_sheet', (t) => consent.paperPdf(t.conference_id, t.scope.sheet_id));
     // The health purge runs at boot and then every six hours (and when the settings are opened).
     consent.purgeDue({ force: true }).catch((e) => console.warn('[conference-manager] health purge:', e && e.message));
     if (typeof setInterval === 'function') {

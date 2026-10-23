@@ -54,7 +54,9 @@ correo», and the link can be shared by hand (it is useless without the code sen
 For people who sign by hand. It sits alongside the e-mailed code and does not replace it. Coordinators use it in
 the portal, for their own locality. Administrators use it in **Conference › Autorizaciones**, for any locality.
 
-1. **Abrir hoja para imprimir o guardar como PDF** makes a sheet for the locality, on Letter («carta», the default) or A4, landscape. Every
+1. **Crear la hoja (PDF)** makes a sheet for the locality, on Letter («carta», the default) or A4, landscape. Since 2.36.3 the sheet is a
+   real PDF: **Descargar PDF** saves it (computer, Android, iPhone), and **Abrir para imprimir** opens it in the browser's or the phone's own
+   viewer, which prints and shares it. Every
    page has:
    - a compact header: the controller, the contact, the purpose, the rights, the policy in force (version, address
      and SHA-256), and ONE authorization, the three configured texts in a single block, which says that health and
@@ -72,8 +74,10 @@ the portal, for their own locality. Administrators use it in **Conference › Au
    the sheet, the row, the policy version, the files' hashes, and who uploaded and who ticked. **Deshacer** undoes a wrong tick with a reason. It is a new row; nothing
    is edited.
 
-   While ticking, the sheet is on screen too (2.36.2): its rows in the printed order, blank rows included, with the
-   same opt-out columns, or the uploaded photo. On a phone, switch between «Hoja» and «Lista».
+   While ticking, the uploaded page and the sheet are on the same screen (2.36.3). The page is in a viewer
+   (zoom and drag; a scanned PDF page by page; nothing is downloaded). Next to it are the sheet's rows in the printed
+   order, blank rows included, with the same opt-out columns, ticked right there. On a phone the page stays on
+   top, its height set with the bar under it, and the rows scroll below.
 4. **Eliminar** (2.36.2) deletes a sheet that was never used, for example one printed in the wrong language. It is
    offered only while no signed page has been uploaded. After that the sheet is evidence and stays. The consent log
    records both the creation and the deletion.
@@ -128,8 +132,9 @@ must still be valid, and a field you marked as required stays required.
 ## Printable stickers (2.36.0)
 
 *Escarapelas › Diseño › Sticker para imprimir* designs the label a sticker printer prints for the physical badge.
-Print it from *Personas* (one person, the search shown, a locality or everyone). The PDF has one label per page,
-each exactly the label's size.
+Print it from *Personas › Imprimir stickers* (2.36.3). Choose everyone, one locality, or the people you tick
+(search, then tick; one person is one tick). The dialog shows how many will print before you print. Each person's
+own button prints just theirs. The PDF has one label per page, each exactly the label's size.
 
 In the print window:
 - choose the sticker printer;

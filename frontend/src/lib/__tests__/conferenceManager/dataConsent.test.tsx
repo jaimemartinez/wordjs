@@ -369,16 +369,45 @@ describe('paper sheets (2.36.2): delete an unused one, and the sheet next to the
         // Every box is a fixed square (the core sweep: shrink-0).
         expect(src('client/lib/PaperConsent.tsx')).toContain('inline-flex w-5 h-5 shrink-0');
     });
-    it('a phone toggles between the sheet and the list; a wide screen shows both; the photo is a second view of the sheet', () => {
+    it('one screen, no toggle (2.36.3): the uploaded page and the rows of the sheet side by side, or the page on top of the rows on a phone', () => {
         const s = src('client/lib/PaperConsent.tsx');
         expect(s).toContain('<Dialog wide');
-        expect(s).toContain('data-paper-pane-toggle={k}');
+        expect(s).not.toContain('data-paper-pane-toggle');
+        expect(s).not.toContain('data-paper-photo-toggle');
+        expect(s).not.toContain('hidden lg:block');
         expect(s).toContain('lg:grid lg:grid-cols-2');
-        expect(s).toContain('hidden lg:block');
-        expect(s).toContain('data-paper-photo-toggle');
+        // The viewer stays in view while the rows scroll; on a phone its height is dragged (20–70 % of the screen).
+        expect(s).toContain('className="sticky top-0 z-10 bg-white pb-1 lg:pb-0" data-paper-viewer-pane=""');
+        expect(s).toContain('<PageViewer t={t} files={check.sheet.files || []} load={loadFile} />');
+        expect(s).toContain('data-paper-viewer-resize=""');
+        expect(s).toContain('Math.min(70, Math.max(20,');
+        // Who signed on a blank row is ticked under the sheet; a minor's representative under their row.
+        expect(s).toContain('renderDetail={detailOf}');
+        expect(s).toContain('data-paper-walkins=""');
         expect(src('client/admin/ConsentAdmin.tsx')).toContain('wide ? "max-w-5xl"');
         expect(src('client/portal/ConsentBits.tsx')).toContain('size={wide ? "xl" : "lg"}');
-        for (const k of ['paper.view.sheet', 'paper.view.list']) for (const l of ['es', 'en', 'pt']) expect(consentT(l)(k)).not.toBe(k);
+        for (const k of ['paper.walkins.title', 'paper.viewer.page', 'paper.viewer.zoomIn', 'paper.viewer.resize', 'paper.viewer.pdf.none']) for (const l of ['es', 'en', 'pt']) expect(consentT(l)(k)).not.toBe(k);
+    });
+    it('a file opens in the viewer, never a download: a photo zooms and moves, a PDF shows page by page', () => {
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).toContain('const openFile = (f: any) => setView({ kind: "file", file: f });');
+        expect(s).toContain('<PageViewer t={t} files={[view.file]} load={loadFile} />');
+        const v = src('client/lib/PageViewer.tsx');
+        expect(v).toContain('scanPages(dataUrlBytes(r.data_url))');
+        expect(v).not.toMatch(/window\.open|download\s*=|\.download\b|saveAs/);
+        expect(v).toContain('onPointerMove={move}');
+        expect(v).toContain('el.addEventListener("wheel", onWheel, { passive: false })');
+        expect(v).toContain('onDoubleClick=');
+        expect(v).not.toMatch(/\b(alert|confirm|prompt)\s*\(/);
+    });
+    it('the sheet view carries the detail of a minor under their own row', async () => {
+        const { SheetView } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/PaperConsent');
+        const t = consentT('es');
+        const sheet = { code: 'X', blank: 0, roster: [{ row: 1, inscription_id: 5, name: 'Beto Gil' }] };
+        const rows = [{ id: 5, name: 'Beto Gil', row: 1, on: true, noHealth: false, noImage: false, typedRow: '', err: {} }];
+        const html = renderToStaticMarkup(React.createElement(SheetView, { t, sheet, rows, people: [{ id: 5, name: 'Beto Gil' }], setRow: () => {}, renderDetail: () => React.createElement('span', null, 'REP-FIELDS') }));
+        expect(html).toContain('data-paper-sheet-detail="1"');
+        expect(html.indexOf('REP-FIELDS')).toBeGreaterThan(html.indexOf('data-paper-sheet-row="1"'));
     });
     it('delete: only an unused sheet offers it, confirmed in the host dialog, never a native one', () => {
         const s = src('client/lib/PaperConsent.tsx');
@@ -386,5 +415,66 @@ describe('paper sheets (2.36.2): delete an unused one, and the sheet next to the
         expect(s).toContain('testId="paper-delete"');
         expect(s).toContain('action: "delete", sheet_id: del.sheet.id');
         expect(s).not.toMatch(/\b(alert|confirm|prompt)\s*\(/);
+    });
+});
+
+describe('the signed page shown in place (2.36.3): a scanned PDF\'s pages as images, never a download', () => {
+    const fx = (f: string) => new Uint8Array(fs.readFileSync(path.join(__dirname, 'fixtures', f)));
+    it('a phone «scan to PDF» (JPEG pages): every page, in order, as its own JPEG', async () => {
+        const { scanPages } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/pdfScan');
+        const pages = scanPages(fx('scan-jpeg-2p.pdf'));
+        expect(pages.map((p) => p.kind)).toEqual(['jpeg', 'jpeg']);
+        for (const p of pages as any[]) {
+            expect([p.bytes[0], p.bytes[1], p.bytes[2]]).toEqual([0xff, 0xd8, 0xff]);
+            expect([p.bytes[p.bytes.length - 2], p.bytes[p.bytes.length - 1]]).toEqual([0xff, 0xd9]);
+            expect(p.width).toBe(320);
+        }
+        expect(Buffer.from((pages[0] as any).bytes).equals(Buffer.from((pages[1] as any).bytes))).toBe(false);
+    });
+    it('a scanner\'s lossless page (Flate, RGB or gray, colour space by reference): inflated to its pixels', async () => {
+        const { scanPages, rawPixels } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/pdfScan');
+        for (const [f, colors, width] of [['scan-flate-1p.pdf', 3, 260], ['scan-gray-1p.pdf', 1, 240]] as const) {
+            const [p] = scanPages(fx(f)) as any[];
+            expect(p.kind, f).toBe('raw');
+            expect([p.colors, p.width], f).toEqual([colors, width]);
+            const px = await rawPixels(p);
+            expect(px.length, f).toBe(p.width * p.height * colors);
+            // The sheet's paper is white: the top-left corner is.
+            expect(px[0], f).toBeGreaterThan(240);
+        }
+    });
+    it('not a PDF, or a typed PDF with no picture: nothing to show (the screen says so, no download)', async () => {
+        const { scanPages } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/pdfScan');
+        expect(scanPages(new TextEncoder().encode('hello'))).toEqual([]);
+        expect(scanPages(new TextEncoder().encode('%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n%%EOF'))).toEqual([]);
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).not.toContain('saveAs(r.name');
+    });
+});
+
+describe('the paper sheet as a real PDF (2.36.3): «Descargar PDF» saves a .pdf, «Abrir para imprimir» opens it — no window.print', () => {
+    it('no print-from-a-frame and no .html download any more', () => {
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).not.toMatch(/\.print\(\)/);
+        expect(s).not.toContain('srcdoc');
+        expect(s).not.toContain('text/html');
+        expect(s).toContain('request("get", { sheet_id: s.id, format: "pdf" })');
+        expect(s).toContain('saveFile(r.filename, r.mime, r.b64)');
+        expect(s).toContain('request("get", { sheet_id: s.id, format: "ticket" })');
+        // The new tab opens inside the tap, before the ticket is asked for (a phone allows it only then).
+        expect(s).toMatch(/export async function openSheetPdf[\s\S]*?window\.open\("", "_blank"\)[\s\S]*?await ticket\(\)/);
+    });
+    it('the PDF opens at the core portal file route, the same one the badge and sticker PDFs use', async () => {
+        const { sheetFileUrl } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/PaperConsent');
+        const manifest = JSON.parse(src('manifest.json'));
+        const url = new URL(sheetFileUrl('T'.repeat(24)), 'http://site');
+        expect(url.pathname).toBe(`/portal/${manifest.frontend.portalPage.slug}/file`);
+        expect(fs.existsSync(path.resolve(__dirname, '../../../app/portal/[slug]/file/route.ts'))).toBe(true);
+    });
+    it('the labels say PDF in the three languages', () => {
+        for (const [l, re] of [['es', /PDF/], ['en', /PDF/], ['pt', /PDF/]] as const) {
+            expect(consentT(l)('paper.reprint')).toMatch(re);
+            expect(consentT(l)('paper.download')).toMatch(re);
+        }
     });
 });

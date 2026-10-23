@@ -33,6 +33,7 @@
 
 const crypto = require('crypto');
 const { sheetHtml, sheetText, LANGS, PAPERS } = require('./consent-paper-sheet');
+const { sheetPdf } = require('./consent-paper-pdf');
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const isoUtc = (ms = Date.now()) => new Date(ms).toISOString();
@@ -166,20 +167,34 @@ function createPaper(core) {
         return out;
     }
 
-    /** What the printable page needs for a stored sheet. */
-    async function htmlOf(sheet) {
+    /** What the printable page (HTML or PDF) needs for a stored sheet. */
+    async function sheetData(sheet) {
         const conf = await core.conferenceOf(sheet.conference_id);
         const loc = await db.get(`SELECT name FROM ${T.locations} WHERE id = ?`, [sheet.location_id]);
         const pol = sheet.policy_id ? await db.get(`SELECT body FROM ${T.consentPolicies} WHERE id = ?`, [sheet.policy_id]) : null;
         let body = {};
         try { body = pol ? JSON.parse(pol.body) : {}; } catch { body = {}; }
         const { texts } = await core.textsOf(sheet.conference_id, conf, body);
-        return sheetHtml({
+        return ({
             lang: sheet.lang, paper: sheet.paper, code: sheet.code, created_utc: sheet.created_utc, conference: conf ? conf.name : '', location: loc ? loc.name : '',
             policy: { url: body.policy_url || '', version: sheet.policy_version, sha256: sheet.policy_sha256 },
             responsible: body.responsible || '', contact: body.contact_email || '', texts,
             people: rosterOf(sheet).map(p => ({ row: p.row, name: p.name })), blank: Number(sheet.blank) || 0,
         });
+    }
+    const htmlOf = async (sheet) => sheetHtml(await sheetData(sheet));
+    /**
+     * The sheet as a real PDF (2.36.3): what «Descargar PDF» saves and what «Imprimir» opens — a phone ignores
+     * window.print() from a frame, and the HTML download was an .html file. { mime, filename, b64 }.
+     */
+    async function pdfOf(sheet) {
+        const bytes = sheetPdf(await sheetData(sheet));
+        return { mime: 'application/pdf', filename: `consentimiento-${String(sheet.code).replace(/[^A-Za-z0-9]/g, '')}.pdf`, b64: bytes.toString('base64') };
+    }
+    /** The PDF of a sheet a file ticket names (the portal's file route): null when the sheet is gone. */
+    async function pdfFile(cid, sheetId) {
+        const sheet = await db.get(`SELECT * FROM ${T.consentSheets} WHERE id = ? AND conference_id = ?`, [Number(sheetId) || 0, Number(cid) || 0]);
+        return sheet ? pdfOf(sheet) : null;
     }
 
     async function newCode() {
@@ -373,7 +388,7 @@ function createPaper(core) {
 
     // ── routes ──
     function install(deps) {
-        const { http, allow, positiveInt, sendError, httpError, actorOf, resolvePortalLocation } = deps;
+        const { http, allow, positiveInt, sendError, httpError, actorOf, resolvePortalLocation, fileTicket } = deps;
         const send = (res, e) => {
             if (e && e.status) return res.status(e.status).json({ error: e.message, ...(e.extra || {}), ...(e.extra ? { data: e.extra } : {}) });
             return sendError(res, e);
@@ -435,6 +450,9 @@ function createPaper(core) {
 
             // GET …/paper ?conference_id&location_id (admin) → { location, lang, sheets, people, limits }
             //   ?sheet_id → { code, html } (the same sheet, printed again) · ?file_id → { name, mime, sha256, data_url }
+            //   ?sheet_id&format=pdf → { mime, filename, b64 } (2.36.3: the sheet as a real PDF, to save)
+            //   ?sheet_id&format=ticket → { d } (2.36.3: a ticket for /portal/conference/file, which opens the PDF —
+            //   on a phone in its own viewer, to print or share)
             route('get', async (req, res) => {
                 try {
                     const q = req.query || {};
@@ -449,6 +467,11 @@ function createPaper(core) {
                     if (sheetId) {
                         const s = await sheetScope(req, res, 'view', portal, sheetId);
                         if (!s) return;
+                        if (q.format === 'pdf') return res.json(await pdfOf(s.sheet));
+                        if (q.format === 'ticket') {
+                            if (typeof fileTicket !== 'function') return res.status(503).json({ error: 'No disponible todavía.' });
+                            return res.json({ d: await fileTicket(Number(s.sheet.conference_id), { kind: 'consent_sheet', sheet_id: Number(s.sheet.id), ids: [] }) });
+                        }
                         return res.json({ code: s.sheet.code, html: await htmlOf(s.sheet) });
                     }
                     const scope = portal ? await portalScope(req, res) : await adminScope(req, res, 'view', positiveInt(q.conference_id), positiveInt(q.location_id));
@@ -495,7 +518,7 @@ function createPaper(core) {
         }
     }
 
-    return { migrate, install, sheetsForExport, peopleOf, MSG, LIMITS: { MAX_FILES, MAX_BLANK, DEFAULT_BLANK, MAX_FILE_CHARS } };
+    return { migrate, install, sheetsForExport, peopleOf, pdfFile, MSG, LIMITS: { MAX_FILES, MAX_BLANK, DEFAULT_BLANK, MAX_FILE_CHARS } };
 }
 
 module.exports = { createPaper, MAX_FILE_CHARS, MAX_FILES };

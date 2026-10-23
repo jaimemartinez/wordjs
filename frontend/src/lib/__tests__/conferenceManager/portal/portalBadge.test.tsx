@@ -145,6 +145,20 @@ describe("the badge PDF goes through the core's portal file route", () => {
             expect(src, f).not.toContain("/badge/file");
         }
     });
+    it("the admin's PDF buttons (badge, sheet, stickers) open that same core route (2.36.3)", () => {
+        const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/manifest.json"), "utf8"));
+        const url = new URL(pluginBadges.badgeFileUrl("T".repeat(24)), "http://site");
+        // The route the core serves for every plugin portal, with this plugin's portal slug.
+        expect(url.pathname).toBe(`/portal/${manifest.frontend.portalPage.slug}/file`);
+        expect(fs.existsSync(path.resolve(__dirname, "../../../../app/portal/[slug]/file/route.ts"))).toBe(true);
+        expect(url.searchParams.get("d")).toBe("T".repeat(24));
+        // Every admin PDF button goes through it (no URL of its own).
+        for (const f of ["admin/BadgeActions.tsx", "admin/BadgesPage.tsx"]) {
+            const src = fs.readFileSync(path.resolve(__dirname, `../../../../../../marketplace/plugins/conference-manager/client/${f}`), "utf8");
+            expect(src, f).toContain("openBadgeFileFrom(");
+            expect(src, f).not.toMatch(/\/portal\/conference\/[a-z/]*file/);
+        }
+    });
 });
 
 describe("the participant sheet", () => {
@@ -484,5 +498,64 @@ describe('the printable sticker (2.36.0)', () => {
         for (const k of ['badges.target.sticker', 'badges.sticker.help.print', 'badges.ed.meal', 'badges.bulk.sticker', 'badges.act.sticker', 'badges.sticker.real'])
             for (const lang of ['es', 'en', 'pt'] as const) expect(translations[lang][k], `${lang} ${k}`).toBeTruthy();
         expect(translations.es['badges.sticker.help.print']).toContain('Márgenes: ninguno');
+    });
+});
+
+describe("«Imprimir stickers» (2.36.3): the scope is chosen before printing, and the count shown", () => {
+    const CMDIR = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager");
+    const people = [
+        { id: 1, name: "Ana Pérez", place: "Norte", loc: "10", code: "A1" },
+        { id: 2, name: "Beto Gómez", place: "Norte", loc: "10" },
+        { id: 3, name: "Carla Ríos", place: "Sur", loc: "20" },
+    ];
+    it("everyone, a locality or the people ticked — sent as the server's own scopes where they fit", async () => {
+        const { stickerIdsOf, stickerRequestOf } = await import("../../../../../../marketplace/plugins/conference-manager/client/admin/StickerPrint");
+        expect(stickerIdsOf(people, "all", "", new Set())).toEqual([1, 2, 3]);
+        expect(stickerIdsOf(people, "loc", "10", new Set())).toEqual([1, 2]);
+        expect(stickerIdsOf(people, "loc", "", new Set())).toEqual([]);
+        expect(stickerIdsOf(people, "pick", "", new Set([3, 1]))).toEqual([1, 3]);
+        expect(stickerRequestOf("all", "", [1, 2, 3])).toEqual({ all: true });
+        expect(stickerRequestOf("loc", "10", [1, 2])).toEqual({ location_id: 10 });
+        expect(stickerRequestOf("pick", "", [3])).toEqual({ inscription_id: 3 });
+        expect(stickerRequestOf("pick", "", [1, 3])).toEqual({ inscription_ids: [1, 3] });
+    });
+    it("the dialog shows the count and the label size before printing, and starts on what the list shows", async () => {
+        const { StickerPrint } = await import("../../../../../../marketplace/plugins/conference-manager/client/admin/StickerPrint");
+        const tx = (k: string, f: string) => translations.es[k] || f;
+        const render = (initial: any) => renderToStaticMarkup(React.createElement(StickerPrint, {
+            conferenceId: 1, people, locations: [{ id: 10, name: "Norte" }, { id: 20, name: "Sur" }], tx, addToast: () => {}, size: { w: 62, h: 100 }, initial, onClose: () => {},
+        }));
+        const all = render({ scope: "all" });
+        expect(all).toContain('data-sticker-count="3"');
+        expect(all).toContain("Se imprimirán 3 stickers, uno por página de 62 × 100 mm.");
+        expect(all).toContain("Imprimir 3 stickers");
+        expect(all).toContain('aria-checked="true" class="flex-1 min-h-[40px] px-2 rounded-xl text-[11px] font-black uppercase tracking-widest border-2 border-blue-500 bg-blue-50 text-blue-700" data-sticker-scope="all"');
+        const loc = render({ scope: "loc", loc: "20" });
+        expect(loc).toContain('data-sticker-count="1"');
+        expect(loc).toContain("Imprimir 1 sticker");
+        expect(loc).toContain("Sur (1)");
+        // A search's people come ticked; the rest of the list is there to tick.
+        const pick = render({ scope: "pick", picked: [2] });
+        expect(pick).toContain('data-sticker-count="1"');
+        expect((pick.match(/data-sticker-person=/g) || []).length).toBe(3);
+        expect(pick).toContain('data-sticker-picked="1"');
+        // Nobody chosen: nothing to print.
+        const none = render({ scope: "pick", picked: [] });
+        expect(none).toMatch(/<button type="button" class="[^"]*" disabled="" data-sticker-go=""/);
+    });
+    it("Personas opens it from one button; the styled Select and the plugin's own dialog, never a native one; three languages", () => {
+        const page = fs.readFileSync(path.join(CMDIR, "client/admin/BadgesPage.tsx"), "utf8");
+        expect(page).toContain('data-bulk="sticker" onClick={() => setStickers(true)}');
+        expect(page).toContain("<StickerPrint ");
+        expect(page).toContain("initial={shownIds ? { scope: 'pick', picked: shownIds } : loc ? { scope: 'loc', loc: String(loc) } : { scope: 'all' }}");
+        const dlg = fs.readFileSync(path.join(CMDIR, "client/admin/StickerPrint.tsx"), "utf8");
+        expect(dlg).toContain("<Overlay ");
+        expect(dlg).toContain("<Select ");
+        expect(dlg).not.toMatch(/<select\b/);
+        expect(dlg).not.toMatch(/\b(alert|confirm|prompt)\s*\(/);
+        expect(dlg).not.toMatch(/\brequired\b/);
+        const keys = [...dlg.matchAll(/tx\('(badges\.print\.[a-zA-Z.]+)'|t\('(badges\.print\.[a-zA-Z.]+)'/g)].map((m) => m[1] || m[2]);
+        expect(keys.length).toBeGreaterThan(15);
+        for (const k of new Set(keys)) for (const lang of ["es", "en", "pt"] as const) expect(translations[lang][k], `${lang} ${k}`).toBeTruthy();
     });
 });
