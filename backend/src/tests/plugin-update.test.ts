@@ -12,6 +12,8 @@
  *     before anything moves — so the boot backfill cannot grant an active plugin what its NEW version
  *     declares, while a plugin never activated is still seeded on its first activation;
  *   - the origin gate: no recorded origin → 409, a DIFFERENT source → 409 (the takeover block), same → ok;
+ *   - adopt / reinstall: an unbound plugin takes the official catalog in place, a source change only when
+ *     confirmed; neither replays the grants, and the data is dropped only when the administrator says so;
  *   - a bad new zip rolls back to the previous code + data + grants (nothing half-applied);
  *   - a NEGATIVE CONTROL proving the gate is what stops a foreign source from taking the plugin over;
  *   - boot recovery restores an interrupted update's stashed code and discards a completed one.
@@ -500,5 +502,118 @@ describe('plugin in-place update', () => {
                 return true;
             }
         );
+    });
+    // ── Adopting a plugin with no recorded origin, and reinstalling from another source ──────────────────
+    // The owner's rule: updating never requires uninstalling. What the origin binding protects (grants and
+    // data/ handed to code from elsewhere) is kept by asking again instead of replaying.
+    const OFFICIAL = 'https://github.com/jaimemartinez/wordjs/releases/latest/download';
+    const tableExists = async () => !!(await dbAsync.get(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, [table]));
+
+    it('adopt: an UNBOUND plugin updates in place from the official catalog — data kept, grants asked again, origin recorded', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write', 'network'], grants: ['database:write', 'network'], egress: ['api.one.com'] });
+        const zip = buildZip({ version: '2.0.0', permissions: ['database:write', 'settings:read', 'network'] });
+
+        // The administrator approves settings:read only now; filesystem:write is not declared by the new manifest.
+        const r = await runPluginUpdate(SLUG, zip, { source: OFFICIAL, catalogId: SLUG, version: '2.0.0' },
+            { via: 'adopt', officialSource: OFFICIAL, grants: ['settings:read', 'filesystem:write'] });
+
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.strictEqual(installedVersion(), '2.0.0');
+        assert.strictEqual(dataPreserved(), 'PRESERVE-ME', 'data/ kept');
+        assert.strictEqual(await rowCount(), 1, 'tables kept');
+        assert.deepStrictEqual(perms.getGrants(SLUG), ['settings:read'], 'the old grants were NOT replayed: only what was approved now, and only what the manifest declares');
+        assert.deepStrictEqual(perms.getEgressAllowlist(SLUG), [], 'the old egress list was not carried over');
+        assert.strictEqual(await perms.hasAdminGrantDecision(SLUG), true, 'recorded as the administrator\'s decision');
+        assert.strictEqual((await origins.getPluginOrigin(SLUG)).source, OFFICIAL, 'origin recorded');
+        assert.strictEqual(r.body.mode, 'adopt');
+        assert.strictEqual(r.body.previousSource, null);
+        assert.deepStrictEqual(r.body.previousGrants.sort(), ['database:write', 'network']);
+        assert.deepStrictEqual(r.body.grants, ['settings:read']);
+
+        // From now on it is a normal one-click update.
+        const next = await runPluginUpdate(SLUG, buildZip({ version: '2.1.0', permissions: ['database:write', 'settings:read', 'network'] }), { source: OFFICIAL, catalogId: SLUG, version: '2.1.0' });
+        assert.strictEqual(next.ok, true, next.body && next.body.error);
+        assert.deepStrictEqual(perms.getGrants(SLUG), ['settings:read'], 'the normal update keeps what was approved');
+    });
+
+    it('adopt is refused from a NON-official source and for a plugin bound to this source — nothing changes', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: ['database:write'] });
+        const foreign = await runPluginUpdate(SLUG, buildZip({ version: '9.0.0', permissions: ['database:write'] }), { source: S2, catalogId: SLUG, version: '9.0.0' },
+            { via: 'adopt', officialSource: OFFICIAL, grants: ['database:write'] });
+        assert.strictEqual(foreign.status, 409);
+        assert.strictEqual(foreign.body.code, 'modeMismatch');
+        assert.strictEqual(foreign.body.mode, 'reinstall', 'another source is a reinstall, never a silent adopt');
+        assert.strictEqual(installedVersion(), '1.0.0');
+        assert.deepStrictEqual(perms.getGrants(SLUG), ['database:write']);
+
+        await origins.setPluginOrigin(SLUG, { source: OFFICIAL, catalogId: SLUG, version: '1.0.0' });
+        const same = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0' }), { source: OFFICIAL, catalogId: SLUG, version: '2.0.0' },
+            { via: 'adopt', officialSource: OFFICIAL, grants: [] });
+        assert.strictEqual(same.status, 409);
+        assert.strictEqual(same.body.code, 'useUpdate');
+        assert.strictEqual(installedVersion(), '1.0.0');
+    });
+
+    it('reinstall from ANOTHER source: refused without the explicit confirmation; confirmed, it keeps the data only when asked to', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: ['database:write'], egress: ['api.one.com'], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        const origin2 = { source: S2, catalogId: SLUG, version: '2.0.0' };
+
+        // The normal update still refuses the other source (the takeover block is unchanged)...
+        const plain = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), origin2);
+        assert.strictEqual(plain.status, 409);
+        assert.strictEqual(plain.body.code, 'originMismatch');
+        // ...and so does a reinstall nobody confirmed.
+        const unconfirmed = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), origin2,
+            { via: 'reinstall', officialSource: OFFICIAL, grants: ['database:write'], keepData: true });
+        assert.strictEqual(unconfirmed.status, 400);
+        assert.strictEqual(unconfirmed.body.code, 'sourceChangeNotConfirmed');
+        assert.strictEqual(installedVersion(), '1.0.0');
+        assert.deepStrictEqual(perms.getGrants(SLUG), ['database:write']);
+        assert.strictEqual((await origins.getPluginOrigin(SLUG)).source, S1);
+
+        const r = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), origin2,
+            { via: 'reinstall', officialSource: OFFICIAL, grants: [], keepData: true, confirmedSourceChange: true });
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.strictEqual(installedVersion(), '2.0.0');
+        assert.strictEqual(dataPreserved(), 'PRESERVE-ME', 'kept, because the administrator chose to');
+        assert.strictEqual(await rowCount(), 1);
+        assert.deepStrictEqual(perms.getGrants(SLUG), [], 'nothing approved, nothing granted: database:write was not replayed');
+        assert.deepStrictEqual(perms.getEgressAllowlist(SLUG), []);
+        assert.strictEqual((await origins.getPluginOrigin(SLUG)).source, S2, 'the new source is recorded');
+        assert.strictEqual(r.body.previousSource, S1);
+        assert.strictEqual(r.body.newSource, S2);
+        assert.strictEqual(r.body.keptData, true);
+    });
+
+    it('reinstall from another source WITHOUT keeping the data: data/ and the tables are gone', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: ['database:write'], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        const r = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), { source: S2, catalogId: SLUG, version: '2.0.0' },
+            { via: 'reinstall', officialSource: OFFICIAL, grants: ['database:write'], keepData: false, confirmedSourceChange: true });
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.strictEqual(installedVersion(), '2.0.0');
+        assert.strictEqual(dataPreserved(), null, 'data/ was not handed to the code from the other source');
+        assert.strictEqual(await tableExists(), false, 'tables dropped');
+        assert.deepStrictEqual(perms.getGrants(SLUG), ['database:write'], 'granted because it was approved now');
+        assert.strictEqual(r.body.keptData, false);
+        assert.deepStrictEqual(ownScratch(), [], 'the stash (with the old data) is gone on success');
+    });
+
+    it('adopt with a package that fails validation changes nothing: old code, data and grants intact', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: ['database:write'] });
+        const r = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', corrupt: true }), { source: OFFICIAL, catalogId: SLUG, version: '2.0.0' },
+            { via: 'adopt', officialSource: OFFICIAL, grants: [] });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(installedVersion(), '1.0.0');
+        assert.strictEqual(dataPreserved(), 'PRESERVE-ME');
+        assert.deepStrictEqual(perms.getGrants(SLUG), ['database:write']);
+        assert.strictEqual(await origins.getPluginOrigin(SLUG), null, 'no origin recorded for an adoption that did not happen');
+    });
+
+    it('catalogApplyMode: same source = update, unbound + official = adopt, anything else = reinstall', () => {
+        const m = origins.catalogApplyMode;
+        assert.strictEqual(m({ source: S1, catalogId: SLUG, version: null }, `${S1}/`, OFFICIAL), 'update');
+        assert.strictEqual(m(null, OFFICIAL, OFFICIAL), 'adopt');
+        assert.strictEqual(m(null, S2, OFFICIAL), 'reinstall');
+        assert.strictEqual(m({ source: S1, catalogId: SLUG, version: null }, OFFICIAL, OFFICIAL), 'reinstall', 'a plugin bound to a private source is never silently moved to the official one');
     });
 });

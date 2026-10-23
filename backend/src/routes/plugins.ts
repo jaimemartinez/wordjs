@@ -874,6 +874,19 @@ function moveEntriesInto(from: string, to: string): void {
  * provenance, exactly as for a fresh upload — and a recorded catalog origin is DROPPED afterwards: the code
  * no longer comes from that catalog, so a later one-click update must not present itself as one.
  *
+ * `opts.via === 'adopt' | 'reinstall'`: the code comes from a catalog OTHER than the one recorded for the
+ * plugin (no origin and the official catalog → 'adopt'; any other source change → 'reinstall'; see
+ * plugin-origins catalogApplyMode). The origin gate is assertAdoptableFrom instead, and what the update
+ * otherwise carries over is decided again:
+ *  - the grants and the egress/private-destination lists are NOT replayed: they are replaced by
+ *    `opts.grants` (what the administrator approved in the consent dialog just now), kept only where the
+ *    new manifest declares them. A failure rolls the previous policy back with the previous code.
+ *  - `opts.keepData === false` (reinstall only, an explicit choice) also removes the plugin's data: its
+ *    data/ dir goes to the stash with the old code (deleted on success, restored on a rollback) and its
+ *    tables, owned options, account capabilities and private storage are purged as on "delete with data".
+ *    Adopting from the official catalog always keeps the data.
+ *  - the new origin is recorded, so the next update is a normal one.
+ *
  * Order: the new code is extracted and VALIDATED in a private staging dir first (installPluginFromZip in
  * staging mode). A zip that fails there changes nothing — the installed plugin keeps running. Only then
  * is the plugin stopped and its code swapped (old code to a stash, staged code in, manifest.json LAST so
@@ -883,7 +896,7 @@ async function runPluginUpdate(
     slug: string,
     newZipPath: string,
     origin: { source: string; catalogId: string; version?: any } | null,
-    opts: { via?: 'upload' } = {}
+    opts: { via?: 'upload' | 'adopt' | 'reinstall'; officialSource?: string; grants?: string[]; keepData?: boolean; confirmedSourceChange?: boolean } = {}
 ): Promise<{ ok: boolean; status: number; body: any }> {
     const perms = require('../core/plugin-permissions');
     const core = require('../core/plugins');
@@ -934,6 +947,24 @@ async function runPluginUpdate(
 
     let stashDir: string | null = null;
     let wasActive = false;
+    // adopt / reinstall: the grants are decided again (see the doc comment), and keeping the data is a choice.
+    const takeover = opts.via === 'adopt' || opts.via === 'reinstall';
+    const keepData = opts.via !== 'reinstall' || opts.keepData !== false;
+    // The policy in force before a takeover, to put back on a rollback and to report (audit).
+    let previousPolicy: { grants: string[]; egress: string[]; privateDestinations: string[] } | null = null;
+    let previousOrigin: any = null;
+    let policyReplaced = false;
+    let approvedGrants: string[] = [];
+    const restorePreviousPolicy = async (): Promise<void> => {
+        if (!policyReplaced || !previousPolicy) return;
+        try {
+            await perms.removeGrants(slug);
+            await perms.setGrants(slug, previousPolicy.grants, { adminDecision: true });
+            if (previousPolicy.egress.length) await perms.setEgressAllowlist(slug, previousPolicy.egress);
+            if (previousPolicy.privateDestinations.length) await (await perms.applyPrivateDestinations(slug, previousPolicy.privateDestinations)).announced;
+            policyReplaced = false;
+        } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] the previous permissions could not be restored`); }
+    };
 
     // AN UPDATE NEVER REWRITES THE GRANTS OR THE EGRESS LIST. The plugin stays installed, so what an
     // administrator decided for it stays as it is stored (uninstallPluginData keepGrants). The update used
@@ -957,6 +988,7 @@ async function runPluginUpdate(
     // grants cannot be read), the previous version is on disk but switched off, and the answer has to
     // say so.
     const rollback = async (): Promise<boolean> => {
+        await restorePreviousPolicy();
         try { removePluginDirPreservingData(installedDir); } catch { /* */ }
         if (stashDir) { try { moveEntriesInto(stashDir, installedDir); fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
         if (!wasActive) return true;
@@ -968,7 +1000,10 @@ async function runPluginUpdate(
     try {
         // ORIGIN GATE — before any destructive action (no rollback needed if this throws). A hand upload
         // has no catalog to match (see the doc comment).
-        if (opts.via !== 'upload') await origins.assertUpdatableFrom(slug, origin);
+        // An adopt / reinstall is gated on the origin read now: the mode asked for must be the plugin's.
+        if (takeover) {
+            ({ recorded: previousOrigin } = await origins.assertAdoptableFrom(slug, origin, String(opts.officialSource || ''), opts.via, { confirmedSourceChange: opts.confirmedSourceChange }));
+        } else if (opts.via !== 'upload') await origins.assertUpdatableFrom(slug, origin);
 
         // A GRANT RECORD BEFORE ANYTHING MOVES, so neither the new version nor a crash half-way through
         // the update finds the plugin without one. An ACTIVE plugin with no record is granted, at the next
@@ -998,20 +1033,31 @@ async function runPluginUpdate(
 
         // SNAPSHOT the state we must replay.
         wasActive = await core.isPluginActive(slug);
+        if (takeover) {
+            // The STORED policy (not this node's memory, which a revoke elsewhere may not have reached).
+            await perms.adoptStoredPolicy(slug);
+            previousPolicy = { grants: perms.getGrants(slug), egress: perms.getEgressAllowlist(slug), privateDestinations: perms.getPrivateDestinations(slug) };
+        }
 
         // 1. Nothing runs while the files move (don't prune deps — the new version reinstalls them).
         if (wasActive) await core.deactivatePlugin(slug, { prune: false });
 
         // 2. Stash the old CODE aside, keeping plugins/<slug>/data/ (mail keys, DKIM, attachments).
         stashDir = makeStashDir(slug);
+        //    A reinstall that does NOT keep the data stashes data/ too: gone on success, back on a rollback.
         for (const entry of fs.readdirSync(installedDir)) {
-            if (entry === 'data') continue;
+            if (entry === 'data' && keepData) continue;
             fs.renameSync(path.join(installedDir, entry), path.join(stashDir, entry));
         }
 
         // 3. Clear the old version's strikes/enqueued assets — KEEP the wjp_<slug>_* tables and the
-        //    stored grants and egress allowlist.
-        await core.uninstallPluginData(slug, { dropTables: false, keepGrants: true });
+        //    stored grants and egress allowlist. A reinstall without its data purges the tables, owned
+        //    options, account capabilities and private storage, as "delete with data" does.
+        const declaredCapabilities = Array.isArray(oldManifest && oldManifest.accountCapabilities)
+            ? oldManifest.accountCapabilities.map((c: any) => String(c && c.slug || '')).filter(Boolean) : [];
+        await core.uninstallPluginData(slug, keepData
+            ? { dropTables: false, keepGrants: true }
+            : { dropTables: true, keepGrants: true, accountCapabilities: declaredCapabilities });
 
         // 4. SWAP the validated staged code in. The preserved data/ always wins over a data/ the zip
         //    ships (only a plugin that had none receives the zip's). manifest.json goes LAST: until it
@@ -1028,6 +1074,15 @@ async function runPluginUpdate(
 
         // 5. Adopt the STORED grants + egress BEFORE reactivating — they are baked into the isolate at
         //    spawn time. A database error here is thrown (and rolls back): nothing starts on a guess.
+        //    An adopt / reinstall REPLACES them first with what the administrator approved now, limited to
+        //    what the new manifest declares; the old egress and private destinations are not carried over.
+        if (takeover) {
+            const declaredNow = new Set(manifestPermTokens(readManifest(installedDir)));
+            approvedGrants = Array.from(new Set((Array.isArray(opts.grants) ? opts.grants : []).map(String))).filter((t) => declaredNow.has(t));
+            policyReplaced = true;
+            await perms.removeGrants(slug);
+            await perms.setGrants(slug, approvedGrants, { adminDecision: true });
+        }
         await perms.adoptStoredPolicy(slug);
 
         // 6. Re-record the origin under the lease (so it can't land on a slug a concurrent op just removed).
@@ -1079,12 +1134,18 @@ async function runPluginUpdate(
         // ungrantedPermissions = declared by this version and still not granted (usable only once approved).
         const ungrantedPermissions = newDeclared.filter((p) => !grantedSet.has(p));
 
-        return {
-            ok: true, status: 200,
-            body: { success: true, updated: true, slug, fromVersion, toVersion, reactivated: wasActive, newPermissions, ungrantedPermissions },
-        };
+        const body: any = { success: true, updated: true, slug, fromVersion, toVersion, reactivated: wasActive, newPermissions, ungrantedPermissions };
+        if (takeover) {
+            Object.assign(body, {
+                mode: opts.via, keptData: keepData,
+                previousSource: previousOrigin ? previousOrigin.source : null, newSource: origin ? origin.source : null,
+                previousGrants: previousPolicy ? previousPolicy.grants : [], grants: approvedGrants,
+            });
+        }
+        return { ok: true, status: 200, body };
     } catch (e: any) {
         if (stashDir) { try { await rollback(); } catch { /* */ } }
+        else await restorePreviousPolicy();
         cleanupZip();
         log.error({ slug: logSafe(slug), err: e }, `[plugins] update of '${logSafe(slug)}' failed`);
         return { ok: false, status: e.status || 500, body: e.body || { error: publicErrorText(e, `Failed to update plugin '${slug}'.`) } };

@@ -25,6 +25,25 @@ Installed.** The card then reads **Installed (inactive)**.
 When the catalog has a newer version of an installed plugin, its card offers **Update to vX**. Updating keeps
 what you granted; permissions that are new in that version stay off until you grant them.
 
+You never have to uninstall a plugin to update it. WordJS remembers which catalog each plugin was installed
+from, and only that catalog updates it as above. A plugin that came from somewhere else updates in one step too,
+but its earlier permissions are not carried over:
+
+- **Uploaded as a ZIP, or installed before WordJS recorded sources.** From the official catalog the card still
+  offers **Update to vX**, with the note *Installed by manual upload: updating asks for its permissions again.*
+  The dialog **Update "Name" from the official catalog** lists the permissions under **Permissions you grant
+  now**, each with a tick box. The new version replaces the old one in place, its data and tables stay, and it
+  gets exactly the permissions you leave ticked. From then on it updates normally.
+- **Installed from another catalog.** The card offers **Reinstall from this source**. The dialog shows
+  **The source changes**, with the old and the new address, and the permissions to tick. **Keep the plugin's
+  data** is ticked by default: the plugin's files, tables and settings stay and pass to the code from the new
+  catalog. Untick it to start from scratch; they are deleted. For a plugin that asks for a high-risk permission
+  (network access, for example), the dialog warns that it can hold sensitive data and that you should keep it
+  only if you trust the new catalog. **Reinstall** does it in one step.
+
+Both actions are recorded in the **Audit trail** (`marketplace.adopt`), with the old and the new source and the old and
+the new permissions.
+
 The gear button (**Configure marketplace sources**) adds other catalogs (https addresses), and the arrows
 button refreshes the catalog.
 

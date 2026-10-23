@@ -70,8 +70,8 @@ async function removePluginOrigin(slug: string): Promise<void> {
  * Gate an update: it must come from the SAME source the plugin was installed from. Throws an Error
  * carrying `.status` (409/400) and a `.body` shaped for the HTTP response. The gate lives here (not in a
  * route) so EVERY caller is covered.
- *  - no recorded origin  → 409 originMismatch, recordedOrigin: null (uploads + pre-feature installs; the
- *    safe adoption path is uninstall — data/ + tables are kept — then install from the catalog).
+ *  - no recorded origin  → 409 originMismatch, recordedOrigin: null (uploads + pre-feature installs; they
+ *    take a catalog version through assertAdoptableFrom instead: fresh consent, never replayed grants).
  *  - different source     → 409 naming both, so a second catalog source cannot take over an installed plugin.
  */
 async function assertUpdatableFrom(slug: string, origin: { source: string; catalogId?: string } | null): Promise<PluginOrigin> {
@@ -79,7 +79,7 @@ async function assertUpdatableFrom(slug: string, origin: { source: string; catal
     if (!recorded) {
         const e: any = new Error(
             `'${slug}' has no recorded install origin (it was installed by upload, or before one-click updates existed). ` +
-            `To enable catalog updates, uninstall it — its data/ and its tables are kept — then install it from the Marketplace.`
+            `Update it from the Marketplace instead: from the official catalog it is updated in place and its permissions are asked again; from another source it is reinstalled from that source.`
         );
         e.status = 409;
         e.body = { error: e.message, code: 'originMismatch', recordedOrigin: null };
@@ -103,7 +103,75 @@ async function assertUpdatableFrom(slug: string, origin: { source: string; catal
     return recorded;
 }
 
+/**
+ * How an installed plugin can take a catalog entry's newer version, given its recorded origin:
+ *  - 'update'    the entry comes from the source it was installed from: the normal one-click update
+ *                (grants and data/ carried over, as they always were).
+ *  - 'adopt'     no recorded origin (uploaded by zip, or installed before origins were recorded) and the
+ *                entry comes from the OFFICIAL catalog: one click, the verified code goes in place keeping
+ *                data/ and tables, the permissions are asked again (nothing is replayed) and the origin is
+ *                recorded from then on.
+ *  - 'reinstall' any other source change (recorded A, entry B; or no origin and an unofficial entry): an
+ *                explicit "reinstall from this source" with fresh consent, where keeping the plugin's data
+ *                is a separate, explicit choice.
+ */
+export type CatalogApplyMode = 'update' | 'adopt' | 'reinstall';
+
+function catalogApplyMode(recorded: PluginOrigin | null, entrySource: string, officialSource: string): CatalogApplyMode {
+    if (recorded && recorded.source && normSource(recorded.source) === normSource(entrySource)) return 'update';
+    if (!recorded && normSource(entrySource) === normSource(officialSource)) return 'adopt';
+    return 'reinstall';
+}
+
+/**
+ * Gate for the two paths that take a plugin over from another provenance (adopt / reinstall). Like
+ * assertUpdatableFrom it lives here so every caller is covered, and it is decided on the origin read NOW,
+ * not on what the client saw: the mode the request asks for must be the mode this plugin is in.
+ *  - same source              → 409 useUpdate (the normal update applies; nothing to adopt).
+ *  - 'adopt' requested         → only for a plugin with NO recorded origin and the official source.
+ *  - 'reinstall' requested     → for any other source change; the caller must have confirmed it.
+ */
+async function assertAdoptableFrom(
+    slug: string,
+    origin: { source: string; catalogId?: string } | null,
+    officialSource: string,
+    mode: 'adopt' | 'reinstall',
+    opts: { confirmedSourceChange?: boolean } = {}
+): Promise<{ recorded: PluginOrigin | null }> {
+    if (!origin || !origin.source) {
+        const e: any = new Error('A reinstall must be driven from a catalog entry (no origin supplied).');
+        e.status = 400;
+        e.body = { error: e.message };
+        throw e;
+    }
+    const recorded = await getPluginOrigin(slug);
+    const actual = catalogApplyMode(recorded, origin.source, officialSource);
+    if (actual === 'update') {
+        const e: any = new Error(`'${slug}' was installed from this source: use the normal update.`);
+        e.status = 409;
+        e.body = { error: e.message, code: 'useUpdate' };
+        throw e;
+    }
+    if (actual !== mode) {
+        const e: any = new Error(actual === 'reinstall'
+            ? `'${slug}' would change source: it can only be reinstalled from this source, with the source change confirmed.`
+            : `'${slug}' can be updated from the official catalog in place; a reinstall is not needed.`);
+        e.status = 409;
+        e.body = { error: e.message, code: 'modeMismatch', mode: actual, recordedOrigin: recorded ? recorded.source : null, attemptedOrigin: origin.source };
+        throw e;
+    }
+    if (mode === 'reinstall' && opts.confirmedSourceChange !== true) {
+        const e: any = new Error(`Reinstalling '${slug}' from another source must be confirmed explicitly.`);
+        e.status = 400;
+        e.body = { error: e.message, code: 'sourceChangeNotConfirmed', recordedOrigin: recorded ? recorded.source : null, attemptedOrigin: origin.source };
+        throw e;
+    }
+    return { recorded };
+}
+
 module.exports = {
+    catalogApplyMode,
+    assertAdoptableFrom,
     getAllOrigins,
     getPluginOrigin,
     setPluginOrigin,

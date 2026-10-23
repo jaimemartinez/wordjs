@@ -135,6 +135,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // ── Extensions ──────────────────────────────────────────────────────────────────────────────────
     MARKETPLACE_INSTALL: 'marketplace.install',
     MARKETPLACE_UPDATE: 'marketplace.update',
+    // An installed plugin brought onto a catalog entry from another provenance (POST /marketplace/adopt):
+    // {mode: adopt|reinstall, keepData, previousSource, newSource, previousGrants, grants}.
+    MARKETPLACE_ADOPT: 'marketplace.adopt',
     // A plugin installed from an uploaded zip (the marketplace path records `marketplace.install`).
     PLUGIN_INSTALL: 'plugin.install',
     PLUGIN_UNINSTALL: 'plugin.uninstall',
