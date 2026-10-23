@@ -33,7 +33,7 @@
 
 exports.metadata = {
     name: 'Event Tickets',
-    version: '1.1.2',
+    version: '1.1.3',
     description: 'Ticket types with capacity caps, unique ticket codes by email, attendee list and check-in.',
     author: 'WordJS',
 };

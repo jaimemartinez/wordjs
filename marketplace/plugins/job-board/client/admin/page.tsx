@@ -15,6 +15,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const BASE = "/plugin/job-board";
 
@@ -265,6 +266,7 @@ function CoverLetterModal({ application, onClose }) {
 
 // ---- Vacantes tab --------------------------------------------------------------------------------
 function JobsTab({ jobs, onReload, onMessage }) {
+    const { confirm } = useModal();
     const { t } = useT();
     const [modalJob, setModalJob] = useState(undefined); // undefined = closed, null = new, object = edit
 
@@ -278,7 +280,7 @@ function JobsTab({ jobs, onReload, onMessage }) {
     };
 
     const remove = async (job) => {
-        if (!window.confirm(t("jobs.confirmDelete", { title: job.title }))) return;
+        if (!(await confirm(t("jobs.confirmDelete", { title: job.title }), undefined, true))) return;
         try {
             await apiDelete(`${BASE}/jobs/${job.id}`);
             onReload();
@@ -379,6 +381,7 @@ function JobsTab({ jobs, onReload, onMessage }) {
 
 // ---- Postulaciones tab -----------------------------------------------------------------------------
 function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [applications, setApplications] = useState([]);
     const [counts, setCounts] = useState({ new: 0, total: 0 });
@@ -416,7 +419,7 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
     };
 
     const remove = async (app) => {
-        if (!window.confirm(t("apps.confirmDelete", { name: app.name }))) return;
+        if (!(await confirm(t("apps.confirmDelete", { name: app.name }), undefined, true))) return;
         try {
             await apiDelete(`${BASE}/applications/${app.id}`);
             load();

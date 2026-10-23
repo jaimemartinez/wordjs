@@ -22,28 +22,7 @@ import { scanRepository, scanText, countByFile } from "./helpers/nativeDialogSca
  * BELOW it (a fixed call must also be taken off the list, so it cannot quietly come back).
  */
 const PENDING_PLUGIN_FILES: Record<string, number> = {
-    "marketplace/plugins/auctions/client/admin/page.tsx": 4,
-    "marketplace/plugins/bookings/client/admin/page.tsx": 2,
     "marketplace/plugins/conference-manager/client/admin/BadgeEditor.tsx": 1,
-    "marketplace/plugins/contact-forms/client/admin/page.tsx": 2,
-    "marketplace/plugins/digital-downloads/client/admin/page.tsx": 2,
-    "marketplace/plugins/donations/client/admin/page.tsx": 2,
-    "marketplace/plugins/event-tickets/client/admin/page.tsx": 4,
-    "marketplace/plugins/events-calendar/client/admin/page.tsx": 1,
-    "marketplace/plugins/faq/client/admin/page.tsx": 1,
-    "marketplace/plugins/invoices/client/admin/page.tsx": 2,
-    "marketplace/plugins/job-board/client/admin/page.tsx": 2,
-    "marketplace/plugins/mail-server/client/admin/Composer.tsx": 1,
-    "marketplace/plugins/memberships/client/admin/page.tsx": 2,
-    "marketplace/plugins/newsletter/client/admin/page.tsx": 4,
-    "marketplace/plugins/online-store/client/admin/page.tsx": 4,
-    "marketplace/plugins/polls/client/admin/page.tsx": 1,
-    "marketplace/plugins/popup-builder/client/admin/page.tsx": 1,
-    "marketplace/plugins/restaurant-menu/client/admin/page.tsx": 3,
-    "marketplace/plugins/restaurant-menu/client/admin/v2tabs.tsx": 6,
-    "marketplace/plugins/testimonials/client/admin/page.tsx": 1,
-    "marketplace/plugins/vendor-marketplace/client/admin/page.tsx": 4,
-    "marketplace/plugins/vendor-marketplace/client/verso/VendorMarketplaceVerso.tsx": 1,
 };
 
 describe("the scanner (its own controls)", () => {

@@ -1,7 +1,7 @@
 {
     "id": "memberships",
     "name": "Memberships",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "description": "Members-only content for WordJS: free and paid tiers, a paywall block that ends a post's free teaser, paid subscriptions through Stripe, Mercado Pago or Wompi (sandbox credentials) verified by signed webhooks, tier changes and cancellation by the member, complimentary memberships granted by the admin, and newsletters that email published posts to members by tier with one-click unsubscribe. Members are the site's own user accounts.",
     "author": "WordJS",
     "license": "MIT",

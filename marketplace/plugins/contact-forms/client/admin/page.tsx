@@ -16,6 +16,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 // Labels are resolved through `t` at render time (hooks only run inside components).
 const FIELD_TYPE_OPTIONS = (t) => [
@@ -76,6 +77,7 @@ const IconInboxEmpty = (props) => (
 );
 
 export default function ContactFormsAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [forms, setForms] = useState([]);
     const [tab, setTab] = useState("forms"); // forms | inbox
@@ -194,7 +196,7 @@ export default function ContactFormsAdminPage() {
     };
 
     const deleteForm = async (f) => {
-        if (!window.confirm(t("msg.confirmDeleteForm", { name: f.name }))) return;
+        if (!(await confirm(t("msg.confirmDeleteForm", { name: f.name }), undefined, true))) return;
         setBusy(true);
         setMessage("");
         try {
@@ -226,7 +228,7 @@ export default function ContactFormsAdminPage() {
     };
 
     const deleteSubmission = async (id) => {
-        if (!window.confirm(t("msg.confirmDeleteSubmission"))) return;
+        if (!(await confirm(t("msg.confirmDeleteSubmission"), undefined, true))) return;
         setBusy(true);
         try {
             await apiDelete(`/plugin/contact-forms/submissions/${id}`);

@@ -19,6 +19,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const BASE = "/plugin/digital-downloads";
 
@@ -75,6 +76,7 @@ const IconReceipt = (props) => (
 );
 
 export default function DigitalDownloadsAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [tab, setTab] = useState("products");
     const [products, setProducts] = useState([]);
@@ -165,7 +167,7 @@ export default function DigitalDownloadsAdminPage() {
     };
 
     const deleteProduct = async (p) => {
-        if (!window.confirm(t("confirm.deleteProduct", { name: p.name }))) return;
+        if (!(await confirm(t("confirm.deleteProduct", { name: p.name }), undefined, true))) return;
         setBusy(true);
         try { await apiDelete(`${BASE}/products/${p.id}`); flash(t("msg.productDeleted")); loadAll(); }
         catch (err) { flash(t("common.error", { msg: err?.message || err })); }
@@ -192,7 +194,7 @@ export default function DigitalDownloadsAdminPage() {
     };
 
     const deleteOrder = async (o) => {
-        if (!window.confirm(t("confirm.deleteOrder", { id: o.id, email: o.customer_email }))) return;
+        if (!(await confirm(t("confirm.deleteOrder", { id: o.id, email: o.customer_email }), undefined, true))) return;
         setBusy(true);
         try { await apiDelete(`${BASE}/orders/${o.id}`); flash(t("msg.orderDeleted")); loadAll(); }
         catch (err) { flash(t("common.error", { msg: err?.message || err })); }

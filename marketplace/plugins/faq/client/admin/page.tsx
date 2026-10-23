@@ -15,6 +15,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const EMPTY_FORM = { id: null, question: "", answer: "", category: "" };
 
@@ -60,6 +61,7 @@ const IconBlock = (props) => (
 );
 
 export default function FaqAdminPage() {
+    const { confirm } = useModal();
     const { t } = useT();
     const [faqs, setFaqs] = useState(null); // null = loading
     const [categories, setCategories] = useState([]);
@@ -139,7 +141,7 @@ export default function FaqAdminPage() {
     };
 
     const remove = async (f) => {
-        if (typeof window !== "undefined" && !window.confirm(t("msg.deleteConfirm"))) return;
+        if (!(await confirm(t("msg.deleteConfirm"), undefined, true))) return;
         try {
             await apiDelete(`/plugin/faq/${f.id}`);
             setFaqs((prev) => (prev || []).filter((x) => x.id !== f.id));

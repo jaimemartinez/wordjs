@@ -1,7 +1,7 @@
 {
     "id": "digital-downloads",
     "name": "Digital Downloads",
-    "version": "1.1.2",
+    "version": "1.1.3",
     "description": "Sell or give away downloadable products. Each product file is a PRIVATE media-library item (stored outside the public uploads folder); buyers get an expiring, limited-use download link by email or on screen, and every download is checked and streamed by the host, so no permanent file URL is ever revealed. Free products deliver instantly with an email; paid orders stay pending until the admin marks them paid (the link is then auto-emailed).",
     "author": "WordJS",
     "isolated": true,

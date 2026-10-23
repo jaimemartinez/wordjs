@@ -15,6 +15,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const BASE = "/plugin/vendor-marketplace";
 
@@ -117,6 +118,7 @@ function VendorFormModal({ initial, title, busy, onSave, onClose }) {
 }
 
 export default function MarketplaceAdminPage() {
+    const { confirm } = useModal();
     const { t } = useT();
     const [tab, setTab] = useState("vendors");
     const [vendors, setVendors] = useState([]);
@@ -178,16 +180,16 @@ export default function MarketplaceAdminPage() {
         () => apiPost(`${BASE}/vendors/${v.id}/approve`, {}),
         (out) => t(out.mailed ? "msg.approvedMailed" : "msg.approvedNotMailed", { name: v.name, code: out.access_code })
     );
-    const suspend = (v) => {
-        if (!window.confirm(t("confirm.suspend", { name: v.name }))) return;
+    const suspend = async (v) => {
+        if (!(await confirm(t("confirm.suspend", { name: v.name }), undefined, true))) return;
         run(() => apiPost(`${BASE}/vendors/${v.id}/suspend`, {}), t("msg.suspended", { name: v.name }));
     };
-    const rotateCode = (v) => {
-        if (!window.confirm(t("confirm.rotate", { name: v.name }))) return;
+    const rotateCode = async (v) => {
+        if (!(await confirm(t("confirm.rotate", { name: v.name }), undefined, false))) return;
         run(() => apiPost(`${BASE}/vendors/${v.id}/rotate-code`, {}), (out) => t("msg.newCode", { name: v.name, code: out.access_code }));
     };
-    const removeVendor = (v) => {
-        if (!window.confirm(t("confirm.deleteVendor", { name: v.name }))) return;
+    const removeVendor = async (v) => {
+        if (!(await confirm(t("confirm.deleteVendor", { name: v.name }), undefined, true))) return;
         run(() => apiDelete(`${BASE}/vendors/${v.id}`), t("msg.vendorDeleted", { name: v.name }));
     };
     const saveVendorEdit = (form) => run(async () => {
@@ -213,8 +215,8 @@ export default function MarketplaceAdminPage() {
         () => apiPost(`${BASE}/products/${p.id}/publish`, { is_published: p.is_published ? 0 : 1 }),
         p.is_published ? t("msg.productHidden", { name: p.name }) : t("msg.productPublished", { name: p.name })
     );
-    const removeProduct = (p) => {
-        if (!window.confirm(t("confirm.deleteProduct", { name: p.name }))) return;
+    const removeProduct = async (p) => {
+        if (!(await confirm(t("confirm.deleteProduct", { name: p.name }), undefined, true))) return;
         run(() => apiDelete(`${BASE}/products/${p.id}`), t("msg.productDeleted", { name: p.name }));
     };
     const setInquiryStatus = (i, status) => run(

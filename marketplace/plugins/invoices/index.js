@@ -16,7 +16,7 @@
 
 exports.metadata = {
     name: 'Invoices',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Invoice builder with public print-friendly token URLs, statuses and dashboard totals.',
     author: 'WordJS',
 };

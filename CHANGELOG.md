@@ -6,6 +6,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plugin screens use the WordJS dialogs instead of the browser's pop-ups.** Every delete, cancel, revoke
+  and send confirmation in the marketplace plugins (auctions, bookings, contact forms, digital downloads,
+  donations, event tickets, events calendar, FAQ, invoices, job board, mail server, memberships, newsletter,
+  online store, polls, popup builder, restaurant menu, testimonials, vendor marketplace) now opens the host
+  dialog, in the reader's language. The newsletter's *Send test* address, the mail composer's *Insert link*
+  (which keeps the selected text) and the invoice link shown when the clipboard is unavailable use
+  `useModal().prompt()`. These plugins are off the native-dialog list; only Conference Manager remains.
+
 ## [2.9.0] - 2026-10-23
 
 ### Added

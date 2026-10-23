@@ -16,6 +16,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 const STATUS_META = {
     pending: { labelKey: "status.pending", cls: "is-pending" },
@@ -153,6 +154,7 @@ function CampaignModal({ campaign, onClose, onSaved }) {
 }
 
 export default function NewsletterAdminPage() {
+    const { confirm, prompt } = useModal();
     const { t, locale } = useT();
     const [tab, setTab] = useState("subs"); // 'subs' | 'camps'
     const [subs, setSubs] = useState([]);
@@ -202,7 +204,7 @@ export default function NewsletterAdminPage() {
     }, []);
 
     const deleteSubscriber = async (id) => {
-        if (!window.confirm(t("subs.confirmDelete"))) return;
+        if (!(await confirm(t("subs.confirmDelete"), undefined, true))) return;
         try {
             await apiDelete(`/plugin/newsletter/subscribers/${id}`);
             loadSubs();
@@ -229,7 +231,7 @@ export default function NewsletterAdminPage() {
     };
 
     const deleteCampaign = async (camp) => {
-        if (!window.confirm(t("camps.confirmDelete", { subject: camp.subject }))) return;
+        if (!(await confirm(t("camps.confirmDelete", { subject: camp.subject }), undefined, true))) return;
         try {
             await apiDelete(`/plugin/newsletter/campaigns/${camp.id}`);
             loadCampaigns();
@@ -239,7 +241,7 @@ export default function NewsletterAdminPage() {
     };
 
     const sendTest = async (camp) => {
-        const to = window.prompt(t("camps.testPrompt"));
+        const to = await prompt(t("camps.testPrompt"), undefined, { inputType: "email" });
         if (!to || !to.trim()) return;
         try {
             await apiPost(`/plugin/newsletter/campaigns/${camp.id}/test`, { to: to.trim() });
@@ -255,7 +257,7 @@ export default function NewsletterAdminPage() {
             setNotice({ kind: "warn", text: t("camps.noConfirmed") });
             return;
         }
-        if (!window.confirm(t("camps.confirmSend", { subject: camp.subject, n }))) return;
+        if (!(await confirm(t("camps.confirmSend", { subject: camp.subject, n }), undefined, false))) return;
         setSendingId(camp.id);
         setNotice(null);
         try {

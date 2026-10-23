@@ -16,6 +16,7 @@ import {
 } from "./shared";
 import { qrSvg } from "./qr";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 // ================================================================================================
 // MODIFICADORES
@@ -108,6 +109,7 @@ function OptionModal({ initial, busy, onSave, onClose }) {
 }
 
 export function ModifiersTab({ flash, symbol }) {
+    const { confirm } = useModal();
     const { t } = useT();
     const [groups, setGroups] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -148,12 +150,12 @@ export function ModifiersTab({ flash, symbol }) {
         else await apiPost(`${BASE}/modifier-options`, { ...payload, group_id: optionModal.groupId });
         setOptionModal(null);
     }, t("mod.optionSaved"));
-    const deleteGroup = (g) => {
-        if (typeof window !== "undefined" && !window.confirm(t("mod.groupDeleteConfirm", { name: g.name }))) return;
+    const deleteGroup = async (g) => {
+        if (!(await confirm(t("mod.groupDeleteConfirm", { name: g.name }), undefined, true))) return;
         run(() => apiDelete(`${BASE}/modifier-groups/${g.id}`), t("mod.groupDeleted"));
     };
-    const deleteOption = (o) => {
-        if (typeof window !== "undefined" && !window.confirm(t("mod.optionDeleteConfirm", { name: o.name }))) return;
+    const deleteOption = async (o) => {
+        if (!(await confirm(t("mod.optionDeleteConfirm", { name: o.name }), undefined, true))) return;
         run(() => apiDelete(`${BASE}/modifier-options/${o.id}`), t("mod.optionDeleted"));
     };
 
@@ -241,6 +243,7 @@ export function ModifiersTab({ flash, symbol }) {
 // ================================================================================================
 
 export function KitchenTab({ flash }) {
+    const { confirm } = useModal();
     const { t } = useT();
     const [orders, setOrders] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -351,7 +354,7 @@ export function KitchenTab({ flash }) {
                         {next.label}
                     </button>
                     {o.status !== "ready" ? (
-                        <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(t("kitchen.cancelConfirm", { id: o.id }))) setStatus(o.id, "cancelled"); }} className="px-3 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50">
+                        <button type="button" disabled={busy} onClick={async () => { if (await confirm(t("kitchen.cancelConfirm", { id: o.id }), undefined, true)) setStatus(o.id, "cancelled"); }} className="px-3 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50">
                             ✕
                         </button>
                     ) : null}
@@ -456,6 +459,7 @@ function printAllQRs(tables, menuPageUrl, t) {
 }
 
 export function TablesTab({ flash }) {
+    const { confirm } = useModal();
     const { t } = useT();
     const [tables, setTables] = useState(null);
     const [menuPageUrl, setMenuPageUrl] = useState("");
@@ -534,8 +538,8 @@ export function TablesTab({ flash }) {
                             <div className="flex gap-1.5">
                                 <button type="button" disabled={busy || ti === 0} onClick={() => run(() => apiPost(`${BASE}/tables/${tb.id}/move`, { dir: "up" }))} className={btnGhostCls}>↑</button>
                                 <button type="button" disabled={busy || ti === tables.length - 1} onClick={() => run(() => apiPost(`${BASE}/tables/${tb.id}/move`, { dir: "down" }))} className={btnGhostCls}>↓</button>
-                                <button type="button" disabled={busy} title={t("tables.regenTitle")} onClick={() => { if (typeof window === "undefined" || window.confirm(t("tables.regenConfirm"))) run(() => apiPut(`${BASE}/tables/${tb.id}`, { regenerate_token: true }), t("tables.regenerated")); }} className={btnGhostCls}>⟳</button>
-                                <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(t("tables.deleteConfirm", { name: tb.label }))) run(() => apiDelete(`${BASE}/tables/${tb.id}`), t("tables.deleted")); }} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
+                                <button type="button" disabled={busy} title={t("tables.regenTitle")} onClick={async () => { if (await confirm(t("tables.regenConfirm"), undefined, true)) run(() => apiPut(`${BASE}/tables/${tb.id}`, { regenerate_token: true }), t("tables.regenerated")); }} className={btnGhostCls}>⟳</button>
+                                <button type="button" disabled={busy} onClick={async () => { if (await confirm(t("tables.deleteConfirm", { name: tb.label }), undefined, true)) run(() => apiDelete(`${BASE}/tables/${tb.id}`), t("tables.deleted")); }} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                             </div>
                         </div>
                     ))}
@@ -617,6 +621,7 @@ function ReservationModal({ busy, onSave, onClose }) {
 }
 
 export function ReservationsTab({ flash }) {
+    const { confirm } = useModal();
     const { t } = useT();
     const [data, setData] = useState(null); // {reservations, counts, today}
     const [busy, setBusy] = useState(false);
@@ -722,7 +727,7 @@ export function ReservationsTab({ flash }) {
                                             </button>
                                         </>
                                     ) : null}
-                                    <button type="button" disabled={busy} onClick={() => { if (typeof window === "undefined" || window.confirm(t("resv.deleteConfirm"))) run(() => apiDelete(`${BASE}/reservations/${r.id}`), t("resv.deleted")); }} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
+                                    <button type="button" disabled={busy} onClick={async () => { if (await confirm(t("resv.deleteConfirm"), undefined, true)) run(() => apiDelete(`${BASE}/reservations/${r.id}`), t("resv.deleted")); }} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
                                 </div>
                             </div>
                         );

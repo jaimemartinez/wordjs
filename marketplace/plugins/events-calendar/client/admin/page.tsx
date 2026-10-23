@@ -14,6 +14,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 import { useT } from "./i18n";
+import { useModal } from "@/contexts/ModalContext";
 
 /**
  * Parse the stored local-naive ISO ('YYYY-MM-DD' or 'YYYY-MM-DDTHH:mm') as LOCAL time.
@@ -208,6 +209,7 @@ const SCOPES = [
 ];
 
 export default function EventsCalendarAdminPage() {
+    const { confirm } = useModal();
     const { t, locale } = useT();
     const [events, setEvents] = useState(null); // null = loading
     const [scope, setScope] = useState("upcoming");
@@ -228,7 +230,7 @@ export default function EventsCalendarAdminPage() {
     useEffect(() => { load(scope); }, [scope]);
 
     const remove = async (ev) => {
-        if (!window.confirm(t("msg.deleteConfirm", { title: ev.title }))) return;
+        if (!(await confirm(t("msg.deleteConfirm", { title: ev.title }), undefined, true))) return;
         setBusyId(ev.id);
         setMessage("");
         try {
