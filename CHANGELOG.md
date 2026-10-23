@@ -21,8 +21,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
-- **conference-manager 2.36.3: the admin's PDF buttons open the file again, «Imprimir stickers» asks what to print, and
-  «Marcar quién firmó» shows the signed page on the same screen.**
+- **conference-manager 2.36.3: the admin's PDF buttons open the file again, «Imprimir stickers» asks what to print, the
+  paper consent sheet is a real PDF, and «Marcar quién firmó» shows the signed page on the same screen.**
   - **The fix.** Since 2.30.0 every PDF button of the admin opened a page that said «Esta página no existe» instead
     of the file: the sticker buttons, and also the badge PDF of a person, «PDF para imprimir (hoja Carta)» and «PDF
     una por página». The admin still used the conference portal's old file address. It now uses the core's portal
@@ -32,6 +32,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     people you tick, with a search and «Marcar los que se ven» (one person is one tick). It shows how many stickers
     will print, at what label size, before printing. It starts on what the list shows: the search's people already
     ticked, else the chosen locality, else everyone. Each person's own sticker button is unchanged.
+  - **The paper consent sheet is a real PDF.** «Imprimir» did nothing on phones (they ignore printing from a frame)
+    and «Descargar» saved an .html file. The server now draws the sheet as a PDF, with the same texts, columns and
+    rows, on Letter or A4, and the authorization header and the QR on every page. «Descargar PDF» saves the .pdf
+    (computer, Android, iPhone). «Abrir para imprimir» opens it through the portal's file route, the same one as
+    the badge and sticker PDFs, in the browser's or the phone's own viewer, which prints and shares it.
   - **The signed page in place.** An uploaded page of a paper consent sheet opens in a viewer inside the screen,
     never as a download: a photo as it is, a scanned PDF page by page, its pages taken out of the file in the
     browser. Zoom with the buttons, the wheel, a pinch or a double tap, and drag to move. A PDF that is not a scan

@@ -212,4 +212,4 @@ ${pages.join('\n')}
 </body></html>`;
 }
 
-module.exports = { sheetHtml, sheetText, qrSvg, rowsPerPage, PAPERS, LANGS };
+module.exports = { sheetHtml, sheetText, qrSvg, rowsPerPage, PAPERS, LANGS, TEXTS: T, oneAuthorization, langOf, paperOf, ROW_MM };

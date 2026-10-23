@@ -302,6 +302,57 @@ test('an unused sheet can be deleted; one with a signed page cannot (2.36.2)', a
     assert.strictEqual(ok(await w.p.call('get', `/consent/evidence/${ana}`)).chain_ok, true);
 });
 
+test('the sheet as a real PDF (2.36.3): saved from the list, opened through the portal file route; Letter or A4, every page with its header and QR', async () => {
+    const w = await world();
+    const ana = await w.register(w.tNorte, 'Ana');
+    for (let i = 0; i < 9; i++) await w.register(w.tNorte, `Persona${i}`);
+    const zlib = require('zlib');
+    const textOf = (pdf: Buffer) => {
+        // Every content stream inflated: what the pages draw.
+        const s = pdf.toString('latin1');
+        let out = '';
+        for (const m of s.matchAll(/stream\n([\s\S]*?)\nendstream/g)) { try { out += zlib.inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1') + '\n'; } catch { /* not deflated */ } }
+        return out;
+    };
+    const boxes = (pdf: Buffer) => [...pdf.toString('latin1').matchAll(/\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/g)].map(m => [Number(m[1]), Number(m[2])].map(v => Math.round(v / 72 * 25.4)));
+    for (const [paper, size] of [['letter', [279, 216]], ['a4', [297, 210]]] as const) {
+        const sheet = ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create', paper, blank: 12 })).sheet;
+        const file = ok(await w.portal('get', `/portal/consent/paper?sheet_id=${sheet.id}&format=pdf`, w.tNorte));
+        assert.strictEqual(file.mime, 'application/pdf');
+        assert.match(file.filename, /^consentimiento-[A-Z0-9]+\.pdf$/);
+        const pdf = Buffer.from(file.b64, 'base64');
+        assert.strictEqual(pdf.subarray(0, 5).toString('latin1'), '%PDF-');
+        const pages = boxes(pdf);
+        assert.ok(pages.length >= 2, `${paper}: 10 people + 12 blank rows take more than one page (${pages.length})`);
+        for (const b of pages) assert.deepStrictEqual(b, size, `${paper} landscape`);
+        // Every page carries the authorization header, its page number and the QR's sheet id.
+        const text = textOf(pdf);
+        // A shown string as the page draws it: cp1252 bytes, those above 126 as octal escapes.
+        const lit = (str: string) => `(${[...Buffer.from(str, 'latin1')].map(b => (b > 126 ? '\\' + b.toString(8) : String.fromCharCode(b))).join('')}) Tj`;
+        assert.strictEqual(text.split(lit('Autorización para el tratamiento de datos personales')).length - 1, pages.length);
+        assert.ok(text.includes(lit(`Hoja ${sheet.code}`)));
+        assert.ok(text.includes(lit(` · Página ${pages.length} de ${pages.length}`)), 'the last page says «Página n de n»');
+        assert.ok(text.includes(lit('Ana Pérez')), 'the pre-filled names');
+        assert.ok(text.includes(lit('Responsable:')));
+        // The portal's file route: a ticket from the same door, answered by the plugin's public file route as the PDF.
+        const { d } = ok(await w.portal('get', `/portal/consent/paper?sheet_id=${sheet.id}&format=ticket`, w.tNorte));
+        assert.match(d, /^[0-9a-f]{32}$/);
+        const viaFile = ok(await w.p.call('get', `/public/badge/file?d=${d}`, { anonymous: true }));
+        assert.strictEqual(viaFile.mime, 'application/pdf');
+        assert.deepStrictEqual(boxes(Buffer.from(viaFile.b64, 'base64')), pages);
+    }
+    // The admin's door too; another locality's coordinator cannot reach either form (404).
+    const sheet = ok(await w.p.call('post', '/consent/paper', { body: { conference_id: w.cid, location_id: w.norte, action: 'create' } })).sheet;
+    assert.strictEqual(ok(await w.p.call('get', `/consent/paper?sheet_id=${sheet.id}&format=pdf`)).mime, 'application/pdf');
+    for (const f of ['pdf', 'ticket']) assert.strictEqual((await w.portal('get', `/portal/consent/paper?sheet_id=${sheet.id}&format=${f}`, w.tSur)).status, 404);
+    // A deleted sheet's ticket no longer answers.
+    const gone = ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create' })).sheet;
+    const { d } = ok(await w.portal('get', `/portal/consent/paper?sheet_id=${gone.id}&format=ticket`, w.tNorte));
+    ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'delete', sheet_id: gone.id }));
+    assert.strictEqual((await w.p.call('get', `/public/badge/file?d=${d}`, { anonymous: true })).status, 410);
+    assert.ok(ana);
+});
+
 test('the activation scan accepts the plugin (no computed call, every permission declared)', () => {
     const { validatePluginPermissions } = require('../core/plugins');
     const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'manifest.json'), 'utf8'));

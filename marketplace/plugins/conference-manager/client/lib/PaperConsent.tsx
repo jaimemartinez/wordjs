@@ -29,23 +29,39 @@ const input = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:
 const lbl = "block text-xs font-bold text-gray-600 mb-1";
 const errCls = "text-xs font-semibold text-rose-600 mt-1";
 
-/** Save a text or data URL as a file (no new window: some embedded browsers block those). */
-function saveAs(name: string, content: string, type = "text/html") {
+/**
+ * Save a file given as base64 (2.36.3: the sheet's PDF) under its name: a computer and an Android phone save it, an
+ * iPhone offers to open or keep it. No new window.
+ */
+export function saveFile(name: string, mime: string, b64: string) {
+    const bin = atob(String(b64 || ""));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
     const a = document.createElement("a");
-    const blob = content.startsWith("data:") ? null : new Blob([content], { type: `${type};charset=utf-8` });
-    a.href = blob ? URL.createObjectURL(blob) : content;
-    a.download = name;
+    a.href = url; a.download = name; a.rel = "noopener";
     document.body.appendChild(a); a.click(); a.remove();
-    if (blob) setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-/** Print a self-contained page through a hidden frame. */
-function printHtml(html: string) {
-    const f = document.createElement("iframe");
-    f.setAttribute("aria-hidden", "true");
-    Object.assign(f.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
-    f.onload = () => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch { /* the download is still there */ } setTimeout(() => f.remove(), 60000); };
-    f.srcdoc = html;
-    document.body.appendChild(f);
+/** The core portal's file route for a ticket (the PDF with its real type: a phone opens it in its own viewer). */
+export const sheetFileUrl = (d: string) => `/portal/conference/file?d=${encodeURIComponent(d)}`;
+/**
+ * Open the sheet's PDF to print it (2.36.3, instead of the browser's print call, which a phone ignores from a frame): the new
+ * tab is opened inside the tap, before the ticket is asked for, then sent to the PDF — the phone's viewer prints
+ * and shares it, a computer's prints it.
+ */
+export async function openSheetPdf(ticket: () => Promise<string>) {
+    const w = typeof window !== "undefined" ? window.open("", "_blank") : null;
+    try {
+        const url = sheetFileUrl(await ticket());
+        if (w && !w.closed) { try { w.opener = null; } catch { /* ignore */ } w.location.href = url; return; }
+        const a = document.createElement("a");
+        a.href = url; a.target = "_blank"; a.rel = "noopener";
+        document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) {
+        if (w && !w.closed) w.close();
+        throw e;
+    }
 }
 const readDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -163,7 +179,6 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
 
     const when = (iso: string) => { try { return new Intl.DateTimeFormat(dateLang, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso)); } catch { return iso; } };
     const nameOf = (id: number) => (data?.people || []).find((p: any) => p.id === id)?.name || `#${id}`;
-    const fileName = (code: string) => `consentimiento-${code}.html`;
 
     const download = async () => {
         const n = blank === "" ? undefined : Number(blank);
@@ -171,19 +186,19 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         setBusy("create"); setErr(null);
         try {
             const r = await request("post", { action: "create", blank: n, lang: sheetLang || data?.lang, paper });
-            // Straight to the browser's print window, where «Guardar como PDF» is one of the printers.
-            printHtml(r.html);
+            // The new sheet, ready: its PDF is saved or opened from the dialog (a tap of its own, so a phone allows it).
             addToast(t("paper.downloaded", { code: r.sheet.code }), "success");
-            setView({ kind: "printed", code: r.sheet.code, html: r.html });
+            setView({ kind: "printed", code: r.sheet.code, sheet: r.sheet });
             load();
         } catch (e: any) { setErr(e?.message || "Error"); }
         finally { setBusy(null); }
     };
+    // The sheet as a real PDF (2.36.3): «Descargar PDF» saves it; «Imprimir» opens it (print, share).
     const reprint = async (s: any, print = false) => {
         setBusy(`html-${s.id}`);
         try {
-            const r = await request("get", { sheet_id: s.id });
-            if (print) printHtml(r.html); else saveAs(fileName(r.code), r.html);
+            if (print) await openSheetPdf(async () => (await request("get", { sheet_id: s.id, format: "ticket" })).d);
+            else { const r = await request("get", { sheet_id: s.id, format: "pdf" }); saveFile(r.filename, r.mime, r.b64); }
         } catch (e: any) { addToast(e?.message || "Error", "error"); }
         finally { setBusy(null); }
     };
@@ -361,8 +376,8 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                                         <div className="text-[11px] text-gray-500">{t("paper.sheet.meta", { rows: s.rows, blank: s.blank, when: when(s.created_utc) })} · {t("paper.marked", { n: s.marked })}</div>
                                     </div>
                                     <div className="flex flex-wrap gap-2">
-                                        <button type="button" className={btn} disabled={busy === `html-${s.id}`} onClick={() => reprint(s, true)}><i className="fa-solid fa-print" aria-hidden="true"></i>{t("paper.print")}</button>
-                                        <button type="button" className={btn} disabled={busy === `html-${s.id}`} onClick={() => reprint(s)}><i className="fa-solid fa-download" aria-hidden="true"></i>{t("paper.reprint")}</button>
+                                        <button type="button" className={btn} disabled={busy === `html-${s.id}`} onClick={() => reprint(s, true)} data-paper-print={s.code}><i className="fa-solid fa-print" aria-hidden="true"></i>{t("paper.print")}</button>
+                                        <button type="button" className={btn} disabled={busy === `html-${s.id}`} onClick={() => reprint(s)} data-paper-pdf={s.code}><i className="fa-solid fa-download" aria-hidden="true"></i>{t("paper.reprint")}</button>
                                         {canManage && (
                                             <label className={`${btn} cursor-pointer ${busy === `up-${s.id}` ? "opacity-50 pointer-events-none" : ""}`} data-paper-upload={s.code}>
                                                 <i className="fa-solid fa-upload" aria-hidden="true"></i>{busy === `up-${s.id}` ? t("paper.uploading") : t("paper.upload")}
@@ -414,8 +429,8 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
             {view?.kind === "printed" && (
                 <Dialog closeLabel={t("paper.close")} title={t("paper.sheet", { code: view.code })} onClose={() => setView(null)} testId="paper-printed"
                     footer={<div className="flex flex-wrap justify-end gap-2 w-full">
-                        <button type="button" className={btn} onClick={() => saveAs(fileName(view.code), view.html)}><i className="fa-solid fa-download" aria-hidden="true"></i>{t("paper.reprint")}</button>
-                        <button type="button" className={btnDark} onClick={() => printHtml(view.html)}><i className="fa-solid fa-print" aria-hidden="true"></i>{t("paper.print")}</button>
+                        <button type="button" className={btn} disabled={busy === `html-${view.sheet.id}`} onClick={() => reprint(view.sheet)} data-paper-pdf-save=""><i className="fa-solid fa-download" aria-hidden="true"></i>{t("paper.reprint")}</button>
+                        <button type="button" className={btnDark} disabled={busy === `html-${view.sheet.id}`} onClick={() => reprint(view.sheet, true)} data-paper-pdf-open=""><i className="fa-solid fa-print" aria-hidden="true"></i>{t("paper.print")}</button>
                     </div>}>
                     <p className="text-sm text-gray-700">{t("paper.downloaded", { code: view.code })}</p>
                     <p className="text-xs text-gray-500 mt-2">{t("paper.printed.hint")}</p>

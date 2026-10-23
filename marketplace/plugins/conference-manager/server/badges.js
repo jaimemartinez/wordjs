@@ -448,6 +448,11 @@ function createBadges(base) {
         const scope = parseJson(t.scope);
         return scope ? { conference_id: Number(t.conference_id), scope } : null;
     }
+    // 2.36.3: other files through the same ticket and the same public route (the portal has ONE file route): a
+    // provider per `kind` answers { mime, filename, b64 } for a ticket's scope, or null when the file is gone.
+    const fileProviders = new Map();
+    const fileProvider = (kind, fn) => { fileProviders.set(String(kind), fn); };
+    const fileTicket = (cid, scope) => mintTicket(Number(cid), { ...scope, kind: String(scope.kind) });
     // 'sticker' (2.36.0): the printable sticker's design, one label per page at the label's exact size.
     const sheetOf = (v) => (v === 'letter' ? 'letter' : v === 'sticker' ? 'sticker' : 'single');
     const pdfName = (base) => `${String(base || 'escarapela').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'escarapela'}.pdf`;
@@ -874,6 +879,12 @@ function createBadges(base) {
                 try {
                     const t = await useTicket(String((req.query || {}).d || ''));
                     if (!t) return res.status(410).json({ error: MSG.ticket, code: 'ticket' });
+                    if (t.scope.kind) {
+                        const provide = fileProviders.get(String(t.scope.kind));
+                        const file = provide ? await provide(t) : null;
+                        if (!file) return res.status(410).json({ error: MSG.ticket, code: 'ticket' });
+                        return res.json(file);
+                    }
                     const sticker = t.scope.sheet === 'sticker';
                     const { list, plates, images, conf } = await badgesFor(t.conference_id, (t.scope.ids || []).map(Number).filter(Boolean), { sticker });
                     if (!list.length) return res.status(410).json({ error: MSG.inactive, code: 'inactive' });
@@ -887,7 +898,7 @@ function createBadges(base) {
         });
     }
 
-    return { migrate, ensureReady, install, portalFeatures, configOf, expiresAtMs, selfBadge, selfTicket, availableFields, MSG };
+    return { migrate, ensureReady, install, portalFeatures, fileTicket, fileProvider, configOf, expiresAtMs, selfBadge, selfTicket, availableFields, MSG };
 }
 
 module.exports = { createBadges };

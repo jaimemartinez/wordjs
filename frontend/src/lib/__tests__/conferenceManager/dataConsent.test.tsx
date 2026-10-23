@@ -451,3 +451,30 @@ describe('the signed page shown in place (2.36.3): a scanned PDF\'s pages as ima
         expect(s).not.toContain('saveAs(r.name');
     });
 });
+
+describe('the paper sheet as a real PDF (2.36.3): «Descargar PDF» saves a .pdf, «Abrir para imprimir» opens it — no window.print', () => {
+    it('no print-from-a-frame and no .html download any more', () => {
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).not.toMatch(/\.print\(\)/);
+        expect(s).not.toContain('srcdoc');
+        expect(s).not.toContain('text/html');
+        expect(s).toContain('request("get", { sheet_id: s.id, format: "pdf" })');
+        expect(s).toContain('saveFile(r.filename, r.mime, r.b64)');
+        expect(s).toContain('request("get", { sheet_id: s.id, format: "ticket" })');
+        // The new tab opens inside the tap, before the ticket is asked for (a phone allows it only then).
+        expect(s).toMatch(/export async function openSheetPdf[\s\S]*?window\.open\("", "_blank"\)[\s\S]*?await ticket\(\)/);
+    });
+    it('the PDF opens at the core portal file route, the same one the badge and sticker PDFs use', async () => {
+        const { sheetFileUrl } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/PaperConsent');
+        const manifest = JSON.parse(src('manifest.json'));
+        const url = new URL(sheetFileUrl('T'.repeat(24)), 'http://site');
+        expect(url.pathname).toBe(`/portal/${manifest.frontend.portalPage.slug}/file`);
+        expect(fs.existsSync(path.resolve(__dirname, '../../../app/portal/[slug]/file/route.ts'))).toBe(true);
+    });
+    it('the labels say PDF in the three languages', () => {
+        for (const [l, re] of [['es', /PDF/], ['en', /PDF/], ['pt', /PDF/]] as const) {
+            expect(consentT(l)('paper.reprint')).toMatch(re);
+            expect(consentT(l)('paper.download')).toMatch(re);
+        }
+    });
+});
