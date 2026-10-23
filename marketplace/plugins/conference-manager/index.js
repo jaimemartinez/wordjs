@@ -35,14 +35,14 @@ const pack = require('./server/lodging-pack');
 const healthMod = require('./server/health');
 const { createMealPriority } = require('./server/meal-priority');
 // «Autorización de datos» (2.33.0): each person's consent, signed with a code sent to their e-mail.
-const { createConsent } = require('./server/consent');
+const { createConsent, emailFieldIn } = require('./server/consent');
 const { docFieldsOf: selfDocFieldsOf } = require('./server/selfpage');
 // Phone numbers with their country (2.33.2): E.164 on write, the conference's default country for national numbers.
 const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.33.2',
+    version: '2.33.3',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -5671,8 +5671,8 @@ exports.init = async function (wordjs) {
     const CONSENT_EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]{2,}$/;
     async function assertConsentEmail(conferenceId, values) {
         const form = await db.all(`SELECT name, label, type, role FROM ${T.fields} WHERE conference_id = ?`, [conferenceId]);
-        const usable = form.filter(f => isFieldColumn(f.name));
-        const f = usable.find(x => x.role === 'email') || usable.find(x => x.name === 'email') || usable.find(x => x.type === 'email');
+        // The same field the consent module reads (role, name, type, or a label like «Correo», 2.33.3).
+        const f = emailFieldIn(form, isFieldColumn);
         const v = f ? String(values[f.name] == null ? '' : values[f.name]).trim() : '';
         if (!CONSENT_EMAIL_RE.test(v)) {
             throw httpError(400, f ? `Escribe un correo válido en «${f.label || f.name}»: allí llega el enlace para que la persona (o su padre, madre o representante) autorice el tratamiento de sus datos.`

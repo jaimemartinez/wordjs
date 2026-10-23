@@ -27,7 +27,7 @@ export function consentMessage(lang: ConsentLang | string, info: ShareInfo): str
         '',
         t('msg.policy', { version: info.policy_version || '', url: info.policy_url || '' }),
         '',
-        t('msg.how', { email: info.email_masked || '', days: info.link_days ?? '' }),
+        info.email_masked ? t('msg.how', { email: info.email_masked, days: info.link_days ?? '' }) : t('msg.how.noemail', { days: info.link_days ?? '' }),
     ].join('\n');
 }
 

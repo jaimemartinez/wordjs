@@ -69,6 +69,8 @@ export default function ConsentPage() {
     const [boxes, setBoxes] = useState({ general: false, health: false, image: false });
     const [health, setHealth] = useState<HealthAnswer | null>(null);
     const [code, setCode] = useState("");
+    // 2.33.3: a person with no e-mail on file types one here; the code goes there.
+    const [email, setEmail] = useState("");
     const [codeSent, setCodeSent] = useState(false);
     const [resendIn, setResendIn] = useState(0);
     const [errors, setErrors] = useState<Record<string, string>>({});
@@ -151,11 +153,12 @@ export default function ConsentPage() {
             const he = healthAnswerError({ is_required: 0 }, health);
             if (he === "other") e.health = lang === "en" ? "Write which other condition." : "Escribe cuál es la otra condición.";
         }
+        if (view.needs_email && !/^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]{2,}$/.test(email.trim())) e.email = t("page.email.missing");
         if (!forCode && !/^\d{6}$/.test(code)) e.code = t("page.code.missing");
         return e;
     };
     const focusFirst = (e: Record<string, string>) => {
-        const first = ["who", "rep", "general", "health", "code"].find((k) => e[k]);
+        const first = ["who", "rep", "general", "health", "email", "code"].find((k) => e[k]);
         if (first && typeof document !== "undefined") document.querySelector(`[data-consent-field="${first}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
     };
 
@@ -165,9 +168,10 @@ export default function ConsentPage() {
         if (Object.keys(e).length) { focusFirst(e); return; }
         setBusy(true);
         try {
-            const r = await post("code", { token, user_agent: navigator.userAgent });
+            const r = await post("code", { token, user_agent: navigator.userAgent, ...(view.needs_email ? { email: email.trim() } : {}) });
             if (r.status === 200) { setCodeSent(true); countdown(r.body.resend_in || 60); setNote({ tone: "blue", text: t("page.code.sent", { email: r.body.email_masked || view.email_masked }) }); }
             else if (r.status === 410) setState({ kind: "error", code: r.body.code || "link" });
+            else if (r.body.field === "email") { setErrors({ email: r.body.error }); focusFirst({ email: r.body.error }); }
             else { if (r.body.resend_in) countdown(r.body.resend_in); setNote({ tone: "rose", text: r.body.error || t("page.network") }); }
         } catch { setNote({ tone: "rose", text: t("page.network") }); }
         finally { setBusy(false); }
@@ -301,7 +305,16 @@ export default function ConsentPage() {
 
                 <section className={card} data-consent-field="code">
                     <h2 className={h2}>{t("page.sign")}</h2>
-                    <p className="text-sm text-gray-700">{t("page.sign.hint", { email: view.email_masked })}</p>
+                    <p className="text-sm text-gray-700">{view.needs_email ? t("page.sign.hint.noemail") : t("page.sign.hint", { email: view.email_masked })}</p>
+                    {view.needs_email && (
+                        <div data-consent-field="email">
+                            <label htmlFor="consent-email" className="block text-xs font-bold text-gray-600 mb-1">{t("page.email.label")}</label>
+                            <input id="consent-email" type="email" inputMode="email" autoComplete="email" className={input(!!errors.email)} value={email} maxLength={254}
+                                disabled={codeSent} onChange={(e) => { setEmail(e.target.value); setErrors({ ...errors, email: "" }); }} data-consent-email="" />
+                            <p className="text-[11px] text-gray-500 mt-1">{t("page.email.hint")}</p>
+                            {err("email")}
+                        </div>
+                    )}
                     {codeSent && (
                         <div>
                             <label htmlFor="consent-code" className="block text-xs font-bold text-gray-600 mb-1">{t("page.code.label")}</label>

@@ -213,3 +213,19 @@ describe('CM select (2.33.2): one styled dropdown with scroll and search for eve
         expect(left.map(f => path.relative(CM, f))).toEqual([]);
     });
 });
+
+describe('no e-mail on file (2.33.3)', () => {
+    it('the copied message says the page asks for the e-mail, in each language', () => {
+        const info = { link: 'https://site.example/portal/conference/autorizacion#t=0123456789abcdef0123456789abcdef', first_name: 'Ana', conference: 'Asume el Riesgo', policy_version: '1.0', policy_url: 'https://site.example/p', link_days: 14, email_masked: '' };
+        expect(consentMessage('es', info)).toContain('escribe tu correo en la página');
+        expect(consentMessage('en', info)).toContain('enter your e-mail on the page');
+        expect(consentMessage('pt', info)).toContain('escreva seu e-mail na página');
+        for (const l of ['es', 'en', 'pt']) expect(consentMessage(l, info)).toContain(info.link);
+    });
+    it('the consent page asks for it only when there is none, with its error in place', () => {
+        const page = src('client/portal/consent/ConsentPage.tsx');
+        expect(page).toContain('{view.needs_email && (');
+        expect(page).toContain('...(view.needs_email ? { email: email.trim() } : {})');
+        expect(page).toContain('err("email")');
+    });
+});
