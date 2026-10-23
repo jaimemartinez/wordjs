@@ -10,18 +10,18 @@ import { translations, type Language } from "../i18n";
 
 const PARTS = ["modes", "challenge", "path", "port80", "dns", "custom"];
 
+/** What a reader sees: the sentence with each part's text in place (the styling is the panel's). */
 function rendered(lang: Language): string {
     const tr = translations[lang];
-    const html = renderToStaticMarkup(<p>{withParts(tr["ssl.auto.note.http01"], {
-        modes: <b>{tr["ssl.auto.note.everyMode"]}</b>,
-        challenge: <b>HTTP-01</b>,
-        path: <code>http://&lt;domain&gt;/.well-known/acme-challenge/</code>,
-        port80: <b>{tr["ssl.auto.port80"]}</b>,
-        dns: <b>DNS</b>,
-        custom: <b>{tr["ssl.auto.note.customUpload"]}</b>,
-    })}</p>);
-    // What a reader sees: the text with the markup taken out.
-    return html.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    const nodes = withParts(tr["ssl.auto.note.http01"], {
+        modes: tr["ssl.auto.note.everyMode"],
+        challenge: "HTTP-01",
+        path: "http://<domain>/.well-known/acme-challenge/",
+        port80: tr["ssl.auto.port80"],
+        dns: "DNS",
+        custom: tr["ssl.auto.note.customUpload"],
+    });
+    return nodes.map((node) => String((node as { props: { children: unknown } }).props.children)).join("");
 }
 
 describe("the HTTP-01 note reads as one sentence in each language", () => {
