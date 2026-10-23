@@ -289,8 +289,12 @@ export function HeroCard({ tone = "blue", className, contentClassName, children,
     };
     return (
         <div className={cx("relative overflow-hidden bg-white rounded-[40px] p-6 sm:p-10 border border-gray-100 shadow-xl shadow-gray-100/50", className)} {...rest}>
-            <div className={cx("absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 rounded-full blur-3xl pointer-events-none", blob[tone][0])}></div>
-            <div className={cx("absolute bottom-0 left-0 -ml-16 -mb-16 w-48 h-48 rounded-full blur-3xl pointer-events-none", blob[tone][1])}></div>
+            {/* The glow sits in its own clipped layer: outside the card it made the card itself scrollable, and focusing a
+                control near its edge (the login's «Mostrar el código») slid the whole form sideways. */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none" style={{ borderRadius: "inherit" }} aria-hidden="true">
+                <div className={cx("absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 rounded-full blur-3xl", blob[tone][0])}></div>
+                <div className={cx("absolute bottom-0 left-0 -ml-16 -mb-16 w-48 h-48 rounded-full blur-3xl", blob[tone][1])}></div>
+            </div>
             <div className={cx("relative", contentClassName)}>{children}</div>
         </div>
     );

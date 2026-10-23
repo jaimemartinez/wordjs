@@ -10,6 +10,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **conference-manager 2.36.0: a printable sticker for the physical badge, and the meal group on badges.**
+  - **«Sticker para imprimir»** is a second design next to the virtual badge, under *Escarapelas › Diseño*, for a
+    label printer. It uses the same designer: texts with the person's data, shapes, images and the QR.
+    - Sizes: presets (62 × 100 mm, the default, and 62 × 29 mm for Brother QL; 100 × 50 mm; 4 × 6 in; 2 × 1 in),
+      or a custom width × height in mm. «1:1» shows it at real size on screen.
+    - Changing the label's shape (tall ↔ wide) offers a layout made for it, or scales the current one.
+    - A sticker may drop its QR. The starting points are black on white, since label printers are thermal.
+  - **Printing**:
+    - for one person (their badge window), the people a search shows, a locality, or everyone;
+    - each sticker comes from the registrant's live data;
+    - a PDF with one label per page at the label's exact size, so no browser margins or headers;
+    - in the print window, choose the sticker printer and the label size, «Márgenes: ninguno» and «Escala: 100 %».
+  - **Meal group (A–F)**:
+    - The designer's «Texto» tab has a «Grupo de comida (letra)» button that places the person's letter in large
+      type. The field was already in «Datos del inscrito», but easy to miss.
+    - A person with no group yet shows nothing.
+    - The letter appears once «Turnos de comida» is on and groups are assigned.
+
 - **conference-manager 2.35.0: registering without an e-mail.** While a conference asks for «Autorización de
   datos», a person can now be registered without an e-mail, for example a walk-in who signs on paper.
   - An e-mail written in the form must still be a valid one. An e-mail field the administrator marked as required
@@ -116,6 +134,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Changed
 
+- **conference-manager 2.36.1: a clearer coordinators' portal.**
+  - **Sign-in**:
+    - With a single published conference, it is already chosen.
+    - The device remembers the conference and the locality last used to sign in. It never stores the access
+      code, and the code field is emptied after signing in.
+    - The code opens a number pad, has a show/hide button, and says where to get it.
+    - The card shows the chosen conference.
+  - **Header**: the sticky bar names the conference and the locality, so the context stays in view after the
+    summary scrolls away.
+  - **Summary**: tiles for registered, paid, unpaid and awaiting validation. While the conference asks for it, a
+    tile also counts who has not authorized the processing of their data. Each tile opens the list on its filter.
+  - **Tools**: «Herramientas de la localidad» folds the badge tools and the paper consent behind one row, so on a
+    phone the list comes first. The device remembers whether it was left open.
+  - **Fix**: the cards' background glow no longer lets a card slide sideways when a control near its edge is
+    focused, which cut off the login form on phones.
 - **conference-manager 2.33.4: the consent e-mails, page and copied message in the e-mail language.**
   - A new plugin setting, **«Idioma de los correos de consentimiento»** (Autorizaciones, for all conferences:
     Español, English or Português), starts as the site's language (WPLANG). A conference can choose its own. The

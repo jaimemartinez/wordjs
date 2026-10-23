@@ -251,11 +251,55 @@ describe("page.tsx wiring of «Participantes»", () => {
         expect(page).toMatch(/feeHub\.setPersonFilter\(id\);\s*feeHub\.setSegment\('transfers'\);\s*setTab\('fees'\);/);
     });
     it("on a phone the three tabs share the width (no strip scrolling sideways), each at least 56 px tall", () => {
-        expect(page).toMatch(/className="grid grid-flow-col auto-cols-fr sm:flex border-b border-gray-200" role="tablist"/);
+        expect(page).toMatch(/className="grid grid-flow-col auto-cols-fr sm:flex border-b border-gray-200 scroll-mt-20" role="tablist"/);
         expect(page).toContain("min-h-14 sm:min-h-12 min-w-0 border-b-2");
         expect(page).not.toMatch(/role="tablist"[^>]*overflow-x-auto|overflow-x-auto[^"]*" role="tablist"/);
     });
     it("Hospedajes is unchanged: still mounted with the same props", () => {
         expect(page).toContain("<Hospedajes authHeaders={portalAuthHeaders} onLocationRefresh={refreshMyLocation}");
+    });
+});
+
+describe("the coordinators' portal UX (2.36.1)", () => {
+    const page = read("CoordinatorPortal.tsx");
+    it("login: one conference is chosen, the last conference and locality come back, never the code", () => {
+        expect(page).toContain("data.length === 1 ? data[0]");
+        expect(page).toContain("writePortalPref('conference', String(selectedConference))");
+        expect(page).toContain("writePortalPref(`location:${selectedConference}`, String(selectedLocation))");
+        expect(page).not.toMatch(/writePortalPref\([^)]*code/);
+        expect(page).toContain("setCode(''); setShowCode(false);");
+        // The code: a number pad, a show / hide button, and where to get it.
+        expect(page).toContain('inputMode="numeric"');
+        expect(page).toContain('data-action="toggle-code"');
+        expect(page).toContain("pídeselo al administrador de la conferencia");
+        // Device storage is best effort (private mode must not break the login).
+        expect(page).toMatch(/function readPortalPref[\s\S]*?catch \{ return null; \}/);
+    });
+    it("dashboard: the header names the conference and the locality; the summary tiles open the list on their filter", () => {
+        expect(page).toContain('data-testid="portal-header-context"');
+        expect(page).toContain("(myLocation as any)?.conference_name");
+        for (const [id, f] of [["kpi-active", "all"], ["kpi-paid", "paid"], ["kpi-unpaid", "unpaid"], ["kpi-review", "pending"]]) {
+            expect(page).toContain(`showList('${f}')} testId="${id}"`);
+        }
+        expect(page).toContain("key={`list-${listPreset.n}`}");
+        expect(page).toContain("initialFilter={{ pay: listPreset.pay }}");
+        expect(page).toContain('testId="kpi-consent"');
+    });
+    it("the locality's tools fold behind one row, remembered per device", () => {
+        expect(page).toContain('data-action="tools-toggle"');
+        expect(page).toContain('aria-expanded={toolsOpen}');
+        expect(page).toContain("writePortalPref('tools', v ? '0' : '1')");
+    });
+    it("a list opened on a filter shows that filter", () => {
+        // Luis owes everything (unpaid); Rosa paid; Ana paid part.
+        const html = list({ initialFilter: { pay: "unpaid" } });
+        expect(html).toContain('data-person="2"');
+        expect(html).not.toContain('data-person="4"');
+        expect(html).not.toContain('data-person="1"');
+    });
+    it("the hero card's glow cannot make the card scroll sideways", async () => {
+        const { HeroCard } = await import("../../../../../../marketplace/plugins/conference-manager/client/portal/ui");
+        const html = renderToStaticMarkup(React.createElement(HeroCard, null, "x"));
+        expect(html).toMatch(/<div class="absolute inset-0 overflow-hidden pointer-events-none"[^>]*aria-hidden="true"><div class="absolute top-0 right-0 -mr-16/);
     });
 });

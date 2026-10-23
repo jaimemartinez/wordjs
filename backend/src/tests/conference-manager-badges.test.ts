@@ -843,3 +843,83 @@ test('free-form designs: saved with their images, previewed, printed with embedd
     assert.strictEqual((await pub(p, 'get', '/public/badge/font?f=../index')).status, 404);
     assert.strictEqual((await pub(p, 'get', '/public/badge/font?f=helvetica-400')).status, 404);
 });
+
+// ── 2.36.0: the printable sticker ──
+const PT_PER_MM = 72 / 25.4;
+const mediaBoxes = (pdf: string) => [...pdf.matchAll(/\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/g)].map(m => [Number(m[1]) / PT_PER_MM, Number(m[2]) / PT_PER_MM].map(v => Math.round(v * 10) / 10));
+
+test('sticker: its own design and size next to the virtual badge, saved together, bounded', async () => {
+    const w = await world();
+    const { p } = w;
+    const cfg0 = ok(await p.call('get', `/badges/config?conference_id=${w.cid}`)).config;
+    assert.strictEqual(cfg0.sticker.layout, 'sticker');
+    assert.deepStrictEqual(cfg0.sticker.size, { w: 62, h: 100 }, 'Brother QL 62 × 100 mm by default');
+    assert.ok(cfg0.sticker.elements.some((e: any) => e.text === '{{@meal_group}}'), 'the default sticker shows the meal group letter');
+    const sticker = { version: 2, layout: 'horizontal', size: { w: 5000, h: 29 }, background: '#ffffff', elements: [
+        { id: 'n', type: 'text', x: 2, y: 2, w: 58, h: 12, text: '{{@name}}', size: 14 },
+        { id: 'g', type: 'text', x: 2, y: 14, w: 20, h: 13, text: '{{@meal_group}}', size: 30, bold: true },
+    ] };
+    const saved = ok(await p.call('put', '/badges/config', { user: DESIGNER, body: { conference_id: w.cid, design: cfg0.design, policy: cfg0.policy, sticker } })).config;
+    assert.strictEqual(saved.sticker.layout, 'sticker', 'always a sticker');
+    assert.deepStrictEqual(saved.sticker.size, { w: 220, h: 29 }, 'bounded to 220 mm');
+    assert.ok(!saved.sticker.elements.some((e: any) => e.type === 'qr'), 'a sticker may have no QR');
+    assert.strictEqual(saved.design.layout, cfg0.design.layout, 'the virtual badge is untouched');
+    // The virtual badge keeps its QR whatever the sticker does.
+    assert.ok(ok(await p.call('get', `/badges/config?conference_id=${w.cid}`)).config.design.version !== 2
+        || ok(await p.call('get', `/badges/config?conference_id=${w.cid}`)).config.design.elements.some((e: any) => e.type === 'qr'));
+    assert.strictEqual((await p.call('put', '/badges/config', { user: VIEWER, body: { conference_id: w.cid, sticker } })).status, 403);
+});
+
+test('sticker: the meal group letter from live data (nothing without a group), one label per page at its exact size', async () => {
+    const w = await world();
+    const { p } = w;
+    const cfg0 = ok(await p.call('get', `/badges/config?conference_id=${w.cid}`)).config;
+    ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: cfg0.design, policy: cfg0.policy, sticker: { ...cfg0.sticker, size: { w: 62, h: 29 } } } }));
+    // The preview of the sticker for a real person: their name; no group yet → no letter.
+    const pv = async (iid: number) => ok(await p.call('post', '/badges/preview', { body: { conference_id: w.cid, inscription_id: iid, target: 'sticker' } })).badge;
+    let b = await pv(w.ana);
+    assert.deepStrictEqual([b.w_mm, b.h_mm], [62, 29]);
+    assert.ok(texts(b).join(' ').includes('Ana'));
+    assert.ok(!b.items.some((i: any) => i.t === 'text' && /^[A-F]$/.test(i.text)), 'no group yet: no letter');
+    // Meal turns on and a group set: the letter appears (only the letter).
+    ok(await p.call('put', '/meals/priority/config', { body: { conference_id: w.cid, enabled: true } }));
+    ok(await p.call('put', `/meals/priority/people/${w.ana}`, { body: { group: 'B' } }));
+    b = await pv(w.ana);
+    assert.ok(b.items.some((i: any) => i.t === 'text' && i.text === 'B'), JSON.stringify(texts(b)));
+    // The sample (no person) shows a sample letter.
+    const sample = ok(await p.call('post', '/badges/preview', { body: { conference_id: w.cid, target: 'sticker' } })).badge;
+    assert.ok(texts(sample).includes('C'));
+    // Print: a locality → one page per person, each exactly 62 × 29 mm; the virtual badge's PDF is unchanged.
+    const d = ok(await p.call('post', '/badges/ticket', { user: VIEWER, body: { conference_id: w.cid, location_id: w.norte, sheet: 'sticker' } })).d;
+    const f = ok(await p.call('get', `/public/badge/file?d=${d}`, { anonymous: true }));
+    assert.strictEqual(f.filename, 'Stickers-Norte.pdf');
+    const boxes = mediaBoxes(Buffer.from(f.b64, 'base64').toString('latin1'));
+    assert.deepStrictEqual(boxes, [[62, 29], [62, 29]], 'Ana and Beto, one label each');
+    const one = ok(await p.call('post', '/badges/ticket', { body: { conference_id: w.cid, inscription_id: w.carla, sheet: 'sticker' } })).d;
+    const f1 = ok(await p.call('get', `/public/badge/file?d=${one}`, { anonymous: true }));
+    assert.strictEqual(f1.filename, 'Sticker-Carla-Rios.pdf');
+    const badge = ok(await p.call('post', '/badges/ticket', { body: { conference_id: w.cid, inscription_id: w.carla, sheet: 'single' } })).d;
+    const fb = ok(await p.call('get', `/public/badge/file?d=${badge}`, { anonymous: true }));
+    assert.notDeepStrictEqual(mediaBoxes(Buffer.from(fb.b64, 'base64').toString('latin1'))[0], [62, 29], 'the virtual badge keeps its card size');
+    // A chosen list (the search) prints just those.
+    const sel = ok(await p.call('post', '/badges/ticket', { body: { conference_id: w.cid, inscription_ids: [w.beto, w.carla], sheet: 'sticker' } })).d;
+    assert.strictEqual(mediaBoxes(Buffer.from(ok(await p.call('get', `/public/badge/file?d=${sel}`, { anonymous: true })).b64, 'base64').toString('latin1')).length, 2);
+    // Codes stay behind «Inscripciones › ver».
+    assert.strictEqual((await p.call('post', '/badges/ticket', { user: NOCODES, body: { conference_id: w.cid, inscription_id: w.ana, sheet: 'sticker' } })).status, 403);
+});
+
+test('the meal group is offered to the designer as a data field', async () => {
+    const w = await world();
+    const fields = ok(await w.p.call('get', `/badges/config?conference_id=${w.cid}`)).available_fields;
+    assert.ok(fields.some((f: any) => f.key === '@meal_group' && f.builtin));
+});
+
+test('the portal session names its conference (the header shows it after a reload too)', async () => {
+    const w = await world();
+    const code = w.p.one(`SELECT code FROM ${T('locations')} WHERE id = ?`, w.norte).code;
+    const login = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: w.norte, code } }));
+    assert.strictEqual(login.location.conference_name, 'Congreso Nacional de Jóvenes');
+    const me = ok(await portal(w.p, 'get', '/portal/me', login.token));
+    assert.strictEqual(me.conference_name, 'Congreso Nacional de Jóvenes');
+    assert.strictEqual(me.code, undefined, 'the access code never leaves');
+});

@@ -16,8 +16,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useModal } from "@/contexts/ModalContext";
 import { BadgeSvg as BadgeCard } from "./BadgeSvg";
 import { badgesApi } from "../lib/badges";
+import { Select } from "../lib/Select";
 import {
-    TEMPLATES, FONTS, editorMetrics, loadFace, faceOf, familyCss, layoutDesign, normalizeDesignV2, cardOf, newId, prepareImage,
+    TEMPLATES, STICKER_TEMPLATES, STICKER_PRESETS, STICKER_MM, presetOf, scaleDesign, stickerTemplateFor, FONTS, editorMetrics, loadFace, faceOf, familyCss, layoutDesign, normalizeDesignV2, cardOf, newId, prepareImage,
 } from "../lib/badgeEditor";
 
 const btn = 'min-h-[36px] px-3 rounded-xl font-black text-[10px] uppercase tracking-widest inline-flex items-center justify-center gap-1.5 disabled:opacity-40';
@@ -127,7 +128,11 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
     };
     const columns = mode === 'wide' ? '290px minmax(0,1fr) 290px' : mode === 'mid' ? 'minmax(0,1fr) 290px' : 'minmax(0,1fr)';
 
-    const card = cardOf(d.layout);
+    const card = cardOf(d.layout, d.size);
+    // 2.36.0: «Sticker para imprimir» — the same designer on a label of the chosen size (no orientation, no fixed QR).
+    const isSticker = d.layout === 'sticker';
+    // A sticker offers the starting points made for its label's shape (tall or wide).
+    const templates = isSticker ? STICKER_TEMPLATES.filter((t: any) => !!t.wide === (card.w > card.h * 1.3)) : TEMPLATES;
     const editable = canManage && !locked;
 
     // ── committing (history) ──
@@ -328,7 +333,8 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
         commit({ ...dRef.current, elements: [...dRef.current.elements, full] }, [full.id]);
     };
     const remove = () => {
-        const ids = sel.filter(id => dRef.current.elements.find((e: any) => e.id === id)?.type !== 'qr');
+        // A sticker may drop its QR (a small label has no room); the virtual badge keeps it for the meal scanner.
+        const ids = sel.filter(id => isSticker || dRef.current.elements.find((e: any) => e.id === id)?.type !== 'qr');
         if (!ids.length) { addToast(tx('badges.ed.qr.keep', 'El QR no se puede quitar: es lo que lee el escáner de comidas.'), 'info'); return; }
         commit({ ...dRef.current, elements: dRef.current.elements.filter((e: any) => !ids.includes(e.id)) }, []);
     };
@@ -367,6 +373,23 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
             return { y: r2(e.y + area.y + area.h - (b.y + b.h)) };
         });
     };
+    // A sticker on another label size: everything scales with it (turning it = swapping width and height). When the
+    // label's SHAPE changes (tall ↔ wide) scaling squeezes the design, so the designer offers a layout made for that
+    // shape instead (an in-app question; «Ajustar mi diseño» keeps the scaling).
+    const setStickerSize = async (size: { w: number; h: number }) => {
+        const w = r2(clampN(Number(size.w) || 0, STICKER_MM.min, STICKER_MM.max)), h = r2(clampN(Number(size.h) || 0, STICKER_MM.min, STICKER_MM.max));
+        if (w === card.w && h === card.h) return;
+        const wideNow = card.w > card.h * 1.3, wideNext = w > h * 1.3;
+        if (wideNow !== wideNext && await confirm(
+            tx('badges.sticker.reshape', 'La etiqueta cambia de forma. ¿Usar un diseño pensado para esta forma? Puedes deshacerlo.'),
+            tx('badges.sticker.reshape.title', 'Otra forma de etiqueta'), false,
+            { confirmText: tx('badges.sticker.reshape.template', 'Usar ese diseño'), cancelText: tx('badges.sticker.reshape.scale', 'Ajustar mi diseño') })) {
+            commit(scaleDesign(normalizeDesignV2(stickerTemplateFor({ w, h }).make()), { w, h }), []);
+            return;
+        }
+        commit(scaleDesign(dRef.current, { w, h }), sel);
+    };
+    const [customSize, setCustomSize] = useState<{ w: string; h: string } | null>(null);
     const setOrientation = (layout: 'horizontal' | 'vertical') => {
         if (layout === d.layout) return;
         const from = cardOf(d.layout), to = cardOf(layout);
@@ -383,7 +406,9 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
     // The host's in-app confirm (never the browser's native dialog).
     const applyTemplate = async (t: any) => {
         if (d.elements.length > 1 && !await confirm(tx('badges.ed.template.confirm', '¿Reemplazar el diseño actual por esta plantilla? Puedes deshacerlo.'), tx('badges.ed.template.title', 'Cambiar de plantilla'), false, { confirmText: tx('badges.ed.template.apply', 'Reemplazar') })) return;
-        commit(t.make(), []);
+        const made = t.make();
+        // A sticker template is drawn for 62 × 100 mm: it lands on the label size in use.
+        commit(isSticker ? scaleDesign(normalizeDesignV2(made), { w: card.w, h: card.h }) : made, []);
     };
 
     const tokenText = (key: string) => `{{${key}}}`;
@@ -393,6 +418,12 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
         let out = String(t || '');
         for (const [k, label] of Object.entries(tokenLabels || {})) out = out.split(`[${label}]`).join(`{{${k}}}`);
         return out;
+    };
+    // The meal group letter (2.32.0, A–F): a big bold letter, centred; empty (not drawn) while the person has no group.
+    const addMealGroup = () => {
+        const side = Math.min(30, card.w - 6, card.h - 6);
+        add({ type: 'text', x: r2((card.w - side) / 2), y: r2((card.h - side) / 2), w: side, h: side, text: '{{@meal_group}}', font: 'montserrat', bold: true,
+            size: r2(side * 2.2), color: isSticker ? '#000000' : '#111827', align: 'center', valign: 'middle', upper: false, ls: 0, lh: 1, fit: 'shrink', name: tx('badges.ed.meal', 'Grupo de comida (letra)') });
     };
     const addText = (kind: 'title' | 'subtitle' | 'body' | string, token?: string) => {
         const w = Math.min(50, card.w - 8);
@@ -450,11 +481,11 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
         if (!fontMenu) return;
         for (const f of FONTS) { const face = faceOf(f.id, false); if (face) loadFace(face).then(() => setFontVer(v => v + 1)); }
     }, [fontMenu]);
-    const thumbs = useMemo(() => (tab === 'templates' ? TEMPLATES.map(t => { const des = normalizeDesignV2(t.make()); return { t, des, badge: layoutDesign(des, { data: sample, qr: qrSample, metrics: editorMetrics, images: {} }) }; }) : []), [tab, sample, qrSample, fontVer]);
+    const thumbs = useMemo(() => (tab === 'templates' ? templates.map(t => { const des = normalizeDesignV2(t.make()); return { t, des, badge: layoutDesign(des, { data: sample, qr: qrSample, metrics: editorMetrics, images: {} }) }; }) : []), [tab, sample, qrSample, fontVer, isSticker]);
     useEffect(() => {
         if (tab !== 'templates') return;
         const faces = new Set<string>();
-        for (const t of TEMPLATES) for (const e of t.make().elements) if (e.type === 'text') { const f = faceOf(e.font, e.bold); if (f) faces.add(f); }
+        for (const t of templates) for (const e of t.make().elements) if (e.type === 'text') { const f = faceOf(e.font, e.bold); if (f) faces.add(f); }
         for (const f of faces) loadFace(f).then(() => setFontVer(v => v + 1));
     }, [tab]);
 
@@ -509,7 +540,7 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
         </div>
     ) : (
         <div className={`${mode === 'narrow' ? 'h-[84px] flex-wrap content-center' : 'h-[48px] flex-nowrap overflow-x-auto'} flex items-center gap-1 rounded-2xl bg-white border-2 border-blue-100 shadow-sm px-2`} data-ed-actionbar="">
-            {selected.some((e: any) => e.type !== 'qr') && (
+            {selected.some((e: any) => isSticker || e.type !== 'qr') && (
                 <button type="button" onClick={remove} className={`${btn} min-h-[34px] shrink-0 bg-rose-600 text-white hover:bg-rose-700`} data-ed-bar-delete="">
                     <i className="fa-solid fa-trash-can" aria-hidden="true"></i>{tx('badges.ed.delete.short', 'Eliminar')}
                 </button>
@@ -569,7 +600,7 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                         {thumbs.map(({ t, badge: b }) => (
                             <button key={t.id} type="button" disabled={!editable} onClick={() => applyTemplate(t)} className="group flex flex-col justify-between text-left rounded-xl border-2 border-gray-100 hover:border-blue-400 p-1.5 disabled:opacity-60" data-ed-template={t.id}>
                                 <div className="flex-1 flex items-center justify-center">
-                                    <div className={`${b.layout === 'vertical' ? 'w-[58%]' : 'w-full'} rounded overflow-hidden shadow ring-1 ring-black/5`}>
+                                    <div className={`${b.layout === 'vertical' || (b.layout === 'sticker' && b.h_mm > b.w_mm) ? 'w-[58%]' : 'w-full'} rounded overflow-hidden shadow ring-1 ring-black/5`}>
                                         <BadgeCard badge={b} images={{}} title={tx(`badges.ed.tpl.${t.id}`, t.name)} />
                                     </div>
                                 </div>
@@ -586,6 +617,13 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                         <button type="button" disabled={!editable} onClick={() => addText('subtitle')} className="text-left rounded-xl border-2 border-gray-100 hover:border-blue-400 px-3 py-2 text-sm font-bold text-gray-800">{tx('badges.ed.text.subtitle', 'Añadir un subtítulo')}</button>
                         <button type="button" disabled={!editable} onClick={() => addText('body')} className="text-left rounded-xl border-2 border-gray-100 hover:border-blue-400 px-3 py-2 text-xs text-gray-700">{tx('badges.ed.text.body', 'Añadir un texto')}</button>
                     </div>
+                    {tokenLabels && tokenLabels['@meal_group'] && (
+                        <button type="button" disabled={!editable} onClick={addMealGroup} data-ed-meal-group=""
+                            className="w-full text-left rounded-xl border-2 border-violet-100 bg-violet-50/60 hover:border-violet-400 px-3 py-2">
+                            <span className="flex items-center gap-2 text-sm font-black text-violet-800"><span className="inline-flex w-7 h-7 shrink-0 items-center justify-center rounded-lg bg-violet-700 text-white text-base">C</span>{tx('badges.ed.meal', 'Grupo de comida (letra)')}</span>
+                            <span className="block text-[11px] text-violet-700/80 mt-0.5">{tx('badges.ed.meal.hint', 'La letra del grupo (A–F) de cada persona, en grande. Si aún no tiene grupo, no se muestra nada.')}</span>
+                        </button>
+                    )}
                     <div>
                         <span className={sectionTitle}>{tx('badges.ed.data', 'Datos del inscrito')}</span>
                         <p className="text-[11px] text-gray-500 mb-1.5">{tx('badges.ed.data.hint', 'Cada escarapela muestra los de su persona.')}</p>
@@ -610,7 +648,11 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                             <ShapeIcon kind={k} /><span className="block w-full truncate text-center">{name}</span>
                         </button>
                     ))}
-                    <button type="button" onClick={() => setSel([d.elements.find((e: any) => e.type === 'qr').id])} className="min-w-0 flex flex-col items-center gap-1 rounded-xl border-2 border-gray-100 hover:border-blue-400 py-2.5 px-1 text-[10px] font-bold text-gray-600">
+                    <button type="button" onClick={() => {
+                        const q = d.elements.find((e: any) => e.type === 'qr');
+                        if (q) setSel([q.id]);
+                        else if (editable) { const side = Math.max(14, Math.min(24, card.w - 6, card.h - 6)); add({ type: 'qr', x: r2((card.w - side) / 2), y: r2(card.h - side - 3), w: side, h: side, bg: !isSticker }); }
+                    }} data-ed-qr="" className="min-w-0 flex flex-col items-center gap-1 rounded-xl border-2 border-gray-100 hover:border-blue-400 py-2.5 px-1 text-[10px] font-bold text-gray-600">
                         <i className="fa-solid fa-qrcode text-lg text-gray-700 h-6 flex items-center" aria-hidden="true"></i><span className="block w-full truncate text-center">{tx('badges.ed.el.qr', 'El QR')}</span>
                     </button>
                 </div>
@@ -655,11 +697,34 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                 <button type="button" className={tbtn} disabled={!editable || !past.current.length} onClick={undo} title={tx('badges.ed.undo', 'Deshacer (Ctrl+Z)')} aria-label={tx('badges.ed.undo', 'Deshacer (Ctrl+Z)')} data-ed-undo=""><i className="fa-solid fa-rotate-left"></i></button>
                 <button type="button" className={tbtn} disabled={!editable || !future.current.length} onClick={redo} title={tx('badges.ed.redo', 'Rehacer (Ctrl+Y)')} aria-label={tx('badges.ed.redo', 'Rehacer (Ctrl+Y)')} data-ed-redo=""><i className="fa-solid fa-rotate-right"></i></button>
                 <span className="w-px h-6 bg-gray-200 mx-0.5" aria-hidden="true"></span>
-                <button type="button" className={d.layout === 'horizontal' ? tbtnOn : tbtn} disabled={!editable} onClick={() => setOrientation('horizontal')} title={tx('badges.layout.h', 'Horizontal')} aria-label={tx('badges.layout.h', 'Horizontal')} aria-pressed={d.layout === 'horizontal'}><i className="fa-solid fa-id-card"></i></button>
-                <button type="button" className={d.layout === 'vertical' ? tbtnOn : tbtn} disabled={!editable} onClick={() => setOrientation('vertical')} title={tx('badges.layout.v', 'Vertical')} aria-label={tx('badges.layout.v', 'Vertical')} aria-pressed={d.layout === 'vertical'}><i className="fa-solid fa-id-badge"></i></button>
+                {isSticker ? (
+                    <>
+                        <Select className="h-9 min-w-[8.5rem] shrink-0 rounded-xl border-2 border-gray-100 bg-white px-2 text-[11px] font-bold text-gray-700" disabled={!editable}
+                            aria-label={tx('badges.sticker.size', 'Tamaño de la etiqueta')} title={tx('badges.sticker.size', 'Tamaño de la etiqueta')} data-ed-sticker-size=""
+                            value={customSize ? 'custom' : (presetOf(card) || { id: 'custom' }).id}
+                            onChange={(e) => {
+                                const p = STICKER_PRESETS.find(x => x.id === e.target.value);
+                                if (p) { setCustomSize(null); setStickerSize(card.h > card.w && p.w > p.h ? { w: p.w, h: p.h } : p.w < p.h === card.w < card.h ? { w: p.w, h: p.h } : { w: p.h, h: p.w }); }
+                                else setCustomSize({ w: String(card.w), h: String(card.h) });
+                            }}>
+                            {STICKER_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                            <option value="custom">{tx('badges.sticker.custom', 'Personalizado (mm)')}</option>
+                        </Select>
+                        <button type="button" className={tbtn} disabled={!editable} onClick={() => setStickerSize({ w: card.h, h: card.w })} title={tx('badges.sticker.turn', 'Girar la etiqueta')} aria-label={tx('badges.sticker.turn', 'Girar la etiqueta')} data-ed-sticker-turn=""><i className="fa-solid fa-arrows-rotate"></i></button>
+                    </>
+                ) : (
+                    <>
+                        <button type="button" className={d.layout === 'horizontal' ? tbtnOn : tbtn} disabled={!editable} onClick={() => setOrientation('horizontal')} title={tx('badges.layout.h', 'Horizontal')} aria-label={tx('badges.layout.h', 'Horizontal')} aria-pressed={d.layout === 'horizontal'}><i className="fa-solid fa-id-card"></i></button>
+                        <button type="button" className={d.layout === 'vertical' ? tbtnOn : tbtn} disabled={!editable} onClick={() => setOrientation('vertical')} title={tx('badges.layout.v', 'Vertical')} aria-label={tx('badges.layout.v', 'Vertical')} aria-pressed={d.layout === 'vertical'}><i className="fa-solid fa-id-badge"></i></button>
+                    </>
+                )}
                 <span className="w-px h-6 bg-gray-200 mx-0.5" aria-hidden="true"></span>
                 <button type="button" className={tbtn} onClick={() => setZoom(z => Math.max(0.5, r2(z - 0.25)))} title={tx('badges.ed.zoomout', 'Alejar')} aria-label={tx('badges.ed.zoomout', 'Alejar')}><i className="fa-solid fa-magnifying-glass-minus"></i></button>
                 {!narrow && <button type="button" className="h-9 px-2 rounded-xl shrink-0 border-2 border-gray-100 bg-white text-[10px] font-black text-gray-600" onClick={() => setZoom(1)} title={tx('badges.ed.zoomfit', 'Ajustar')}>{Math.round(zoom * 100)}%</button>}
+                {isSticker && (
+                    // About the label's real size on a 96 dpi screen (1 mm ≈ 3.78 px): how it will look in the hand.
+                    <button type="button" className={tbtn} onClick={() => setZoom(r2((96 / 25.4) / Math.max(0.01, fitScale)))} title={tx('badges.sticker.real', 'Tamaño real')} aria-label={tx('badges.sticker.real', 'Tamaño real')} data-ed-real-size="">1:1</button>
+                )}
                 <button type="button" className={tbtn} onClick={() => setZoom(z => Math.min(3, r2(z + 0.25)))} title={tx('badges.ed.zoomin', 'Acercar')} aria-label={tx('badges.ed.zoomin', 'Acercar')}><i className="fa-solid fa-magnifying-glass-plus"></i></button>
                 <button type="button" className={showData ? tbtnOn : tbtn} onClick={() => setShowData(v => !v)} aria-pressed={showData} data-ed-sample=""
                     title={showData ? tx('badges.ed.sample.on', 'Mostrando una persona de muestra (toca para ver los campos)') : tx('badges.ed.sample.off', 'Mostrando los campos (toca para ver una persona de muestra)')}
@@ -672,6 +737,20 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                     </button>
                 )}
             </div>
+            {isSticker && customSize && (
+                <div className="flex flex-wrap items-end gap-2 rounded-2xl border border-gray-100 bg-white px-3 py-2" data-ed-sticker-custom="">
+                    {(['w', 'h'] as const).map(k => (
+                        <label key={k} className="text-[10px] font-bold text-gray-600">
+                            {k === 'w' ? tx('badges.sticker.width', 'Ancho (mm)') : tx('badges.sticker.height', 'Alto (mm)')}
+                            <input type="number" inputMode="decimal" min={STICKER_MM.min} max={STICKER_MM.max} step="0.1" className="block w-24 h-8 rounded-lg border-2 border-gray-100 px-2 text-sm"
+                                value={customSize[k]} onChange={(e) => setCustomSize({ ...customSize, [k]: e.target.value })} disabled={!editable} />
+                        </label>
+                    ))}
+                    <button type="button" className="h-8 px-3 rounded-lg bg-gray-900 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-50" disabled={!editable}
+                        onClick={() => { setStickerSize({ w: Number(customSize.w), h: Number(customSize.h) }); setCustomSize(null); }}>{tx('badges.sticker.apply', 'Aplicar')}</button>
+                    <span className="text-[10px] text-gray-400">{tx('badges.sticker.range', 'Entre {min} y {max} mm.').replace('{min}', String(STICKER_MM.min)).replace('{max}', String(STICKER_MM.max))}</span>
+                </div>
+            )}
             {actionBar}
             <div ref={wrapRef} className="relative rounded-3xl bg-[radial-gradient(circle,#e5e7eb_1px,transparent_1px)] bg-[length:16px_16px] bg-gray-50 border border-gray-100 overflow-auto"
                 onPointerDown={() => setSel([])} data-ed-canvas="">
@@ -698,7 +777,7 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                     </svg>
                 </div>
                 <p className="text-center text-[10px] text-gray-400 pb-2.5 px-3">
-                    {d.layout === 'vertical' ? '54 × 85,6 mm' : '85,6 × 54 mm'} · {narrow
+                    {`${String(card.w).replace('.', ',')} × ${String(card.h).replace('.', ',')} mm`} · {narrow
                         ? tx('badges.ed.canvas.hint.touch', 'Toca para elegir · arrastra para mover · esquinas: tamaño · círculo: girar')
                         : tx('badges.ed.canvas.hint', 'Arrastra para mover · esquinas para el tamaño · círculo para girar · Shift: mantener proporción')}
                 </p>
@@ -822,7 +901,7 @@ export function BadgeEditor({ conferenceId, initial, onChange, images, onImages,
                     )}
                     {one && one.type === 'qr' && (
                         <>
-                            <p className="text-[11px] text-gray-600">{tx('badges.ed.qr.hint', 'El QR lleva a «Mi inscripción» y es lo que lee el escáner de comidas: siempre está. Mínimo 14 mm de lado.')}</p>
+                            <p className="text-[11px] text-gray-600">{isSticker ? tx('badges.sticker.qr.hint', 'El QR de la persona, el mismo que lee el escáner de comidas. En una etiqueta pequeña puedes quitarlo. Mínimo 14 mm de lado.') : tx('badges.ed.qr.hint', 'El QR lleva a «Mi inscripción» y es lo que lee el escáner de comidas: siempre está. Mínimo 14 mm de lado.')}</p>
                             <label className="flex items-center gap-2 text-[11px] font-bold text-gray-700">
                                 <input type="checkbox" className="w-4 h-4" checked={one.bg !== false} disabled={!editable} onChange={(e) => update([one.id], () => ({ bg: e.target.checked }))} />
                                 {tx('badges.ed.qr.bg', 'Fondo blanco detrás (recomendado)')}
