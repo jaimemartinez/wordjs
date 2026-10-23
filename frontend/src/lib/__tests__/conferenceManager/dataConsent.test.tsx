@@ -309,7 +309,7 @@ describe('paper consent (2.34.0)', () => {
         const html = sheetHtml(s);
         expect(html).not.toMatch(/<script|<img/);
         expect(html).toContain('&lt;img src=x&gt;');
-        expect(html).toContain('Página 1 de 2');
+        expect(html).toContain('Página 1 de 1');
         expect(html).toContain('lang="pt"');
         expect(sheetText(s)).toContain('G <script>');
     });

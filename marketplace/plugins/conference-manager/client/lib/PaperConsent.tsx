@@ -70,6 +70,7 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
     const [err, setErr] = useState<string | null>(null);
     const [sheetLang, setSheetLang] = useState<string>("");
     const [blank, setBlank] = useState<string>("");
+    const [paper, setPaper] = useState<string>("letter");
     const [busy, setBusy] = useState<string | null>(null);
     const [check, setCheck] = useState<any>(null);
     const [undo, setUndo] = useState<any>(null);
@@ -90,7 +91,7 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         if (n !== undefined && !(Number.isInteger(n) && n >= 0 && n <= (data?.limits?.max_blank || 40))) { setErr(t("paper.blank.bad", { max: data?.limits?.max_blank || 40 })); return; }
         setBusy("create"); setErr(null);
         try {
-            const r = await request("post", { action: "create", blank: n, lang: sheetLang || data?.lang });
+            const r = await request("post", { action: "create", blank: n, lang: sheetLang || data?.lang, paper });
             saveAs(fileName(r.sheet.code), r.html);
             addToast(t("paper.downloaded", { code: r.sheet.code }), "success");
             setView({ kind: "printed", code: r.sheet.code, html: r.html });
@@ -213,6 +214,13 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                                     {Object.entries(LANG_NAMES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                                 </Select>
                             </div>
+                            <div style={{ flex: "0 1 10rem" }}>
+                                <label className={lbl} htmlFor="cp-paper">{t("paper.size")}</label>
+                                <Select id="cp-paper" className={input} value={paper} onChange={(e) => setPaper(e.target.value)}>
+                                    <option value="letter">{t("paper.size.letter")}</option>
+                                    <option value="a4">A4</option>
+                                </Select>
+                            </div>
                             <div style={{ flex: "0 1 12rem" }}>
                                 <label className={lbl} htmlFor="cp-blank">{t("paper.blank")}</label>
                                 <input id="cp-blank" type="number" min={0} max={data.limits.max_blank} inputMode="numeric" className={input} placeholder={String(data.limits.default_blank)} value={blank} onChange={(e) => { setBlank(e.target.value); setErr(null); }} />
@@ -230,7 +238,7 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                             <div key={s.id} className="rounded-lg border border-gray-100 p-3 space-y-2" data-paper-sheet={s.code}>
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                     <div className="min-w-0">
-                                        <div className="text-sm font-bold text-gray-900">{t("paper.sheet", { code: s.code })} <span className="ml-1 text-[11px] font-semibold text-gray-500">{LANG_NAMES[s.lang] || s.lang} · v{s.policy_version}</span></div>
+                                        <div className="text-sm font-bold text-gray-900">{t("paper.sheet", { code: s.code })} <span className="ml-1 text-[11px] font-semibold text-gray-500">{LANG_NAMES[s.lang] || s.lang} · {s.paper === "a4" ? "A4" : t("paper.size.letter")} · v{s.policy_version}</span></div>
                                         <div className="text-[11px] text-gray-500">{t("paper.sheet.meta", { rows: s.rows, blank: s.blank, when: when(s.created_utc) })} · {t("paper.marked", { n: s.marked })}</div>
                                     </div>
                                     <div className="flex flex-wrap gap-2">

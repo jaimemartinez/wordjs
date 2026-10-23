@@ -60,17 +60,25 @@ test('the sheet: the locality\'s pending people, the policy in force, one author
     assert.ok(html.includes('La iglesia en Barranquilla') && html.includes('datos@example.org'), 'controller and contact');
     // ONE authorization: the three configured texts in one block, health and image said to be voluntary.
     const texts = ok(await w.p.call('get', `/consent/settings?conference_id=${w.cid}`)).settings;
-    assert.ok(html.includes('<h2>Consent</h2>'), 'one authorization block');
+    assert.ok(html.includes('<b>Consent.</b>'), 'one authorization block');
     assert.ok(texts.text_health.startsWith('Autorizo expresamente') && html.includes('Autorizo expresamente el tratamiento de mis datos sensibles de salud'), 'the configured health text, in it');
     assert.ok(html.includes('Autorizo el uso de mi imagen') && html.includes('como Responsable'), 'the image and general texts, in it');
     assert.ok(html.includes('voluntary: I am not obliged to give it'));
     // Opt-out boxes, not Sí / No.
     assert.ok(html.includes('I do not consent to health data') && html.includes('I do not consent to use of image') && html.includes('Legal guardian (minors)'));
     assert.ok(!/>Yes<|>No</.test(html), 'no Yes / No columns');
-    // 2 people + 12 blank = 14 rows → 2 signature pages + the cover: 3 pages, each with its QR and «Page i of 3».
-    assert.strictEqual((html.match(/<section class="page">/g) || []).length, 3);
-    for (const i of [1, 2, 3]) assert.ok(html.includes(`Page ${i} of 3`), `page ${i}`);
-    assert.strictEqual((html.match(/<svg /g) || []).length, 3, 'a QR per page');
+    // 2 people + 12 blank = 14 rows over several pages; EVERY page repeats the authorization, the table header, the QR
+    // and «Page i of n» (no cover page: whoever signs a later page reads what they sign). Letter by default.
+    const pages = (html.match(/<section class="page">/g) || []).length;
+    assert.ok(pages >= 2, `${pages} pages`);
+    for (let i = 1; i <= pages; i++) assert.ok(html.includes(`Page ${i} of ${pages}`), `page ${i}`);
+    for (const piece of [/<svg /g, /<b>Consent\.<\/b>/g, /<thead>/g, /voluntary: I am not obliged/g]) assert.strictEqual((html.match(piece) || []).length, pages, String(piece));
+    assert.strictEqual((html.match(/<td class="n">/g) || []).length, 14, 'every row once');
+    assert.ok(html.includes('@page { size: letter landscape'));
+    const a4 = ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create', paper: 'a4' }));
+    assert.strictEqual(a4.sheet.paper, 'a4');
+    assert.ok(a4.html.includes('@page { size: A4 landscape'));
+    assert.strictEqual((await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create', paper: 'legal' })).status, 400);
     assert.ok(!/<script/i.test(html), 'no script in the printable page');
     // An injected name is escaped.
     const evil = ok(await w.portal('post', '/portal/inscriptions', w.tNorte, { first_name: '<img src=x onerror=alert(1)>', last_name: 'X', email: 'x@example.org', age: 30 })).id;
@@ -82,7 +90,7 @@ test('the sheet: the locality\'s pending people, the policy in force, one author
     assert.strictEqual(reprint.html, html);
     // Every sheet is logged in the conference's chain.
     const audit = w.p.q(`SELECT kind, actor FROM ${PREFIX}consent_events WHERE conference_id = ? AND inscription_id IS NULL ORDER BY id`, w.cid) as any[];
-    assert.deepStrictEqual(audit.map(a => a.kind), ['paper_sheet_created', 'paper_sheet_created']);
+    assert.deepStrictEqual(audit.map(a => a.kind), ['paper_sheet_created', 'paper_sheet_created', 'paper_sheet_created']);
     assert.strictEqual(audit[0].actor, 'portal:Norte');
     assert.ok(ana);
 });

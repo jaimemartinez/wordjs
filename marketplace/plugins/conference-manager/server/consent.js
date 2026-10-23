@@ -1123,7 +1123,7 @@ function createConsent(base) {
         await db.run(`UPDATE ${T.consentRequests} SET state = 'pending', general = 0, health = 0, image = 0, granted_s = NULL, method = NULL, sheet_id = NULL, verbal_s = NULL, verbal_by = NULL, verbal_event_id = NULL, updated_s = ? WHERE id = ?`, [nowS(), r.id]);
     }
     const paper = createPaper({
-        db, T, P, createIndex, createUniqueIndex, append, policySnapshot, formOf, conferenceOf, requestOf, isEnabled, ensureReady, minorByAge, settingsOf, identityOf,
+        db, T, P, createIndex, createUniqueIndex, addColumnIfMissing, append, policySnapshot, formOf, conferenceOf, requestOf, isEnabled, ensureReady, minorByAge, settingsOf, identityOf,
         textsOf: async (cid, conf, body) => (body ? { texts: fillTexts(body, conf) } : textsOf(cid, conf)),
         grantPaper, ungrantPaper, settleVerbal, deps: () => D,
     });

@@ -32,7 +32,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { sheetHtml, sheetText, LANGS } = require('./consent-paper-sheet');
+const { sheetHtml, sheetText, LANGS, PAPERS } = require('./consent-paper-sheet');
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const isoUtc = (ms = Date.now()) => new Date(ms).toISOString();
@@ -78,7 +78,7 @@ const MSG = {
  * settingsOf, deps() (the install deps: personWithName, health, randomToken, …).
  */
 function createPaper(core) {
-    const { db, T, P, createIndex, createUniqueIndex } = core;
+    const { db, T, P, createIndex, createUniqueIndex, addColumnIfMissing } = core;
     T.consentSheets = `${P}consent_sheets`;
     T.consentSheetFiles = `${P}consent_sheet_files`;
 
@@ -89,6 +89,7 @@ function createPaper(core) {
             'location_id INT NOT NULL',
             'code VARCHAR(16) NOT NULL',
             'lang VARCHAR(8)',
+            'paper VARCHAR(8)',
             'policy_id INT',
             'policy_version VARCHAR(40)',
             'policy_sha256 VARCHAR(64)',
@@ -100,6 +101,7 @@ function createPaper(core) {
             'created_utc VARCHAR(32) NOT NULL',
             'created_s INT NOT NULL',
         ]);
+        if (addColumnIfMissing) await addColumnIfMissing(T.consentSheets, 'paper', 'VARCHAR(8)');
         await createUniqueIndex(`${P}uidx_consent_sheets_code`, T.consentSheets, 'code');
         await createIndex(`${P}idx_consent_sheets_loc`, T.consentSheets, 'conference_id, location_id');
         // Never updated, never deleted: each file is evidence.
@@ -152,7 +154,7 @@ function createPaper(core) {
         for (const s of rows) {
             const marked = await db.get(`SELECT COUNT(*) AS n FROM ${T.consentRequests} WHERE sheet_id = ? AND state = 'granted' AND method = 'paper'`, [s.id]);
             out.push({
-                id: Number(s.id), code: s.code, lang: s.lang, policy_version: s.policy_version, created_by: s.created_by || null, created_utc: s.created_utc,
+                id: Number(s.id), code: s.code, lang: s.lang, paper: s.paper || 'letter', policy_version: s.policy_version, created_by: s.created_by || null, created_utc: s.created_utc,
                 rows: rosterOf(s).length, blank: Number(s.blank) || 0, files: await filesOf(s.id), marked: Number(marked && marked.n) || 0,
                 roster: rosterOf(s).map(p => ({ row: p.row, inscription_id: p.id })),
             });
@@ -169,7 +171,7 @@ function createPaper(core) {
         try { body = pol ? JSON.parse(pol.body) : {}; } catch { body = {}; }
         const { texts } = await core.textsOf(sheet.conference_id, conf, body);
         return sheetHtml({
-            lang: sheet.lang, code: sheet.code, created_utc: sheet.created_utc, conference: conf ? conf.name : '', location: loc ? loc.name : '',
+            lang: sheet.lang, paper: sheet.paper, code: sheet.code, created_utc: sheet.created_utc, conference: conf ? conf.name : '', location: loc ? loc.name : '',
             policy: { url: body.policy_url || '', version: sheet.policy_version, sha256: sheet.policy_sha256 },
             responsible: body.responsible || '', contact: body.contact_email || '', texts,
             people: rosterOf(sheet).map(p => ({ row: p.row, name: p.name })), blank: Number(sheet.blank) || 0,
@@ -193,6 +195,9 @@ function createPaper(core) {
         const s = await core.settingsOf(cid);
         const lang = b.lang ? String(b.lang).toLowerCase() : s.mail_lang;
         if (!LANGS.includes(lang)) throw httpError(400, 'Idioma de la hoja inválido (es, en o pt).');
+        // «Carta» (Letter) by default, the Colombian standard; A4 on request.
+        const paper = b.paper ? String(b.paper).toLowerCase() : 'letter';
+        if (!PAPERS[paper]) throw httpError(400, 'Tamaño de papel inválido (carta o A4).');
         const conf = await core.conferenceOf(cid);
         const { texts } = await core.textsOf(cid, conf);
         const policy = await core.policySnapshot(cid, s);
@@ -202,13 +207,13 @@ function createPaper(core) {
             responsible: s.responsible, contact: s.contact_email, texts });
         const code = await newCode();
         const ms = Date.now();
-        const r = await db.run(`INSERT INTO ${T.consentSheets} (conference_id, location_id, code, lang, policy_id, policy_version, policy_sha256, text, text_sha256, roster, blank, created_by, created_utc, created_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [cid, scope.location.id, code, lang, policy.id, s.policy_version, policy.sha256, text, sha256(text), JSON.stringify(roster), blank, scope.actor, isoUtc(ms), Math.floor(ms / 1000)]);
+        const r = await db.run(`INSERT INTO ${T.consentSheets} (conference_id, location_id, code, lang, paper, policy_id, policy_version, policy_sha256, text, text_sha256, roster, blank, created_by, created_utc, created_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [cid, scope.location.id, code, lang, paper, policy.id, s.policy_version, policy.sha256, text, sha256(text), JSON.stringify(roster), blank, scope.actor, isoUtc(ms), Math.floor(ms / 1000)]);
         const id = Number(r.lastID);
         await core.append({ conference_id: cid, inscription_id: null, kind: 'paper_sheet_created', actor: scope.actor, policy_version: s.policy_version, policy_sha256: policy.sha256, text_sha256: sha256(text),
             data: { sheet_id: id, code, location_id: Number(scope.location.id), location: scope.location.name, rows: roster.length, blank, lang, via: scope.via } });
         const sheet = await db.get(`SELECT * FROM ${T.consentSheets} WHERE id = ?`, [id]);
-        return { sheet: { id, code, lang, rows: roster.length, blank }, html: await htmlOf(sheet) };
+        return { sheet: { id, code, lang, paper, rows: roster.length, blank }, html: await htmlOf(sheet) };
     }
 
     async function upload(scope, sheet, body, httpError) {

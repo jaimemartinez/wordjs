@@ -13,17 +13,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     data on a printed sheet. This sits alongside the e-mailed code; it does not replace it. Coordinators work in
     the portal, for their own locality only. Administrators work in **Autorizaciones**, for any locality.
     - **Descargar plantilla** makes a sheet for the locality, as a print-ready page:
-      - It is printed in Spanish, English or Portuguese, by default the consent e-mail language.
-      - Page 1 has the policy in force (its version, address and SHA-256), the controller and contact, the
-        purpose, the rights and how to exercise them.
-      - It also holds **one authorization** in a single block, the configured general, image and health texts.
-        It says that health and image are voluntary, and one signature covers it all.
-      - The next pages list the locality's people without an authorization yet. Each row has the name, the
-        document and a signature, and the legal representative of a minor (name, document, signature).
+      - It is printed in Spanish, English or Portuguese, by default the consent e-mail language, on Letter
+        («carta», the default) or A4, landscape.
+      - **Every page** starts with a compact header: the controller and contact, the purpose, the rights, the
+        policy in force (address, version and SHA-256), and how to sign. Whoever signs on any page reads what they
+        sign.
+      - The header holds **one authorization** in a single block, the configured general, image and health
+        texts. It says that health and image are voluntary, and one signature covers it all.
+      - Under the header, the locality's people without an authorization yet, as many rows as fit the page. Each
+        row has the name, the document and a signature, and the legal representative of a minor (name, document,
+        signature).
       - Each row also has two narrow opt-out boxes, «No autorizo datos de salud» and «No autorizo uso de imagen».
         An unmarked box means authorized; the registration goes ahead either way.
       - Blank rows follow, for walk-ins.
-      - Every page carries the sheet id, «page i of n» and a QR code.
+      - The bottom of every printed page carries the sheet id, «page i of n» and a QR code.
       - The same sheet can be downloaded or printed again at any time.
     - **Subir hoja firmada** keeps the signed pages privately, each with the SHA-256 of its bytes:
       - Photos are compressed in the browser; a PDF goes up as it is, up to 2 MB.

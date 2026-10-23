@@ -54,13 +54,13 @@ correo», and the link can be shared by hand (it is useless without the code sen
 For people who sign by hand. It sits alongside the e-mailed code and does not replace it. Coordinators use it in
 the portal, for their own locality. Administrators use it in **Conference › Autorizaciones**, for any locality.
 
-1. **Descargar plantilla** makes a sheet for the locality:
-   - page 1 has the policy in force (version, address and SHA-256), the controller, the contact, the purpose and
-     the rights;
-   - it also holds ONE authorization, the three configured texts in a single block, which says that health and
+1. **Descargar plantilla** makes a sheet for the locality, on Letter («carta», the default) or A4, landscape. Every
+   page has:
+   - a compact header: the controller, the contact, the purpose, the rights, the policy in force (version, address
+     and SHA-256), and ONE authorization, the three configured texts in a single block, which says that health and
      image are voluntary;
-   - the next pages list the people without an authorization yet, then blank rows;
-   - every page has the sheet id, the page number and a QR code.
+   - the people without an authorization yet, then blank rows, as many as fit under the header;
+   - the sheet id, the page number and a QR code at the bottom.
 
    Print it, and have each person write their document and sign once. Whoever does not authorize health data or
    the use of their image marks that box («No autorizo datos de salud» / «No autorizo uso de imagen»); the
