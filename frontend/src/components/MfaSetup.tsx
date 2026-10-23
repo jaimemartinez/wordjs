@@ -5,7 +5,7 @@ import qrcode from "qrcode-generator";
 import { mfaApi, MfaStatus } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { Button } from "@/components/ui";
+import { Button, Input } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
@@ -139,7 +139,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
         finally { setBusy(false); }
     };
 
-    const codeInput = "w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none font-mono tracking-widest text-center";
+    const codeInput = "font-mono tracking-widest text-center";
 
     return (
         // @container: the card sits in a narrow column of the account page at tablet widths (1024px), so its
@@ -176,8 +176,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                         <div className="flex-1 min-w-0 w-full">
                             <label htmlFor={manualKeyId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.manualKey")}</label>
                             <code id={manualKeyId} className="block break-all bg-gray-50 rounded-xl px-3 py-2 font-mono text-xs text-gray-600 mb-4">{enroll.secret}</code>
-                            <label htmlFor={enrollCodeId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.codeLabel")}</label>
-                            <input id={enrollCodeId} value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" className={codeInput} required />
+                            <Input id={enrollCodeId} size="md" label={t("mfa.codeLabel")} value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" className={codeInput} required />
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-3">
@@ -191,10 +190,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                     <p className="text-sm text-gray-500">
                         {(status.backupCodesRemaining === 1 ? t("mfa.backupRemaining.one") : t("mfa.backupRemaining.other")).replace("{count}", String(status.backupCodesRemaining))}
                     </p>
-                    <div>
-                        <label htmlFor={manageCodeId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.enterCurrentCode")}</label>
-                        <input id={manageCodeId} value={manageCode} onChange={(e) => setManageCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder={t("mfa.codePlaceholder")} className={codeInput} />
-                    </div>
+                    <Input id={manageCodeId} size="md" label={t("mfa.enterCurrentCode")} value={manageCode} onChange={(e) => setManageCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder={t("mfa.codePlaceholder")} className={codeInput} />
                     <MfaStepUpFields stepUp={manageStepUp} withCode={false} />
                     <div className="flex flex-wrap gap-3">
                         <Button variant="secondary" icon="fa-rotate" onClick={regenerate} loading={busy} disabled={!manageCode.trim()}>{t("mfa.regenerate")}</Button>
@@ -205,23 +201,18 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                 // ── off: prove the account password, and only then mint + show the secret ──
                 <form onSubmit={startEnroll} className="mt-6 space-y-4">
                     <p className="text-sm text-gray-500">{t("mfa.offDescription")}</p>
-                    <div>
-                        <label htmlFor={enrollPasswordId} className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-1">
-                            {tf("mfa.currentPassword", "Your current password")}
-                        </label>
-                        <input
-                            id={enrollPasswordId}
-                            type="password"
-                            value={enrollPassword}
-                            onChange={(e) => setEnrollPassword(e.target.value)}
-                            autoComplete="current-password"
-                            required
-                            className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none"
-                        />
-                        <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
-                            {tf("mfa.currentPassword.help", "Turning two-factor on locks this account to one device, so it takes more than being signed in: re-enter your password.")}
-                        </p>
-                    </div>
+                    <Input
+                        id={enrollPasswordId}
+                        size="md"
+                        type="password"
+                        revealable
+                        label={tf("mfa.currentPassword", "Your current password")}
+                        help={tf("mfa.currentPassword.help", "Turning two-factor on locks this account to one device, so it takes more than being signed in: re-enter your password.")}
+                        value={enrollPassword}
+                        onChange={(e) => setEnrollPassword(e.target.value)}
+                        autoComplete="current-password"
+                        required
+                    />
                     <Button type="submit" icon="fa-plus" loading={busy} disabled={!enrollPassword}>{t("mfa.enable")}</Button>
                 </form>
             )}

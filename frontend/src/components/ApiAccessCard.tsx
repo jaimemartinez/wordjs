@@ -11,7 +11,7 @@ import { settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { Card } from "@/components/ui";
+import { Card, Switch } from "@/components/ui";
 import { optionEnabled } from "@/lib/optionFlags";
 import { withServerReason } from "@/lib/errorText";
 
@@ -88,17 +88,12 @@ export default function ApiAccessCard() {
                             {!explicit && introspection !== null && <> {t("apiAccess.introspectionDefault")}</>}
                         </p>
                     </div>
-                    <button
-                        type="button"
-                        role="switch"
-                        aria-checked={!!introspection}
+                    <Switch
+                        checked={!!introspection}
                         aria-label={t("apiAccess.introspection")}
                         disabled={saving || introspection === null}
-                        onClick={toggle}
-                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-60 ${introspection ? "bg-blue-600" : "bg-gray-200"}`}
-                    >
-                        <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${introspection ? "translate-x-6" : "translate-x-1"}`} />
-                    </button>
+                        onChange={() => toggle()}
+                    />
                 </div>
             )}
         </Card>

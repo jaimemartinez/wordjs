@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import DialogLayer from "./DialogLayer";
-import { Button } from "@/components/ui";
+import { Button, UnstyledButton } from "@/components/ui";
 import { useI18n } from "@/contexts/I18nContext";
 
 /**
@@ -60,14 +60,14 @@ export default function SecretRevealModal({
                     <code className="block w-full break-all bg-gray-900 text-emerald-300 rounded-2xl px-5 py-4 pr-14 font-mono text-sm select-all">
                         {secret}
                     </code>
-                    <button
+                    <UnstyledButton
                         onClick={copy}
                         title={t('secret.copyTitle')}
                         aria-label={t('secret.copyTitle')}
                         className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-xl bg-white/10 text-white hover:bg-white/20 flex items-center justify-center transition-all"
                     >
-                        <i className={`fa-solid ${copied ? "fa-check text-emerald-400" : "fa-copy"} text-sm`}></i>
-                    </button>
+                        <i className={`fa-solid ${copied ? "fa-check text-emerald-400" : "fa-copy"} text-sm`} aria-hidden="true"></i>
+                    </UnstyledButton>
                 </div>
 
                 <div className="mt-4 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-xl px-4 py-3">
