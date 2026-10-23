@@ -454,3 +454,58 @@ test('phones (2.33.2): E.164 on write, the conference default for national numbe
     const links = ok(await w.p.call('post', '/badges/links', { body: { conference_id: w.cid, inscription_id: a.id } }));
     assert.strictEqual(links.country_code, '593');
 });
+
+test('no e-mail on file (2.33.3): «Copiar mensaje» still works, the page asks for one, the code and the evidence use it', async () => {
+    const w = await world();
+    const id = (await w.register({})).body.id as number;
+    // The person's e-mail is gone (registered before consent was asked, or cleared).
+    w.p.exec(`UPDATE ${PREFIX}inscriptions SET email = '' WHERE id = ?`, id);
+    w.p.exec(`UPDATE ${PREFIX}consent_requests SET email = NULL WHERE inscription_id = ?`, id);
+    const share = ok(await portal(w.p, 'post', '/portal/consent/share', w.ptoken, { inscription_id: id }));
+    assert.strictEqual(share.email_masked, '');
+    assert.strictEqual(JSON.parse(w.events(id).filter(e => e.kind === 'link_shared').pop().data).email_on_file, false);
+    const token = share.link.split('#t=')[1];
+    const view = ok(await w.pub('open', { token })).view;
+    assert.strictEqual(view.needs_email, true);
+    // The e-mail is checked before any code leaves; then the code goes to it.
+    const bad = await w.pub('code', { token, email: 'not-an-email' });
+    assert.strictEqual(bad.status, 400);
+    assert.strictEqual(bad.body.field, 'email');
+    ok(await w.pub('code', { token, email: 'Nueva.Persona@Example.org' }));
+    const code = w.lastCode('nueva.persona@example.org');
+    assert.ok(code, 'the code went to the typed e-mail');
+    assert.strictEqual(JSON.parse(w.events(id).filter(e => e.kind === 'otp_sent').pop().data).email_source, 'typed_on_page');
+    ok(await w.pub('confirm', { token, code, ...GRANT }));
+    const g = w.events(id).find(e => e.kind === 'granted');
+    assert.strictEqual(g.email, 'nueva.persona@example.org');
+    assert.deepStrictEqual({ v: JSON.parse(g.data).verified_email, s: JSON.parse(g.data).email_source }, { v: 'nueva.persona@example.org', s: 'typed_on_page' });
+    // It fills the empty e-mail field and the request; the copy goes to it.
+    assert.strictEqual(w.p.one(`SELECT email FROM ${PREFIX}inscriptions WHERE id = ?`, id).email, 'nueva.persona@example.org');
+    assert.strictEqual(w.p.one(`SELECT email FROM ${PREFIX}consent_requests WHERE inscription_id = ?`, id).email, 'nueva.persona@example.org');
+    assert.ok(w.p.mails.some((m: any) => m.to === 'nueva.persona@example.org' && /registrada/.test(m.subject)));
+    // With an e-mail on file, a typed one is ignored: the code still goes to the e-mail on file.
+    const other = (await w.register({ first_name: 'Eva', email: 'eva@example.org' })).body.id as number;
+    const t2 = w.linkToken('eva@example.org')!;
+    assert.strictEqual(ok(await w.pub('open', { token: t2 })).view.needs_email, false);
+    ok(await w.pub('code', { token: t2, email: 'intruso@example.org' }, 'ck-eva'));
+    assert.ok(w.lastCode('eva@example.org') && !w.lastCode('intruso@example.org'));
+    assert.ok(other);
+});
+
+test('the e-mail field is found by its label too (a custom «Correo electrónico» field, 2.33.3)', async () => {
+    const C = require(path.join(PLUGIN_DIR, 'server/consent.js'));
+    const yes = () => true;
+    assert.strictEqual(C.emailFieldIn([{ name: 'f_a', label: 'Correo electrónico', type: 'text' }], yes).name, 'f_a');
+    assert.strictEqual(C.emailFieldIn([{ name: 'f_b', label: 'E-mail', type: 'text' }], yes).name, 'f_b');
+    assert.strictEqual(C.emailFieldIn([{ name: 'f_c', label: 'Correos enviados', type: 'select' }], yes), null);
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Otra', slug: `dc-mail-${Date.now()}`, date_start: '2030-01-10', date_end: '2030-01-12' } })).id as number;
+    ok(await p.call('post', '/fields', { body: { conference_id: cid, template: 'first_name' } }));
+    const f = ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Correo electrónico', type: 'text' } }));
+    const col = p.one(`SELECT name FROM ${PREFIX}fields WHERE conference_id = ? AND label = 'Correo electrónico'`, cid).name;
+    ok(await p.call('put', '/consent/settings', { body: { conference_id: cid, enabled: true } }));
+    const r = ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: 'Ana', [col]: 'ana@example.org' } }));
+    assert.strictEqual(r.consent.email_masked, 'a***@e***.org');
+    assert.ok(p.mails.some((m: any) => m.to === 'ana@example.org'));
+    assert.ok(f);
+});

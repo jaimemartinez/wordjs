@@ -147,6 +147,11 @@ const es: Record<string, string> = {
     'copy.whatsapp': 'Abrir en WhatsApp',
     'copy.close': 'Cerrar',
     'copy.replaces': 'Es un enlace nuevo: el que se envió antes deja de funcionar.',
+    'page.sign.hint.noemail': 'Escribe tu correo: te enviaremos allí un código de 6 dígitos. Escribirlo es tu firma electrónica.',
+    'page.email.label': 'Tu correo electrónico',
+    'page.email.hint': 'Quedará en tu inscripción y allí recibirás la copia de lo que autorizas.',
+    'page.email.missing': 'Escribe un correo válido: allí te enviaremos el código para firmar.',
+    'msg.how.noemail': 'Para firmar, escribe tu correo en la página: te enviaremos allí un código. El enlace vale {days} días y se usa una sola vez.',
 };
 
 const en: Record<string, string> = {
@@ -280,6 +285,11 @@ const en: Record<string, string> = {
     'copy.whatsapp': 'Open in WhatsApp',
     'copy.close': 'Close',
     'copy.replaces': 'This is a new link: the one sent before stops working.',
+    'page.sign.hint.noemail': 'Enter your e-mail: we will send a 6-digit code there. Entering it is your electronic signature.',
+    'page.email.label': 'Your e-mail',
+    'page.email.hint': 'It is saved in your registration, and the copy of what you consent to goes there.',
+    'page.email.missing': 'Enter a valid e-mail: we will send the code to sign there.',
+    'msg.how.noemail': 'To sign, enter your e-mail on the page: we will send a code there. The link is valid for {days} days and works once.',
 };
 
 const pt: Record<string, string> = {
@@ -413,6 +423,11 @@ const pt: Record<string, string> = {
     'copy.whatsapp': 'Abrir no WhatsApp',
     'copy.close': 'Fechar',
     'copy.replaces': 'É um link novo: o enviado antes deixa de funcionar.',
+    'page.sign.hint.noemail': 'Escreva seu e-mail: enviaremos para lá um código de 6 dígitos. Digitá-lo é a sua assinatura eletrônica.',
+    'page.email.label': 'Seu e-mail',
+    'page.email.hint': 'Fica na sua inscrição, e a cópia do que você autoriza chega a ele.',
+    'page.email.missing': 'Escreva um e-mail válido: enviaremos para lá o código para assinar.',
+    'msg.how.noemail': 'Para assinar, escreva seu e-mail na página: enviaremos um código para lá. O link vale {days} dias e só pode ser usado uma vez.',
 };
 
 
