@@ -14,7 +14,7 @@ import ParticipantList from "./ParticipantList";
 import ParticipantSheet from "./ParticipantSheet";
 import { consentT } from "../lib/consentI18n";
 import { PortalPaperConsent } from "./ConsentBits";
-import { familyGroupsOf, isCancelled, personName, pruneSelection, type PortalPerson } from "./participants";
+import { familyGroupsOf, isCancelled, payStateOf, personName, pruneSelection, type PayFilter, type PortalPerson } from "./participants";
 // «Pagos de cuotas» (conference-manager ≥ 2.18.0): the tab, its data hub and its sheets (feePayments.ts holds the rules).
 import FeePaymentsTab, { FeeSheets, useFeeHub } from "./FeePaymentsTab";
 import { feeBadge, hasFeePayments, mergeBalances, rowBalanceC, type PortalFeeView } from "./feePayments";
@@ -24,7 +24,7 @@ import { PortalBadgeBulk } from "./PortalBadges";
 import LegacyBulkPayment from "./LegacyBulkPayment";
 import { useFieldErrors } from "../lib/useFieldErrors";
 // Visual primitives shared with the conference-manager admin design language (see ui.tsx).
-import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Notice, Spinner, captionCls, captionWideCls, cx, headingCls, inputBoldCls, inputCls, selectCls } from "./ui";
+import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, KpiTile, Notice, Spinner, captionCls, captionWideCls, cx, headingCls, inputBoldCls, inputCls, selectCls } from "./ui";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
 import { HEALTH_FIELD, healthAnswerError, healthPayload, isHealthField } from "../lib/health";
 import { VerbalHealthConsent } from "../lib/VerbalHealthConsent";
@@ -166,6 +166,11 @@ function LocationPortalContent() {
     const [locations, setLocations] = useState<Location[]>([]);
     const [selectedLocation, setSelectedLocation] = useState<string>('');
     const [code, setCode] = useState('');
+    const [showCode, setShowCode] = useState(false);
+    // The dashboard's summary tiles open the roster on their filter (the list remounts on each tap).
+    const [listPreset, setListPreset] = useState<{ pay: PayFilter; n: number }>({ pay: 'all', n: 0 });
+    // «Herramientas de la localidad» (escarapelas, consentimiento en papel): folded so the list comes first.
+    const [toolsOpen, setToolsOpen] = useState(() => readPortalPref('tools') === '1');
 
     // Dashboard State
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
@@ -313,6 +318,11 @@ function LocationPortalContent() {
                     }
                 } else if (data.length === 0) {
                     setError('No hay conferencias disponibles en este momento.');
+                } else {
+                    // One conference: it is chosen. Several: the one last used on this device, when it is still there.
+                    const last = readPortalPref('conference');
+                    const pick = data.length === 1 ? data[0] : data.find((c: Conference) => String(c.id) === last);
+                    if (pick) setSelectedConference(String(pick.id));
                 }
             }
         } catch (e) {
@@ -325,7 +335,11 @@ function LocationPortalContent() {
         try {
             const res = await fetch(`/api/v1/plugin/conference-manager/public/locations?conference_id=${confId}`);
             if (res.ok) {
-                setLocations(await res.json());
+                const list: Location[] = await res.json();
+                setLocations(list);
+                // The locality last used on this device for this conference (never the code).
+                const last = readPortalPref(`location:${confId}`);
+                if (last && list.some((l) => String(l.id) === last)) setSelectedLocation(last);
                 loadFields(confId); // shared loader — guards NULL options, seeds formData
             } else if (res.status === 403) {
                 const err = await res.json();
@@ -350,6 +364,9 @@ function LocationPortalContent() {
             if (res.ok && data.success) {
                 // A new session: nothing a previous coordinator of this device left loading may show up.
                 feeHub.reset();
+                writePortalPref('conference', String(selectedConference));
+                writePortalPref(`location:${selectedConference}`, String(selectedLocation));
+                setCode(''); setShowCode(false);
                 setToken(data.token);
                 setMyLocation(data.location);
                 setStep('dashboard');
@@ -561,7 +578,9 @@ function LocationPortalContent() {
                         </div>
                         <div className="min-w-0">
                             <h1 className={cx("text-2xl sm:text-3xl", headingCls)}>Portal de Localidades</h1>
-                            <p className={cx(captionCls, "mt-1")}>Gestión de inscripciones</p>
+                            <p className={cx(captionCls, "mt-1 break-words")} data-testid="login-conference">
+                                {(conferences.find((c) => String(c.id) === String(selectedConference)) || { name: '' }).name || 'Gestión de inscripciones'}
+                            </p>
                         </div>
                     </div>
 
@@ -607,21 +626,29 @@ function LocationPortalContent() {
                             )}
                         </Field>
 
-                        <Field label="Código de Acceso" error={feLogin.error('code')} errorId={feLogin.errorId('code')}>
+                        <Field label="Código de Acceso" error={feLogin.error('code')} errorId={feLogin.errorId('code')}
+                            help="El código de tu localidad. Si no lo tienes, pídeselo al administrador de la conferencia.">
                             {(id) => (
                                 <div className="relative">
                                     <input
                                         id={id}
-                                        type="password"
-                                        className={cx(inputBoldCls, "pl-11 tracking-[0.3em]")}
+                                        type={showCode ? 'text' : 'password'}
+                                        inputMode="numeric"
+                                        autoComplete="off"
+                                        className={cx(inputBoldCls, "pl-11 pr-12 tracking-[0.3em]")}
                                         placeholder="••••••"
                                         maxLength={6}
                                         value={code}
-                                        onChange={e => setCode(e.target.value)}
+                                        onChange={e => setCode(e.target.value.replace(/\s+/g, ''))}
                                         required
                                         data-field="code" aria-invalid={feLogin.invalid('code')} aria-describedby={feLogin.describedBy('code')}
                                     />
-                                    <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
+                                    <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-xs" aria-hidden="true"></i>
+                                    <button type="button" onClick={() => setShowCode((v) => !v)} data-action="toggle-code"
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 inline-flex items-center justify-center rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-50"
+                                        aria-label={showCode ? 'Ocultar el código' : 'Mostrar el código'} aria-pressed={showCode} title={showCode ? 'Ocultar el código' : 'Mostrar el código'}>
+                                        <i className={`fa-solid ${showCode ? 'fa-eye-slash' : 'fa-eye'}`} aria-hidden="true"></i>
+                                    </button>
                                 </div>
                             )}
                         </Field>
@@ -653,7 +680,19 @@ function LocationPortalContent() {
     const feesOn = hasFeePayments(myLocation);
     // «Escarapelas» (conference-manager ≥ 2.19.0): while the conference lets coordinators share them.
     const badgesOn = hasBadges(myLocation);
-    const conferenceName = (conferences.find((c) => String(c.id) === String(selectedConference)) || { name: '' }).name || '';
+    const conferenceName = (myLocation as any)?.conference_name || (conferences.find((c) => String(c.id) === String(myLocation?.conference_id ?? selectedConference)) || { name: '' }).name || '';
+    // The summary tiles (active people only): who has paid, who has not, money waiting for validation, and — while the
+    // conference asks for it — who has not authorized the processing of their data yet.
+    const active = inscriptions.filter((i) => !isCancelled(i));
+    const unpaidCount = active.filter((i) => payStateOf(i) === 'unpaid').length;
+    const reviewCount = active.filter((i) => (Number(i.pending_amount) || 0) > 0).length;
+    const consentOn = active.some((i: any) => i.consent);
+    const consentPending = active.filter((i: any) => i.consent && i.consent.state !== 'granted').length;
+    const showList = (pay: PayFilter) => {
+        setTab('participants'); setView('list'); setListPreset((p) => ({ pay, n: p.n + 1 }));
+        // Down to the list, under the sticky bar.
+        window.setTimeout(() => document.querySelector('[data-testid="portal-tabs"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    };
     const activeTab = tab === 'fees' && !feesOn ? 'participants' : tab;
     const badge = feesOn ? feeBadge(myLocation?.fees) : null;
     const byId = new Map(inscriptions.map((i) => [Number(i.id), i]));
@@ -688,7 +727,11 @@ function LocationPortalContent() {
                             <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white text-sm shadow-lg shadow-blue-200 shrink-0">
                                 <i className="fa-solid fa-map-marker-alt"></i>
                             </div>
-                            <span className={cx(captionWideCls, "text-blue-600 truncate")}>Portal de Localidades</span>
+                            {/* Who and where, always in view once the hero scrolls away. */}
+                            <div className="min-w-0 leading-tight" data-testid="portal-header-context">
+                                <span className={cx(captionWideCls, "block text-blue-600 truncate")}>{conferenceName || 'Portal de Localidades'}</span>
+                                {myLocation?.name && <span className="block text-sm font-black text-gray-900 truncate">{myLocation.name}</span>}
+                            </div>
                         </div>
                         <IconButton
                             icon="fa-right-from-bracket"
@@ -709,7 +752,9 @@ function LocationPortalContent() {
                         <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-200 shrink-0">
                             <i className="fa-solid fa-map-marker-alt"></i>
                         </div>
-                        <span className={cx(captionWideCls, "text-blue-600 truncate")}>{myLocation?.responsible_name}</span>
+                        <span className={cx(captionWideCls, "text-blue-600 truncate")}>
+                            {[conferenceName, myLocation?.responsible_name].filter(Boolean).join(' · ') || 'Tu localidad'}
+                        </span>
                     </div>
                     <h1 className={cx("text-2xl sm:text-4xl mb-3 break-words", headingCls)}>{myLocation?.name}</h1>
                     <div className="flex flex-wrap items-center gap-2 sm:gap-4">
@@ -726,13 +771,25 @@ function LocationPortalContent() {
                             </div>
                         )}
                     </div>
+                    {/* At a glance: each tile opens the list on its filter. */}
+                    <div className={cx("grid grid-cols-2 gap-2 sm:gap-3 mt-4", consentOn ? "sm:grid-cols-5" : "sm:grid-cols-4")} data-testid="portal-summary">
+                        <KpiTile label="Inscritos" value={String(activeCount)} icon="fa-users" tone="gray" onClick={() => showList('all')} testId="kpi-active" />
+                        <KpiTile label="Pagados" value={String(paidCount)} icon="fa-circle-check" tone="emerald" onClick={() => showList('paid')} testId="kpi-paid" />
+                        <KpiTile label="Sin pagar" value={String(unpaidCount)} icon="fa-hourglass-half" tone={unpaidCount ? 'rose' : 'gray'} onClick={() => showList('unpaid')} testId="kpi-unpaid" />
+                        <KpiTile label="Por validar" value={String(reviewCount)} icon="fa-clock" tone={reviewCount ? 'amber' : 'gray'} onClick={() => showList('pending')} testId="kpi-review" />
+                        {consentOn && (
+                            <div className="col-span-2 sm:col-span-1 min-w-0">
+                                <KpiTile label="Sin autorizar" value={String(consentPending)} icon="fa-file-signature" tone={consentPending ? 'amber' : 'gray'} hint="Autorización de datos" testId="kpi-consent" />
+                            </div>
+                        )}
+                    </div>
                 </HeroCard>
 
                 {/* Tabs: Participantes | Pagos de cuotas (plugin ≥ 2.18.0) | Hospedajes. The money figures live in
                     «Pagos de cuotas › Resumen» (the old StatCards above the tabs counted cancelled people). */}
                 {/* On a phone the tabs share the width in equal columns (icon over a label that may wrap), so all
                     three are always visible — no strip scrolling sideways; from 640 px, one row as before. */}
-                <div className="grid grid-flow-col auto-cols-fr sm:flex border-b border-gray-200" role="tablist" data-testid="portal-tabs">
+                <div className="grid grid-flow-col auto-cols-fr sm:flex border-b border-gray-200 scroll-mt-20" role="tablist" data-testid="portal-tabs">
                     {tabs.map(({ key, label, icon }) => (
                         <button
                             key={key}
@@ -789,15 +846,34 @@ function LocationPortalContent() {
                         )}
                     />
 
-                    {view === 'list' && badgesOn && inscriptions.length > 0 && (
-                        <PortalBadgeBulk authHeaders={portalAuthHeaders} nameOf={nameOf} />
-                    )}
-                    {/* «Consentimiento en papel» (2.34.0): only while the conference asks for the authorization. */}
-                    {view === 'list' && inscriptions.some((i: any) => i.consent) && (
-                        <PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} />
+                    {/* The locality's tools — «Escarapelas» and «Consentimiento en papel» (2.34.0, while the conference asks for
+                        the authorization) — folded behind one row, so on a phone the list comes first. Remembered per device. */}
+                    {view === 'list' && ((badgesOn && inscriptions.length > 0) || consentOn) && (
+                        <div className="border-b border-gray-100" data-testid="portal-tools">
+                            <button type="button" className="w-full flex items-center justify-between gap-3 px-4 sm:px-6 py-3 text-left hover:bg-gray-50/60"
+                                aria-expanded={toolsOpen} aria-controls="portal-tools-body" data-action="tools-toggle"
+                                onClick={() => setToolsOpen((v) => { writePortalPref('tools', v ? '0' : '1'); return !v; })}>
+                                <span className="flex items-center gap-2 min-w-0">
+                                    <i className="fa-solid fa-toolbox text-blue-600" aria-hidden="true"></i>
+                                    <span className="text-xs font-black uppercase tracking-widest text-gray-700">Herramientas de la localidad</span>
+                                    <span className="hidden sm:inline text-[11px] text-gray-500 truncate">
+                                        {[badgesOn && inscriptions.length > 0 ? 'Escarapelas' : null, consentOn ? 'Consentimiento en papel' : null].filter(Boolean).join(' · ')}
+                                    </span>
+                                </span>
+                                <i className={`fa-solid fa-chevron-down text-gray-400 transition-transform ${toolsOpen ? 'rotate-180' : ''}`} aria-hidden="true"></i>
+                            </button>
+                            {toolsOpen && (
+                                <div id="portal-tools-body" className="pb-3">
+                                    {badgesOn && inscriptions.length > 0 && <PortalBadgeBulk authHeaders={portalAuthHeaders} nameOf={nameOf} />}
+                                    {consentOn && <PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} />}
+                                </div>
+                            )}
+                        </div>
                     )}
                     {view === 'list' ? (
                         <ParticipantList
+                            key={`list-${listPreset.n}`}
+                            initialFilter={{ pay: listPreset.pay }}
                             people={inscriptions}
                             fields={listFields}
                             onOpen={setSheetId}
@@ -979,6 +1055,18 @@ function LocationPortalContent() {
             )}
         </div>
     );
+}
+
+/**
+ * What this device remembers between visits (localStorage, best effort): the conference and the locality last used to
+ * sign in — never the access code — and whether «Herramientas de la localidad» was left open.
+ */
+const PORTAL_PREF = 'cm-portal:';
+function readPortalPref(key: string): string | null {
+    try { return typeof window !== 'undefined' ? window.localStorage.getItem(PORTAL_PREF + key) : null; } catch { return null; }
+}
+function writePortalPref(key: string, value: string) {
+    try { if (typeof window !== 'undefined') window.localStorage.setItem(PORTAL_PREF + key, value); } catch { /* private mode: nothing kept */ }
 }
 
 export default function LocationPortalPage() {
