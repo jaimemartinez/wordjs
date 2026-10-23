@@ -24,7 +24,7 @@ import { apiDelete, apiGet } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState } from "@/components/ui";
+import { PageHeader, Button, Card, EmptyState } from "@/components/ui";
 import {
     AdminNotice,
     NoticeTone,
@@ -187,15 +187,17 @@ export default function NoticesPage() {
                                             {when && <span>{when}</span>}
                                         </div>
                                     </div>
-                                    <button
-                                        type="button"
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        icon="fa-xmark"
+                                        className="shrink-0"
                                         onClick={() => dismiss(notice.id)}
-                                        disabled={dismissingId === notice.id}
-                                        className="shrink-0 text-xs font-semibold text-gray-400 hover:text-gray-700 disabled:opacity-50 transition-colors"
+                                        pending={dismissingId === notice.id}
+                                        pendingLabel={t("notices.dismissing")}
                                     >
-                                        <i className="fa-solid fa-xmark mr-1"></i>
-                                        {dismissingId === notice.id ? t("notices.dismissing") : t("notices.dismiss")}
-                                    </button>
+                                        {t("notices.dismiss")}
+                                    </Button>
                                 </li>
                             );
                         })}

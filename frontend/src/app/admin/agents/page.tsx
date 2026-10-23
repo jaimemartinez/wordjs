@@ -5,7 +5,7 @@ import { agentsApi, usersApi, apiPut, AgentCapability, AgentConnection, AgentPub
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge } from "@/components/ui";
+import { PageHeader, Button, Card, Checkbox, EmptyState, Input, Select, StatusBadge, Switch } from "@/components/ui";
 import DialogLayer from "@/components/DialogLayer";
 import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
@@ -88,9 +88,9 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
         <div>
             <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] font-black uppercase tracking-widest text-gray-400">{label}</span>
-                <button type="button" onClick={copy} className="text-[11px] font-black uppercase tracking-wider text-blue-600 hover:text-blue-800 flex items-center gap-1">
-                    <i className={`fa-solid ${copied ? "fa-check" : "fa-copy"}`}></i>{copied ? t("agents.copied") : t("agents.copy")}
-                </button>
+                <Button variant="link" icon={copied ? "fa-check" : "fa-copy"} onClick={copy}>
+                    {copied ? t("agents.copied") : t("agents.copy")}
+                </Button>
             </div>
             <pre className="bg-gray-900 text-emerald-300 rounded-2xl px-4 py-3 font-mono text-xs whitespace-pre-wrap break-all select-all">{text}</pre>
         </div>
@@ -329,7 +329,7 @@ export default function AgentsPage() {
                                     const implied = !requested.has(c) && withImplied(requested).has(c);
                                     return (
                                         <label key={c} className={`flex items-start gap-3 rounded-xl border px-3 py-2 cursor-pointer transition-colors ${requested.has(c) || implied ? "border-blue-200 bg-blue-50/40" : "border-gray-100 hover:bg-gray-50"}`}>
-                                            <input type="checkbox" className="mt-1" aria-label={t(`agents.cap.${capKey(c)}`)} checked={requested.has(c) || implied} disabled={implied} onChange={() => setRequested(toggle(requested, c))} />
+                                            <Checkbox containerClassName="mt-1" aria-label={t(`agents.cap.${capKey(c)}`)} checked={requested.has(c) || implied} disabled={implied} onChange={() => setRequested(toggle(requested, c))} />
                                             <span>
                                                 <span className="text-xs font-bold text-gray-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                                                     <i className={`fa-solid ${CAP_ICONS[c]} text-gray-300 w-4 text-center`}></i>{t(`agents.cap.${capKey(c)}`)}
@@ -390,17 +390,12 @@ export default function AgentsPage() {
                                         <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{t("agents.confirmationHelp")}</p>
                                     </div>
                                 </div>
-                                <button
-                                    type="button"
-                                    role="switch"
-                                    aria-checked={publishConfirmation}
+                                <Switch
+                                    checked={publishConfirmation}
                                     aria-label={t("agents.confirmationTitle")}
                                     disabled={savingConfirmation}
-                                    onClick={toggleConfirmation}
-                                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 disabled:opacity-60 ${publishConfirmation ? "bg-violet-500" : "bg-gray-200"}`}
-                                >
-                                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${publishConfirmation ? "translate-x-6" : "translate-x-1"}`} />
-                                </button>
+                                    onChange={() => toggleConfirmation()}
+                                />
                             </div>
                             {(publishConfirmation || queue.length > 0) && (
                                 <div className="mt-5 border-t border-gray-100 pt-4" data-testid="agent-publish-queue">
@@ -494,7 +489,7 @@ export default function AgentsPage() {
                                                 const implied = !draftGrant.has(cap) && withImplied(draftGrant).has(cap);
                                                 return (
                                                     <label key={cap} className="flex items-center gap-2 text-xs font-bold text-gray-700 bg-white rounded-xl border border-gray-100 px-3 py-2 cursor-pointer">
-                                                        <input type="checkbox" aria-label={t(`agents.cap.${capKey(cap)}`)} checked={draftGrant.has(cap) || implied} disabled={implied} onChange={() => setDraftGrant(toggle(draftGrant, cap))} />
+                                                        <Checkbox aria-label={t(`agents.cap.${capKey(cap)}`)} checked={draftGrant.has(cap) || implied} disabled={implied} onChange={() => setDraftGrant(toggle(draftGrant, cap))} />
                                                         <i className={`fa-solid ${CAP_ICONS[cap]} text-gray-300 w-4 text-center`}></i>
                                                         {t(`agents.cap.${capKey(cap)}`)}
                                                     </label>

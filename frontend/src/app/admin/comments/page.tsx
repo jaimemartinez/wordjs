@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { commentsApi, Comment, postsApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, EmptyState, DataTable, Pagination } from "@/components/ui";
+import { PageHeader, EmptyState, DataTable, Pagination, UnstyledButton } from "@/components/ui";
 import type { DataTableAction } from "@/components/ui";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { commentActions, commentState, commentTargetLink, type CommentActionKey, type CommentTarget } from "@/lib/commentModeration";
@@ -143,7 +143,7 @@ export default function CommentsPage() {
             {/* Premium Tabs */}
             <div role="group" aria-label={t("comments.title")} className="flex gap-2 mb-6 md:mb-8 flex-wrap">
                 {tabs.map(tab => (
-                    <button
+                    <UnstyledButton
                         key={tab.id}
                         type="button"
                         aria-pressed={activeTab === tab.id}
@@ -154,7 +154,7 @@ export default function CommentsPage() {
                             }`}
                     >
                         {tab.label}
-                    </button>
+                    </UnstyledButton>
                 ))}
             </div>
 

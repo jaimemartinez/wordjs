@@ -122,6 +122,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **The content admin screens use the admin's form kit.** Tags, Categories, Comments, Fonts, Forms, Import
+  from WordPress, Notices, API tokens, Webhooks, Widgets and AI agents now use `@/components/ui`:
+  - fields have their labels tied to them (the widget settings too), and the tag and font searches are kit
+    inputs with their icon; the tag search's clear button is named;
+  - the WordPress import's media choice is a radio group with a legend and a hint per option, and its
+    options are kit switches with their help announced;
+  - icon-only actions (webhook deliveries, pause, rotate and delete; widget settings and remove; deleting a
+    font variant) are named buttons, and busy states (send test, dismiss a notice, start an import, save a
+    widget) use the kit's pending button;
+  - the file choosers behind a drop area are a new kit `HiddenFileInput`, out of the tab order;
+  - the AI agents' capability checkboxes and the publish-confirmation switch are the kit's.
+  These files leave the form kit's allowlist (551 → 509 raw controls left).
 - **The settings sub-pages use the admin's form kit.** Site address, Interactions (the simple editor and
   the preset editor), Media storage, Backups, AI, Network setup, Network, Cluster and Tools now use
   `@/components/ui`:
