@@ -32,7 +32,7 @@ const T = {
         rights: 'Derechos', rightsText: (mail) => `Usted puede conocer, actualizar, rectificar y suprimir sus datos, y revocar esta autorización, escribiendo a ${mail}.`,
         policy: 'Política', version: (v) => `versión ${v}`,
         auth: 'Autorización',
-        how: 'Cómo firmar: escriba su número de documento y firme; su firma da la autorización de esta página. Si no autoriza sus datos de salud o el uso de su imagen, marque la casilla correspondiente. Para un menor de edad firma su padre, madre o representante legal, con su nombre y documento.',
+        how: 'Cómo firmar: escriba su número de documento y firme; su firma da la autorización de esta página. Si no autoriza sus datos de salud o el uso de su imagen, marque la casilla correspondiente. Para un menor de edad firma su padre, madre o representante legal, con su nombre y documento. Si se equivoca, no hace falta otra hoja: tache con una línea, ponga sus iniciales al lado y, si hace falta, firme en una fila en blanco.',
         voluntary: 'La autorización de mis datos de salud y la del uso de mi imagen son voluntarias: no estoy obligado a darlas. Si no las doy, marco la casilla «No autorizo…» de mi fila; mi inscripción sigue adelante igual.',
         col: { n: '#', name: 'Nombre', doc: 'Documento', sign: 'Firma', health: 'No autorizo datos de salud', image: 'No autorizo uso de imagen', rep: 'Representante legal (menores)', repName: 'Nombre', repDoc: 'Documento', repSign: 'Firma' },
         organizers: 'los organizadores',
@@ -45,7 +45,7 @@ const T = {
         rights: 'Rights', rightsText: (mail) => `You may access, update, correct and delete your data, and revoke this consent, by writing to ${mail}.`,
         policy: 'Policy', version: (v) => `version ${v}`,
         auth: 'Consent',
-        how: 'How to sign: write your document number and sign; your signature gives the consent on this page. If you do not consent to your health data or to the use of your image, tick that box. For a minor, their parent or legal guardian signs, with their name and document.',
+        how: 'How to sign: write your document number and sign; your signature gives the consent on this page. If you do not consent to your health data or to the use of your image, tick that box. For a minor, their parent or legal guardian signs, with their name and document. If you make a mistake, no new sheet is needed: cross it out with one line, write your initials next to it and, if needed, sign on a blank row.',
         voluntary: 'The consent to my health data and to the use of my image is voluntary: I am not obliged to give it. If I do not give it, I tick the «I do not consent…» box in my row; my registration goes ahead all the same.',
         col: { n: '#', name: 'Name', doc: 'Document', sign: 'Signature', health: 'I do not consent to health data', image: 'I do not consent to use of image', rep: 'Legal guardian (minors)', repName: 'Name', repDoc: 'Document', repSign: 'Signature' },
         organizers: 'the organisers',
@@ -58,7 +58,7 @@ const T = {
         rights: 'Direitos', rightsText: (mail) => `Você pode conhecer, atualizar, retificar e excluir seus dados, e revogar esta autorização, escrevendo para ${mail}.`,
         policy: 'Política', version: (v) => `versão ${v}`,
         auth: 'Autorização',
-        how: 'Como assinar: escreva o número do seu documento e assine; sua assinatura dá a autorização desta página. Se não autorizar seus dados de saúde ou o uso da sua imagem, marque a casinha correspondente. Por um menor de idade assina o pai, a mãe ou o representante legal, com nome e documento.',
+        how: 'Como assinar: escreva o número do seu documento e assine; sua assinatura dá a autorização desta página. Se não autorizar seus dados de saúde ou o uso da sua imagem, marque a casinha correspondente. Por um menor de idade assina o pai, a mãe ou o representante legal, com nome e documento. Se errar, não precisa de outra folha: risque com uma linha, escreva suas iniciais ao lado e, se precisar, assine numa linha em branco.',
         voluntary: 'A autorização dos meus dados de saúde e a do uso da minha imagem são voluntárias: não sou obrigado a dá-las. Se não as der, marco a casinha «Não autorizo…» da minha linha; minha inscrição segue igual.',
         col: { n: '#', name: 'Nome', doc: 'Documento', sign: 'Assinatura', health: 'Não autorizo dados de saúde', image: 'Não autorizo uso de imagem', rep: 'Representante legal (menores)', repName: 'Nome', repDoc: 'Documento', repSign: 'Assinatura' },
         organizers: 'os organizadores',
@@ -91,13 +91,13 @@ const PAPERS = {
 const paperOf = (p) => (PAPERS[String(p || '').toLowerCase()] ? String(p).toLowerCase() : 'letter');
 
 // What a page needs, in mm, to fit its rows under the header (estimates on the safe side: a row too many would push
-// the footer onto a page of its own). 11 pt ≈ 2.05 mm a character, 9.5 pt ≈ 1.75 mm, line heights ×1.3.
+// the footer onto a page of its own). 11 pt ≈ 1.9 mm a character, 9.5 pt ≈ 1.65 mm, 10 pt ≈ 1.75 mm, line heights ×1.3.
 const ROW_MM = 12.5, THEAD_MM = 14, FOOT_MM = 19, GAPS_MM = 12;
 const linesOf = (text, charsPerLine) => Math.max(1, Math.ceil(String(text || '').length / charsPerLine));
 function headerMm(paper, parts) {
     const colW = (paper.w - 8) / 2;                     // two columns for the facts and the authorization
-    const per = (pt) => Math.floor(colW / (pt === 11 ? 2.05 : 1.78));
-    const full = Math.floor(paper.w / 1.95);            // the 10 pt how-to line across the page
+    const per = (pt) => Math.floor(colW / (pt === 11 ? 1.9 : 1.65));
+    const full = Math.floor((paper.w - 4) / 1.75);      // the 10 pt how-to line across the page
     const facts = Math.max(
         parts.factsLeft.reduce((n, t) => n + linesOf(t, per(9.5)), 0),
         parts.factsRight.reduce((n, t) => n + linesOf(t, per(9.5)), 0)) * 4.3;
