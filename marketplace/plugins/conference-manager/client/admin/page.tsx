@@ -49,6 +49,9 @@ import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
 import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
 import { DateField } from "../lib/DateField";
+import { PhoneInput } from "../lib/PhoneInput";
+import { PhoneCountrySetting } from "./PhoneCountrySetting";
+import { isPhoneField } from "../lib/phone";
 import { HEALTH_FIELD, healthAnswerError, healthAnswerText, healthPayload, isHealthField, sameHealthAnswer } from "../lib/health";
 // Inscription tables + «Pagos de cuotas» (2.18.0): browser-side search / filters / paging, the person sheet
 // (⋮), split fee payments.
@@ -1688,6 +1691,12 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                     </span>
                                                     {switchLabel(tx, isSwitchOn(formData[field.name]))}
                                                 </button>
+                                            ) : isPhoneField(field) ? (
+                                                // 2.33.2: the country's calling code next to the number; E.164 is sent.
+                                                <PhoneInput dataField={field.name} label={field.label} lang={language} defaultCountry={excelConf?.phone_country}
+                                                    invalid={fe.invalid(field.name)} describedBy={fe.describedBy(field.name)}
+                                                    selectClassName="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm" inputClassName="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                                    value={formData[field.name] ?? ''} onChange={v => handleFormChange(field.name, v)} />
                                             ) : field.type === 'select' ? (
                                                 <select
                                                     data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)}
@@ -3637,6 +3646,11 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
             <ReadOnlyNotice section="settings" />
+            {/* «Indicativo por defecto» (2.33.2), while the form has a phone field. */}
+            {conference && fields.some(isPhoneField) && (
+                <PhoneCountrySetting conference={conference} language={language} canManage={canManage}
+                    onSaved={(iso) => setConference({ ...conference, phone_country: iso })} />
+            )}
             {/* Premium Publisher Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 max-sm:p-6 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'

@@ -27,6 +27,8 @@ import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButto
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
 import { HEALTH_FIELD, healthAnswerError, healthPayload, isHealthField } from "../lib/health";
 import { DateField } from "../lib/DateField";
+import { PhoneInput } from "../lib/PhoneInput";
+import { isPhoneField } from "../lib/phone";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -871,6 +873,12 @@ function LocationPortalContent() {
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     />
+                                                ) : isPhoneField(field) ? (
+                                                    // 2.33.2: the country's calling code next to the number; E.164 is sent.
+                                                    <PhoneInput id={id} dataField={field.name} lang="es" invalid={fe.invalid(field.name)} describedBy={fe.describedBy(field.name)}
+                                                        defaultCountry={(conferences.find((c) => String(c.id) === String(myLocation?.conference_id ?? selectedConference)) || {}).phone_country}
+                                                        selectClassName={inputCls} inputClassName={inputCls}
+                                                        value={formData[field.name] ?? ''} onChange={(v) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })} />
                                                 ) : field.type === 'date' ? (
                                                     // The host's calendar (2.33.1) instead of the browser's.
                                                     <DateField id={id} dataField={field.name} required={!!field.is_required}

@@ -84,7 +84,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
             const text = consentMessage(language, info);
             const copied = await copyText(text);
             if (copied) addToast(t("copy.done"), "success");
-            setShare({ name: nameOf(p), text, phone: info.phone || "", copied });
+            setShare({ name: nameOf(p), text, phone: info.phone_wa || "", copied });
             load();
         } catch (e: any) { addToast(e?.message || "Error", "error"); }
         finally { setBusyId(null); }

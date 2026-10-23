@@ -103,14 +103,22 @@ export async function openBadgeFileFrom(ticket: () => Promise<string>): Promise<
 
 /**
  * The WhatsApp number of a phone as typed in the form: the first number of a list («300… / 310…»), its digits,
- * an international «00» prefix dropped, a 10-digit Colombian mobile (3…) given the country code (`cc`). null
+ * an international «+» / «00» number as it is, a national one given the country code (`cc`, 2.33.2: any national
+ * number, its trunk «0» dropped — before, only a 10-digit Colombian mobile). null
  * when nothing usable remains (WhatsApp then opens without a recipient). The portal keeps a copy (badges.ts).
  */
 export function waNumber(phone: unknown, cc = '57'): string | null {
     const first = String(phone == null ? '' : phone).split(/[/,;|]|\s+y\s+|\s+o\s+/i)[0] || '';
     let digits = first.replace(/\D/g, '');
-    if (digits.startsWith('00')) digits = digits.slice(2);
-    if (digits.length === 10 && digits.startsWith('3')) digits = `${String(cc || '57').replace(/\D/g, '') || '57'}${digits}`;
+    // 2.33.2: «+» / «00» numbers keep their country code; a national one takes `cc` and loses its trunk «0».
+    if (first.trim().startsWith('+')) { /* already international */ }
+    else if (digits.startsWith('00')) digits = digits.slice(2);
+    else if (digits) {
+        const code = String(cc || '57').replace(/\D/g, '') || '57';
+        const national = digits.replace(/^0+/, '');
+        // Already carrying the code without «+» («573001234567»): not prefixed twice.
+        digits = national.startsWith(code) && national.length >= code.length + 9 ? national : `${code}${national}`;
+    }
     return digits.length >= 8 && digits.length <= 15 ? digits : null;
 }
 /** wa.me with a message, to the person's number when there is one. */

@@ -36,6 +36,7 @@ const { normalizeDesignV2, layoutDesign, assetsOfDesign, keysOfDesign } = requir
 const { createMetrics, isFace } = require('./badge-font');
 const { faceBytes, faceBase64, faceParsed } = require('./badge-font-files');
 const { docFieldsOf } = require('./selfpage');
+const phoneMod = require('./phone');
 
 const MAX_FIELDS = 8;
 const LABEL_MAX = 40;
@@ -139,6 +140,12 @@ function createBadges(base) {
 
     // ── config ─────────────────────────────────────────────────────────────────────────────────────
     const parseJson = (raw) => { try { const v = JSON.parse(String(raw)); return v && typeof v === 'object' ? v : null; } catch (e) { return null; } };
+    // The calling code WhatsApp links add to a national number (2.33.2): the conference's «Indicativo por defecto»
+    // (Campos) once chosen, else this page's own «Código de país para WhatsApp».
+    async function whatsappCodeOf(cid, cfg) {
+        const c = await db.get(`SELECT phone_country FROM ${T.conferences} WHERE id = ?`, [cid]);
+        return c && phoneMod.isCountry(c.phone_country) ? phoneMod.dialOf(c.phone_country) : cfg.policy.country_code;
+    }
     async function configOf(cid) {
         let raw = null;
         try { const row = await db.get(`SELECT badge_config FROM ${T.conferences} WHERE id = ?`, [cid]); raw = row ? row.badge_config : null; }
@@ -693,7 +700,7 @@ function createBadges(base) {
                 const cfg = await configOf(cid);
                 const exp = expiresAtMs(cfg.policy);
                 const state = !cfg.policy.enabled ? 'disabled' : exp != null && Date.now() >= exp ? 'expired' : null;
-                res.json({ links: await ensureLinks(cid, ids, D.actorOf(req)), state, country_code: cfg.policy.country_code });
+                res.json({ links: await ensureLinks(cid, ids, D.actorOf(req)), state, country_code: await whatsappCodeOf(cid, cfg) });
             } catch (e) { send(res, e); }
         });
         // POST /badges/links/:iid/rotate — a new token (the old link stops working). badges:manage.
@@ -778,7 +785,7 @@ function createBadges(base) {
                 if (!ids.length || !positiveInt((req.body || {}).inscription_id)) return res.status(404).json({ error: 'Inscripción no encontrada.' });
                 const [link] = await ensureLinks(location.conference_id, ids, `portal:${location.id}`);
                 const conf = await confOf(location.conference_id);
-                res.json({ link: link || null, country_code: (await configOf(location.conference_id)).policy.country_code, conference: conf ? conf.name : '' });
+                res.json({ link: link || null, country_code: await whatsappCodeOf(location.conference_id, await configOf(location.conference_id)), conference: conf ? conf.name : '' });
             } catch (e) { send(res, e); }
         });
         // POST /portal/badges/links → every active person of the location.

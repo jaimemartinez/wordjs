@@ -46,6 +46,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { waDigits } = require('./phone');
 
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -411,7 +412,7 @@ function createConsent(base) {
         };
     }
     async function conferenceOf(cid) {
-        return db.get(`SELECT id, name, date_start, date_end FROM ${T.conferences} WHERE id = ?`, [cid]);
+        return db.get(`SELECT id, name, date_start, date_end, phone_country FROM ${T.conferences} WHERE id = ?`, [cid]);
     }
     const requestOf = (insId) => db.get(`SELECT * FROM ${T.consentRequests} WHERE inscription_id = ?`, [insId]);
 
@@ -550,6 +551,8 @@ function createConsent(base) {
             state: now.state, link, email_masked: maskEmail(email), first_name: String(name).split(' ')[0] || '',
             conference: conf ? conf.name : '', policy_version: s.policy_version, policy_url: s.policy_url, link_days: s.link_days,
             phone: await phoneOf(ins, form),
+            // The number wa.me wants: its stored country code, or the conference's default for an older national one.
+            phone_wa: waDigits(await phoneOf(ins, form), conf && conf.phone_country) || '',
         };
     }
 

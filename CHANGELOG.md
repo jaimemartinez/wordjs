@@ -15,6 +15,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   copying, and offers «Abrir en WhatsApp». No e-mail is sent, the request is not marked as e-mailed, and the
   evidence log records «link shared manually». The previous link stops working, as with a resend. Signing still
   needs the code sent to the person's e-mail. The consent screens are now also in Portuguese.
+- **conference-manager 2.33.2: phone numbers carry their country code.**
+  - Phone fields in the admin's inscription form and in the coordinators' portal get a country selector next to
+    the number. It shows the flag, the country name in the screen's language and the calling code, and typing a
+    name jumps to it.
+  - Numbers are stored in E.164 (`+573001234567`). The server builds the same form from whatever an API caller
+    sends: «+» and «00» keep their code, and a national number takes the conference's default country and loses
+    its leading «0». An invalid number is refused next to its field.
+  - **Campos › «Indicativo de país por defecto»** (Colombia unless changed) sets the country the selector starts
+    on and the one a number without a code belongs to.
+  - Existing numbers are never rewritten. WhatsApp links read a stored code, or the default when there is none,
+    and send digits only. The badge WhatsApp links follow the new default once it is chosen; any national number
+    gets the code now, not only 10-digit Colombian mobiles.
 
 ## [2.10.0] - 2026-10-23
 

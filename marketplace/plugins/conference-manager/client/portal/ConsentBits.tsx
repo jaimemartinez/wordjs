@@ -57,7 +57,7 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
             const text = consentMessage("es", body);
             const copied = await copyText(text);
             if (copied) addToast(t("copy.done"), "success");
-            setShare({ text, phone: body.phone || "", copied });
+            setShare({ text, phone: body.phone_wa || "", copied });
             onChanged && onChanged();
         } catch { setMsg({ tone: "rose", text: "Error de conexión" }); }
         finally { setBusy(false); }

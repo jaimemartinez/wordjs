@@ -14,6 +14,9 @@ import path from 'node:path';
 import { CONSENT_KEYS, consentLangOf, consentT } from '../../../../../marketplace/plugins/conference-manager/client/lib/consentI18n';
 import { ConsentChip } from '../../../../../marketplace/plugins/conference-manager/client/portal/ConsentBits';
 import { consentMessage, copyText, whatsappUrl } from '../../../../../marketplace/plugins/conference-manager/client/lib/consentMessage';
+import * as phone from '../../../../../marketplace/plugins/conference-manager/client/lib/phone';
+import { PhoneInput } from '../../../../../marketplace/plugins/conference-manager/client/lib/PhoneInput';
+import { waNumber as badgeWa } from '../../../../../marketplace/plugins/conference-manager/client/lib/badges';
 
 const CM = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager');
 const server = require(path.join(CM, 'server/consent.js'));
@@ -55,7 +58,7 @@ describe('the signed text', () => {
 });
 
 describe('no native dialogs, no required bubbles', () => {
-    for (const rel of ['client/portal/consent/ConsentPage.tsx', 'client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx', 'client/lib/consentMessage.ts']) {
+    for (const rel of ['client/portal/consent/ConsentPage.tsx', 'client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx', 'client/lib/consentMessage.ts', 'client/lib/PhoneInput.tsx', 'client/admin/PhoneCountrySetting.tsx']) {
         it(rel, () => {
             const s = src(rel).replace(/^\s*(\/\/|\*).*$/gm, '');
             expect(s).not.toMatch(/\b(window\.)?(alert|confirm|prompt)\s*\(/);
@@ -90,11 +93,10 @@ describe('«Copiar mensaje» (2.33.2)', () => {
         }
         expect(consentMessage('es', { ...info, first_name: '' }).split('\n')[0]).toBe('Hola:');
     });
-    it('wa.me: the number only with its country code; the text encoded', () => {
-        expect(whatsappUrl('a b&c', '+57 300 123 4567')).toBe('https://wa.me/573001234567?text=a%20b%26c');
-        expect(whatsappUrl('x', '573001234567')).toBe('https://wa.me/573001234567?text=x');
-        expect(whatsappUrl('x', '300 123 4567')).toBe('https://wa.me/?text=x');
+    it('wa.me: to the digits the server normalised; without them WhatsApp asks who', () => {
+        expect(whatsappUrl('a b&c', '573001234567')).toBe('https://wa.me/573001234567?text=a%20b%26c');
         expect(whatsappUrl('x', '')).toBe('https://wa.me/?text=x');
+        expect(whatsappUrl('x', '123')).toBe('https://wa.me/?text=x');
     });
     it('copies with the Clipboard API, and says so when it cannot', async () => {
         const got: string[] = [];
@@ -111,5 +113,56 @@ describe('«Copiar mensaje» (2.33.2)', () => {
         expect(portal).toContain('/portal/consent/share');
         expect(portal).toContain('data-action="consent-copy"');
         for (const s of [admin, portal]) { expect(s).toContain('whatsappUrl('); expect(s).toContain('t("copy.done")'); }
+    });
+});
+
+describe('phones with their country (2.33.2)', () => {
+    const serverPhone = require(path.join(CM, 'server/phone.js'));
+    const vectors: [string, string][] = [['+57 300 123 4567', 'CO'], ['300 123 4567', 'CO'], ['0057 300 123 4567', 'CO'], ['573001234567', 'CO'], ['020 7946 0958', 'GB'],
+        ['(305) 555-0100', 'US'], ['099 123 4567', 'EC'], ['12', 'CO'], ['abc', 'CO'], ['+1 809 555 1234', 'DO'], ['300 1234567 / 310 7654321', 'CO'], ['', 'CO']];
+    it('the client follows the server: same list, same normalisation, same reading back', () => {
+        expect(phone.COUNTRY_CODES).toBe(serverPhone.COUNTRY_CODES);
+        expect(phone.PRIMARY).toEqual(serverPhone.PRIMARY);
+        for (const [v, iso] of vectors) {
+            expect(phone.toE164(v, iso)).toBe(serverPhone.toE164(v, iso));
+            expect(phone.waDigits(v, iso)).toBe(serverPhone.waDigits(v, iso));
+            const e = phone.toE164(v, iso);
+            if (e) expect(phone.parseE164(e, iso)).toEqual(serverPhone.parseE164(e, iso));
+        }
+        expect(new Set(phone.COUNTRIES.map(c => c.iso)).size).toBe(phone.COUNTRIES.length);
+    });
+    it('splits a stored value for the selector and joins it back in E.164', () => {
+        expect(phone.splitPhone('+593991234567', 'CO')).toEqual({ iso: 'EC', national: '991234567' });
+        expect(phone.splitPhone('300 123 4567', 'CO')).toEqual({ iso: 'CO', national: '300 123 4567' });
+        expect(phone.splitPhone('', 'PE')).toEqual({ iso: 'PE', national: '' });
+        expect(phone.splitPhone('', 'ZZ').iso).toBe('CO');
+        expect(phone.joinPhone('CO', '300 123 4567')).toBe('+573001234567');
+        expect(phone.joinPhone('GB', '07946 0958')).toBe('+4479460958');
+        expect(phone.joinPhone('CO', '')).toBe('');
+        expect(phone.flagOf('CO')).toBe(String.fromCodePoint(0x1F1E8, 0x1F1F4));
+    });
+    it('the selector: labelled, in the screen language, the default country chosen, no required bubble', () => {
+        for (const [lang, country, colombia] of [['es', 'Indicativo de país', 'Colombia (+57)'], ['en', 'Country code', 'Colombia (+57)'], ['pt', 'Código do país', 'Colômbia (+57)']]) {
+            const html = renderToStaticMarkup(React.createElement(PhoneInput, { value: '', onChange: () => {}, defaultCountry: 'CO', lang, label: 'Teléfono', dataField: 'phone' }));
+            expect(html).toContain(`aria-label="Teléfono · ${country}"`);
+            expect(html).toContain(`<option value="CO" selected="">${colombia}</option>`);
+            expect(html).toContain('type="tel"');
+            expect(html).not.toContain('required');
+        }
+        const ec = renderToStaticMarkup(React.createElement(PhoneInput, { value: '+593991234567', onChange: () => {}, defaultCountry: 'CO' }));
+        expect(ec).toContain('<option value="EC" selected="">');
+        expect(ec).toContain('value="991234567"');
+    });
+    it('both forms use it for phone fields, and the badges WhatsApp number keeps a stored code', () => {
+        for (const rel of ['client/admin/page.tsx', 'client/portal/CoordinatorPortal.tsx']) {
+            const s = src(rel);
+            const at = s.indexOf('isPhoneField(field) ? (');
+            expect(at).toBeGreaterThan(0);
+            expect(s.slice(at, at + 300)).toContain('<PhoneInput');
+        }
+        expect(badgeWa('+593991234567', '57')).toBe('593991234567');
+        expect(badgeWa('0991234567', '593')).toBe('593991234567');
+        expect(badgeWa('573001234567', '57')).toBe('573001234567');
+        expect(badgeWa('300 123 4567', '57')).toBe('573001234567');
     });
 });

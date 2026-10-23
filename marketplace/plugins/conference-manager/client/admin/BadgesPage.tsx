@@ -204,7 +204,7 @@ export default function BadgesPage({ conferenceId, conference }: { conferenceId:
                             <label className={label} htmlFor="badge-cc">{tx('badges.cc', 'Código de país para WhatsApp')}</label>
                             <input id="badge-cc" className={`${input} max-w-[120px]`} inputMode="numeric" maxLength={4} value={policy.country_code || ''} disabled={locked}
                                 onChange={(e) => patchPolicy({ country_code: e.target.value.replace(/\D/g, '').slice(0, 4) })} />
-                            <p className="text-[10px] text-gray-400 mt-1">{tx('badges.cc.hint', 'Se antepone a los celulares de 10 dígitos al enviar por WhatsApp (57 = Colombia).')}</p>
+                            <p className="text-[10px] text-gray-400 mt-1">{tx('badges.cc.hint', 'Se antepone a los números sin indicativo al enviar por WhatsApp (57 = Colombia). Si eliges el indicativo por defecto en Campos, se usa ese.')}</p>
                         </div>
                         {dirty && <p className="text-[10px] text-gray-400">{tx('badges.self.save', 'Los cambios se aplican al guardar.')}</p>}
                     </div>

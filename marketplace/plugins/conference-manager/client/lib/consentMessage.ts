@@ -12,7 +12,7 @@ import { consentT, type ConsentLang } from "./consentI18n";
 
 export type ShareInfo = {
     link: string; first_name?: string; conference?: string; policy_version?: string; policy_url?: string;
-    link_days?: number; email_masked?: string; phone?: string;
+    link_days?: number; email_masked?: string; phone?: string; phone_wa?: string;
 };
 
 /** The message, line by line: greeting, why, the personal link, the policy and how signing works. */
@@ -32,14 +32,13 @@ export function consentMessage(lang: ConsentLang | string, info: ShareInfo): str
 }
 
 /**
- * wa.me with the text. The phone goes in only when it carries its country code (written with «+», or 11 digits
- * and more); a local number would open the wrong chat, so then WhatsApp asks who to send it to.
+ * wa.me with the text, to `waDigits` — the number the server already put in international form (its stored
+ * country code, or the conference's default for an older national number; server/phone.js). Without one,
+ * WhatsApp asks who to send it to.
  */
-export function whatsappUrl(text: string, phone?: string | null): string {
-    const raw = String(phone || '').trim();
-    const digits = raw.replace(/\D/g, '');
-    const withCountry = digits.length >= 8 && (raw.startsWith('+') || digits.length >= 11);
-    return `https://wa.me/${withCountry ? digits : ''}?text=${encodeURIComponent(text)}`;
+export function whatsappUrl(text: string, waDigits?: string | null): string {
+    const digits = String(waDigits || '').replace(/\D/g, '');
+    return `https://wa.me/${/^\d{8,15}$/.test(digits) ? digits : ''}?text=${encodeURIComponent(text)}`;
 }
 
 /** Copy with the Clipboard API. false when there is none or it refused: show the text to copy by hand. */
