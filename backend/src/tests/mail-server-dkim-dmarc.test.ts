@@ -23,8 +23,9 @@ import { makeDb, PREFIX } from './fixtures/mail-server-db';
 
 const PLUGIN_DIR = path.resolve(__dirname, '../../../marketplace/plugins/mail-server');
 const PLUGIN_SRC = path.join(PLUGIN_DIR, 'index.js');
-const SOURCE = fs.readFileSync(PLUGIN_SRC, 'utf8');
-const WEBMAIL_SRC = fs.readFileSync(path.join(PLUGIN_DIR, 'client/admin/Webmail.tsx'), 'utf8');
+// Line endings normalized: a Windows checkout (core.autocrlf) has CRLF, and the slices below end at '\n}\n'.
+const SOURCE = fs.readFileSync(PLUGIN_SRC, 'utf8').replace(/\r\n/g, '\n');
+const WEBMAIL_SRC = fs.readFileSync(path.join(PLUGIN_DIR, 'client/admin/Webmail.tsx'), 'utf8').replace(/\r\n/g, '\n');
 const MailAuth = require(path.join(PLUGIN_DIR, 'lib/mail-auth.js'));
 const MailComposer = require('nodemailer/lib/mail-composer');
 const DKIMSigner = require('nodemailer/lib/dkim');
