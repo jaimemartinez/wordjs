@@ -228,9 +228,22 @@ function stripTags(text: any) {
  * Equivalent to wp_trim_excerpt()
  */
 function generateExcerpt(content: any, length = 55) {
-    const stripped = stripTags(content);
+    // Blocks are adjacent in the stored HTML (`<p>Visit the roastery</p><p>Open Tuesday…</p>`), so
+    // stripping the tags alone glued their words together («roasteryOpen» — FALLOS 142). The parser
+    // first reduces the markup to bare `<p>` / `<br />` (every block tag becomes a `<p>`, everything
+    // else is dropped and text is escaped), so those exact strings are the only tags left: a space goes
+    // around each, then the tags are stripped and the whitespace collapsed. No pattern ever reads HTML.
+    const blocks = sanitizeHtml(String(content ?? ''), { allowedTags: ['p', 'br'], allowedAttributes: {}, transformTags: BLOCKS_AS_P });
+    const spaced = blocks.split('<p>').join(' <p>').split('</p>').join('</p> ').split('<br />').join(' <br />');
+    const stripped = stripTags(spaced).replace(/\s+/g, ' ').trim();
     return trimWords(stripped, length);
 }
+
+/** Every tag that holds a block of text, rewritten to `p` for the excerpt's first pass. */
+const BLOCKS_AS_P: Record<string, string> = Object.fromEntries([
+    'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol', 'blockquote', 'pre', 'figure', 'figcaption',
+    'section', 'article', 'header', 'footer', 'aside', 'nav', 'td', 'th', 'tr', 'table', 'dd', 'dt', 'hr',
+].map((tag) => [tag, 'p']));
 
 /**
  * Format date

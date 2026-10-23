@@ -162,6 +162,15 @@ export function starterText(s: string, lang: Language): string {
     return hit ? hit[lang] || s : s;
 }
 
+/**
+ * Is `s` (trimmed) one of the starter texts, in any language? The inline editor selects such a text when
+ * editing starts, so typing replaces it instead of being appended to it («Write here...my text», FALLOS 136).
+ */
+export function isStarterText(s: string): boolean {
+    const t = String(s ?? "").trim();
+    return t.length > 0 && lookup().has(t);
+}
+
 /** Every starter entry that contains `s` in any language (tests: coverage of the core defaults). */
 export function starterTextMatches(s: string): Tri[] {
     return STARTER_CONTENT.filter((t) => t.es === s || t.en === s || t.pt === s);

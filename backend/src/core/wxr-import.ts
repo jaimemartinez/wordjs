@@ -246,12 +246,12 @@ function metaValueOf(item: any, key: string): string {
 
 const isPlaceholderDate = (d: string) => !d || d.startsWith('0000-00-00');
 
-/** A `YYYY-MM-DD HH:MM:SS` UTC time as the same moment in this server's clock (what Post.create stores). */
-function localFromGmt(gmt: string): string {
+/** A `YYYY-MM-DD HH:MM:SS` UTC time as the same moment on the site's wall clock (what Post.create stores). */
+async function localFromGmt(gmt: string): Promise<string> {
     const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(gmt || ''));
     if (!m) return '';
     const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
-    return Number.isNaN(d.getTime()) ? '' : require('./formatting').formatDate(d);
+    return Number.isNaN(d.getTime()) ? '' : await require('./site-time').siteLocalDateTime(d);
 }
 
 /**
@@ -718,10 +718,10 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
         const pDateGmt = text(item['wp:post_date_gmt']);
         if (isPlaceholderDate(pDate)) return;
         const gmt = isPlaceholderDate(pDateGmt) ? pDate : pDateGmt;
-        // `post_date` holds the same clock as a post written here: the moment (post_date_gmt) in this
-        // server's local time, as Post.create stamps it. The WordPress site's wall time was kept before,
+        // `post_date` holds the same clock as a post written here: the moment (post_date_gmt) on this
+        // site's wall clock, as Post.create stamps it. The WordPress site's wall time was kept before,
         // so imported and native posts mixed two clocks in every listing and ordering.
-        const local = localFromGmt(gmt) || pDate;
+        const local = (await localFromGmt(gmt)) || pDate;
         await dbAsync.run(
             `UPDATE posts SET post_date = ?, post_date_gmt = ?, post_modified = ?, post_modified_gmt = ? WHERE id = ?`,
             [local, gmt, local, gmt, newId]
@@ -1017,7 +1017,7 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                             const cDateGmt = wxrDateTime(text(cm['wp:comment_date_gmt'])) || cDate;
                             await dbAsync.run(
                                 `UPDATE comments SET comment_date = ?, comment_date_gmt = ? WHERE comment_id = ?`,
-                                [localFromGmt(cDateGmt) || cDate, cDateGmt, newCommentId]
+                                [(await localFromGmt(cDateGmt)) || cDate, cDateGmt, newCommentId]
                             );
                         }
                         const cOld = text(cm['wp:comment_id']);

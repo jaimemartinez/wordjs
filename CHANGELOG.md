@@ -90,6 +90,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Dates follow the site time zone.** A comment, a post, an edit and the starter content stored their local date with the server's clock instead of the site time zone (Settings → General), so on a host in another zone a comment written just after midnight UTC was dated the day before the post it answers. The local date is now built from the site time zone on any host, and the public pages read the UTC moment whenever the site zone is known, so comments stored before this change show the right day too.
+- **A new Text block's sample text is replaced when you start typing.** It is selected when editing starts, instead of the caret landing after it and publishing «Write here...» in front of what was typed. Text an author wrote is untouched.
+- **Ctrl/⌘+K inside a Text block adds a link.** With text selected while editing, the shortcut opened the command palette instead of the link popover. It now opens the link popover; outside a text being edited it still opens the palette.
+- **The comments section speaks the site language.** Its heading, form labels, buttons and notices were always in English. They now follow the site language (Spanish, English or Portuguese), on open entries and on members-only entries alike.
+- **A post awaiting review shows a translated badge** in the Posts list, instead of the raw word «pending».
+- **Automatic excerpts keep a space between paragraphs.** An excerpt built from the content glued the last word of one block to the first of the next («roasteryOpen»). Headings, paragraphs, list items and line breaks are now separated.
+- **The WordPress import summary explains unassigned menus in your language.** It printed an internal English message in the middle of the translated note. It now says, in the admin language, that the export named no theme location, or that the locations it named matched no imported menu.
 - **Security → Automatic Certificate Renewal reads correctly.** The HTTP-01 note was glued from fragments,
   so it read "runs in the every deployment mode" and "Port 80 listenerabove" in English, "en el todos los modos"
   and "HTTP-01 ; por eso" in Spanish, and "na todos os modos" in Portuguese. Each language now has the whole

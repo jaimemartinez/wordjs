@@ -356,10 +356,13 @@ async function restoreRevision(revisionId: number) {
 
       // Identifiers come only from revision-snapshots.RESTORABLE_COLUMNS. Values remain parameters.
       const assignments = restorePlan.columns.map((entry: any) => `${entry.column} = ?`);
-      assignments.push('post_modified = CURRENT_TIMESTAMP', 'post_modified_gmt = CURRENT_TIMESTAMP');
+      // The site's wall clock and UTC (core/site-time), like every other write of post_modified —
+      // CURRENT_TIMESTAMP is UTC on SQLite and the database server's zone elsewhere.
+      const modified = await require('./site-time').siteDatePair();
+      assignments.push('post_modified = ?', 'post_modified_gmt = ?');
       await tx.run(
         `UPDATE posts SET ${assignments.join(', ')} WHERE id = ?`,
-        [...restorePlan.columns.map((entry: any) => entry.value), revisionRow.post_parent]
+        [...restorePlan.columns.map((entry: any) => entry.value), modified.local, modified.gmt, revisionRow.post_parent]
       );
 
       // Status/date are workflow state, not just bytes. Reconcile the one-shot publication event in

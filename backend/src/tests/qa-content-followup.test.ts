@@ -439,3 +439,63 @@ test('the Redis server is set from the panel: tested, saved without echoing the 
         if (supervised === undefined) delete process.env.WORDJS_SUPERVISED; else process.env.WORDJS_SUPERVISED = supervised;
     }
 });
+
+// ── Dates follow the SITE time zone, not the server's (FALLOS 135) ─────────────────────────────────
+
+test('site-local dates are built from the site time zone, whatever the host zone is', async () => {
+    const siteTime = require('../core/site-time');
+    // A fixed moment, so nothing depends on the machine running the test: 03:42:54 UTC on 23 Oct 2026.
+    const moment = new Date(Date.UTC(2026, 9, 23, 3, 42, 54));
+    assert.strictEqual(siteTime.gmtDateTime(moment), '2026-10-23 03:42:54');
+    assert.strictEqual(siteTime.localDateTimeIn(moment, 'UTC'), '2026-10-23 03:42:54');
+    assert.strictEqual(siteTime.localDateTimeIn(moment, 'America/Bogota'), '2026-10-22 22:42:54', 'UTC-5: the day before');
+    assert.strictEqual(siteTime.localDateTimeIn(moment, 'Asia/Tokyo'), '2026-10-23 12:42:54');
+    assert.strictEqual(siteTime.localDateTimeIn(moment, 'Not/AZone'), '2026-10-23 03:42:54', 'an unusable zone falls back to UTC');
+
+    const offsetHours = (local: string, gmt: string) =>
+        Math.round((Date.parse(local.replace(' ', 'T') + 'Z') - Date.parse(gmt.replace(' ', 'T') + 'Z')) / 3600000);
+
+    // A comment and a post stored with the site on UTC: the local column IS the UTC one.
+    await setOption('timezone_string', 'UTC');
+    await setOption('comment_moderation', '0');
+    const post = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ title: 'TZ post', content: 'x', status: 'publish' });
+    assert.strictEqual(post.status, 201, JSON.stringify(post.body));
+    const row = await dbAsync.get('SELECT post_date, post_date_gmt, post_modified, post_modified_gmt FROM posts WHERE id = ?', [post.body.id]);
+    assert.strictEqual(offsetHours(row.post_date, row.post_date_gmt), 0);
+    assert.strictEqual(offsetHours(row.post_modified, row.post_modified_gmt), 0);
+    await setOption('comment_rate_anon', 1000);
+    const c = await request(app).post(`${B}/comments`).set(SAME_ORIGIN).send({ post: post.body.id, author_name: 'Tz', author_email: 'tz@example.com', content: 'When?' });
+    assert.strictEqual(c.status, 201, JSON.stringify(c.body));
+    const crow = await dbAsync.get('SELECT comment_date, comment_date_gmt FROM comments WHERE comment_id = ?', [c.body.id]);
+    assert.strictEqual(offsetHours(crow.comment_date, crow.comment_date_gmt), 0, `${crow.comment_date} vs ${crow.comment_date_gmt}`);
+
+    // Tokyo: nine hours ahead, for the comment, a new post, an edit (post_modified) and a dated post.
+    await setOption('timezone_string', 'Asia/Tokyo');
+    const c2 = await request(app).post(`${B}/comments`).set(SAME_ORIGIN).send({ post: post.body.id, author_name: 'Tz', author_email: 'tz@example.com', content: 'And now?' });
+    const crow2 = await dbAsync.get('SELECT comment_date, comment_date_gmt FROM comments WHERE comment_id = ?', [c2.body.id]);
+    assert.strictEqual(offsetHours(crow2.comment_date, crow2.comment_date_gmt), 9);
+    const edited = await request(app).put(`${B}/posts/${post.body.id}`).set(bearer('admin')).send({ title: 'TZ post, edited' });
+    assert.strictEqual(edited.status, 200, JSON.stringify(edited.body));
+    const row2 = await dbAsync.get('SELECT post_modified, post_modified_gmt FROM posts WHERE id = ?', [post.body.id]);
+    assert.strictEqual(offsetHours(row2.post_modified, row2.post_modified_gmt), 9);
+    const dated = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ title: 'Dated', content: 'x', status: 'publish', date: '2026-01-10T20:00:00Z' });
+    const row3 = await dbAsync.get('SELECT post_date, post_date_gmt FROM posts WHERE id = ?', [dated.body.id]);
+    assert.strictEqual(row3.post_date_gmt, '2026-01-10 20:00:00');
+    assert.strictEqual(row3.post_date, '2026-01-11 05:00:00', 'the next day in Tokyo');
+    await setOption('timezone_string', 'UTC');
+});
+
+test('the automatic excerpt keeps a space between blocks (FALLOS 142)', () => {
+    const { generateExcerpt } = require('../core/formatting');
+    assert.strictEqual(
+        generateExcerpt('<p>Visit the roastery</p><p>Open Tuesday to Sunday</p>'),
+        'Visit the roastery Open Tuesday to Sunday',
+    );
+    assert.strictEqual(generateExcerpt('<h2>Hours</h2><ul><li>Mon</li><li>Tue</li></ul>Line<br>two<br/>three'), 'Hours Mon Tue Line two three');
+    // Inline markup inside a block does not split a word.
+    assert.strictEqual(generateExcerpt('<p>Fresh<strong>ly</strong> roasted</p>'), 'Freshly roasted');
+    assert.strictEqual(generateExcerpt('<p>one</p><p>two</p><p>three</p>', 2), 'one two...');
+    // Text before a block, escaped markup inside text, and unknown tags.
+    assert.strictEqual(generateExcerpt('Intro<p>Body</p>'), 'Intro Body');
+    assert.strictEqual(generateExcerpt('<p>a &lt;/p&gt; b</p><script>x</script>'), 'a &lt;/p&gt; b');
+});

@@ -7,7 +7,7 @@ const database = require('../config/database');
 const { clampLimit, clampOffset } = require('../core/pagination');
 const { db, dbAsync, getDbType } = database;
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
-const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate, boundSlug } = require('../core/formatting');
+const { sanitizeTitle, sanitizeContent, generateExcerpt, boundSlug } = require('../core/formatting');
 const config = require('../config/app');
 const cache = require('../core/cache');
 // Multisite: the current site's main address, the base of the absolute URLs below (site 1: config.site.url).
@@ -665,8 +665,10 @@ class Post {
         // Sanitize content
         const sanitizedContent = sanitizeContent(content);
 
-        const now = currentTime();
-        const nowGmt = currentTimeGMT();
+        // post_date is the SITE's wall clock (Settings → General → Time zone), never the server's: on a host
+        // in another zone the two disagreed by hours, and by a day around midnight (core/site-time).
+        const siteTime = require('../core/site-time');
+        const { local: now, gmt: nowGmt } = await siteTime.siteDatePair();
 
         // Scheduled publishing (WordPress parity): a caller-supplied post_date decides post_date /
         // post_date_gmt, and a 'publish' whose date is in the FUTURE is stored as 'future' + armed with a
@@ -679,8 +681,8 @@ class Post {
         if (date !== undefined && date !== null && date !== '') {
             const d = new Date(date);
             if (!Number.isNaN(d.getTime())) {
-                postDate = formatDate(d);
-                postDateGmt = d.toISOString().slice(0, 19).replace('T', ' ');
+                postDate = await siteTime.siteLocalDateTime(d);
+                postDateGmt = siteTime.gmtDateTime(d);
                 effectiveStatus = scheduledPublish.resolveScheduledStatus(requestedStatus, d.getTime());
                 if (effectiveStatus === 'future') scheduledWhenMs = d.getTime();
             }
@@ -1717,7 +1719,7 @@ class Post {
                 whenMs = d.getTime();
                 explicitDate = true;
                 updates.push('post_date = ?', 'post_date_gmt = ?');
-                values.push(formatDate(d), d.toISOString().slice(0, 19).replace('T', ' '));
+                values.push(await require('../core/site-time').siteLocalDateTime(d), require('../core/site-time').gmtDateTime(d));
             }
         }
 
@@ -1758,7 +1760,7 @@ class Post {
                 whenMs = nowDate.getTime();
                 stampedOrphanDate = true;
                 updates.push('post_date = ?', 'post_date_gmt = ?');
-                values.push(formatDate(nowDate), nowDate.toISOString().slice(0, 19).replace('T', ' '));
+                values.push(await require('../core/site-time').siteLocalDateTime(nowDate), require('../core/site-time').gmtDateTime(nowDate));
             }
         }
 
@@ -1853,7 +1855,8 @@ class Post {
 
         // Always update modified date
         updates.push('post_modified = ?', 'post_modified_gmt = ?');
-        values.push(currentTime(), currentTimeGMT());
+        const modifiedStamp = await require('../core/site-time').siteDatePair();
+        values.push(modifiedStamp.local, modifiedStamp.gmt);
 
         // term_taxonomy.count materialises "how many PUBLISHED posts are attached to this term", so
         // every crossing of the publish/non-publish boundary changes it. Before, the ONLY writer was

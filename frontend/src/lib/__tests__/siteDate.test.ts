@@ -46,3 +46,14 @@ describe('formatSiteDate in the site time zone (M3-16)', () => {
         expect(siteTimeZone({})).toBe('UTC');
     });
 });
+
+describe("a site on UTC still reads the UTC moment (FALLOS 135)", () => {
+    it("dates a comment by dateGmt, not by a local date written with the server's clock", () => {
+        // Written at 03:42 UTC on the 23rd by a host at UTC-5, before the backend stored site-local dates.
+        const stale = { date: "2026-10-22 22:42:54", gmt: "2026-10-23 03:42:54" };
+        expect(formatSiteDate(stale.date, "en", { gmt: stale.gmt, timeZone: "UTC" })).toBe("October 23, 2026");
+        expect(formatSiteDate(stale.date, "en", { gmt: stale.gmt, timeZone: "UTC", format: "Y-m-d", timeFormat: "H:i" })).toBe("2026-10-23 03:42");
+        // Without a zone the stored day is all there is.
+        expect(formatSiteDate(stale.date, "en")).toBe("October 22, 2026");
+    });
+});

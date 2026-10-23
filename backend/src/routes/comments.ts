@@ -32,7 +32,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // once, as a string, or the request is a 400 (the same answer routes/posts.ts already gives).
 const { scalarQueryParam, requireScalarQuery, requireRouteId } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
-const { stripTags, escUrl, sanitizeContent, currentTime, currentTimeGMT } = require('../core/formatting');
+const { stripTags, escUrl, sanitizeContent } = require('../core/formatting');
 // THE COMMENT ABUSE POSTURE (see the block below the query-field table) needs three more things: the
 // limiter constructor, the one honest per-request IP every limiter on this server keys on, and the
 // filter an anti-spam plugin hooks so it can veto an insert without a core change.
@@ -422,6 +422,8 @@ async function nextPhantomCommentId(): Promise<number> {
 }
 
 async function discardedComment(draft: any, storedContent: string) {
+    // The same clock as a stored comment (core/site-time): the site's, not the server's.
+    const stamp = await require('../core/site-time').siteDatePair();
     return new Comment({
         comment_id: await nextPhantomCommentId(),
         comment_post_id: draft.postId,
@@ -429,8 +431,8 @@ async function discardedComment(draft: any, storedContent: string) {
         comment_author_email: draft.authorEmail,
         comment_author_url: draft.authorUrl,
         comment_author_ip: draft.authorIp,
-        comment_date: currentTime(),
-        comment_date_gmt: currentTimeGMT(),
+        comment_date: stamp.local,
+        comment_date_gmt: stamp.gmt,
         comment_content: storedContent,
         comment_karma: 0,
         comment_approved: draft.status,

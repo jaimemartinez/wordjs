@@ -29,7 +29,15 @@ describe("ContentTable — scheduled posts", () => {
     it("keeps the existing status mappings intact", () => {
         expect(statusBadgeView("publish", t)).toEqual({ status: "published", label: "Publicado" });
         expect(statusBadgeView("draft", t)).toEqual({ status: "draft", label: "Borrador" });
-        expect(statusBadgeView("pending", t)).toEqual({ status: "pending", label: "pending" });
+    });
+
+    it("labels a pending post with the translated status, in the warning palette (FALLOS 139)", () => {
+        expect(statusBadgeView("pending", t)).toEqual({ status: "pending", label: "Pendiente" });
+        const en = (k: string) => (translations.en as Record<string, string>)[k] || k;
+        expect(statusBadgeView("pending", en).label).toBe("Pending");
+        const html = renderToStaticMarkup(<StatusBadge {...statusBadgeView("pending", t)} />);
+        expect(html).toContain("Pendiente");
+        expect(html).toContain("text-amber"); // statusMap.pending → warning
     });
 
     it("offers a Scheduled tab whose filter key is the real DB status ('future')", () => {

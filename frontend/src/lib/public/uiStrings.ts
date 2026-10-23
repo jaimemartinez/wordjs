@@ -162,3 +162,47 @@ export function postTermsStrings(settings: Record<string, unknown> | null | unde
     const lang = catalogueLanguage(resolveDocumentLanguage(settings).lang);
     return { categories: t("public.post.categories", lang), tags: t("public.post.tags", lang) };
 }
+
+/** The public comment thread and form (components/CommentsSection). */
+export interface CommentStrings {
+    /** «Comments ({count})». */
+    title: string;
+    empty: string;
+    loading: string;
+    reply: string;
+    formTitle: string;
+    /** «You must be {link} to post a comment.» — `{link}` is replaced by the `loginLink` anchor. */
+    loginRequired: string;
+    loginLink: string;
+    replyingTo: string;
+    cancelReply: string;
+    commentingAs: string;
+    name: string;
+    email: string;
+    website: string;
+    comment: string;
+    honeypot: string;
+    submit: string;
+    submitting: string;
+    required: string;
+    published: string;
+    pending: string;
+    failed: string;
+}
+
+export const COMMENT_STRING_KEYS: readonly (keyof CommentStrings)[] = [
+    "title", "empty", "loading", "reply", "formTitle", "loginRequired", "loginLink", "replyingTo", "cancelReply",
+    "commentingAs", "name", "email", "website", "comment", "honeypot", "submit", "submitting", "required",
+    "published", "pending", "failed",
+];
+
+export function commentStringsFor(lang: Language): CommentStrings {
+    const out = {} as CommentStrings;
+    for (const key of COMMENT_STRING_KEYS) out[key] = t(`public.comments.${key}`, lang);
+    return out;
+}
+
+/** Comment texts for a site, from its settings (`WPLANG`; nothing configured → English). */
+export function commentStrings(settings: Record<string, unknown> | null | undefined): CommentStrings {
+    return commentStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
+}

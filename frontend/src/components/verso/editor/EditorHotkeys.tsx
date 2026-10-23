@@ -26,7 +26,7 @@ import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import { duplicateSelected, removeSelected, selectParent } from "../overlay/actionBarCommands";
 import { copySelectedSubtree, pasteFromClipboard } from "./blockClipboard";
-import { bypassesTypingGuard, hotkeyActionOf, TYPING_TARGET_SELECTOR } from "./hotkeyMap";
+import { bypassesTypingGuard, hotkeyActionOf, INLINE_EDITABLE_SELECTOR, TYPING_TARGET_SELECTOR, yieldsToInlineText } from "./hotkeyMap";
 
 export interface VersoEditorHotkeysProps {
     handle: EditorHandle;
@@ -60,6 +60,10 @@ export default function EditorHotkeys({ handle, registry, frameDocument, onSave,
         const onKey = (e: KeyboardEvent) => {
             const action = hotkeyActionOf(e);
             if (!action) return;
+            // Ctrl/⌘+K en un texto en edición: el popover de enlace de la superficie (FALLOS 140).
+            const target = e.target as HTMLElement | null;
+            const inEditable = !!(target && typeof target.closest === "function" && target.closest(INLINE_EDITABLE_SELECTOR));
+            if (yieldsToInlineText(action, handle.getState().inlineEditingId !== null, inEditable)) return;
             if (!bypassesTypingGuard(action)) {
                 if (isTypingTarget(e.target) || handle.getState().inlineEditingId !== null) return;
             }

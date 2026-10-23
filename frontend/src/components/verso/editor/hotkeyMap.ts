@@ -59,6 +59,19 @@ export function bypassesTypingGuard(action: HotkeyAction): boolean {
     return action === "save" || action === "palette";
 }
 
+/**
+ * Ctrl/⌘+K dentro de un texto en edición inline es el ENLACE, no la paleta: VersoTextSurface abre su
+ * popover de enlace con la selección, pero el listener de captura de EditorHotkeys corre antes en la
+ * ventana del iframe y abría la paleta (FALLOS 140). Cede solo con la edición inline activa Y el foco
+ * en su editable; desde un campo del inspector la paleta sigue abriéndose.
+ */
+export function yieldsToInlineText(action: HotkeyAction, inlineEditing: boolean, targetInEditable: boolean): boolean {
+    return action === "palette" && inlineEditing && targetInEditable;
+}
+
+/** El editable de la edición inline (VersoTextSurface). */
+export const INLINE_EDITABLE_SELECTOR = '[contenteditable="true"]';
+
 /** Selector de "está escribiendo" — el mismo del EditorHotkeys actual. */
 export const TYPING_TARGET_SELECTOR =
     'input, textarea, select, [contenteditable="true"], .ProseMirror';

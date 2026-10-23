@@ -8,6 +8,36 @@ import { sanitizeHTML } from "@/lib/sanitize";
 import { formatSiteDate } from "@/lib/public/siteDate";
 import { probeSession } from "@/contexts/AuthContext";
 import { readCsrfToken } from "@/lib/csrf";
+import type { CommentStrings } from "@/lib/public/uiStrings";
+
+/**
+ * The English texts, for a caller that passes none. The page resolves the SITE language's texts on the
+ * server (lib/public/uiStrings `commentStrings`) and passes them in: this island never ships lib/i18n.
+ * The section printed these English words on every site whatever its language (FALLOS 138).
+ */
+export const DEFAULT_COMMENT_STRINGS: CommentStrings = {
+    title: "Comments ({count})",
+    empty: "No comments yet. Be the first to share your thoughts!",
+    loading: "Loading comments...",
+    reply: "Reply",
+    formTitle: "Leave a Reply",
+    loginRequired: "You must be {link} to post a comment.",
+    loginLink: "logged in",
+    replyingTo: "Replying to",
+    cancelReply: "Cancel reply",
+    commentingAs: "Commenting as",
+    name: "Name",
+    email: "Email",
+    website: "Website",
+    comment: "Comment",
+    honeypot: "Do not fill in this field",
+    submit: "Post Comment",
+    submitting: "Posting...",
+    required: "Please fill in all required fields.",
+    published: "Your comment is published.",
+    pending: "Comment submitted successfully! It awaits moderation.",
+    failed: "Failed to submit comment.",
+};
 
 // Local initials avatar — no request to the external avatar service. Background is a
 // deterministic pick (simple char-code hash of the name) over the theme token palette.
@@ -38,6 +68,13 @@ function InitialsAvatar({ name }: { name: string }) {
     );
 }
 
+/** `text` with its `{link}` placeholder replaced by `link` (the whole text, then the link, when it has none). */
+function withLink(text: string, link: React.ReactNode): React.ReactNode {
+    const at = text.indexOf("{link}");
+    if (at < 0) return <>{text} {link}</>;
+    return <>{text.slice(0, at)}{link}{text.slice(at + "{link}".length)}</>;
+}
+
 /** The signed-in commenter, as GET /auth/me names them. */
 interface Commenter { displayName: string }
 
@@ -47,8 +84,20 @@ interface Commenter { displayName: string }
  * `requireLogin` is the «registered users only» setting (comment_registration): a visitor without a
  * session gets a sign-in link instead of the form. The server enforces it too; this keeps the page from
  * offering a form whose every submission is refused.
+ * `strings` are the section's texts in the site language (DEFAULT_COMMENT_STRINGS when absent).
  */
-export default function CommentsSection({ postId, lang, requireLogin = false, timeZone, dateFormat, timeFormat }: { postId: number; lang?: string | null; requireLogin?: boolean; timeZone?: string | null; dateFormat?: string; timeFormat?: string }) {
+export interface CommentsSectionProps {
+    postId: number;
+    lang?: string | null;
+    requireLogin?: boolean;
+    timeZone?: string | null;
+    dateFormat?: string;
+    timeFormat?: string;
+    strings?: CommentStrings;
+}
+
+export default function CommentsSection({ postId, lang, requireLogin = false, timeZone, dateFormat, timeFormat, strings }: CommentsSectionProps) {
+    const s = strings || DEFAULT_COMMENT_STRINGS;
     const [comments, setComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
@@ -111,7 +160,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
 
         // A signed-in commenter is identified by the session (the server ignores name/email for them).
         if (!content.trim() || (!commenter && (!authorName.trim() || !authorEmail.trim()))) {
-            setError("Please fill in all required fields.");
+            setError(s.required);
             return;
         }
 
@@ -133,7 +182,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
             const created = await commentsApi.create(payload) as { status?: string } | null;
             // Published at once when the site does not hold comments for moderation (Settings → Discussion).
             const published = created && (created.status === "1" || created.status === "approved");
-            setSuccessMessage(published ? "Your comment is published." : "Comment submitted successfully! It awaits moderation.");
+            setSuccessMessage(published ? s.published : s.pending);
             setContent("");
             setReplyTo(null);
             if (published) loadComments();
@@ -142,14 +191,14 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
             // For now, just clear form.
         } catch (err: any) {
             console.error(err);
-            setError(err.message || "Failed to submit comment.");
+            setError(err.message || s.failed);
         } finally {
             setSubmitting(false);
         }
     };
 
     // The placeholder carries the ref too: it is what sits where the comments will be until they load.
-    if (loading) return <div ref={rootRef} className="py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">Loading comments...</div>;
+    if (loading) return <div ref={rootRef} className="py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">{s.loading}</div>;
 
     // Token hooks below prefer UNDECLARED contract tokens (card-*/button-*/form-*): ui.css :root
     // pre-declares e.g. --wjs-color-danger (a SOLID color) and would beat any Tailwind-parity
@@ -163,13 +212,13 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
     return (
         <div ref={rootRef} className="wjs-comments max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-[var(--wjs-radius-lg,0.75rem)]">
             <h3 className="wjs-comments-title text-2xl font-bold text-[var(--wjs-color-heading,#111827)] mb-8">
-                Comments ({comments.length})
+                {s.title.replace("{count}", String(comments.length))}
             </h3>
 
             {/* Comments List */}
             <div className="wjs-comment-list space-y-8 mb-12">
                 {comments.length === 0 ? (
-                    <p className="wjs-comments-empty text-[var(--wjs-color-text-muted,#6b7280)] italic">No comments yet. Be the first to share your thoughts!</p>
+                    <p className="wjs-comments-empty text-[var(--wjs-color-text-muted,#6b7280)] italic">{s.empty}</p>
                 ) : (
                     commentThread(comments).map(({ comment, depth }) => (
                         <div key={comment.id} className="wjs-comment flex gap-4" data-depth={depth}
@@ -198,7 +247,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                                         <button type="button"
                                             onClick={() => { setReplyTo({ id: comment.id, author: comment.author }); document.getElementById("wjs-comment-form")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
                                             className="wjs-comment-reply mt-2 min-h-8 text-xs font-semibold text-[var(--wjs-color-primary,#2563eb)] hover:underline">
-                                            Reply
+                                            {s.reply}
                                         </button>
                                     )}
                                 </div>
@@ -210,7 +259,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
 
             {/* Comment Form */}
             <div id="wjs-comment-form" className="wjs-comment-form scroll-mt-28 bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-[var(--wjs-card-radius,0.75rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
-                <h4 className="wjs-comment-form-title text-lg font-bold text-[var(--wjs-color-heading,#111827)] mb-4">Leave a Reply</h4>
+                <h4 className="wjs-comment-form-title text-lg font-bold text-[var(--wjs-color-heading,#111827)] mb-4">{s.formTitle}</h4>
 
                 {/* Alert bg tints (red-50/green-50) stay literal: the contract has no undeclared danger/
                     success-surface token, and --wjs-color-danger/success are pre-declared SOLIDS. */}
@@ -228,25 +277,25 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
 
                 {commenter === undefined && requireLogin ? null : !commenter && requireLogin ? (
                     <p className="wjs-comment-login-required text-[var(--wjs-color-text-main,#374151)]">
-                        You must be <a href={`/login?redirect=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname : "/")}`} className="underline font-medium text-[var(--wjs-color-primary,#2563eb)]">logged in</a> to post a comment.
+                        {withLink(s.loginRequired, <a href={`/login?redirect=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname : "/")}`} className="underline font-medium text-[var(--wjs-color-primary,#2563eb)]">{s.loginLink}</a>)}
                     </p>
                 ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {replyTo && (
                         <p className="wjs-comment-replying text-sm text-[var(--wjs-color-text-muted,#6b7280)] flex flex-wrap items-center gap-2">
-                            Replying to <strong className="text-[var(--wjs-color-text-main,#374151)]">{replyTo.author}</strong>
-                            <button type="button" onClick={() => setReplyTo(null)} className="min-h-8 text-xs underline">Cancel reply</button>
+                            {s.replyingTo} <strong className="text-[var(--wjs-color-text-main,#374151)]">{replyTo.author}</strong>
+                            <button type="button" onClick={() => setReplyTo(null)} className="min-h-8 text-xs underline">{s.cancelReply}</button>
                         </p>
                     )}
                     {commenter ? (
                         <p className="wjs-comment-as text-sm text-[var(--wjs-color-text-muted,#6b7280)]">
-                            Commenting as <strong className="text-[var(--wjs-color-text-main,#374151)]">{commenter.displayName}</strong>
+                            {s.commentingAs} <strong className="text-[var(--wjs-color-text-main,#374151)]">{commenter.displayName}</strong>
                         </p>
                     ) : (
                     <>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label htmlFor="comment-author-name" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Name *</label>
+                            <label htmlFor="comment-author-name" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">{s.name} *</label>
                             <input
                                 id="comment-author-name"
                                 type="text"
@@ -258,7 +307,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                             />
                         </div>
                         <div>
-                            <label htmlFor="comment-author-email" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Email *</label>
+                            <label htmlFor="comment-author-email" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">{s.email} *</label>
                             <input
                                 id="comment-author-email"
                                 type="email"
@@ -271,7 +320,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                         </div>
                     </div>
                     <div>
-                        <label htmlFor="comment-author-url" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Website</label>
+                        <label htmlFor="comment-author-url" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">{s.website}</label>
                         <input
                             id="comment-author-url"
                             type="url"
@@ -283,7 +332,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                     </>
                     )}
                     <div>
-                        <label htmlFor="comment-content" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Comment *</label>
+                        <label htmlFor="comment-content" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">{s.comment} *</label>
                         <textarea
                             id="comment-content"
                             required
@@ -308,7 +357,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                             overflow: "hidden",
                         }}
                     >
-                        <label htmlFor="comment-hp">Do not fill in this field</label>
+                        <label htmlFor="comment-hp">{s.honeypot}</label>
                         <input
                             id="comment-hp"
                             type="text"
@@ -324,7 +373,7 @@ export default function CommentsSection({ postId, lang, requireLogin = false, ti
                         disabled={submitting}
                         className="wjs-comment-submit px-6 py-2 bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] font-medium rounded-[var(--wjs-button-radius,0.5rem)] hover:opacity-90 disabled:opacity-50 transition shadow-[var(--wjs-button-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))]"
                     >
-                        {submitting ? "Posting..." : "Post Comment"}
+                        {submitting ? s.submitting : s.submit}
                     </button>
                 </form>
                 )}

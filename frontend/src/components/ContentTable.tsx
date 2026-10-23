@@ -58,6 +58,8 @@ export function statusBadgeView(status: string, t: (k: string) => string): { sta
     if (status === "draft") return { status: "draft", label: t("posts.draft") };
     if (status === "future") return { status: "scheduled", label: t("posts.scheduled") || "Scheduled" };
     if (status === "trash") return { status: "deleted", label: t("posts.trashed") || "Trashed" };
+    // Awaiting review: the catalog label, never the raw status word (FALLOS 139).
+    if (status === "pending") return { status: "pending", label: t("posts.pending") || "Pending" };
     return { status, label: status };
 }
 
