@@ -384,6 +384,30 @@ function callHost(method, args) {
     });
 }
 
+// A REGISTRATION REFUSED FOR A MISSING GRANT IS NOT A CRASH. Adding the admin sidebar entry
+// (admin_menu:register) or enqueuing a public script/style (assets:write) is gated host-side like every
+// bridge call, and an administrator may leave those grants off — on the permission screen, or unticked in
+// the consent dialog of a Marketplace update. Plugins call them fire-and-forget from init, so the refusal
+// was an unhandled rejection, which is fatal here: the plugin crash-looped through its restarts and its
+// routes, hooks and blocks went down with a menu entry. The host still refuses exactly as before; on THIS
+// side the refusal resolves to null and is logged once per method, and the plugin keeps running without
+// what it was not granted. Anything else (a malformed entry, a host error) still rejects as before.
+const PERMISSION_REFUSAL = /tried to access '([a-z_]+)' \(([a-z_]+)\) without permission/i;
+const reportedRefusals = new Set();
+function tolerateRefusal(method, call) {
+    return call.catch((e) => {
+        const m = PERMISSION_REFUSAL.exec(String(e && e.message || ''));
+        if (!m) throw e;
+        if (!reportedRefusals.has(method)) {
+            reportedRefusals.add(method);
+            // stderr: the worker's own log channel (the host relays it as `[plugin <slug>]` lines), as the
+            // fatal-error report above uses — module-logger is a host module this child does not load.
+            try { process.stderr.write(`[${slug}] ${method} skipped: the permission "${m[1]}:${m[2]}" is not granted (Plugins → ${slug} → Permissions). The plugin keeps running without it.\n`); } catch { /* stderr gone */ }
+        }
+        return null;
+    });
+}
+
 function registerCallback(hookType, hook, cb, priority) {
     const cbId = `${hookType}:${hook}:${++_id}`;
     callbacks.set(cbId, cb);
@@ -455,7 +479,7 @@ const wordjs = {
         },
         status: () => askHost('smtp-status', {}),
     },
-    adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
+    adminMenu: { add: (item) => tolerateRefusal('adminMenu.add', callHost('adminMenu.add', [item])) },
     cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
     // CSPRNG bridge — the static validator blocks crypto/globalThis in plugin CODE, so a plugin that
     // needs UNGUESSABLE tokens/codes must get them here (host-backed) instead of Math.random (whose
@@ -472,8 +496,8 @@ const wordjs = {
     // Load a script/style from inside your plugin dir onto public pages (needs the 'assets' grant).
     // spec = { handle, src (relative path in your plugin), inFooter?, strategy?:'async'|'defer', media? }
     assets: {
-        enqueueScript: (spec) => callHost('assets.enqueueScript', [spec]),
-        enqueueStyle: (spec) => callHost('assets.enqueueStyle', [spec]),
+        enqueueScript: (spec) => tolerateRefusal('assets.enqueueScript', callHost('assets.enqueueScript', [spec])),
+        enqueueStyle: (spec) => tolerateRefusal('assets.enqueueStyle', callHost('assets.enqueueStyle', [spec])),
     },
 
     // SAFE user lookups (gated host-side on users:read). Return a SAFE projection
