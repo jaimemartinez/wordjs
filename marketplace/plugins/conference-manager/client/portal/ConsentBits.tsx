@@ -6,6 +6,9 @@
  * with its date / revocada) and the person's sheet section with «Reenviar enlace» and «Copiar mensaje» (2.33.2:
  * a new link in a message to paste into WhatsApp; no e-mail, logged «link_shared»). A roster row carries
  * `consent` only while the conference asks for it (GET /portal/inscriptions).
+ *
+ * «Consentimiento en papel» (2.34.0): PortalPaperConsent — the locality's printable sheet, the signed pages and the
+ * checklist of who signed (lib/PaperConsent), in the portal's own Modal.
  */
 import React, { useState } from "react";
 import { useToast } from "@/contexts/ToastContext";
@@ -13,10 +16,13 @@ import { Badge, Button, Modal, Notice, labelCls } from "./ui";
 import { consentT } from "../lib/consentI18n";
 import { consentMessage, copyLangOf, copyText, rememberCopyLang, whatsappUrl } from "../lib/consentMessage";
 import { CopyLangPicker } from "../lib/CopyLangPicker";
+import { PaperConsent } from "../lib/PaperConsent";
 
 export type PortalConsent = {
     state: "pending" | "granted" | "revoked"; granted_at: string | null; revoked_at: string | null;
     email_masked: string; mail_failed: boolean; link_expired: boolean; never_sent?: boolean;
+    /** 2.34.0: a verbal health authorization waiting for its written confirmation (late after the conference's days). */
+    verbal_health?: boolean; verbal_overdue?: boolean;
 };
 
 const t = consentT("es");
@@ -29,12 +35,18 @@ const ICON = { pending: "fa-hourglass-half", granted: "fa-file-signature", revok
 
 export function ConsentChip({ consent }: { consent?: PortalConsent | null }) {
     if (!consent) return null;
+    const verbal = consent.verbal_overdue ? (
+        <Badge tone="rose" size="xs" icon="fa-comment-dots" data-consent-verbal="overdue">{t("verbal.overdue")}</Badge>
+    ) : null;
     const label = consent.state === "granted" ? t("portal.state.granted") : consent.state === "revoked" ? t("portal.state.revoked") : t("portal.state.pending");
     const title = consent.state === "granted" ? t("portal.state.granted.at", { when: dateOf(consent.granted_at) }) : consent.mail_failed ? t("portal.mail.failed") : undefined;
     return (
-        <Badge tone={TONE[consent.state] || "amber"} size="xs" icon={consent.mail_failed && consent.state === "pending" ? "fa-triangle-exclamation" : ICON[consent.state]} title={title} data-consent-state={consent.state}>
-            {label}
-        </Badge>
+        <>
+            <Badge tone={TONE[consent.state] || "amber"} size="xs" icon={consent.mail_failed && consent.state === "pending" ? "fa-triangle-exclamation" : ICON[consent.state]} title={title} data-consent-state={consent.state}>
+                {label}
+            </Badge>
+            {verbal}
+        </>
     );
 }
 
@@ -142,5 +154,43 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
                 </Notice>
             )}
         </section>
+    );
+}
+
+function PortalDialog({ title, onClose, children, footer, testId }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string }) {
+    return <Modal title={title} onClose={onClose} size="lg" testId={testId} footer={footer}>{children}</Modal>;
+}
+
+/** The coordinator's paper consent for their own locality (the portal session's). */
+export function PortalPaperConsent({ authHeaders, onChanged }: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; onChanged?: () => void }) {
+    const { addToast } = useToast();
+    const [open, setOpen] = useState(false);
+    // The host hands in new functions on every render: kept in refs, so the panel does not reload each time.
+    const headersRef = React.useRef(authHeaders);
+    const changedRef = React.useRef(onChanged);
+    headersRef.current = authHeaders; changedRef.current = onChanged;
+    const request = React.useCallback(async (method: "get" | "post", params: Record<string, any> = {}) => {
+        const qs = method === "get" ? new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString() : "";
+        const res = await fetch(`/api/v1/plugin/conference-manager/portal/consent/paper${qs ? `?${qs}` : ""}`, {
+            method: method.toUpperCase(), credentials: "include",
+            headers: headersRef.current(method === "post" ? { "Content-Type": "application/json" } : {}),
+            ...(method === "post" ? { body: JSON.stringify(params) } : {}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { const e: any = new Error(data.error || "Error"); e.body = data; throw e; }
+        if (params.action === "marks" || params.action === "unmark") changedRef.current && changedRef.current();
+        return data;
+    }, []);
+    return (
+        <div className="px-4 sm:px-6 pt-4" data-portal-paper="">
+            {!open ? (
+                <Button variant="outline" icon="fa-file-signature" onClick={() => setOpen(true)} data-action="paper-open">{t("paper.title")}</Button>
+            ) : (
+                <div className="space-y-2">
+                    <PaperConsent t={t} request={request} Dialog={PortalDialog} addToast={addToast} canManage dateLang="es" />
+                    <Button variant="ghost" icon="fa-chevron-up" onClick={() => setOpen(false)}>{t("paper.close")}</Button>
+                </div>
+            )}
+        </div>
     );
 }

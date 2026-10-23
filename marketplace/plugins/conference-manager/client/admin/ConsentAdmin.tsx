@@ -8,6 +8,10 @@
  *   - Personas (inscriptions:view): each person's state, what they authorized and when; «Enviar / Reenviar
  *     enlace» and «Registrar revocación» (inscriptions:manage, a NEW log row); «Exportar evidencia» (WordJS
  *     administrators: the person's whole log, chain-checked, as a JSON file for a data protection request);
+ *   - verbal health authorizations (2.34.0): the count of those still waiting for their written confirmation, a
+ *     filter to list them, a marker on each (late after «Días para confirmar», which is a setting);
+ *   - «Consentimiento en papel» (2.34.0, lib/PaperConsent): for any locality, the printable sheet, the signed pages'
+ *     upload and the checklist of who signed (inscriptions:manage), next to the code signature;
  *   - «Copiar mensaje» (2.33.2): a new link and the request as a message in the admin's language, for WhatsApp —
  *     copied with the Clipboard API (toast «Mensaje copiado»), always shown in a dialog to select by hand when the
  *     clipboard is unavailable, with «Abrir en WhatsApp». No e-mail is sent; the log records «link_shared».
@@ -23,10 +27,27 @@ import { consentT } from "../lib/consentI18n";
 import { consentMessage, copyLangOf, copyText, rememberCopyLang, whatsappUrl } from "../lib/consentMessage";
 import { CopyLangPicker } from "../lib/CopyLangPicker";
 import { Select } from "../lib/Select";
+import { PaperConsent } from "../lib/PaperConsent";
 
 const BASE = "/plugin/conference-manager";
 const LANG_NAMES: Record<string, string> = { es: "Español", en: "English", pt: "Português" };
 const STATE_TONE: Record<string, string> = { pending: "bg-amber-50 text-amber-800 border-amber-200", granted: "bg-emerald-50 text-emerald-800 border-emerald-200", revoked: "bg-rose-50 text-rose-800 border-rose-200" };
+
+/** The admin's dialog for the paper panel: the plugin's Overlay, with a title, a body and a footer. */
+function AdminDialog({ title, onClose, children, footer, testId, closeLabel }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; testId?: string; closeLabel?: string }) {
+    return (
+        <Overlay layer={2} onBackdrop={onClose} onEscape={onClose}>
+            <div role="dialog" aria-modal="true" aria-label={title} className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 space-y-4" data-testid={testId}>
+                <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-lg font-bold text-gray-900">{title}</h3>
+                    <button type="button" onClick={onClose} aria-label={closeLabel || "Cerrar"} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+                </div>
+                <div className="max-h-[60vh] overflow-y-auto">{children}</div>
+                {footer}
+            </div>
+        </Overlay>
+    );
+}
 
 export default function ConsentAdmin({ conferenceId }: { conferenceId: number }) {
     const { language } = useI18n();
@@ -42,6 +63,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
     const [states, setStates] = useState<Record<string, any>>({});
     const [enabled, setEnabled] = useState(false);
     const [q, setQ] = useState("");
+    const [onlyVerbal, setOnlyVerbal] = useState(false);
     const [saving, setSaving] = useState(false);
     const [fieldErr, setFieldErr] = useState<string | null>(null);
     const [revoke, setRevoke] = useState<any>(null);
@@ -82,7 +104,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
         try {
             const body = { conference_id: conferenceId, enabled: !!draft.enabled, policy_url: draft.policy_url || "", policy_version: draft.policy_version, responsible: draft.responsible,
                 contact_email: draft.contact_email, text_general: draft.text_general, text_health: draft.text_health, text_image: draft.text_image,
-                purge_days: Number(draft.purge_days), link_days: Number(draft.link_days), email_lang: draft.email_lang || '' };
+                purge_days: Number(draft.purge_days), link_days: Number(draft.link_days), verbal_days: Number(draft.verbal_days), email_lang: draft.email_lang || '' };
             const r = await apiPut<any>(`${BASE}/consent/settings`, body);
             setSettings(r.settings); setDraft({ ...r.settings, policy_url: r.settings.policy_url_custom });
             addToast(t("admin.saved"), "success");
@@ -135,19 +157,36 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
     };
     const nameOf = (p: any) => [p.first_name, p.last_name].filter((x) => x && String(x).trim()).join(" ") || `#${p.id}`;
 
+    // «Consentimiento en papel» (2.34.0): the admin picks the locality.
+    const [locations, setLocations] = useState<any[]>([]);
+    const [paperLoc, setPaperLoc] = useState<string>("");
+    useEffect(() => {
+        apiGet<any>(`${BASE}/locations?conference_id=${conferenceId}`)
+            .then((r) => { const l = Array.isArray(r) ? r : (r && r.locations) || []; setLocations(l); if (l.length === 1) setPaperLoc(String(l[0].id)); })
+            .catch(() => setLocations([]));
+    }, [conferenceId]);
+    const paperRequest = useCallback(async (method: "get" | "post", params: Record<string, any> = {}) => {
+        const scope = { conference_id: conferenceId, location_id: Number(paperLoc) };
+        if (method === "get") return apiGet<any>(`${BASE}/consent/paper?${new URLSearchParams(Object.entries({ ...scope, ...params }).map(([k, v]) => [k, String(v)]))}`);
+        const r = await apiPost<any>(`${BASE}/consent/paper`, { ...scope, ...params });
+        if (params.action === "marks" || params.action === "unmark") load();
+        return r;
+    }, [conferenceId, paperLoc]);
+
     const rows = useMemo(() => {
         const n = (s: string) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
         const needle = n(q.trim());
-        return people.filter((p) => p.status !== "cancelled" && (!needle || n(nameOf(p)).includes(needle)));
-    }, [people, q]);
+        return people.filter((p) => p.status !== "cancelled" && (!needle || n(nameOf(p)).includes(needle)) && (!onlyVerbal || (states[p.id] && states[p.id].verbal_health)));
+    }, [people, q, onlyVerbal, states]);
     const counts = useMemo(() => {
-        const c = { pending: 0, granted: 0, revoked: 0, failed: 0 };
+        const c = { pending: 0, granted: 0, revoked: 0, failed: 0, verbal: 0 };
         for (const p of people) {
             if (p.status === "cancelled") continue;
             const st = states[p.id];
             const k = st ? st.state : "pending";
             c[k] = (c[k] || 0) + 1;
             if (st && st.mail_failed && k === "pending") c.failed++;
+            if (st && st.verbal_health) c.verbal++;
         }
         return c;
     }, [people, states]);
@@ -227,6 +266,11 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                             <p className="text-[11px] text-gray-400 mt-1">{t("admin.email.lang.hint")}</p>
                         </div>
                         <div>
+                            <label className={label} htmlFor="cs-verbal-days">{t("admin.verbal.days")}</label>
+                            <input id="cs-verbal-days" type="number" min={1} max={365} className={input} value={draft.verbal_days} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, verbal_days: e.target.value })} />
+                            <p className="text-[11px] text-gray-400 mt-1">{t("admin.verbal.days.hint")}</p>
+                        </div>
+                        <div>
                             <label className={label} htmlFor="cs-days">{t("admin.link.days")}</label>
                             <input id="cs-days" type="number" min={1} max={90} className={input} value={draft.link_days} disabled={!canSettings} onChange={(e) => setDraft({ ...draft, link_days: e.target.value })} />
                         </div>
@@ -253,14 +297,20 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                 </div>
                 {!enabled && <p className="text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">{t("admin.off")}</p>}
                 {enabled && (
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {(["pending", "granted", "revoked", "failed"] as const).map((k) => (
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                        {(["pending", "granted", "revoked", "failed", "verbal"] as const).map((k) => (
                             <div key={k} className="rounded-xl border border-gray-100 bg-gray-50/50 px-4 py-3" data-consent-kpi={k}>
                                 <div className="text-[10px] font-black uppercase tracking-widest text-gray-500">{t(`admin.kpi.${k}`)}</div>
                                 <div className="text-2xl font-black text-gray-900 tabular-nums">{counts[k]}</div>
                             </div>
                         ))}
                     </div>
+                )}
+                {enabled && (
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                        <input type="checkbox" className="w-4 h-4 accent-amber-600" checked={onlyVerbal} onChange={(e) => setOnlyVerbal(e.target.checked)} data-consent-filter-verbal="" />
+                        {t("admin.filter.verbal")} ({counts.verbal})
+                    </label>
                 )}
                 <div className="overflow-x-auto border border-gray-100 rounded-xl">
                     <table className="w-full text-sm text-left">
@@ -285,6 +335,12 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                                         </td>
                                         <td className="px-4 py-3 text-xs text-gray-600">
                                             {st && state !== "pending" ? [st.general && t("page.done.general"), st.health && t("page.done.health"), st.image && t("page.done.image")].filter(Boolean).join(" · ") || "—" : "—"}
+                                            {st && st.verbal_health && (
+                                                <span className={`ml-2 inline-block border rounded-full px-2 py-0.5 text-[10px] font-bold ${st.verbal_overdue ? "border-rose-200 bg-rose-50 text-rose-800" : "border-amber-200 bg-amber-50 text-amber-800"}`} data-consent-verbal={st.verbal_overdue ? "overdue" : "pending"}>
+                                                    <i className="fa-solid fa-comment-dots mr-1" aria-hidden="true"></i>{st.verbal_overdue ? t("verbal.overdue") : t("verbal.pending")}
+                                                </span>
+                                            )}
+                                            {st && st.method === "paper" && <span className="ml-2 inline-block border border-gray-200 rounded-full px-2 py-0.5 text-[10px] font-bold text-gray-600" data-consent-method="paper"><i className="fa-solid fa-file-signature mr-1" aria-hidden="true"></i>{t("paper.method")}</span>}
                                         </td>
                                         <td className="px-4 py-3 text-xs text-gray-500">{st ? st.email_masked : ""}</td>
                                         <td className="px-4 py-3">
@@ -317,6 +373,34 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                     </table>
                 </div>
             </section>
+
+            {enabled && (
+                <div data-consent-paper-admin="">
+                    {paperLoc ? (
+                        <PaperConsent key={paperLoc} t={t} request={paperRequest} Dialog={AdminDialog} addToast={addToast} canManage={canManage} dateLang={language || "es"}
+                            locationPicker={(
+                                <div style={{ maxWidth: "20rem" }}>
+                                    <label className={label} htmlFor="cp-loc">{t("paper.location")}</label>
+                                    <Select id="cp-loc" className={input} value={paperLoc} onChange={(e) => setPaperLoc(e.target.value)}>
+                                        {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+                                    </Select>
+                                </div>
+                            )} />
+                    ) : (
+                        <section className="rounded-xl border border-gray-200 p-5 space-y-3">
+                            <h2 className="text-lg font-bold text-gray-900"><i className="fa-solid fa-file-signature mr-2 text-gray-400" aria-hidden="true"></i>{t("paper.title")}</h2>
+                            <p className="text-xs text-gray-500">{t("paper.hint")}</p>
+                            <div style={{ maxWidth: "20rem" }}>
+                                <label className={label} htmlFor="cp-loc">{t("paper.location")}</label>
+                                <Select id="cp-loc" className={input} value="" onChange={(e) => setPaperLoc(e.target.value)}>
+                                    <option value="">{t("paper.location.choose")}</option>
+                                    {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+                                </Select>
+                            </div>
+                        </section>
+                    )}
+                </div>
+            )}
 
             {share && (
                 <Overlay layer={2} onBackdrop={() => setShare(null)} onEscape={() => setShare(null)}>

@@ -276,3 +276,64 @@ describe('languages (2.33.4)', () => {
         }
     });
 });
+
+describe('paper consent (2.34.0)', () => {
+    it('the panel renders in each language, with the host dialog, the styled Select and no native dialog', async () => {
+        const { PaperConsent } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/PaperConsent');
+        for (const l of ['es', 'en', 'pt']) {
+            const t = consentT(l);
+            const html = renderToStaticMarkup(React.createElement(PaperConsent, { t, request: async () => ({}), Dialog: () => null, addToast: () => {}, canManage: true }));
+            expect(html).toContain('data-consent-paper=""');
+            expect(html).toContain(t('paper.title'));
+        }
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).not.toMatch(/\b(alert|confirm|prompt)\s*\(/);
+        expect(s).not.toMatch(/\brequired\b/);
+        expect(s).toContain('<Select');
+        expect(s).toContain('<Dialog');
+        for (const rel of ['client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx']) expect(src(rel)).toContain('<PaperConsent');
+    });
+    it('every paper string it uses exists in Spanish, English and Portuguese', () => {
+        const used = new Set<string>();
+        for (const rel of ['client/lib/PaperConsent.tsx', 'client/admin/ConsentAdmin.tsx', 'client/portal/ConsentBits.tsx']) {
+            for (const m of src(rel).matchAll(/t\("(paper\.[a-z.]+)"/g)) used.add(m[1]);
+        }
+        expect(used.size).toBeGreaterThan(30);
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of used) expect(CONSENT_KEYS[l]).toContain(k);
+    });
+    it('the printable sheet escapes every value and needs no script', () => {
+        const { sheetHtml, sheetText } = require(path.join(CM, 'server/consent-paper-sheet.js'));
+        const s = { lang: 'pt', code: 'ABC123', created_utc: '2026-10-23T10:00:00.000Z', conference: 'Conf <b>', location: 'Norte & Sur',
+            policy: { url: 'https://example.org/p', version: '2.0', sha256: 'f'.repeat(64) }, responsible: 'R', contact: 'c@example.org',
+            texts: { general: 'G <script>', health: 'H', image: 'I' }, people: [{ row: 1, name: '<img src=x>' }], blank: 3 };
+        const html = sheetHtml(s);
+        expect(html).not.toMatch(/<script|<img/);
+        expect(html).toContain('&lt;img src=x&gt;');
+        expect(html).toContain('Página 1 de 1');
+        expect(html).toContain('lang="pt"');
+        expect(sheetText(s)).toContain('G <script>');
+    });
+});
+
+describe('verbal health authorization (2.34.0)', () => {
+    it('the tick renders with its statement and error, and both registration forms use it', async () => {
+        const { VerbalHealthConsent } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/VerbalHealthConsent');
+        const html = renderToStaticMarkup(React.createElement(VerbalHealthConsent, { id: 'v', label: consentT('es')('verbal.statement'), checked: false, onChange: () => {}, error: consentT('es')('verbal.missing') }));
+        expect(html).toContain('verbalmente');
+        expect(html).toContain('role="alert"');
+        expect(html).toContain('aria-invalid="true"');
+        for (const rel of ['client/admin/page.tsx', 'client/portal/CoordinatorPortal.tsx']) {
+            const s = src(rel);
+            expect(s).toContain('<VerbalHealthConsent');
+            expect(s).toContain('health_verbal_consent');
+        }
+        for (const l of ['es', 'en', 'pt']) for (const k of ['verbal.statement', 'verbal.missing', 'verbal.overdue', 'verbal.pending', 'admin.kpi.verbal', 'admin.filter.verbal', 'admin.verbal.days']) expect(consentT(l)(k)).not.toBe(k);
+        expect(src('client/lib/VerbalHealthConsent.tsx')).not.toMatch(/\brequired\b|\b(alert|confirm|prompt)\s*\(/);
+    });
+    it('the paper checklist uses opt-out boxes, not Sí / No', () => {
+        const s = src('client/lib/PaperConsent.tsx');
+        expect(s).toContain('paper.optout.health');
+        expect(s).toContain('health: !x.noHealth');
+        expect(s).not.toContain('YesNo');
+    });
+});

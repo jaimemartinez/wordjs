@@ -84,13 +84,15 @@ async function world({ enable = true, extra = [] as string[] } = {}) {
 
 const GRANT = { general: true, health: true, image: false, client_tz: 'America/Bogota', user_agent: 'Mozilla/5.0 (Test)' };
 
-test('with consent on, a portal registration needs an e-mail, stays pending, cannot be confirmed and carries no health', async () => {
+test('with consent on, a portal registration needs an e-mail, stays pending and cannot be confirmed; health needs the verbal tick', async () => {
     const w = await world();
-    // The portal does not even get the health field.
+    // 2.34.0: the portal gets the health field, marked as needing the person's verbal authorization.
     const fields = ok(await w.p.call('get', `/public/fields?conference_id=${w.cid}`, { anonymous: true }));
-    assert.ok(!fields.some((f: any) => f.name === 'health_conditions'));
+    assert.strictEqual(fields.find((f: any) => f.name === 'health_conditions').verbal_consent, true);
     assert.strictEqual((await w.register({ email: '' })).status, 400, 'an e-mail is required');
-    assert.strictEqual((await w.register({ health_conditions: { answer: 'none' } })).status, 409, 'the coordinator never handles health data');
+    const noTick = await w.register({ health_conditions: { answer: 'none' } });
+    assert.strictEqual(noTick.status, 400, 'no health without the verbal tick');
+    assert.strictEqual(noTick.body.field, 'health_verbal_consent');
     const r = await w.register({});
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     assert.deepStrictEqual(r.body.consent, { state: 'pending', sent: true, email_masked: 'a***@e***.org' });
@@ -100,7 +102,7 @@ test('with consent on, a portal registration needs an e-mail, stays pending, can
     const put = await w.p.call('put', `/inscriptions/${id}`, { body: { status: 'active' } });
     assert.strictEqual(put.status, 409);
     assert.strictEqual(put.body.code, 'consent_pending');
-    assert.strictEqual((await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: { answer: 'none' } } })).status, 409);
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: { answer: 'none' } } })).status, 400, 'the admin too needs the verbal tick');
     // The coordinator sees «pendiente».
     const list = ok(await portal(w.p, 'get', '/portal/inscriptions', w.ptoken));
     assert.strictEqual(list[0].consent.state, 'pending');
@@ -587,4 +589,96 @@ test('the plugin-wide default e-mail language (2.33.4): starts as the site langu
     // A role without Configuración cannot change it.
     const staff = { id: 79, role: 'conference_manager_team', userLogin: 'nocfg', extra: { pluginCapabilities: ['conference_manager_access'] } };
     assert.strictEqual((await w.p.call('put', '/consent/defaults', { body: { email_lang: 'es' }, user: staff as any })).status, 403);
+});
+
+// ── 2.34.0: the verbal health authorization ──
+const DIABETES = { health_conditions: { conditions: ['Diabetes'] }, health_verbal_consent: true };
+test('verbal: no answer without the tick; with it, a verbal record (pending written confirmation) and the answer in use at once', async () => {
+    const w = await world();
+    assert.strictEqual((await w.register({ health_conditions: { conditions: ['Diabetes'] } })).body.field, 'health_verbal_consent');
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers`).n, 0, 'nothing saved without the tick');
+    const id = ok(await w.register(DIABETES)).id as number;
+    const v = w.events(id).find(e => e.kind === 'verbal_granted');
+    const d = JSON.parse(v.data);
+    assert.strictEqual(d.method, 'verbal');
+    assert.strictEqual(d.scope, 'health');
+    assert.strictEqual(d.status, 'pending_written_confirmation');
+    assert.strictEqual(d.entered_by, 'portal:Norte');
+    assert.strictEqual(v.actor, 'portal:Norte');
+    assert.strictEqual(v.policy_version, '1.0');
+    assert.ok(v.policy_sha256 && v.text_sha256 === sha256(d.statement));
+    assert.ok(d.statement.includes('verbalmente') && d.statement.includes('voluntario'));
+    const entered = JSON.parse(w.events(id).find(e => e.kind === 'health_entered').data);
+    assert.deepStrictEqual({ by: entered.entered_by, via: entered.via, basis: entered.basis }, { by: 'portal:Norte', via: 'portal', basis: 'verbal' });
+    assert.ok(!w.events(id).some(e => String(e.data || '').includes('Diabetes')), 'the log never holds the answer');
+    // In use at once: the roster (health:view), the meal priority, the states.
+    assert.strictEqual(ok(await w.p.call('get', `/inscriptions/${id}`)).health_conditions, 'Diabetes');
+    const pr = ok(await w.p.call('get', `/meals/priority?conference_id=${w.cid}`));
+    assert.ok(pr.people.find((p: any) => p.id === id).health_points > 0, 'meal priority uses it');
+    const st = ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id];
+    assert.deepStrictEqual([st.state, st.verbal_health, st.verbal_overdue], ['pending', true, false]);
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/inscriptions', w.ptoken))[0].consent.verbal_health, true);
+    // The chain stays whole.
+    assert.strictEqual(ok(await w.p.call('get', `/consent/evidence/${id}`)).chain_ok, true);
+});
+
+test('verbal: the code signature confirms it (linked), or deletes the answer when health is not authorized', async () => {
+    const w = await world();
+    const id = ok(await w.register(DIABETES)).id as number;
+    const token = w.linkToken()!;
+    ok(await w.pub('code', { token }));
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    const granted = w.events(id).find(e => e.kind === 'granted');
+    const c = JSON.parse(w.events(id).find(e => e.kind === 'verbal_confirmed').data);
+    assert.strictEqual(c.confirmed_by_event_id, granted.id);
+    assert.strictEqual(c.verbal_event_id, w.events(id).find(e => e.kind === 'verbal_granted').id);
+    assert.strictEqual(c.method, 'otp');
+    assert.strictEqual(ok(await w.p.call('get', `/inscriptions/${id}`)).health_conditions, 'Diabetes', 'the answer stays');
+    assert.strictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id].verbal_health, false);
+    // Another person signs WITHOUT health: their answer goes, and that is logged.
+    const id2 = ok(await w.register({ ...DIABETES, first_name: 'Beto', email: 'beto@example.org' })).id as number;
+    const t2 = w.linkToken('beto@example.org')!;
+    ok(await w.pub('code', { token: t2 }, 'ck-beto'));
+    ok(await w.pub('confirm', { token: t2, code: w.lastCode('beto@example.org'), ...GRANT, health: false }, 'ck-beto'));
+    const del = w.events(id2).find(e => e.kind === 'health_deleted');
+    assert.strictEqual(JSON.parse(del.data).reason, 'health_not_authorized_in_writing');
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers WHERE inscription_id = ?`, id2).n, 0);
+    // A written «no» stands: no verbal statement brings it back.
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${id2}`, { body: DIABETES })).status, 409);
+    // The person's own answer on the page wins over the one entered for them.
+    const id3 = ok(await w.register({ ...DIABETES, first_name: 'Carla', email: 'carla@example.org' })).id as number;
+    const t3 = w.linkToken('carla@example.org')!;
+    ok(await w.pub('code', { token: t3 }, 'ck-carla'));
+    ok(await w.pub('confirm', { token: t3, code: w.lastCode('carla@example.org'), ...GRANT, health_answer: { answer: 'none' } }, 'ck-carla'));
+    assert.strictEqual(ok(await w.p.call('get', `/inscriptions/${id3}`)).health_conditions !== 'Diabetes', true);
+});
+
+test('verbal: never confirmed within the days is flagged, not deleted; the admin needs «Datos de salud», and the tick', async () => {
+    const w = await world();
+    const id = ok(await w.register(DIABETES)).id as number;
+    // The admin: with the tick, logged as theirs; a role without «Datos de salud › gestionar» cannot.
+    const id2 = ok(await w.register({ first_name: 'Beto', email: 'beto@example.org' })).id as number;
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${id2}`, { body: { health_conditions: { answer: 'none' } } })).body.field, 'health_verbal_consent');
+    ok(await w.p.call('put', `/inscriptions/${id2}`, { body: { health_conditions: { answer: 'none' }, health_verbal_consent: true } }));
+    assert.strictEqual(JSON.parse(w.events(id2).find(e => e.kind === 'verbal_granted').data).via, 'admin');
+    const staff = { id: 79, role: 'conference_manager_team', userLogin: 'nohealth', extra: { pluginCapabilities: ['conference_manager_access'] } };
+    assert.notStrictEqual((await w.p.call('put', `/inscriptions/${id2}`, { body: DIABETES, user: staff as any })).status, 200);
+    advance(16 * 86400 * 1000);
+    let st = ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id];
+    assert.deepStrictEqual([st.verbal_health, st.verbal_overdue], [true, true]);
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers WHERE inscription_id = ?`, id).n, 1, 'not deleted');
+    // (the portal session expired with the time travel: sign in again)
+    const code = w.p.one(`SELECT code FROM ${PREFIX}locations WHERE id = ?`, w.norte).code;
+    const fresh = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: w.norte, code } })).token as string;
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/inscriptions', fresh))[0].consent.verbal_overdue, true);
+    // The days are a setting.
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, verbal_days: 30 } }));
+    st = ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id];
+    assert.strictEqual(st.verbal_overdue, false);
+    assert.strictEqual((await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, verbal_days: 0 } })).status, 400);
+    // The post-conference purge still deletes it all (and leaves no verbal flag).
+    advance(5 * 366 * 86400 * 1000); // past the conference (2030) and its purge days
+    ok(await w.p.call('post', '/consent/purge', { body: {} }));
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers`).n, 0);
+    assert.strictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id].verbal_health, false);
 });

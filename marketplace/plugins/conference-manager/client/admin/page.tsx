@@ -48,6 +48,7 @@ import { fieldDependents, isOrphanFeeRule, isSwitchOn, LODGING_FIELD, missingRul
 import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
 import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
+import { VerbalHealthConsent } from "../lib/VerbalHealthConsent";
 import { DateField } from "../lib/DateField";
 import { PhoneInput } from "../lib/PhoneInput";
 import { PhoneCountrySetting } from "./PhoneCountrySetting";
@@ -1204,6 +1205,8 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
     const canHealthView = perms.can('health');
     const canHealthWrite = perms.can('health', 'manage');
     const [healthForm, setHealthForm] = useState<{ value: any; original: any; error: string | null; loading: boolean }>({ value: null, original: null, error: null, loading: false });
+    // 2.34.0: the person's verbal health authorization, needed to enter an answer until they authorize it in writing.
+    const [verbal, setVerbal] = useState<{ required: boolean; checked: boolean; error: string | null }>({ required: false, checked: false, error: null });
     const [barcodeFor, setBarcodeFor] = useState<Inscription | null>(null);
     // «Escarapela» (2.19.0): the person whose badge actions are open.
     const [badgeFor, setBadgeFor] = useState<Inscription | null>(null);
@@ -1344,6 +1347,10 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
         setFormOriginal(null);
         setFormData({});
         setHealthForm({ value: null, original: null, error: null, loading: false });
+        setVerbal({ required: false, checked: false, error: null });
+        if (canHealthWrite && conferenceId && fields.some(isHealthField)) {
+            conferenceApi.getConsentEnabled(conferenceId).then((on) => setVerbal((v) => ({ ...v, required: on }))).catch(() => {});
+        }
         setShowAddModal(true);
     };
     // Dynamic (custom) field values are flattened onto formData so the same form renders them; the location
@@ -1357,8 +1364,9 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
         // The structured answer (the roster row only carries it as text).
         setHealthForm({ value: null, original: null, error: null, loading: canHealthView && fields.some(isHealthField) });
         if (canHealthView && fields.some(isHealthField)) {
+            setVerbal({ required: false, checked: false, error: null });
             conferenceApi.getInscriptionHealth(person.id)
-                .then((r) => setHealthForm({ value: r.answer || null, original: r.answer || null, error: null, loading: false }))
+                .then((r) => { setHealthForm({ value: r.answer || null, original: r.answer || null, error: null, loading: false }); setVerbal({ required: !!r.verbal_required, checked: false, error: null }); })
                 .catch((e: any) => setHealthForm({ value: null, original: null, error: e?.message || tx('health.load.error', 'No se pudo cargar la respuesta de salud.'), loading: false }));
         }
     };
@@ -1389,6 +1397,14 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
             const payload = buildInscriptionPayload(fields, formData, editId ? formOriginal : null);
             if (healthField && (!editId || !sameHealthAnswer(healthPayload(healthField, healthForm.value), healthPayload(healthField, healthForm.original)))) {
                 payload[HEALTH_FIELD] = healthPayload(healthField, healthForm.value);
+                if (payload[HEALTH_FIELD] && verbal.required) {
+                    if (!verbal.checked) {
+                        setVerbal((v) => ({ ...v, error: consentT(language)('verbal.missing') }));
+                        setSaving(false);
+                        return;
+                    }
+                    payload.health_verbal_consent = true;
+                }
             }
             if (editId) {
                 const result = await conferenceApi.updateInscription(editId, payload);
@@ -1657,6 +1673,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                 healthForm.loading ? (
                                                     <p className="text-sm text-gray-500 px-1"><i className="fa-solid fa-spinner fa-spin mr-2" aria-hidden="true"></i>{tx('loading', 'Cargando…')}</p>
                                                 ) : canHealthWrite ? (
+                                                    <>
                                                     <HealthConditionsInput
                                                         id={`cm-health-${editId || 'new'}`}
                                                         field={field}
@@ -1669,6 +1686,13 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                             none: tx('health.none', 'Ninguna'), declined: tx('health.declined', 'Prefiero no responder'),
                                                         }}
                                                     />
+                                                    {verbal.required && (
+                                                        <div className="mt-2">
+                                                            <VerbalHealthConsent id={`cm-health-verbal-${editId || 'new'}`} label={consentT(language)('verbal.statement')} checked={verbal.checked}
+                                                                error={verbal.error} onChange={(c) => setVerbal((v) => ({ ...v, checked: c, error: null }))} />
+                                                        </div>
+                                                    )}
+                                                    </>
                                                 ) : (
                                                     <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm text-gray-800" data-health-readonly="">
                                                         {healthAnswerText(healthForm.value) || '—'}

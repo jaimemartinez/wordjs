@@ -759,7 +759,9 @@ export const conferenceApi = {
     getFields: (conferenceId: number, opts: { health?: boolean } = {}) => apiGet<ConferenceField[]>(`/plugin/conference-manager/fields?conference_id=${conferenceId}`)
         .then((list) => (opts.health || !Array.isArray(list) ? list : list.filter((f) => !isHealthField(f)))),
     /** 2.32.0: one person's answer to «Condiciones de salud» (Datos de salud › ver). */
-    getInscriptionHealth: (id: number) => apiGet<{ field: { name: string; label: string } | null; answer: HealthAnswer | null }>(`/plugin/conference-manager/inscriptions/${id}/health`),
+    getInscriptionHealth: (id: number) => apiGet<{ field: { name: string; label: string } | null; answer: HealthAnswer | null; verbal_required?: boolean }>(`/plugin/conference-manager/inscriptions/${id}/health`),
+    /** 2.33.0: does the conference ask for «Autorización de datos»? (2.34.0: a new health answer then needs the verbal tick.) */
+    getConsentEnabled: (conferenceId: number) => apiGet<{ enabled: boolean }>(`/plugin/conference-manager/consent/states?conference_id=${conferenceId}`).then((r) => !!(r && r.enabled)),
     /** 2.32.0: «Turnos de comida». */
     getMealPriority: (conferenceId: number) => apiGet<any>(`/plugin/conference-manager/meals/priority?conference_id=${conferenceId}`),
     saveMealPriorityConfig: (conferenceId: number, data: Record<string, unknown>) => apiPut<any>('/plugin/conference-manager/meals/priority/config', { conference_id: conferenceId, ...data }),

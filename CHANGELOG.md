@@ -8,6 +8,64 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **conference-manager 2.34.0: paper consent and verbal health authorization.**
+  - **Paper consent («Consentimiento en papel»).** People who sign by hand can authorize the processing of their
+    data on a printed sheet. This sits alongside the e-mailed code; it does not replace it. Coordinators work in
+    the portal, for their own locality only. Administrators work in **Autorizaciones**, for any locality.
+    - **Abrir hoja para imprimir o guardar como PDF** makes a sheet for the locality, as a print-ready page that
+      opens in the browser's print window, where it can be printed or saved as PDF:
+      - It is printed in Spanish, English or Portuguese, by default the consent e-mail language, on Letter
+        («carta», the default) or A4, landscape.
+      - **Every page** starts with a compact header: the controller and contact, the purpose, the rights, the
+        policy in force (address, version and SHA-256), and how to sign. Whoever signs on any page reads what they
+        sign.
+      - The header holds **one authorization** in a single block, the configured general, image and health
+        texts. It says that health and image are voluntary, and one signature covers it all.
+      - Under the header, the locality's people without an authorization yet, as many rows as fit the page. Each
+        row has the name, the document and a signature, and the legal representative of a minor (name, document,
+        signature).
+      - Each row also has two narrow opt-out boxes, «No autorizo datos de salud» and «No autorizo uso de imagen».
+        An unmarked box means authorized; the registration goes ahead either way.
+      - Blank rows follow, for walk-ins.
+      - The bottom of every printed page carries the sheet id, «page i of n» and a QR code.
+      - The same sheet can be downloaded or printed again at any time.
+    - **Subir hoja firmada** keeps the signed pages privately, each with the SHA-256 of its bytes:
+      - Photos are compressed in the browser; a PDF goes up as it is, up to 2 MB.
+      - A file is checked by its first bytes, and it is never public, replaced or deleted.
+    - **Marcar quién firmó** is a checklist of who signed:
+      - Health and image start authorized; the coordinator ticks the opt-out a person marked.
+      - A minor needs the representative's name.
+      - Each person ticked gets a signature in the same append-only, hash-chained log as an e-mailed one, marked
+        `method: 'paper'` with its `opt_outs`. It carries the sheet and row, the policy version and its SHA-256,
+        the SHA-256 of the sheet's text, every uploaded file's SHA-256, and who uploaded and who ticked, and when.
+      - The inscription leaves «Autorización pendiente» exactly as with the code.
+      - **Exportar evidencia** includes the sheet and its files' hashes.
+    - **Deshacer** undoes a wrong tick, with a reason:
+      - It is a new log row, so the log stays append-only.
+      - The person goes back to pending, and their health answers are deleted.
+    - Every sheet made, file uploaded, tick and undo is logged.
+    - The people table marks paper signatures «En papel».
+  - **Verbal health authorization.**
+    - While the conference asks for «Autorización de datos», a coordinator (portal) or an administrator (with
+      *Datos de salud › gestionar*) can enter a person's «Condiciones de salud» at registration. To do so they tick
+      «La persona me autorizó verbalmente el tratamiento de sus datos de salud, tras informarle que es voluntario».
+      Without the tick the answer is not saved, and the error is shown under the box.
+    - The tick is recorded in the person's log as a `verbal_granted` row: method `verbal`, scope health, the staff
+      member, the time and the policy version, pending written confirmation.
+    - Every entry or change is also logged as `health_entered`, with who made it. The log never holds the answer.
+    - The answer is in use at once: «Datos de salud» holders see it, and meal turns and priority groups use it.
+    - The person's later written authorization (the code or the paper sheet) confirms it with a `verbal_confirmed`
+      row, linked to the signature.
+    - Signing without health (the unticked box, or the paper opt-out) deletes the answer at once, logged as
+      `health_deleted`. A written «no» cannot be overridden by a later verbal tick.
+    - A verbal authorization not confirmed within **Días para confirmar por escrito** (a setting, 15 by default) is
+      flagged, not deleted. It shows as «Autorización verbal sin confirmar por escrito» on the person, in the
+      portal too.
+    - Autorizaciones shows a count and a filter to follow these up.
+    - The post-conference health purge still applies.
+    - The person's own answer on their consent page still wins.
+
+
 - **mail-server 3.2.3: a sending rate for the general queue.** *Email Center → Server → Queue* has *Messages per
   minute*: how many messages may leave the server each minute, counting users' mail, scheduled sends, retries, the
   site's mail and other plugins'. Above it, messages wait in the queue and go out in the following minutes, in order;

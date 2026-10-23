@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.33.5',
+    version: '2.34.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -586,7 +586,8 @@ exports.init = async function (wordjs) {
     class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
     const httpError = (status, message) => new HttpError(status, message);
     const sendError = (res, e) => {
-        if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
+        // `field` names the form field an error belongs to (the screens show it there).
+        if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.field ? { field: e.field } : {}) });
         console.error('[conference-manager] request failed:', e && e.message ? e.message : e);
         return res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
     };
@@ -1973,7 +1974,7 @@ exports.init = async function (wordjs) {
     const HEALTH_FIELD = healthMod.FIELD;
     const canSeeHealth = (perms) => hasLevel(perms, 'health', 'view');
     const canWriteHealth = (perms) => hasLevel(perms, 'health', 'manage');
-    // The body's answer to the conference's health field, checked BEFORE anything is written: { field, answer }
+    // The body's answer to the conference's health field, checked BEFORE anything is written: { field, answer, verbal }
     // (answer undefined = the key was absent; null = clear). A caller who may not write it and sends it gets 403;
     // `creating` makes a required field required (an edit only refuses clearing it). The portal may always answer
     // (it registers the person, and never reads an answer back).
@@ -1983,12 +1984,22 @@ exports.init = async function (wordjs) {
         const has = !!body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, HEALTH_FIELD);
         if (has && !mayWrite) throw httpError(403, 'No tienes permiso para registrar datos de salud.');
         const answer = has ? healthMod.parseAnswer(field, body[HEALTH_FIELD], httpError) : undefined;
-        // «Autorización de datos» (2.33.0): while the conference asks for it, a health answer exists only with the
-        // person's own health authorization — they write it on their consent page; clearing one is always allowed.
-        if (answer && !await consent.healthAllowed(conferenceId, inscriptionId)) {
-            throw httpError(409, 'Esta conferencia pide la autorización de datos: los datos de salud los escribe la persona en su enlace de autorización, y solo si autorizó su tratamiento.');
+        if (await consent.isEnabled(conferenceId)) {
+            // «Autorización de datos» (2.34.0): staff may enter a person's health answer only on the strength of their
+            // verbal authorization (the ticked statement below), until the person authorizes health in writing (code
+            // or paper), which confirms it. Clearing one is always allowed.
+            // A written «no» stands: no verbal statement can override it.
+            if (answer && inscriptionId != null && await consent.healthRefused(inscriptionId)) {
+                throw httpError(409, 'La persona no autorizó por escrito el tratamiento de sus datos de salud: no se pueden registrar.');
+            }
+            const written = inscriptionId != null && await consent.healthWritten(inscriptionId);
+            if (answer && !written && !(body && body.health_verbal_consent === true)) {
+                const e = httpError(400, 'Marca que la persona te autorizó verbalmente el tratamiento de sus datos de salud, tras informarle que es voluntario. Sin esa autorización no se guardan.');
+                e.field = 'health_verbal_consent';
+                throw e;
+            }
+            return { field, answer, verbal: !!answer && !written };
         }
-        if (await consent.isEnabled(conferenceId)) return { field, answer };
         if (mayWrite && Number(field.is_required) && ((creating && !answer) || (!creating && answer === null))) {
             throw httpError(400, `El campo «${field.label || 'Condiciones de salud'}» es obligatorio.`);
         }
@@ -1999,7 +2010,7 @@ exports.init = async function (wordjs) {
     async function consentedHealth(conferenceId, answers) {
         if (!await consent.isEnabled(conferenceId)) return answers;
         const states = await consent.statesOf(conferenceId, [...answers.keys()]);
-        return new Map([...answers].filter(([id]) => { const st = states.get(id); return st && st.state === 'granted' && st.health; }));
+        return new Map([...answers].filter(([id]) => { const st = states.get(id); return st && ((st.state === 'granted' && st.health) || st.verbal_health); }));
     }
     // Roster rows of ONE conference + the health answer as text, for health:view only (and only when the form has it).
     async function withHealthText(rows, conferenceId, perms) {
@@ -3055,6 +3066,7 @@ exports.init = async function (wordjs) {
             const result = loc ? await takeSeat(loc, insert) : await insert();
             if (healthIn.answer) await health.save(confId, result.lastID, healthIn.answer);
             const consentOut = consentOn ? await askConsent(result.lastID, actorOf(req), 'admin') : undefined;
+            if (consentOn && healthIn.answer) await consentHealthEntered(result.lastID, actorOf(req), 'admin', healthIn);
             res.json({ success: true, id: result.lastID, ...(consentOut ? { consent: consentOut } : {}) });
         } catch (e) { sendError(res, e); }
     });
@@ -5395,7 +5407,10 @@ exports.init = async function (wordjs) {
                 await db.run(`UPDATE ${T.inscriptions} SET total_due = ? WHERE id = ?`, [feeAfter, id]);
             }
             await recomputePayment(id);
-            if (healthIn.answer !== undefined) await health.save(existing.conference_id, id, healthIn.answer);
+            if (healthIn.answer !== undefined) {
+                await health.save(existing.conference_id, id, healthIn.answer);
+                await consentHealthEntered(id, actorOf(req), 'admin', healthIn);
+            }
             res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { sendError(res, e); }
     });
@@ -5681,6 +5696,13 @@ exports.init = async function (wordjs) {
                 : 'Esta conferencia pide la autorización de datos: añade al formulario el campo «Email» (Campos › Añadir campo) para poder enviar el enlace.');
         }
     }
+    // A health answer staff entered (2.34.0): the verbal authorization it rests on, and who entered or changed it.
+    async function consentHealthEntered(inscriptionId, actor, via, healthIn) {
+        try {
+            const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [inscriptionId]);
+            if (ins) await consent.healthEntered(ins, { actor, via, verbal: !!healthIn.verbal, cleared: healthIn.answer === null });
+        } catch (e) { console.warn('[conference-manager] health entry not logged:', e && e.message); }
+    }
     // …and get the link right after it (a mail failure never undoes the registration).
     async function askConsent(inscriptionId, actor, via) {
         try {
@@ -5924,7 +5946,9 @@ exports.init = async function (wordjs) {
             if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
             const field = await health.fieldOf(ins.conference_id);
             const answer = field ? ((await health.answersOf([id])).get(id) || null) : null;
-            res.json({ field: field ? { name: field.name, label: field.label } : null, answer });
+            // 2.34.0: entering an answer needs the person's verbal authorization until they authorize health in writing.
+            const verbalRequired = !!field && await consent.isEnabled(ins.conference_id) && !await consent.healthWritten(id) && !await consent.healthRefused(id);
+            res.json({ field: field ? { name: field.name, label: field.label } : null, answer, verbal_required: verbalRequired });
         } catch (e) { sendError(res, e); }
     });
 
@@ -8309,10 +8333,12 @@ exports.init = async function (wordjs) {
             // `role` and `is_unique` let the coordinators' portal name people the way the admin does (the
             // fields tagged Nombre / Apellido; never an ID document as a name).
             const list = await db.all(`SELECT name, label, type, options, is_required, width, is_group, role, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
-            // The health field travels as a definition (the portal asks it on registration, write-only) — except while
-            // the conference asks for «Autorización de datos» (2.33.0): then the person answers it on their consent page.
-            const healthInPortal = !await consent.isEnabled(conference_id);
-            res.json(list.filter(f => isFieldColumn(f.name) || (healthInPortal && f.name === healthMod.FIELD)));
+            // The health field travels as a definition (the portal asks it on registration, write-only). While the
+            // conference asks for «Autorización de datos», it goes with `verbal_consent: true`: the coordinator must tick
+            // the person's verbal authorization to send an answer (2.34.0).
+            const consentOn = await consent.isEnabled(conference_id);
+            res.json(list.filter(f => isFieldColumn(f.name) || f.name === healthMod.FIELD)
+                .map(f => (f.name === healthMod.FIELD && consentOn ? { ...f, verbal_consent: true, verbal_statement: consent.VERBAL_STATEMENT } : f)));
         } catch (e) { sendError(res, e); }
     });
 
@@ -8418,7 +8444,7 @@ exports.init = async function (wordjs) {
             const consentStates = await consent.isEnabled(location.conference_id) ? await consent.statesOf(location.conference_id, list.map(r => r.id)) : null;
             const consentOf = (id) => {
                 const st = consentStates.get(Number(id));
-                return st ? { state: st.state, granted_at: st.granted_at, revoked_at: st.revoked_at, email_masked: st.email_masked, mail_failed: st.mail_failed, link_expired: st.link_expired }
+                return st ? { state: st.state, granted_at: st.granted_at, revoked_at: st.revoked_at, email_masked: st.email_masked, mail_failed: st.mail_failed, link_expired: st.link_expired, verbal_health: st.verbal_health, verbal_overdue: st.verbal_overdue }
                     : { state: 'pending', granted_at: null, revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, never_sent: true };
             };
             res.json(list.map(r => ({ ...r, pending_amount: roundMoney(r.pending_amount), returned_amount: roundMoney(r.returned_amount), cancelled: !!Number(r.cancelled), ...(consentStates ? { consent: consentOf(r.id) } : {}) })));
@@ -8531,6 +8557,7 @@ exports.init = async function (wordjs) {
             ));
             if (healthIn.answer) await health.save(conference_id, result.lastID, healthIn.answer);
             const consentOut = consentOn ? await askConsent(result.lastID, `portal:${location.name}`, 'portal') : undefined;
+            if (consentOn && healthIn.answer) await consentHealthEntered(result.lastID, `portal:${location.name}`, 'portal', healthIn);
             res.json({ success: true, id: result.lastID, ...(consentOut ? { consent: consentOut } : {}) });
         } catch (e) { sendError(res, e); }
     });
