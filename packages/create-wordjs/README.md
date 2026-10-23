@@ -53,7 +53,7 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 | --- | --- |
 | `--zip <path-or-url>` | Use a local release ZIP (or a direct **`https://`** ZIP URL — plain `http://` is refused) instead of querying the GitHub API. Handy offline or when rate-limited. |
 | `--sha256 <hex>` | Refuse the ZIP unless its SHA-256 is exactly this (the value in the release's `.sha256` asset). Use it to pin a `--zip` file or URL; with a GitHub download it is checked on top of the release checksum. |
-| `--version <tag>` | Install a specific release (e.g. `--version v2.9.0`) instead of the latest. |
+| `--version <tag>` | Install a specific release (e.g. `--version vX.Y.Z`) instead of the latest. |
 | `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
 | `--no-start` | Scaffold and install dependencies only — start the server yourself later. |
 | `--yes`, `-y` | Skip the confirmation prompt (required when `upgrade` runs non-interactively). |
@@ -102,8 +102,8 @@ on the next start.
 
 ```bash
 npx create-wordjs@latest upgrade /srv/wordjs --yes                                   # unattended
-npx create-wordjs@latest upgrade /srv/wordjs --version v2.9.0 --yes                  # a given release
-npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.9.0.zip --sha256 <hex> --yes --force   # offline, re-apply
+npx create-wordjs@latest upgrade /srv/wordjs --version vX.Y.Z --yes                  # a given release
+npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-vX.Y.Z.zip --sha256 <hex> --yes --force   # offline, re-apply
 ```
 
 `--zip` takes a release ZIP you downloaded (or an `https://` URL) instead of asking GitHub, and
@@ -196,8 +196,8 @@ need `openssl` on the PATH. Full details, port matrix and the manual (source-che
 - **GitHub rate limit / offline**: the release lookup uses the unauthenticated GitHub API. If it
   is rate-limited or you're offline, download `wordjs-v*.zip` from the
   [releases page](https://github.com/jaimemartinez/wordjs/releases) and run
-  `npx create-wordjs@latest my-site --zip ./wordjs-v2.9.0.zip` — add
-  `--sha256 <hex>` with the value from `wordjs-v2.9.0.zip.sha256` to have it verified.
+  `npx create-wordjs@latest my-site --zip ./wordjs-vX.Y.Z.zip` — add
+  `--sha256 <hex>` with the value from `wordjs-vX.Y.Z.zip.sha256` to have it verified.
 - **Existing directories**: the target directory must not exist (or must be empty) — the tool
   refuses to overwrite anything.
 
