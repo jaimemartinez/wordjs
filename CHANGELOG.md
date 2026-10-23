@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-10-23
+
 ### Added
 
 - **conference-manager 2.36.0: a printable sticker for the physical badge, and the meal group on badges.**
