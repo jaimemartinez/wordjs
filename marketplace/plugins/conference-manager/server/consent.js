@@ -23,6 +23,10 @@
  *      time and time zone (and the browser's), the caller's network key and user agent, the policy URL and
  *      version with the SHA-256 of the EXACT text shown, each box, the code's sent / verified times and the
  *      representative of a minor. Deleting an inscription keeps its evidence.
+ *      Each signature also names the POLICY VERSION in force: the settings that make the page (policy address and
+ *      version, controller, contact, the three texts) are kept as an append-only snapshot (consent_policies), and
+ *      the signature carries its id and SHA-256. Once someone signed a version, its texts cannot change under the
+ *      same version: the administrator must publish a new version, so every record proves what it accepted.
  *   5. A confirmation e-mail tells the person what they accepted, with the policy link.
  *   6. Coordinators see each person's state (pendiente / autorizada with its date / revocada) and can resend the
  *      link; the admin exports one person's evidence (a data protection authority's request).
@@ -31,7 +35,8 @@
  *
  * NETWORK DATA. An isolated plugin never receives the caller's raw IP address: the host hands it `clientKey`, a
  * keyed hash of that address (core/client-ip pluginClientKey), which is what the log keeps («clave de red»):
- * the site's operator can tell whether a given address produced it. The user agent is the one the browser
+ * the site's operator can tell whether a given address produced it. That key is the install's own secret: it
+ * must stay the same for later correlation to work (see README.md). The user agent is the one the browser
  * reports with the request.
  *
  * SQL: own prefixed tables, portable (SQLite / PostgreSQL / MySQL): VARCHAR for indexed text, times as
@@ -130,14 +135,19 @@ function canon(v) {
     return JSON.stringify(v === undefined ? null : v);
 }
 const EVENT_COLS = ['conference_id', 'inscription_id', 'request_id', 'kind', 'at_utc', 'at_s', 'server_tz', 'client_tz', 'client_key', 'user_agent',
-    'email', 'policy_version', 'text_sha256', 'general', 'health', 'image', 'data', 'actor', 'prev_hash'];
+    'email', 'policy_version', 'policy_sha256', 'text_sha256', 'general', 'health', 'image', 'data', 'actor', 'prev_hash'];
 const rowHashOf = (row) => sha256(canon(Object.fromEntries(EVENT_COLS.map(c => [c, row[c] == null ? null : (typeof row[c] === 'number' ? row[c] : String(row[c]))]))));
+/** What a policy version is made of (the effective settings the page shows), and its SHA-256. */
+const POLICY_KEYS = ['policy_url', 'policy_version', 'responsible', 'contact_email', 'text_general', 'text_health', 'text_image'];
+const policyBody = (s) => Object.fromEntries(POLICY_KEYS.map(k => [k, String(s[k] == null ? '' : s[k])]));
+const policyHashOf = (s) => sha256(canon(policyBody(s)));
 
 function createConsent(base) {
     const { db, T, P, createIndex, createUniqueIndex } = base;
     T.consentSettings = `${P}consent_settings`;
     T.consentRequests = `${P}consent_requests`;
     T.consentEvents = `${P}consent_events`;
+    T.consentPolicies = `${P}consent_policies`;
     let D = null;
     let ready = false;
 
@@ -195,6 +205,7 @@ function createConsent(base) {
             'user_agent TEXT',
             'email VARCHAR(254)',
             'policy_version VARCHAR(40)',
+            'policy_sha256 VARCHAR(64)',
             'text_sha256 VARCHAR(64)',
             'general INT',
             'health INT',
@@ -206,6 +217,17 @@ function createConsent(base) {
         ]);
         await createIndex(`${P}idx_consent_events_ins`, T.consentEvents, 'inscription_id');
         await createIndex(`${P}idx_consent_events_conf`, T.consentEvents, 'conference_id');
+        // APPEND-ONLY too: one row per distinct policy version a conference ever showed (its body and SHA-256).
+        await db.createTable(T.consentPolicies, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'policy_version VARCHAR(40)',
+            'policy_sha256 VARCHAR(64) NOT NULL',
+            'body TEXT NOT NULL',
+            'created_utc VARCHAR(32) NOT NULL',
+            'created_s INT NOT NULL',
+        ]);
+        await createIndex(`${P}idx_consent_policies_conf`, T.consentPolicies, 'conference_id, policy_sha256');
         ready = true;
     }
     const ensureReady = async () => {
@@ -229,7 +251,7 @@ function createConsent(base) {
                 at_utc: isoUtc(ms), at_s: Math.floor(ms / 1000), server_tz: serverTz(),
                 client_tz: ev.client_tz ? clean(ev.client_tz, 64) : null, client_key: ev.client_key ? clean(ev.client_key, 64) : null,
                 user_agent: ev.user_agent ? clean(ev.user_agent, 400) : null, email: ev.email || null,
-                policy_version: ev.policy_version || null, text_sha256: ev.text_sha256 || null,
+                policy_version: ev.policy_version || null, policy_sha256: ev.policy_sha256 || null, text_sha256: ev.text_sha256 || null,
                 general: ev.general == null ? null : (ev.general ? 1 : 0), health: ev.health == null ? null : (ev.health ? 1 : 0), image: ev.image == null ? null : (ev.image ? 1 : 0),
                 data: ev.data == null ? null : JSON.stringify(ev.data), actor: ev.actor ? clean(ev.actor, 120) : null,
                 prev_hash: scope ? scope.row_hash : null,
@@ -254,6 +276,26 @@ function createConsent(base) {
         }
         return { rows, chain_ok: brokenAt == null, broken_at: brokenAt };
     }
+
+    // ── policy versions (append-only) ──
+    // The snapshot of the policy a page shows: found by its SHA-256, inserted the first time it is signed.
+    let policyLock = Promise.resolve();
+    function policySnapshot(cid, s) {
+        const run = policyLock.then(async () => {
+            const hash = policyHashOf(s);
+            const found = await db.get(`SELECT id, policy_version, policy_sha256 FROM ${T.consentPolicies} WHERE conference_id = ? AND policy_sha256 = ?`, [cid, hash]);
+            if (found) return { id: Number(found.id), version: found.policy_version, sha256: found.policy_sha256 };
+            const ms = Date.now();
+            const r = await db.run(`INSERT INTO ${T.consentPolicies} (conference_id, policy_version, policy_sha256, body, created_utc, created_s) VALUES (?, ?, ?, ?, ?, ?)`,
+                [cid, s.policy_version, hash, JSON.stringify(policyBody(s)), isoUtc(ms), Math.floor(ms / 1000)]);
+            return { id: Number(r.lastID), version: s.policy_version, sha256: hash };
+        });
+        policyLock = run.then(() => {}, () => {});
+        return run;
+    }
+    /** Has anyone signed this conference's policy version? */
+    const versionSigned = async (cid, version) =>
+        !!(await db.get(`SELECT id FROM ${T.consentEvents} WHERE conference_id = ? AND kind = 'granted' AND policy_version = ? LIMIT 1`, [cid, version]));
 
     // ── settings ──
     async function settingsRow(cid) {
@@ -312,6 +354,17 @@ function createConsent(base) {
         if (vals.link_days !== undefined && !(Number.isInteger(vals.link_days) && vals.link_days >= 1 && vals.link_days <= 90)) throw httpError(400, 'Los días de validez del enlace deben ser un número entero entre 1 y 90.');
         for (const k of ['text_general', 'text_health', 'text_image']) if (vals[k] === '') throw httpError(400, 'Ningún texto de autorización puede quedar vacío.');
         const sets = Object.entries(vals).filter(([, v]) => v !== undefined);
+        // A signed version is closed: what it says can only change under a new version number.
+        const before = await settingsOf(cid);
+        const after = { ...before, ...Object.fromEntries(sets) };
+        if (vals.policy_url !== undefined && !vals.policy_url) {
+            const base = await D.siteLinkBase();
+            after.policy_url = base ? `${base}${DEFAULT_POLICY_PATH}` : DEFAULT_POLICY_PATH;
+        }
+        if (vals.policy_version !== undefined && !vals.policy_version) throw httpError(400, 'Escribe la versión de la política.');
+        if (after.policy_version === before.policy_version && policyHashOf(after) !== policyHashOf(before) && await versionSigned(cid, before.policy_version)) {
+            throw httpError(409, `Ya hay personas que firmaron la versión ${before.policy_version} de la política: para cambiar los textos, la dirección, el responsable o el correo, escribe una versión nueva (por ejemplo, la siguiente). Así cada firma sigue probando qué versión aceptó.`);
+        }
         const existing = await settingsRow(cid);
         if (existing) {
             if (sets.length) await db.run(`UPDATE ${T.consentSettings} SET ${sets.map(([k]) => `${k} = ?`).join(', ')}, updated_s = ? WHERE conference_id = ?`, [...sets.map(([, v]) => v), nowS(), cid]);
@@ -402,6 +455,7 @@ function createConsent(base) {
             ['Datos sensibles de salud', yes(ev.health)],
             ['Uso de imagen', yes(ev.image)],
             ['Política', `versión ${d.policy.version} · ${d.policy.url}`],
+            ...(d.policy.sha256 ? [['Huella de la versión de la política (SHA-256)', d.policy.sha256]] : []),
             ['Fecha y hora (UTC)', ev.at_utc],
             ['Huella del texto aceptado (SHA-256)', ev.text_sha256],
         ];
@@ -668,15 +722,16 @@ function createConsent(base) {
                 // The evidence.
                 const p = await pageOf(t.req, t.ins, representative);
                 const text = p.view.text;
+                const policy = await policySnapshot(t.ins.conference_id, p.s);
                 const ev = await append({
                     conference_id: t.ins.conference_id, inscription_id: t.ins.id, request_id: id, kind: 'granted', email: t.req.email,
-                    client_key, user_agent, client_tz, policy_version: p.s.policy_version, text_sha256: sha256(text),
+                    client_key, user_agent, client_tz, policy_version: p.s.policy_version, policy_sha256: policy.sha256, text_sha256: sha256(text),
                     general: true, health: wantsHealth, image: wantsImage,
                     data: {
                         subject: await identityOf(t.ins, p.form),
                         verified_email: t.req.email,
                         minor, representative,
-                        policy: { url: p.s.policy_url, version: p.s.policy_version },
+                        policy: { url: p.s.policy_url, version: p.s.policy_version, sha256: policy.sha256, snapshot_id: policy.id },
                         text, contact: p.s.contact_email || null, responsible: p.s.responsible || null,
                         otp_sent_utc: isoUtc(c.sentAt), otp_verified_utc: isoUtc(verifiedMs),
                         health_answered: wantsHealth && healthAnswer != null,
@@ -775,6 +830,15 @@ function createConsent(base) {
                 const log = await eventsOf(id);
                 if (!log.rows.length) return res.status(404).json({ error: 'No hay evidencia de autorización para esta persona.' });
                 const parse = (s) => { try { return s ? JSON.parse(s) : null; } catch { return s; } };
+                const policiesOf = async (rows) => {
+                    const hashes = [...new Set(rows.map(r => r.policy_sha256).filter(Boolean))];
+                    const out = [];
+                    for (const h of hashes) {
+                        const pr = await db.get(`SELECT * FROM ${T.consentPolicies} WHERE conference_id = ? AND policy_sha256 = ?`, [rows[0].conference_id, h]);
+                        if (pr) out.push({ id: Number(pr.id), policy_version: pr.policy_version, policy_sha256: pr.policy_sha256, created_utc: pr.created_utc, body: parse(pr.body), sha256_ok: policyHashOf(parse(pr.body) || {}) === pr.policy_sha256 });
+                    }
+                    return out;
+                };
                 const conf = await conferenceOf(log.rows[0].conference_id);
                 await append({ conference_id: log.rows[0].conference_id, inscription_id: id, kind: 'evidence_exported', actor: actorOf(req) });
                 res.json({
@@ -782,6 +846,8 @@ function createConsent(base) {
                     chain_ok: log.chain_ok, broken_at: log.broken_at,
                     network_note: 'client_key es una clave derivada (HMAC) de la dirección IP del cliente, calculada por el servidor del sitio; no es la dirección IP.',
                     events: log.rows.map(r => ({ ...r, data: parse(r.data) })),
+                    // Every policy version this person signed: its exact body, to recompute its SHA-256.
+                    policies: await policiesOf(log.rows),
                 });
             } catch (e) { sendError(res, e); }
         });
@@ -809,4 +875,4 @@ function createConsent(base) {
     };
 }
 
-module.exports = { createConsent, maskEmail, shownText, rowHashOf, DEFAULTS, RELATIONSHIPS, LIMITS };
+module.exports = { createConsent, maskEmail, shownText, rowHashOf, policyHashOf, DEFAULTS, RELATIONSHIPS, LIMITS };

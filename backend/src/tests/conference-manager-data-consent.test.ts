@@ -13,7 +13,9 @@
  *     SHA-256 of the exact text shown, each box, the code's sent / verified times, the minor's representative;
  *   - append-only: no UPDATE / DELETE on the log anywhere in the plugin, a revocation is a new row, the rows of
  *     a person form a hash chain that the export checks, and deleting the person keeps the log;
- *   - health purge N days after the conference ends, keeping the evidence.
+ *   - health purge N days after the conference ends, keeping the evidence;
+ *   - each signature names the policy version in force (version + SHA-256 of an append-only snapshot), and a
+ *     version someone signed cannot change its texts without a new version number.
  */
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
@@ -226,6 +228,7 @@ test('append-only: no UPDATE or DELETE on the log anywhere, revocation is a new 
         const src = fs.readFileSync(path.join(PLUGIN_DIR, f), 'utf8');
         assert.ok(!/(UPDATE|DELETE\s+FROM)\s+\$\{T\.consentEvents\}/i.test(src), `${f} writes over the log`);
         assert.ok(!/(UPDATE|DELETE\s+FROM)\s+[`'"]?\$?\{?P?\}?consent_events/i.test(src), `${f} writes over the log by name`);
+        assert.ok(!/(UPDATE|DELETE\s+FROM)\s+\$\{T\.consentPolicies\}/i.test(src), `${f} writes over the policy versions`);
     }
     // 2. Revocations append.
     const w = await world();
@@ -311,4 +314,52 @@ test('without a mail plugin the registration still works and the coordinator see
     assert.strictEqual(r2.body.consent, undefined);
     assert.ok(!('consent' in ok(await portal(off.p, 'get', '/portal/inscriptions', off.ptoken))[0]));
     ok(await off.p.call('put', `/inscriptions/${r2.body.id}`, { body: { status: 'active' } }));
+});
+
+test('each signature names the policy version in force; a signed version cannot change its texts', async () => {
+    const w = await world();
+    const C = require(path.join(PLUGIN_DIR, 'server/consent.js'));
+    // Before anyone signs, the texts can still be corrected under 1.0.
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, text_image: 'Autorizo el uso de mi imagen en fotos y videos del evento.' } }));
+    const sign = async (first: string, email: string, ck: string) => {
+        const id = (await w.register({ first_name: first, email })).body.id as number;
+        const token = w.linkToken(email)!;
+        ok(await w.pub('code', { token }, ck));
+        ok(await w.pub('confirm', { token, code: w.lastCode(email), ...GRANT }, ck));
+        return w.events(id).find(e => e.kind === 'granted');
+    };
+    const g1 = await sign('Ana', 'ana.perez@example.org', 'ck-1');
+    const snap1 = w.p.one(`SELECT * FROM ${PREFIX}consent_policies WHERE policy_sha256 = ?`, g1.policy_sha256);
+    assert.ok(snap1, 'the version signed is kept');
+    assert.strictEqual(g1.policy_version, '1.0');
+    assert.strictEqual(C.policyHashOf(JSON.parse(snap1.body)), g1.policy_sha256, 'its SHA-256 is that of the snapshot');
+    assert.strictEqual(JSON.parse(snap1.body).text_image, 'Autorizo el uso de mi imagen en fotos y videos del evento.');
+    assert.deepStrictEqual(JSON.parse(g1.data).policy, { url: 'https://example.org/politica-de-datos', version: '1.0', sha256: g1.policy_sha256, snapshot_id: Number(snap1.id) });
+    // 1.0 is signed: changing what it says under the same number is refused (texts, address, controller, contact)…
+    for (const body of [{ text_general: 'Otro texto {conferencia}.' }, { policy_url: 'https://example.org/otra' }, { responsible: 'Otra entidad' }, { contact_email: 'otro@example.org' }]) {
+        const r = await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, ...body } });
+        assert.strictEqual(r.status, 409, JSON.stringify(body));
+    }
+    // …anything else still saves, and so does the same text again.
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, purge_days: 45, responsible: 'La iglesia en Barranquilla' } }));
+    // A new version opens: the next signer names 1.1, the first keeps 1.0.
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, policy_version: '1.1', text_general: 'Autorizo a {responsable} a tratar mis datos para «{conferencia}» (v1.1).' } }));
+    const g2 = await sign('Luis', 'luis@example.org', 'ck-2');
+    assert.strictEqual(g2.policy_version, '1.1');
+    assert.notStrictEqual(g2.policy_sha256, g1.policy_sha256);
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}consent_policies WHERE conference_id = ?`, w.cid).n, 2);
+    assert.ok(JSON.parse(g2.data).text.includes('(v1.1)'));
+    // A second signer of the same version reuses its snapshot.
+    const g3 = await sign('Eva', 'eva@example.org', 'ck-3');
+    assert.strictEqual(g3.policy_sha256, g2.policy_sha256);
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}consent_policies WHERE conference_id = ?`, w.cid).n, 2);
+    // The export carries the version each person signed, verifiable; the chain covers policy_sha256 too.
+    const ex = ok(await w.p.call('get', `/consent/evidence/${g1.inscription_id}`));
+    assert.strictEqual(ex.chain_ok, true);
+    assert.deepStrictEqual(ex.policies.map((x: any) => [x.policy_version, x.policy_sha256, x.sha256_ok]), [['1.0', g1.policy_sha256, true]]);
+    w.p.exec(`UPDATE ${PREFIX}consent_events SET policy_sha256 = ? WHERE id = ?`, g2.policy_sha256, g1.id);
+    assert.strictEqual(ok(await w.p.call('get', `/consent/evidence/${g1.inscription_id}`)).chain_ok, false, 'swapping the version breaks the chain');
+    // The confirmation e-mail names it.
+    const mail = [...w.p.mails].reverse().find((m: any) => m.to === 'ana.perez@example.org' && /registrada/.test(m.subject));
+    assert.ok(mail.text.includes(g1.policy_sha256));
 });

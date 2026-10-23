@@ -27,6 +27,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     hash of the network address. It also keeps the policy version, the SHA-256 of the exact text shown, each
     box, the code's sent and verified times and the representative of a minor. Each person's entries are
     hash-chained, and deleting the registration keeps them.
+  - Each signature also names the policy version in force: its number and the SHA-256 of an append-only
+    snapshot of the settings the page was built from. Once a version is signed, its texts can only change under
+    a new version number, so every record still shows which version the person accepted. The plugin's README
+    explains why the site's secret, which keys the network hash, must stay the same.
   - The person receives a copy of what they authorized, with the policy link.
   - Coordinators see each person's state and can resend the link. Administrators record revocations and export
     one person's evidence as a file.
