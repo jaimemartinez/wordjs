@@ -4,14 +4,17 @@
  *
  * Scope-aware, so a `confirm` destructured from useModal() — a local binding — is not a finding, while a
  * bare `confirm(...)` that resolves to the global is. The JavaScript/TypeScript is linted with ESLint's
- * `no-alert` plus the `globalThis` / `self` / `top` / `parent` spellings it does not cover. Markup gets a
- * text check: an inline handler attribute (`onclick="return confirm(…)"`) and the body of a `<script>`
- * element in an .html file, which is then linted like any script.
+ * `no-alert` plus the `globalThis` / `self` / `top` / `parent` spellings it does not cover. An .html file is
+ * read with an HTML tokenizer (htmlparser2, which sanitize-html already brings): the text of every
+ * `<script>` element and the value of every `on…` attribute are linted like any script, so an end tag
+ * spelled `</SCRIPT >` or a handler in single quotes is read the way a browser reads it. Markup written
+ * inside code (a server or a theme building HTML as a string) gets a text check for inline handlers.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { Linter } from "eslint";
 import tsParser from "@typescript-eslint/parser";
+import { Parser } from "htmlparser2";
 
 export const REPO_ROOT = path.resolve(__dirname, "../../../../..");
 
@@ -58,9 +61,12 @@ function lintCode(code: string, filename: string): Array<{ line: number; column:
         // An `eslint-disable` comment does not hide a call from this scan.
         linterOptions: { noInlineConfig: true, reportUnusedDisableDirectives: "off" },
     }], { filename: name });
-    // A file the parser cannot read is a finding too: an unscanned file is not a clean one.
+    // A file the parser cannot read is a finding too: an unscanned file is not a clean one. `window.confirm(…)`
+    // is reported by both rules at one position; one call is one finding.
+    const seen = new Set<string>();
     return messages
         .filter((m) => m.fatal || m.ruleId === "no-alert" || m.ruleId === "no-restricted-properties")
+        .filter((m) => { const key = `${m.line}:${m.column}`; if (seen.has(key)) return false; seen.add(key); return true; })
         .map((m) => ({ line: m.line, column: m.column, message: m.fatal ? `unparsed: ${m.message}` : m.message }));
 }
 
@@ -68,7 +74,40 @@ function lintCode(code: string, filename: string): Array<{ line: number; column:
 // `window["confirm"]`, an alias such as `const ask = window.confirm`). Everything else is not parsed.
 const MAY_CALL = /\b(?:alert|confirm|prompt)\s*\(|\b(?:window|globalThis|self|top|parent)\s*(?:\.\s*(?:alert|confirm|prompt)\b|\[\s*["'`](?:alert|confirm|prompt)["'`])/;
 const INLINE_HANDLER = /\bon[a-z]+\s*=\s*\\?["'][^"'\n]*?(?<![.\w$])(?:(?:window|globalThis|self|top|parent)\s*\.\s*)?(alert|confirm|prompt)\s*\(/gi;
-const SCRIPT_ELEMENT = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+// A <script> whose type is one of these runs as JavaScript; any other type (a template, JSON) does not.
+const JS_SCRIPT_TYPES = new Set(["", "text/javascript", "application/javascript", "module", "text/ecmascript", "application/ecmascript"]);
+
+interface MarkupCode { code: string; start: number; what: "script" | "handler"; wrap: boolean }
+
+/** The JavaScript an HTML document carries: its script elements' text and its on… attributes' values. */
+export function markupCode(html: string): MarkupCode[] {
+    const out: MarkupCode[] = [];
+    let script: MarkupCode | null = null;
+    const parser = new Parser({
+        onopentag(name, attribs) {
+            for (const [attr, value] of Object.entries(attribs)) {
+                if (/^on/i.test(attr) && value) out.push({ code: value, start: parser.startIndex, what: "handler", wrap: true });
+            }
+            if (name === "script" && !attribs.src && JS_SCRIPT_TYPES.has((attribs.type || "").trim().toLowerCase())) {
+                script = { code: "", start: -1, what: "script", wrap: false };
+            }
+        },
+        ontext(text) {
+            if (!script) return;
+            if (script.start < 0) script.start = parser.startIndex;
+            script.code += text;
+        },
+        onclosetag(name) {
+            if (name === "script" && script) {
+                if (script.code.trim()) out.push(script);
+                script = null;
+            }
+        },
+    }, { decodeEntities: true });
+    parser.write(html);
+    parser.end();
+    return out;
+}
 
 function lineOf(text: string, index: number): number {
     let n = 1;
@@ -86,23 +125,21 @@ export function scanText(text: string, rel: string): DialogFinding[] {
         for (const m of lintCode(text, rel)) out.push({ file: rel, line: m.line, column: m.column, what: m.message });
     }
     if (MARKUP_EXT.has(ext)) {
-        for (const m of text.matchAll(SCRIPT_ELEMENT)) {
-            const offset = lineOf(text, m.index! + m[0].indexOf(m[1])) - 1;
-            for (const f of lintCode(m[1], rel + ".js")) out.push({ file: rel, line: f.line + offset, column: f.column, what: f.message });
+        for (const part of markupCode(text)) {
+            const offset = lineOf(text, Math.max(0, part.start)) - 1;
+            // A handler's value is a function body (`return confirm(…)` is legal there).
+            const code = part.wrap ? `(function () { ${part.code}\n})` : part.code;
+            for (const f of lintCode(code, rel + ".js")) {
+                out.push({ file: rel, line: f.line + offset, column: part.wrap ? 0 : f.column, what: part.what === "handler" ? `inline handler: ${f.message}` : f.message });
+            }
+        }
+    } else {
+        // Markup a server or a theme writes as a string: its inline handlers, by text.
+        for (const m of text.matchAll(INLINE_HANDLER)) {
+            out.push({ file: rel, line: lineOf(text, m.index!), column: 0, what: `inline handler calls ${m[1]}()` });
         }
     }
-    // Inline handlers live in markup, and also in markup a server or a theme writes as a string.
-    for (const m of text.matchAll(INLINE_HANDLER)) {
-        out.push({ file: rel, line: lineOf(text, m.index!), column: 0, what: `inline handler calls ${m[1]}()` });
-    }
-    // `window.confirm(…)` is reported by both rules; one call is one finding.
-    const seen = new Set<string>();
-    return out.filter((f) => {
-        const key = `${f.line}:${f.column}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+    return out;
 }
 
 function walk(dir: string, files: string[]) {

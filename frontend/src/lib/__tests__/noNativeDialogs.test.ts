@@ -64,6 +64,23 @@ describe("the scanner (its own controls)", () => {
         expect(calls("res.send(`<a onclick=\"return window.confirm('Sure?')\">x</a>`);", "x.ts")).toBe(1);
     });
 
+    it("reads .html the way a browser does: every end-tag spelling, every handler quoting", () => {
+        // Each of these closes the script element in a browser; a regex for `</script>` misses them.
+        expect(calls("<script>confirm('a')</script >", "x.html")).toBe(1);
+        expect(calls("<SCRIPT>confirm('a')</SCRIPT>", "x.html")).toBe(1);
+        expect(calls("<script type='text/javascript'>window.alert('a')</script\t\n data-x=\"1\">", "x.html")).toBe(1);
+        expect(calls("<script type=\"module\">prompt('a')</sCrIpT>", "x.html")).toBe(1);
+        // Two scripts, and code after the first end tag is not inside it.
+        expect(calls("<script>confirm(1)</script ><p>alert(2) is text</p><script>alert(3)</script>", "x.html")).toBe(2);
+        expect(calls("<a onclick='return confirm(\"Sure?\")' onmouseover=\"alert(1)\">x</a>", "x.html")).toBe(2);
+        expect(calls("<button ONCLICK=\"window.prompt('x')\">x</button>", "x.html")).toBe(1);
+        // Not JavaScript: a template or JSON script, a script loaded from elsewhere, text that merely says confirm(.
+        expect(calls("<script type=\"text/template\">confirm('a')</script>", "x.html")).toBe(0);
+        expect(calls("<script type=\"application/json\">{\"a\":\"confirm(1)\"}</script>", "x.html")).toBe(0);
+        expect(calls("<p>Press OK to confirm(x).</p><script src=\"a.js\"></script>", "x.html")).toBe(0);
+        expect(calls("<script>const { confirm } = host; confirm('a');</script>", "x.html")).toBe(0);
+    });
+
     it("lets the host's dialogs and look-alikes through", () => {
         expect(calls("const { confirm, alert, prompt } = useModal(); if (!(await confirm('x'))) return; await alert('y'); await prompt('z');")).toBe(0);
         expect(calls("function f(confirm) { return confirm('x'); }", "x.js")).toBe(0);
