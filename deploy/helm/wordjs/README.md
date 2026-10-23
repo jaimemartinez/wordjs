@@ -83,10 +83,8 @@ Both PVCs survive `helm uninstall` on purpose — the data volume carries the da
 
 ## Upgrading
 
-A pod is upgraded by replacing its image, never from inside it: anything written to the container's
-own filesystem — a new version included — is lost when the pod is recreated, so do not use
-**Admin → Updates** here (it is meant for a server install). Build and push the new release's image,
-then point the release at it:
+On Kubernetes, update WordJS by changing the image tag: what is written to a container's own filesystem
+does not outlive the pod. Build and push the new release's image, then point the release at it:
 
 ```bash
 docker build -t <registry>/wordjs:2.9.0 . && docker push <registry>/wordjs:2.9.0
