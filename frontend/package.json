@@ -13,7 +13,7 @@
     "build": "next build",
     "postbuild": "node scripts/drop-outage-prerenders.js",
     "start": "node scripts/start-frontend.js prod",
-    "lint": "eslint .",
+    "lint": "eslint . && node scripts/lint-marketplace-clients.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --testTimeout=30000",
     "generate-plugins": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-portal-plugin-registry.js"
