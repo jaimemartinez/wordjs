@@ -85,8 +85,11 @@ VOLUME ["/app/backend/data", "/app/backend/uploads"]
 # WORDJS_HTTP=1 makes monolith.js serve plain HTTP instead of resolving a TLS certificate, so the port is
 # probe-able with no cert handling and the container never generates or renews a self-signed cert. Unset
 # it only if you mount real certificates and want the container itself to terminate TLS.
+# WORDJS_DOCKER=1: this is a container, whose code is the image. Admin → Updates then says to change the
+# image instead of offering to update in place; containerd and CRI-O (Kubernetes) write no /.dockerenv.
 ENV NODE_ENV=production \
     WORDJS_HTTP=1 \
+    WORDJS_DOCKER=1 \
     PORT=3000
 
 EXPOSE 3000

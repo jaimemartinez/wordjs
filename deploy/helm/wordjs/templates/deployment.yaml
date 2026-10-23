@@ -41,6 +41,10 @@ spec:
               containerPort: 3000
               protocol: TCP
           env:
+            # The code is the image: Admin → Updates says to change image.tag instead of updating in place
+            # (an image built elsewhere may not set it, and containerd writes no /.dockerenv).
+            - name: WORDJS_DOCKER
+              value: "1"
             # A suggestion for the setup wizard, not the main address (see values.yaml siteUrl).
             {{- with (include "wordjs.siteUrl" .) }}
             - name: WORDJS_SITE_URL

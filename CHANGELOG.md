@@ -47,6 +47,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Admin → Updates no longer offers an in-place update inside a Kubernetes pod.** containerd and CRI-O write
+  no `/.dockerenv`, and the Helm chart did not say it was a container, so the screen offered the one-click update,
+  which rewrites code the next pod restart replaces with the image. A pod is now recognised by
+  `KUBERNETES_SERVICE_HOST`, a podman container by `/run/.containerenv`, and the image and the chart set
+  `WORDJS_DOCKER=1`. On Kubernetes the screen says to change the release's image tag (`helm upgrade`).
+
 - **Plugin screens use the WordJS dialogs instead of the browser's pop-ups.** Every delete, cancel, revoke
   and send confirmation in the marketplace plugins (auctions, bookings, contact forms, digital downloads,
   donations, event tickets, events calendar, FAQ, invoices, job board, mail server, memberships, newsletter,
