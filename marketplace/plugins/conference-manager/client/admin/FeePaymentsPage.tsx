@@ -82,6 +82,8 @@ export const TRANSFER_COLS: { key: string; rem: number; tier: number }[] = [
 /** «Personas» never gets less than this (rem): «Ana P., Luis P. +1» on one line. */
 export const TRANSFER_PEOPLE_MIN_REM = 10;
 const TRANSFER_TIERS = [0, 1, 2];
+// The empty list a section shows while it loads: one array, so nothing derived from it changes between renders.
+const NO_ROWS: any[] = [];
 /** The narrowest card content (rem) that shows the columns of `tier` with «Personas» at its minimum. */
 export const transferTierMinRem = (tier: number): number => TRANSFER_COLS.filter((c) => c.tier <= tier).reduce((s, c) => s + c.rem, 0) + TRANSFER_PEOPLE_MIN_REM;
 /** What a card whose content is `px` wide shows: the list, or the table's columns, what «Personas» gets and what folds. */
@@ -360,8 +362,10 @@ export default function FeePaymentsPage({ conferenceId, slug, focus, onFocusCons
     const nameOf = (id: number) => rowById.get(Number(id))?.name || `#${id}`;
     const locName = (lid: number | null) => (lid == null ? tx('no.location', 'Sin localidad') : (locations.find((l) => Number(l.id) === Number(lid))?.name || `#${lid}`));
     const balances = useMemo(() => new Map((view?.people || []).map((p) => [Number(p.id), balanceFromWire(p)])), [view]);
-    const people = view?.people || [];
-    const transfers = view?.transfers || [];
+    // 2.36.6: one empty list while loading — a new [] each render made payableIds new each render, and its effect
+    // set the selection again and again («Maximum update depth exceeded» on opening «Pagos de cuotas»).
+    const people = view?.people || NO_ROWS;
+    const transfers = view?.transfers || NO_ROWS;
     const queueAll = useMemo(() => queueOf(transfers), [transfers]);
     const queue = useMemo(() => queueAll.filter((t) => transferInLocation(t, qLoc) && (!qMethod || t.method === qMethod)), [queueAll, qLoc, qMethod]);
     useEffect(() => { if (wide && section === 'queue' && (queueId == null || !queue.some((t) => t.id === queueId))) setQueueId(queue[0]?.id ?? null); }, [wide, section, queue]);

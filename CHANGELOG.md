@@ -32,6 +32,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     - **Missing actions explained**: a short hint says when WhatsApp or Enviar is missing because there is no phone
       or e-mail.
     - **Scope**: the server only acts for the coordinator's own locality.
+  - **A section menu instead of the row of tabs.** The admin's fifteen sections no longer scroll sideways in one row,
+    even on a wide screen. One button names the section you are in («Sección: Inscripciones ▾») and opens them all,
+    grouped (Personas · Dinero · Logística · Configuración) and searchable, on a computer and a phone. A role still
+    sees only the sections it may open.
+  - **Fixed: «Pagos de cuotas» re-rendered in a loop while loading** («Maximum update depth exceeded» in the
+    console).
   - **Fixed: «Limpiar todas las asignaciones» frees the rooms too.** It used to take the people out but leave every
     room and bed reserved for the locality it had been given to.
     - **What is freed**: the rooms and beds that «Sugerir reparto» gave to localities go back to everyone, so the

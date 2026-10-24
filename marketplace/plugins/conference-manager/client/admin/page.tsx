@@ -26,8 +26,8 @@ import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard
 import { Overlay } from "./Overlay";
 import { canAutoFocus, LAYER } from "../lib/overlay";
 // Phones (2.16.0): the shell scrolls with the page; the tab strip reveals the active tab.
-import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS, TAB_STRIP_CSS } from "../lib/phoneLayout";
-import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStripOverflow";
+import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS } from "../lib/phoneLayout";
+import { SectionPicker } from "./SectionPicker";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
@@ -180,14 +180,6 @@ function ConferenceManagerContent() {
     const shown: View = viewAllowed(view, perms) ? view : firstView;
     const openStaff = perms.isAdmin ? () => setView('staff') : undefined;
 
-    // A phone shows three of the twelve tabs: bring the active one into the strip's view, clear of its edge
-    // fade (after a reload the saved «Campos» was off-screen; tapped at the edge it stayed under the fade).
-    // Scrolls the strip only, never the page.
-    const tabStripRef = useRef<HTMLDivElement | null>(null);
-    useRevealActive(tabStripRef, '[aria-current="page"]', [shown, !!currentConference]);
-    // Which sides of the strip have more tabs: it fades out there (lib/phoneLayout.ts TAB_STRIP_CSS).
-    const stripMore = useStripOverflow(tabStripRef, [shown, !!currentConference]);
-
     if (shown === 'list') {
         return <ConferenceList onManage={handleManageConference} onOpenStaff={openStaff} />;
     }
@@ -260,27 +252,10 @@ function ConferenceManagerContent() {
                     </div>
                 </div>
 
-                <style>{TAB_STRIP_CSS}</style>
-                <div ref={tabStripRef} className="flex border-b border-gray-200 mb-6 overflow-x-auto" data-cm-shell-tabs=""
-                    {...stripMoreAttrs(stripMore)}>
-                    {tabs.map((tab) => {
-                        const isActive = shown === tab.view;
-                        return (
-                            <button
-                                key={tab.view}
-                                onClick={() => setView(tab.view)}
-                                aria-current={isActive ? 'page' : undefined}
-                                className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap
-                                    ${isActive
-                                        ? 'border-blue-600 text-blue-600'
-                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    }`}
-                            >
-                                <i className={`fa-solid ${tab.icon}`}></i>
-                                {tab.name}
-                            </button>
-                        );
-                    })}
+                {/* 2.36.6 (the owner: the tab bar «no es responsive, no es user friendly»): one button names the section and opens
+                    them all, grouped and searchable (SectionPicker) — no row of fifteen tabs scrolling sideways. */}
+                <div className="mb-6" data-cm-shell-tabs="">
+                    <SectionPicker tabs={tabs} current={shown} onPick={(v) => setView(v as View)} tx={tx} lang={language} />
                 </div>
             </div>
 
