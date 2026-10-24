@@ -2,13 +2,14 @@
 "use client";
 
 /**
- * The signed sheet's uploaded pages, shown in place (2.36.3): a photo as it is, a scanned PDF page by page
- * (lib/pdfScan: each page's picture, taken out of the file in the browser). Nothing is downloaded and no window is
+ * The signed sheet's uploaded pages, shown in place (2.36.3): a photo as it is, a PDF page by page — a scan by its
+ * pictures (lib/pdfScan), any other PDF drawn with pdf.js (lib/pdfRender, 2.36.4). Nothing is downloaded and no window is
  * opened — the admin's frame and some phones allow neither, and a coordinator only needs to look. Each page can be
  * zoomed (buttons, the wheel, a pinch, a double tap) and moved (drag) to read a signature.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { dataUrlBytes, pageUrl, scanPages } from "./pdfScan";
+import { renderPdf, scansCoverEveryPage } from "./pdfRender";
 
 type Page = { key: string; src?: string; note?: string; label: string };
 const sq = "inline-flex w-8 h-8 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40";
@@ -93,12 +94,26 @@ export function PageViewer({ t, files, load }: { t: (k: string, v?: any) => stri
                 try {
                     const r = await load(f);
                     if (r.mime === "application/pdf") {
-                        const scan = scanPages(dataUrlBytes(r.data_url));
-                        if (!scan.length) out.push({ key: `${f.id}`, note: t("paper.viewer.pdf.none"), label: name });
-                        for (let n = 0; n < scan.length; n++) {
-                            const url = await pageUrl(scan[n]).catch(() => null);
-                            if (url) urls.push(url);
-                            out.push({ key: `${f.id}-${n}`, src: url || undefined, note: url ? undefined : t("paper.viewer.pdf.page"), label: `${name} · ${t("paper.viewer.pdfpage", { n: n + 1, of: scan.length })}` });
+                        const bytes = dataUrlBytes(r.data_url);
+                        const label = (n: number, of: number) => `${name} · ${t("paper.viewer.pdfpage", { n: n + 1, of })}`;
+                        if (scansCoverEveryPage(bytes)) {
+                            // A scan: its pictures as they are (no renderer to load).
+                            const scan = scanPages(bytes);
+                            for (let n = 0; n < scan.length; n++) {
+                                const url = await pageUrl(scan[n]).catch(() => null);
+                                if (url) urls.push(url);
+                                out.push({ key: `${f.id}-${n}`, src: url || undefined, note: url ? undefined : t("paper.viewer.pdf.page"), label: label(n, scan.length) });
+                            }
+                        } else {
+                            // 2.36.4: any other PDF (typed, vector, mixed) — drawn page by page with pdf.js, shown as they come.
+                            const at = out.length;
+                            try {
+                                await renderPdf(bytes, (n, total, url) => {
+                                    if (url) urls.push(url);
+                                    out[at + n] = { key: `${f.id}-${n}`, src: url || undefined, note: url ? undefined : t("paper.viewer.pdf.page"), label: label(n, total) };
+                                    if (alive) setPages([...out]);
+                                });
+                            } catch { out.length = at; out.push({ key: `${f.id}`, note: t("paper.viewer.pdf.none"), label: name }); }
                         }
                     } else out.push({ key: `${f.id}`, src: r.data_url, label: name });
                 } catch (e: any) { out.push({ key: `${f.id}`, note: e?.message || "Error", label: name }); }

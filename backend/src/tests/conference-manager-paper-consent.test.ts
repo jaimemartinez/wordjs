@@ -353,6 +353,16 @@ test('the sheet as a real PDF (2.36.3): saved from the list, opened through the 
     assert.ok(ana);
 });
 
+test('the PDF renderer is served to anyone, on demand: the vendored pdf.js parts, intact (2.36.4)', async () => {
+    const w = await world();
+    for (const part of ['main', 'worker']) {
+        const r = ok(await w.p.call('get', `/public/pdfjs?part=${part}`, { anonymous: true }), part);
+        assert.strictEqual(r.version, '4.10.38');
+        assert.strictEqual(sha256(Buffer.from(r.b64, 'base64')), r.sha256, `${part} intact`);
+    }
+    assert.strictEqual((await w.p.call('get', '/public/pdfjs?part=../index', { anonymous: true })).status, 400);
+});
+
 test('the activation scan accepts the plugin (no computed call, every permission declared)', () => {
     const { validatePluginPermissions } = require('../core/plugins');
     const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'manifest.json'), 'utf8'));

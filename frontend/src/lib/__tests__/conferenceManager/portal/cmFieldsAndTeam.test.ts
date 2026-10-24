@@ -321,3 +321,87 @@ describe("translations (lib/i18n.ts)", () => {
         }
     });
 });
+
+describe("the price-rule builder (2.36.4): the value input follows the field, the old rules open as they were", () => {
+    const fields = [
+        { name: "first_name", label: "Nombre", type: "text" },
+        { name: "gender", label: "Género", type: "select", options: "M, F" },
+        { name: "age", label: "Edad", type: "number" },
+        { name: "f_llegada", label: "Llegada", type: "date" },
+        { name: "f_beca", label: "Becado", type: "switch" },
+        { name: "notes", label: "Notas", type: "notes" },
+    ];
+    it("each field gets its kind of input and its conditions", async () => {
+        const L = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/feeRules");
+        expect(["", "__person", "location", "gender", "first_name", "age", "f_llegada", "f_beca", "notes"].map((f) => L.kindOf(f, fields)))
+            .toEqual(["always", "person", "enum", "enum", "enum", "number", "date", "switch", "text"]);
+        expect(L.OPS_BY_KIND.person).toEqual(["in", "not_in"]);
+        expect(L.OPS_BY_KIND.number.slice(0, 3)).toEqual(["between", "gte", "lte"]);
+        expect(L.OPS_BY_KIND.date.slice(0, 3)).toEqual(["between", "after", "before"]);
+        expect(L.OPS_BY_KIND.switch).toEqual(["eq"]);
+        // A rule keeps its own condition in the list even when its kind would not offer it.
+        expect(L.opsFor("number", "neq")).toContain("neq");
+        expect(L.draftForField("f_beca", fields)).toMatchObject({ kind: "switch", op: "eq", value: "Sí" });
+    });
+    it("drafts round-trip to what the server stores: lists and ranges as arrays, the rest as text", async () => {
+        const L = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/feeRules");
+        expect(L.fromDraft({ ...L.draftForField("location", fields), list: ["Norte", "Sur"] })).toEqual({ field_name: "location", operator: "in", value: ["Norte", "Sur"] });
+        expect(L.fromDraft({ ...L.draftForField("age", fields), range: ["18", ""] })).toEqual({ field_name: "age", operator: "between", value: ["18", ""] });
+        expect(L.fromDraft({ ...L.draftForField("f_llegada", fields), op: "after", value: "2030-01-10" })).toEqual({ field_name: "f_llegada", operator: "after", value: "2030-01-10" });
+        expect(L.fromDraft(L.draftForField("", fields))).toEqual({ field_name: "", operator: "any", value: "" });
+        // A saved list / range opens back as one.
+        expect(L.toDraft({ field_name: "location", operator: "in", value: '["Norte","Sur"]' }, fields)).toMatchObject({ op: "in", list: ["Norte", "Sur"] });
+        expect(L.toDraft({ field_name: "age", operator: "between", value: '["","17"]' }, fields)).toMatchObject({ op: "between", range: ["", "17"] });
+        expect(L.draftReady({ ...L.draftForField("location", fields) })).toBe(false);
+        expect(L.draftReady({ ...L.draftForField("age", fields), range: ["", "17"] })).toBe(true);
+    });
+    it("rules saved before 2.36.4 open with the same meaning: «es igual a X» on a list field is «es uno de [X]»", async () => {
+        const L = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/feeRules");
+        expect(L.toDraft({ field_name: "gender", operator: "eq", value: "F" }, fields)).toMatchObject({ kind: "enum", op: "in", list: ["F"] });
+        expect(L.toDraft({ field_name: "location", operator: "neq", value: "Norte" }, fields)).toMatchObject({ op: "not_in", list: ["Norte"] });
+        expect(L.toDraft({ field_name: "gender", operator: "contains", value: "x" }, fields)).toMatchObject({ op: "contains", value: "x" });
+        expect(L.toDraft({ field_name: "age", operator: "gte", value: "18" }, fields)).toMatchObject({ kind: "number", op: "gte", value: "18" });
+        expect(L.toDraft({ field_name: "notes", operator: "filled", value: "" }, fields)).toMatchObject({ kind: "text", op: "filled" });
+        expect(L.toDraft({ field_name: "", operator: "any" }, fields)).toMatchObject({ kind: "always", op: "any" });
+        // «Personas» and the locality are never flagged as a deleted field.
+        expect(isOrphanFeeRule({ field_name: "__person", operator: "in" }, fields)).toBe(false);
+    });
+    it("the rule list says the condition in words", async () => {
+        const L = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/feeRules");
+        const tx = (k: string, f: string, v: Record<string, any> = {}) => Object.entries(v).reduce((s, [a, b]) => s.split(`{${a}}`).join(String(b)), translations.es[k] || f);
+        const label = (n: string) => fields.find((f) => f.name === n)?.label || (n === "location" ? "Localidad" : n);
+        expect(L.describeCondition({ field_name: "location", operator: "in", value: '["Norte","Sur"]' }, label, tx)).toBe("Localidad es: Norte, Sur");
+        expect(L.describeCondition({ field_name: "age", operator: "between", value: '["18","65"]' }, label, tx)).toBe("Edad entre 18 y 65");
+        expect(L.describeCondition({ field_name: "age", operator: "between", value: '["","17"]' }, label, tx)).toBe("Edad hasta 17");
+        expect(L.describeCondition({ field_name: "__person", operator: "in", value: '["1","2","3","4","5","6"]' }, label, tx, (id) => `P${id}`)).toBe("Para: P1, P2, P3, P4 y 2 más");
+        expect(L.describeCondition({ field_name: "__person", operator: "not_in", value: '["1"]' }, label, tx, (id) => `P${id}`)).toBe("Todos menos: P1");
+        expect(L.describeCondition({ field_name: "gender", operator: "eq", value: "F" }, label, tx)).toBe("Género es igual a F");
+        expect(L.describeCondition({ field_name: "", operator: "any" }, label, tx)).toBe("Siempre");
+    });
+    it("people are searched by name, document or locality, accents aside, and filtered by locality", async () => {
+        const L = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/feeRules");
+        const people = [{ id: 1, name: "Ana Pérez", document: "1001", location: "Norte" }, { id: 2, name: "Beto Gómez", document: "2002", location: "Sur" }];
+        expect(L.searchPeople(people, "perez").map((p) => p.id)).toEqual([1]);
+        expect(L.searchPeople(people, "2002").map((p) => p.id)).toEqual([2]);
+        expect(L.searchPeople(people, "", "Sur").map((p) => p.id)).toEqual([2]);
+        expect(L.toggleIn(["a"], "b", true)).toEqual(["a", "b"]);
+        expect(L.toggleIn(["a", "b"], "a", false)).toEqual(["b"]);
+    });
+    it("the builder: the pickers, the live preview, the styled Select, the calendar, no native dialog; every string in three languages", () => {
+        const b = read("client/admin/FeeRuleBuilder.tsx");
+        expect(b).toContain("conferenceApi.feeRuleValues(conferenceId, f)");
+        expect(b).toContain("conferenceApi.previewFeeRule(");
+        expect(b).toContain("<DateField ");
+        expect(b).toContain("<Select ");
+        expect(b).not.toMatch(/<select\b/);
+        expect(b).not.toMatch(/\b(alert|confirm|prompt)\s*\(/);
+        expect(b).not.toMatch(/\brequired\b/);
+        const page = read("client/admin/page.tsx");
+        expect(page).toContain("<FeeRuleBuilder conferenceId={conferenceId} fields={fields} draft={draft}");
+        expect(page).toContain("...fromDraft(draft)");
+        expect(page).toContain("if (body.field === 'value') setDraftErr(");
+        const used = new Set([...b.matchAll(/tx\('(fee\.[a-z_.]+)'/g)].map((m) => m[1]));
+        for (const op of ["any", "eq", "neq", "contains", "gt", "gte", "lt", "lte", "filled", "empty", "in", "not_in", "between", "before", "after"]) used.add(`fee.op.${op}`);
+        for (const k of used) for (const l of ["es", "en", "pt"] as const) expect((translations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});

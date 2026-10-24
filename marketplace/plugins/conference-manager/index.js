@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.3',
+    version: '2.36.4',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -1672,12 +1672,25 @@ exports.init = async function (wordjs) {
     // else case-insensitively — so a rule value `30` matches stored "30" and legacy "30.0" alike.
     // Same textual canonicalisation as the stored values (no double in between: long ids stay exact).
     const canonNumberish = (s) => { const c = canonicalNumber(s); return c === null ? s.toLowerCase() : c; };
+    // 2.36.4 (the rule builder): a list value ('in' / 'not_in': the values picked; 'between': [from, to]) is stored
+    // as JSON text in `value`; a date compares as its YYYY-MM-DD; `__person` conditions on WHO (the inscription id).
+    const FEE_PERSON = '__person';
+    const feeList = (v) => { try { const a = JSON.parse(String(v == null ? '' : v)); return Array.isArray(a) ? a.map(x => (x == null ? '' : String(x).trim())) : null; } catch { return null; } };
+    const feeDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v == null ? '' : v).trim()); return m ? `${m[1]}-${m[2]}-${m[3]}` : null; };
+    // Compare two values as dates when both are, else as numbers (NaN never matches).
+    const feeCmp = (a, b) => {
+        const da = feeDate(a), db2 = feeDate(b);
+        if (da && db2) return da < db2 ? -1 : da > db2 ? 1 : 0;
+        const na = Number(a), nb = Number(b);
+        if (String(a).trim() === '' || String(b).trim() === '' || !Number.isFinite(na) || !Number.isFinite(nb)) return NaN;
+        return na < nb ? -1 : na > nb ? 1 : 0;
+    };
     // Does a single fee rule match this attendee's field values?
     function feeRuleMatches(rule, values) {
         const field = rule.field_name || '';
         const op = rule.operator || 'eq';
         if (!field || op === 'any') return true;                 // unconditional
-        const raw = values ? values[field] : undefined;
+        const raw = values ? (field === FEE_PERSON ? values.id : values[field]) : undefined;
         if (op === 'filled') return raw != null && String(raw).trim() !== '';
         if (op === 'empty') return raw == null || String(raw).trim() === '';
         const a = raw == null ? '' : String(raw).trim();
@@ -1690,6 +1703,20 @@ exports.init = async function (wordjs) {
             case 'gte': return Number(a) >= Number(b);
             case 'lt': return Number(a) < Number(b);
             case 'lte': return Number(a) <= Number(b);
+            case 'in': case 'not_in': {
+                const list = feeList(rule.value) || [];
+                const hit = a !== '' && list.some(v => canonNumberish(v) === canonNumberish(a));
+                return op === 'in' ? hit : !hit;
+            }
+            case 'between': {
+                // Either end may be open: [from, ''] is «from on», ['', to] «up to».
+                const [lo, hi] = feeList(rule.value) || ['', ''];
+                if (a === '' || (!lo && !hi)) return false;
+                const okLo = !lo || feeCmp(a, lo) >= 0, okHi = !hi || feeCmp(a, hi) <= 0;
+                return okLo === true && okHi === true;
+            }
+            case 'before': return feeCmp(a, b) < 0;
+            case 'after': return feeCmp(a, b) > 0;
             default: return false;
         }
     }
@@ -1704,7 +1731,7 @@ exports.init = async function (wordjs) {
             const rules = await db.all(`SELECT * FROM ${T.feeRules} WHERE conference_id = ? AND enabled = 1 ORDER BY priority ASC, id ASC`, [conferenceId]);
             if (!rules.length) return rules;
             const names = new Set([...FEE_ALWAYS_FILLED, ...(await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [conferenceId])).map(f => f.name).filter(isFieldColumn)]);
-            return rules.filter(r => !r.field_name || r.operator === 'any' || names.has(r.field_name));
+            return rules.filter(r => !r.field_name || r.operator === 'any' || r.field_name === FEE_PERSON || names.has(r.field_name));
         }
         catch { return []; }
     }
@@ -2909,13 +2936,67 @@ exports.init = async function (wordjs) {
     });
 
     // === FEE RULES (dynamic pricing) ===
-    const FEE_OPERATORS = new Set(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'filled', 'empty', 'any']);
+    const FEE_OPERATORS = new Set(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'filled', 'empty', 'any', 'in', 'not_in', 'between', 'before', 'after']);
+    const FEE_LIST_MAX = 500;
+    // The value a rule stores for its operator (lists as JSON text), or an error message.
+    function feeRuleValue(op, value) {
+        if (op === 'in' || op === 'not_in') {
+            const list = Array.isArray(value) ? value : feeList(value);
+            if (!list || !list.length) return { error: 'Escoge al menos un valor para la regla.' };
+            if (list.length > FEE_LIST_MAX) return { error: `Máximo ${FEE_LIST_MAX} valores por regla.` };
+            return { value: JSON.stringify([...new Set(list.map(v => String(v == null ? '' : v).trim()).filter(Boolean))]) };
+        }
+        if (op === 'between') {
+            const pair = Array.isArray(value) ? value : feeList(value);
+            if (!pair || pair.length !== 2) return { error: 'Un rango necesita «desde» y «hasta» (uno de los dos puede quedar abierto).' };
+            const [lo, hi] = pair.map(v => String(v == null ? '' : v).trim());
+            if (!lo && !hi) return { error: 'Escribe al menos uno de los dos extremos del rango.' };
+            if (lo && hi && feeCmp(lo, hi) > 0) return { error: '«Desde» no puede ser mayor que «hasta».' };
+            return { value: JSON.stringify([lo, hi]) };
+        }
+        if ((op === 'before' || op === 'after') && !feeDate(value)) return { error: 'Escoge una fecha para la regla.' };
+        return { value: value == null ? '' : String(value) };
+    }
+    // The people a rule would reach now (the builder's live preview): the active inscriptions.
+    async function feeRulePreview(cid, rule) {
+        const rows = await db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND (status IS NULL OR status <> 'cancelled') ORDER BY id ASC`, [cid]);
+        const hits = rows.filter(r => feeRuleMatches(rule, r));
+        const sample = [];
+        for (const r of hits.slice(0, 8)) sample.push((await personWithName(r)).name || `#${r.id}`);
+        return { count: hits.length, total: rows.length, sample };
+    }
 
     http.route('get', '/fee-rules', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'settings', 'view')) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
+            // 2.36.4, the rule builder's choices: ?values=<field> → the distinct values this conference's people have,
+            // with how many have each; ?values=__person → the people (name, locality, document), to pick some.
+            const field = req.query.values;
+            if (field) {
+                const cid = positiveInt(conference_id);
+                if (field === FEE_PERSON) {
+                    if (!await allow(req, res, 'inscriptions', 'view')) return;
+                    const rows = await db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND (status IS NULL OR status <> 'cancelled') ORDER BY id ASC`, [cid]);
+                    const docField = (await db.all(`SELECT name, label FROM ${T.fields} WHERE conference_id = ?`, [cid])).find(f => /document|cedula|c[eé]dula|identificaci/i.test(`${f.name} ${f.label}`) && isFieldColumn(f.name));
+                    const people = [];
+                    for (const r of rows) people.push({ id: Number(r.id), name: (await personWithName(r)).name || `#${r.id}`, location: r.location || '', document: docField && r[docField.name] != null ? String(r[docField.name]) : '' });
+                    return res.json({ field, people });
+                }
+                const names = new Set([...FEE_ALWAYS_FILLED, ...(await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [cid])).map(f => f.name).filter(isFieldColumn)]);
+                if (!names.has(field) || field === healthMod.FIELD) return res.status(400).json({ error: 'Campo inválido.' });
+                const rows = await db.all(`SELECT ${field} AS v, COUNT(*) AS n FROM ${T.inscriptions} WHERE conference_id = ? AND (status IS NULL OR status <> 'cancelled') GROUP BY ${field} ORDER BY n DESC`, [cid]);
+                const merged = new Map();
+                for (const r of rows) {
+                    const v = r.v == null ? '' : String(r.v).trim();
+                    if (!v) continue;
+                    const k = canonNumberish(v);
+                    const cur = merged.get(k);
+                    merged.set(k, { value: cur ? cur.value : v, count: (cur ? cur.count : 0) + Number(r.n || 0) });
+                }
+                return res.json({ field, values: [...merged.values()].sort((a, b) => b.count - a.count || a.value.localeCompare(b.value, 'es')) });
+            }
             const list = await db.all(`SELECT * FROM ${T.feeRules} WHERE conference_id = ? ORDER BY priority ASC, id ASC`, [conference_id]);
             res.json(list);
         } catch (e) { sendError(res, e); }
@@ -2923,9 +3004,19 @@ exports.init = async function (wordjs) {
 
     http.route('post', '/fee-rules', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'settings', 'manage')) return;
-        const { id, conference_id, label, field_name, operator, value, action, amount, priority, enabled } = req.body;
+        const { id, conference_id, label, field_name, operator, action, amount, priority, enabled } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const op = FEE_OPERATORS.has(operator) ? operator : 'eq';
+        // 2.36.4: a list or a range is stored as JSON text; a date rule needs a date.
+        const checked = field_name && op !== 'any' && !['filled', 'empty'].includes(op) ? feeRuleValue(op, req.body.value) : { value: req.body.value == null ? '' : String(req.body.value) };
+        if (checked.error) return res.status(400).json({ error: checked.error, field: 'value' });
+        const value = checked.value;
+        // «Esta regla aplica a N personas» (the builder's live preview): the rule as typed, nothing saved.
+        if (req.body.preview) {
+            if (field_name === healthMod.FIELD) return res.status(400).json({ error: 'Las condiciones de salud no pueden usarse en una regla de precio.' });
+            try { return res.json(await feeRulePreview(positiveInt(conference_id), { field_name: field_name || '', operator: op, value })); }
+            catch (e) { return sendError(res, e); }
+        }
         const act = action === 'add' ? 'add' : 'set';
         if (!Number.isFinite(Number(amount)) || Math.abs(Number(amount)) > MAX_MONEY) return res.status(400).json({ error: 'El monto de la regla es inválido.' });
         const amt = roundMoney(amount);
@@ -2954,6 +3045,21 @@ exports.init = async function (wordjs) {
         try {
             await db.run(`DELETE FROM ${T.feeRules} WHERE id = ?`, [req.params.id]);
             res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // GET /public/pdfjs?part=main|worker (2.36.4) → { version, part, sha256, b64 } — the PDF renderer (pdf.js, Apache-2.0,
+    // server/pdfjs-legacy.js) the signed-sheet viewer loads only when a PDF is opened, to show ANY PDF page by page.
+    // Public and immutable: code, no data. Read from disk the first time it is asked for.
+    let pdfjsVendor = null;
+    http.route('get', '/public/pdfjs', async (req, res) => {
+        const q = req.query || {};
+        const part = q.part === 'main' || q.part === 'worker' ? q.part : null;
+        if (!part) return res.status(400).json({ error: 'part: main o worker.' });
+        try {
+            if (!pdfjsVendor) pdfjsVendor = require('./server/pdfjs-legacy');
+            try { res.set({ 'Cache-Control': 'public, max-age=31536000, immutable' }); } catch (e) { /* a bridge without headers */ }
+            res.json({ version: pdfjsVendor.version, part, sha256: pdfjsVendor.sha256[part], b64: pdfjsVendor[part] });
         } catch (e) { sendError(res, e); }
     });
 

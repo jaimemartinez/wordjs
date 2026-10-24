@@ -423,7 +423,8 @@ export interface FeeRule {
     conference_id: number;
     label?: string;
     field_name?: string;
-    operator: 'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'filled' | 'empty' | 'any';
+    // 2.36.4: in / not_in (a JSON list in `value`), between (a JSON [from, to]), before / after (a date).
+    operator: 'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'filled' | 'empty' | 'any' | 'in' | 'not_in' | 'between' | 'before' | 'after';
     value?: string;
     action: 'set' | 'add';
     amount: number;
@@ -778,6 +779,10 @@ export const conferenceApi = {
     getFeeRules: (conferenceId: number) => apiGet<FeeRule[]>(`/plugin/conference-manager/fee-rules?conference_id=${conferenceId}`),
     saveFeeRule: (data: Partial<FeeRule>) => apiPost('/plugin/conference-manager/fee-rules', data),
     deleteFeeRule: (id: number) => apiDelete(`/plugin/conference-manager/fee-rules/${id}`),
+    /** 2.36.4, the rule builder: the values a field has in this conference (with how many people have each), or the people. */
+    feeRuleValues: (conferenceId: number, field: string) => apiGet<{ field: string; values?: { value: string; count: number }[]; people?: { id: number; name: string; location: string; document: string }[] }>(`/plugin/conference-manager/fee-rules?conference_id=${conferenceId}&values=${encodeURIComponent(field)}`),
+    /** «Esta regla aplica a N personas»: the condition as typed, nothing saved. */
+    previewFeeRule: (data: { conference_id: number; field_name: string; operator: string; value: any }) => apiPost<{ count: number; total: number; sample: string[] }>('/plugin/conference-manager/fee-rules', { ...data, preview: true }),
     repriceAll: (conferenceId: number) => apiPost<{ success: boolean; total: number; updated: number }>('/plugin/conference-manager/reprice', { conference_id: conferenceId }),
 
     // Transport (2.11.0)

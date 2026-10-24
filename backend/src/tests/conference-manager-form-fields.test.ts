@@ -416,3 +416,74 @@ test('GET /assignment/rules?all=1 adds every location\'s own rules with the loca
     assert.strictEqual(all.status, 200, JSON.stringify(all.body));
     assert.deepStrictEqual(all.body.map((r: any) => [r.name, r.location_name ?? null]).sort(), [['Familias del norte', 'Norte'], ['Familias juntas', null]]);
 });
+
+test('the price-rule builder (2.36.4): lists of values, ranges, dates, Yes/No, chosen people, the live preview — and old rules unchanged', async () => {
+    const p = await bootPlugin();
+    const cid = await newConference(p);
+    assert.strictEqual((await p.call('put', `/${cid}`, { body: { fee_default: 100 } })).status, 200);
+    for (const t of ['first_name', 'gender', 'age']) assert.strictEqual((await addTemplate(p, cid, t)).status, 200);
+    assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, label: 'Fecha de llegada', type: 'date' } })).status, 200);
+    assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, label: 'Becado', type: 'switch' } })).status, 200);
+    const nameOf = (label: string) => p.one(`SELECT name FROM ${F} WHERE conference_id = ? AND label = ?`, cid, label).name as string;
+    const arrival = nameOf('Fecha de llegada'), grant = nameOf('Becado');
+    const norte = (await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 50 } })).body.id;
+    const sur = (await p.call('post', '/locations', { body: { conference_id: cid, name: 'Sur', capacity: 50 } })).body.id;
+    const centro = (await p.call('post', '/locations', { body: { conference_id: cid, name: 'Centro', capacity: 50 } })).body.id;
+    const people: Record<string, number> = {};
+    const rows: [string, number, number, string, string][] = [['Ana', norte, 15, '2030-01-09', 'Sí'], ['Beto', sur, 34, '2030-01-10', 'No'], ['Carla', centro, 70, '2030-01-12', 'No'], ['Dora', norte, 40, '2030-01-11', 'No']];
+    for (const [n, loc, age, day, g] of rows) {
+        const r = await p.call('post', '/inscriptions', { body: { conference_id: cid, location_id: loc, first_name: n, gender: n === 'Beto' ? 'M' : 'F', age, [arrival]: day, [grant]: g } });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+        people[n] = r.body.id;
+    }
+    const preview = async (rule: any) => (await p.call('post', '/fee-rules', { body: { conference_id: cid, preview: true, ...rule } })).body;
+    // The builder's choices: the distinct values with their counts, and the people.
+    const locs = (await p.call('get', `/fee-rules?conference_id=${cid}&values=location`)).body.values;
+    assert.deepStrictEqual(locs[0], { value: 'Norte', count: 2 });
+    assert.deepStrictEqual(locs.map((v: any) => v.value).sort(), ['Centro', 'Norte', 'Sur']);
+    const who = (await p.call('get', `/fee-rules?conference_id=${cid}&values=__person`)).body.people;
+    assert.deepStrictEqual(who.map((x: any) => x.name).sort(), ['Ana', 'Beto', 'Carla', 'Dora']);
+    assert.strictEqual((await p.call('get', `/fee-rules?conference_id=${cid}&values=health_conditions`)).status, 400);
+    assert.strictEqual((await p.call('get', `/fee-rules?conference_id=${cid}&values=not_a_field`)).status, 400);
+    // «Esta regla aplica a N personas», for each kind of condition.
+    assert.deepStrictEqual(await preview({ field_name: 'location', operator: 'in', value: ['Norte', 'Sur'] }), { count: 3, total: 4, sample: ['Ana', 'Beto', 'Dora'] });
+    assert.strictEqual((await preview({ field_name: 'location', operator: 'not_in', value: ['Norte'] })).count, 2);
+    assert.strictEqual((await preview({ field_name: 'age', operator: 'between', value: ['18', '65'] })).count, 2, '18–65: Beto and Dora');
+    assert.strictEqual((await preview({ field_name: 'age', operator: 'between', value: ['', '17'] })).count, 1, 'up to 17: Ana');
+    assert.strictEqual((await preview({ field_name: 'age', operator: 'gte', value: '65' })).count, 1);
+    assert.strictEqual((await preview({ field_name: arrival, operator: 'before', value: '2030-01-11' })).count, 2);
+    assert.strictEqual((await preview({ field_name: arrival, operator: 'after', value: '2030-01-10' })).count, 2);
+    assert.strictEqual((await preview({ field_name: arrival, operator: 'between', value: ['2030-01-10', '2030-01-11'] })).count, 2);
+    assert.strictEqual((await preview({ field_name: grant, operator: 'eq', value: 'Sí' })).count, 1);
+    assert.deepStrictEqual((await preview({ field_name: '__person', operator: 'in', value: [people.Carla] })).sample, ['Carla']);
+    // Bad values are refused in place (field: value), and nothing is saved by a preview.
+    const bads = [{ field_name: 'location', operator: 'in', value: [] }, { field_name: 'age', operator: 'between', value: ['', ''] }, { field_name: 'age', operator: 'between', value: ['70', '18'] }, { field_name: arrival, operator: 'before', value: 'mañana' }];
+    for (const bad of bads) {
+        const r = await p.call('post', '/fee-rules', { body: { conference_id: cid, preview: true, ...bad } });
+        assert.strictEqual(r.status, 400, JSON.stringify(bad));
+        assert.strictEqual(r.body.field, 'value');
+    }
+    assert.strictEqual(p.q('SELECT id FROM wjp_conference_manager_fee_rules WHERE conference_id = ?', cid).length, 0, 'previews save nothing');
+    // Saved and applied: a list is stored as JSON; «Recalcular todos» prices everyone with them.
+    const save = async (rule: any) => { const r = await p.call('post', '/fee-rules', { body: { conference_id: cid, action: 'set', ...rule } }); assert.strictEqual(r.status, 200, JSON.stringify(r.body)); };
+    await save({ label: 'Norte y Sur', field_name: 'location', operator: 'in', value: ['Norte', 'Sur'], amount: 90, priority: 10 });
+    assert.strictEqual(p.one(`SELECT value FROM wjp_conference_manager_fee_rules WHERE label = 'Norte y Sur'`).value, '["Norte","Sur"]');
+    await save({ label: 'Menores', field_name: 'age', operator: 'between', value: ['', '17'], amount: 50, priority: 20 });
+    await save({ label: 'Llegan tarde', field_name: arrival, operator: 'after', value: '2030-01-11', amount: 70, priority: 30 });
+    await save({ label: 'Becados', field_name: grant, operator: 'eq', value: 'Sí', amount: 0, priority: 40 });
+    await save({ label: 'Invitada', field_name: '__person', operator: 'in', value: [people.Dora], amount: 10, priority: 50 });
+    assert.strictEqual((await p.call('post', '/reprice', { body: { conference_id: cid } })).status, 200);
+    const due = (n: string) => Number(p.one('SELECT total_due FROM wjp_conference_manager_inscriptions WHERE id = ?', people[n]).total_due);
+    assert.deepStrictEqual({ Ana: due('Ana'), Beto: due('Beto'), Carla: due('Carla'), Dora: due('Dora') }, { Ana: 0, Beto: 90, Carla: 70, Dora: 10 });
+    // Rules saved before 2.36.4 (one free-text value) read and match exactly as before.
+    p.exec('DELETE FROM wjp_conference_manager_fee_rules WHERE conference_id = ?', cid);
+    const legacy: [string, string, number][] = [['eq', 'Norte', 2], ['neq', 'Norte', 2], ['contains', 'nor', 2], ['filled', '', 4], ['empty', '', 0]];
+    for (const [op, v, n] of legacy) {
+        p.exec(`INSERT INTO wjp_conference_manager_fee_rules (conference_id, label, field_name, operator, value, action, amount, priority, enabled) VALUES (?, 'old', 'location', ?, ?, 'set', 1, 0, 1)`, cid, op, v);
+        assert.strictEqual((await preview({ field_name: 'location', operator: op, value: v })).count, n, `${op} ${v}`);
+    }
+    const numeric: [string, string, number][] = [['gt', '30', 3], ['lte', '15', 1], ['lt', '40', 2]];
+    for (const [op, v, n] of numeric) assert.strictEqual((await preview({ field_name: 'age', operator: op, value: v })).count, n, `${op} ${v}`);
+    const list = (await p.call('get', `/fee-rules?conference_id=${cid}`)).body;
+    assert.deepStrictEqual(list.map((r: any) => r.operator), ['eq', 'neq', 'contains', 'filled', 'empty'], 'the old rows list as they are');
+});

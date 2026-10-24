@@ -6,6 +6,35 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **conference-manager 2.36.4: a friendlier price-rule builder.** In *Precios › Nueva regla*, the value of a condition
+  now follows the field picked, from what this conference's data really has, instead of free text:
+  - **Personas que escojo**: the roster, searched by name, document or locality and filtered by locality; tick one
+    person or several.
+  - **The locality, a list field or a short text** (church, role, gender…): the values people really have, each with
+    how many people have it, ticked as «es uno de» / «no es ninguno de»; another value can be added.
+  - **A number**: a range (either end open) or a bound (≥, ≤ …).
+  - **A date**: between, before or after, with the admin's calendar.
+  - **A Yes / No switch**: Sí or No.
+  - **Live preview**: under the condition, «Esta regla aplica a N de M personas» and the first few names. A value the
+    server refuses (an empty list, a backwards range) is said in place.
+  - **Rules list**: says each condition in words («Localidad es: Norte, Sur», «Edad entre 18 y 65»).
+  - **Older rules**: rules saved before work as they did. A rule on a list field written as «es igual a X» opens as
+    «es uno de [X]» (the same people) when edited.
+- **conference-manager 2.36.4: any signed-sheet PDF shows in place.** The viewer from 2.36.3 showed only scanned PDFs
+  and turned away a typed or exported one («not a picture or a scan»). Now every PDF (typed, vector, mixed or scanned)
+  is drawn page by page in the sheet's viewer, with zoom, pan and page arrows, on a computer or a phone. It is never a
+  download and never the browser's own PDF viewer.
+  - **pdf.js 4.10.38** (Apache-2.0, legacy build) is bundled with the plugin, with its licence in
+    `server/pdfjs.LICENSE.txt`.
+  - **Loaded on demand**: the plugin's bundles stay the same size. The first PDF opened fetches pdf.js once from the
+    new `GET /public/pdfjs` (cached).
+  - **No new permissions**: it runs on the page, with no Worker and no `eval`, so nothing more is needed under the
+    admin's CSP or the sandbox. The plugin now has 176 routes.
+  - **Unchanged**: a phone's «scan to PDF» still shows its pictures directly, without pdf.js, and a photo shows as it
+    is.
+
 ## [2.11.1] - 2026-10-23
 
 ### Security
