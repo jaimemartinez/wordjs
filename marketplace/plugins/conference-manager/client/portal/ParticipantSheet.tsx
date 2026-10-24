@@ -43,16 +43,6 @@ export function fieldNode(field: PortalField, raw: unknown): React.ReactNode {
     return value;
 }
 
-/** The person's phone: the form field typed or named as a phone (for the badge's WhatsApp message). */
-function phoneOf(person: PortalPerson, fields: PortalField[]): string {
-    const f = fields.find((x) => {
-        const type = String(x.type || "").toLowerCase();
-        return type === "tel" || type === "phone" || /phone|telefono|celular|movil|whatsapp/.test(normalizeSearch(x.name));
-    });
-    const v = f ? fieldRaw(person, f.name) : null;
-    return v == null ? "" : String(v);
-}
-
 export type ParticipantSheetProps = {
     person: PortalPerson;
     fields: PortalField[];
@@ -134,7 +124,7 @@ export default function ParticipantSheet({ person, fields, onClose, feesOn, canR
             </section>
 
             {badges && !cancelled && (
-                <PortalBadgeSection inscriptionId={id} phone={phoneOf(person, fields)} conferenceName={badges.conferenceName} authHeaders={badges.authHeaders} />
+                <PortalBadgeSection inscriptionId={id} firstName={String(fieldRaw(person, "first_name") ?? "")} conferenceName={badges.conferenceName} authHeaders={badges.authHeaders} />
             )}
 
             <section className="space-y-1" aria-labelledby={`data-${id}`} data-sheet-section="datos">

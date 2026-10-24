@@ -121,4 +121,4 @@ function confirmationMail(lang, { conference, ev, d }) {
     return { subject, text, html };
 }
 
-module.exports = { LANGS, langOf, linkMail, codeMail, confirmationMail };
+module.exports = { LANGS, langOf, linkMail, codeMail, confirmationMail, esc, shell };

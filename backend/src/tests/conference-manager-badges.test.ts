@@ -945,3 +945,64 @@ test('«Mi inscripción» (2.36.5): a called group shows on the pending meal, an
     ok(await p.call('post', '/meals/priority/call', { body: { service_id: svc, group: other } }), 'call other');
     assert.strictEqual((await view()).meals.pending[0].called_at, undefined);
 });
+
+test('2.36.6 «Escarapela» in the portal: WhatsApp only with a phone, «Enviar» only with an e-mail — own people only, one e-mail per 5 minutes, never a silent failure', async () => {
+    const w = await world();
+    const { p } = w;
+    ok(await p.call('post', '/publish', { body: { conference_id: w.cid, published: false } }));
+    for (const template of ['email', 'phone']) ok(await p.call('post', '/fields', { body: { conference_id: w.cid, template } }), template);
+    ok(await p.call('post', '/publish', { body: { conference_id: w.cid, published: true } }));
+    ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: {} } }));
+    const dani = ok(await p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'Dani', last_name: 'Mora', location_id: w.norte, email: 'Dani@Example.org', phone: '300 123 4567' } }), 'dani').id as number;
+    const tn = await w.tokenOf(w.norte);
+    const email = (iid: number, token = tn) => portal(p, 'post', '/portal/badges/email', token, { inscription_id: iid });
+
+    // What the section offers: the number as the consent message builds it (E.164 with the default code), the e-mail masked.
+    const withBoth = ok(await portal(p, 'post', '/portal/badges/link', tn, { inscription_id: dani }));
+    assert.deepStrictEqual([withBoth.phone_wa, withBoth.email_masked], ['573001234567', 'd***@e***.org']);
+    const without = ok(await portal(p, 'post', '/portal/badges/link', tn, { inscription_id: w.ana }));
+    assert.deepStrictEqual([without.phone_wa, without.email_masked], ['', '']);
+
+    // No e-mail on file; another location's person (Sur) is not this coordinator's.
+    const none = await email(w.ana);
+    assert.deepStrictEqual([none.status, none.body.code], [400, 'no_email']);
+    assert.strictEqual((await email(w.carla)).status, 404);
+    assert.strictEqual(p.mails.length, 0);
+
+    // Sent: to the address on file, with the person's «Mi inscripción» link and the instructions; the answer masks it.
+    const sent = ok(await email(dani), 'send');
+    assert.deepStrictEqual(sent, { sent: true, email_masked: 'd***@e***.org' });
+    assert.strictEqual(p.mails.length, 1);
+    const m = p.mails[0];
+    assert.strictEqual(m.to, 'dani@example.org');
+    assert.strictEqual(m.subject, 'Tu escarapela · Congreso Nacional de Jóvenes');
+    assert.ok(m.text.includes(`https://congreso.example.org/portal/conference/yo#c=${w.codeOf(dani)}`), m.text);
+    for (const step of ['pantalla de inicio', 'Activa los avisos', 'no lo compartas']) assert.ok(m.text.includes(step), step);
+    assert.ok(m.html.includes('Abrir mi escarapela'));
+
+    // Again at once: refused, with the wait; nothing sent.
+    const again = await email(dani);
+    assert.deepStrictEqual([again.status, again.body.code], [429, 'mail_wait']);
+    assert.ok(again.body.retry_in > 0 && again.body.retry_in <= 300);
+    assert.strictEqual(p.mails.length, 1);
+
+    // The audit: who, to which address, sent.
+    const rows = p.q(`SELECT email, actor, ok, error FROM ${T('badge_mails')} WHERE inscription_id = ? ORDER BY id`, dani) as any[];
+    assert.deepStrictEqual(rows.map(r => [r.email, r.actor, Number(r.ok), r.error]), [['dani@example.org', `portal:${w.norte}`, 1, null]]);
+
+    // Five minutes later, with the site's mail gone: a clear 503, logged as not sent — never a silent «sent».
+    p.exec(`UPDATE ${T('badge_mails')} SET at_s = at_s - 301 WHERE inscription_id = ?`, dani);
+    p.setMailFail(true);
+    const off = await email(dani);
+    assert.deepStrictEqual([off.status, off.body.code], [503, 'mail_off']);
+    assert.match(off.body.error, /correo del sitio no está configurado/);
+    const failed = (p.q(`SELECT ok, error FROM ${T('badge_mails')} WHERE inscription_id = ? ORDER BY id`, dani) as any[]).pop();
+    assert.deepStrictEqual([Number(failed.ok), failed.error], [0, 'Mail server not available']);
+    p.setMailFail(false);
+
+    // The conference's e-mail language («Autorizaciones › Idioma de los correos»): English.
+    ok(await p.call('put', '/consent/settings', { body: { conference_id: w.cid, email_lang: 'en' } }), 'lang');
+    ok(await email(dani), 'send in English');
+    assert.strictEqual(p.mails[1].subject, 'Your badge · Congreso Nacional de Jóvenes');
+    assert.ok(p.mails[1].text.includes('Add to Home Screen'));
+});

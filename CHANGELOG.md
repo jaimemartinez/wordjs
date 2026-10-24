@@ -16,6 +16,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     person's badge (view, copy link, WhatsApp, PDF) stays in their sheet, section «Escarapela». The admin's
     *Escarapelas* screen is unchanged.
   - **«Herramientas de la localidad» is removed**: with both of its tools moved or gone, the panel was empty.
+  - **A person's «Escarapela» has three actions**: WhatsApp, Copiar enlace and Enviar. «Ver» and «PDF» are gone.
+    - *WhatsApp* shows only when the person has a phone on file. It uses the number as the consent message builds
+      it, the conference's default calling code included, and the message carries the link plus a few lines on how
+      to use it.
+    - *Copiar enlace* is always there.
+    - *Enviar* shows only when the person has an e-mail on file. After an in-app confirmation naming the (masked)
+      address, it e-mails the person their badge link with instructions: open it, keep it on the home screen, turn
+      on the notices for meal calls and boarding, and keep it to themselves. The e-mail is in the conference's
+      e-mail language (*Autorizaciones › Idioma de los correos*); a toast says how it went.
+    - **Limits and errors**: one e-mail per person every 5 minutes. A site without mail, or a plugin without the
+      e-mail permission, gets a clear error, never a silent «sent».
+    - **Audit**: every attempt is recorded (who, to which address, when, sent or why not).
+    - **Missing actions explained**: a short hint says when WhatsApp or Enviar is missing because there is no phone
+      or e-mail.
+    - **Scope**: the server only acts for the coordinator's own locality.
 
 ### Added
 

@@ -5773,6 +5773,12 @@ exports.init = async function (wordjs) {
         http, allow, positiveInt, actorOf, resolvePortalLocation, personWithName, isFieldColumn, hasLevel,
         randomToken: (n) => wordjs.crypto.randomToken(n), qrText,
         mealGroupOf: (cid, id) => mealPriority.letterOf(cid, id),
+        // 2.36.6, «Escarapela» › «Enviar»: the person's e-mail and WhatsApp number as consent reads them, the e-mail
+        // language, the site's address for the link and the site's mail (email:admin, as consent's e-mails).
+        contactOf: (ins) => consent.contactOf(ins),
+        mailLangOf: (cid) => consent.mailLangOf(cid),
+        siteLinkBase: () => siteLinkBase(),
+        mail: (msg) => wordjs.mail(msg),
     });
     packages.install({
         http, allow, allowAny, positiveInt, withAssignmentLock, sendError, httpError, roundMoney, assertMoneyRange, runBatched, MAX_MONEY,

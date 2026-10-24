@@ -24,7 +24,10 @@ import { encodeQr, qrRows } from "../../../../../../marketplace/plugins/conferen
 import jsQR from "../../../../../../marketplace/plugins/conference-manager/client/lib/vendor/jsQR";
 import * as pluginBadges from "../../../../../../marketplace/plugins/conference-manager/client/lib/badges";
 import { translations } from "../../../../../../marketplace/plugins/conference-manager/client/lib/i18n";
-import { hasBadges, waNumber, whatsappUrl } from "../../../../../../marketplace/plugins/conference-manager/client/portal/badges";
+import { hasBadges } from "../../../../../../marketplace/plugins/conference-manager/client/portal/badges";
+import { badgeMessage } from "../../../../../../marketplace/plugins/conference-manager/client/portal/PortalBadges";
+import { whatsappUrl as consentWhatsappUrl } from "../../../../../../marketplace/plugins/conference-manager/client/lib/consentMessage";
+import { ToastProvider } from "@/contexts/ToastContext";
 import fs from "node:fs";
 import ParticipantSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantSheet";
 import { parseGeo } from "../../../../../../marketplace/plugins/conference-manager/client/lib/geo";
@@ -115,23 +118,17 @@ describe("one display list, two renderers", () => {
 });
 
 describe("the portal's helpers", () => {
-    it("hasBadges reads the plugin's flag; whatsappUrl adds 57 to a 10-digit mobile, like the admin's", () => {
+    it("hasBadges reads the plugin's flag; the WhatsApp message carries the link and how to use it (2.36.6)", () => {
         expect(hasBadges({ features: { badges: 1, fee_payments: 1 } })).toBe(true);
         expect(hasBadges({ features: { fee_payments: 1 } })).toBe(false);
         expect(hasBadges(null)).toBe(false);
-        const phones = ["300 123 4567", "+57 300 1234567", "0057 300 123 4567", "300 1234567 / 310 7654321", "300-123-4567 y 310 765 4321", "", null, "12", "1".repeat(20)];
-        for (const phone of phones) {
-            expect(whatsappUrl(phone, "Hola: x")).toBe(pluginBadges.whatsappUrl(phone, "Hola: x"));
-            expect(waNumber(phone, "57")).toBe(pluginBadges.waNumber(phone, "57"));
-        }
-        // A list or an «00» prefix gives the first number, with the country code; junk gives no number.
-        expect(waNumber("0057 300 123 4567")).toBe("573001234567");
-        expect(waNumber("300 1234567 / 310 7654321")).toBe("573001234567");
-        expect(waNumber("300 1234567", "593")).toBe("5933001234567");
-        expect(waNumber("1".repeat(20))).toBe(null);
-        expect(waNumber("12")).toBe(null);
-        expect(whatsappUrl("300 123 4567", "a b")).toBe("https://wa.me/573001234567?text=a%20b");
-        expect(whatsappUrl("", "a")).toBe("https://wa.me/?text=a");
+        const msg = badgeMessage("Ana", "Congreso", "https://x.org/portal/conference/yo#c=ABCDEFGHJK");
+        expect(msg.split(/\n/)[0]).toBe("Hola Ana: esta es tu escarapela de «Congreso»:");
+        expect(msg).toContain("https://x.org/portal/conference/yo#c=ABCDEFGHJK");
+        for (const step of ["pantalla de inicio", "Activa los avisos", "no la compartas"]) expect(msg).toContain(step);
+        expect(badgeMessage("", "", "u").split(/\n/)[0]).toBe("Hola: esta es tu escarapela:");
+        // The number is the server's (phone_wa, E.164 as the consent message's): wa.me only adds the text.
+        expect(consentWhatsappUrl("a b", "573001234567")).toBe("https://wa.me/573001234567?text=a%20b");
     });
 });
 
@@ -139,11 +136,14 @@ describe("the badge PDF goes through the core's portal file route", () => {
     it("the portal declares the plugin's ticket route, and the pages open /portal/conference/file", () => {
         const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../../../../../../marketplace/plugins/conference-manager/client/portal/../../manifest.json`), "utf8"));
         expect(manifest.frontend.portalPage.file).toBe("/public/badge/file");
-        for (const f of ["badges.ts", "yo/MyRegistration.tsx"]) {
+        for (const f of ["yo/MyRegistration.tsx"]) {
             const src = fs.readFileSync(path.resolve(__dirname, `../../../../../../marketplace/plugins/conference-manager/client/portal/${f}`), "utf8");
             expect(src, f).toContain("/portal/conference/file?d=");
             expect(src, f).not.toContain("/badge/file");
         }
+        // 2.36.6: the coordinators' portal opens no badge PDF any more (WhatsApp, copy, e-mail).
+        const portalBadges = fs.readFileSync(path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal/badges.ts"), "utf8");
+        expect(portalBadges).not.toMatch(/openPortalBadgePdf|\/ticket"|\/badge\/file/);
     });
     it("the admin's PDF buttons (badge, sheet, stickers) open that same core route (2.36.3)", () => {
         const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/manifest.json"), "utf8"));
@@ -165,7 +165,7 @@ describe("the participant sheet", () => {
     const fields = [{ name: "first_name", label: "Nombre" }, { name: "telefono", label: "Teléfono", type: "tel" }] as any;
     const person = (cancelled = 0) => ({ id: 7, first_name: "Ana", telefono: "3001234567", cancelled, amount_paid: 0, total_due: 0 }) as any;
     const sheet = (p: any, badges: any) => renderToStaticMarkup(
-        <ParticipantSheet person={p} fields={fields} onClose={() => { }} feesOn={false} canRecord={false} onPay={() => { }} badges={badges} />);
+        <ToastProvider><ParticipantSheet person={p} fields={fields} onClose={() => { }} feesOn={false} canRecord={false} onPay={() => { }} badges={badges} /></ToastProvider>);
     it("offers «Escarapela» only while badges are on and the inscription is active", () => {
         const on = { authHeaders: () => ({}), conferenceName: "Congreso" };
         expect(sheet(person(), on)).toContain('data-sheet-section="escarapela"');
@@ -185,9 +185,9 @@ describe("the review fixes, in the sources", () => {
         expect(page).toContain("copyLater(text)");
         // 2.36.6: the portal has no «copy every link» any more (the bulk section is gone), so no copyLater there.
         expect(portal).not.toContain("copyLater");
-        // The portal's «Ver» and «WhatsApp» are real links once the person's link is known (no window.open after a request).
+        // The portal's «WhatsApp» is a real link once the person's link is known (no window.open after a request).
         expect(portal).not.toContain("window.open(");
-        expect(portal).toContain('data-action="badge-open"');
+        expect(portal).toContain('data-action="badge-whatsapp"');
     });
     it("the designer (2.29.0) saves the design with the policy, its images already uploaded, and locks the form meanwhile", () => {
         const page = read(`${PLUGIN}/admin/BadgesPage.tsx`);
@@ -564,5 +564,29 @@ describe("«Imprimir stickers» (2.36.3): the scope is chosen before printing, a
         const keys = [...dlg.matchAll(/tx\('(badges\.print\.[a-zA-Z.]+)'|t\('(badges\.print\.[a-zA-Z.]+)'/g)].map((m) => m[1] || m[2]);
         expect(keys.length).toBeGreaterThan(15);
         for (const k of new Set(keys)) for (const lang of ["es", "en", "pt"] as const) expect(translations[lang][k], `${lang} ${k}`).toBeTruthy();
+    });
+});
+
+describe("«Escarapela» in the portal sheet: WhatsApp, Copiar enlace, Enviar (2.36.6)", () => {
+    const src = fs.readFileSync(path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal/PortalBadges.tsx"), "utf8");
+    it("exactly three actions: WhatsApp only with a phone, Copiar enlace always, Enviar only with an e-mail; no «Ver», no PDF", () => {
+        expect(src).toContain('{phoneWa && (link ? (');
+        expect(src).toContain('data-action="badge-copy" disabled={!link} onClick={copy}>Copiar enlace</Button>');
+        expect(src).toContain('{email && (');
+        expect(src).toContain('data-action="badge-email"');
+        for (const gone of ['data-action="badge-open"', 'data-action="badge-pdf"', "openPortalBadgePdf", ">Ver<", ">PDF<"]) expect(src, gone).not.toContain(gone);
+        // The number is the server's E.164 (as the consent message), not re-derived from the typed phone.
+        expect(src).toContain("whatsappUrl(badgeMessage(firstName || \"\", conf, url), phoneWa)");
+        expect(src).not.toMatch(/waNumber\(/);
+    });
+    it("«Enviar» asks first (in the app, naming the masked address), then a toast says what happened; a hint says what is missing", () => {
+        expect(src).toContain("¿Enviar la escarapela y cómo usarla a <span className=\"break-all\">{email}</span>?");
+        expect(src).toContain('onClick={send} data-action="badge-email-send">Sí, enviar</Button>');
+        expect(src).toContain("addToast(`Escarapela enviada a ${r.email_masked}.`, \"success\")");
+        expect(src).toContain("addToast((e as Error)?.message || \"No se pudo enviar el correo.\", \"error\")");
+        expect(src).not.toMatch(/window\.(confirm|alert|prompt)\(/);
+        expect(src).toContain('"WhatsApp: no tiene teléfono registrado"');
+        expect(src).toContain('"Enviar: no tiene correo registrado"');
+        expect(src).toContain("El enlace es personal: envíalo solo a esta persona.");
     });
 });
