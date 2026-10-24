@@ -1187,7 +1187,11 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
     const canHealthWrite = perms.can('health', 'manage');
     const [healthForm, setHealthForm] = useState<{ value: any; original: any; error: string | null; loading: boolean }>({ value: null, original: null, error: null, loading: false });
     // 2.34.0: the person's verbal health authorization, needed to enter an answer until they authorize it in writing.
-    const [verbal, setVerbal] = useState<{ required: boolean; checked: boolean; error: string | null }>({ required: false, checked: false, error: null });
+    const [verbal, setVerbal] = useState<{ required: boolean; checked: boolean; error: string | null; locked?: string | null }>({ required: false, checked: false, error: null });
+    // 2.36.10: a new inscription made here needs the person's verbal authorization of the personal data (consent on).
+    // On an edit (2.36.10): a recorded authorization is shown ticked and LOCKED ('written' | 'verbal'); with none
+    // recorded (a registration from before 2.36.10) the box is unticked and required to save.
+    const [verbalGeneral, setVerbalGeneral] = useState<{ required: boolean; checked: boolean; error: string | null; locked?: string | null }>({ required: false, checked: false, error: null });
     const [barcodeFor, setBarcodeFor] = useState<Inscription | null>(null);
     // «Escarapela» (2.19.0): the person whose badge actions are open.
     const [badgeFor, setBadgeFor] = useState<Inscription | null>(null);
@@ -1329,8 +1333,12 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
         setFormData({});
         setHealthForm({ value: null, original: null, error: null, loading: false });
         setVerbal({ required: false, checked: false, error: null });
-        if (canHealthWrite && conferenceId && fields.some(isHealthField)) {
-            conferenceApi.getConsentEnabled(conferenceId).then((on) => setVerbal((v) => ({ ...v, required: on }))).catch(() => {});
+        setVerbalGeneral({ required: false, checked: false, error: null });
+        if (conferenceId) {
+            conferenceApi.getConsentEnabled(conferenceId).then((on) => {
+                setVerbalGeneral((v) => ({ ...v, required: on }));
+                if (canHealthWrite && fields.some(isHealthField)) setVerbal((v) => ({ ...v, required: on }));
+            }).catch(() => {});
         }
         setShowAddModal(true);
     };
@@ -1338,6 +1346,14 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
     // select works on the id (legacy rows that only carry the label are resolved by name).
     const openEdit = (person: Inscription) => {
         setEditId(person.id);
+        setVerbalGeneral({ required: false, checked: false, error: null });
+        if (conferenceId) {
+            conferenceApi.getConsentAuthorization(person.id).then((a) => {
+                if (!a || !a.enabled) return;
+                setVerbalGeneral({ required: !a.general && !a.revoked, checked: !!a.general, error: null, locked: a.general || null });
+                if (a.health) setVerbal((v) => ({ ...v, required: false, checked: true, locked: a.health }));
+            }).catch(() => {});
+        }
         const seed = { ...person, ...(person.custom_data || {}), location_id: seedLocationId(person, confLocations), notes: person.notes ?? '' };
         setFormOriginal(seed);
         setFormData(seed);
@@ -1347,7 +1363,7 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
         if (canHealthView && fields.some(isHealthField)) {
             setVerbal({ required: false, checked: false, error: null });
             conferenceApi.getInscriptionHealth(person.id)
-                .then((r) => { setHealthForm({ value: r.answer || null, original: r.answer || null, error: null, loading: false }); setVerbal({ required: !!r.verbal_required, checked: false, error: null }); })
+                .then((r) => { setHealthForm({ value: r.answer || null, original: r.answer || null, error: null, loading: false }); setVerbal((v) => ({ required: !!r.verbal_required && !v.locked, checked: !!v.locked, error: null, locked: v.locked })); })
                 .catch((e: any) => setHealthForm({ value: null, original: null, error: e?.message || tx('health.load.error', 'No se pudo cargar la respuesta de salud.'), loading: false }));
         }
     };
@@ -1372,10 +1388,31 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                 return;
             }
         }
+        // 2.36.10: the verbal authorizations, said in place, both at once: the personal data (a new inscription) and,
+        // when health data was entered, the health one.
+        const healthNow = healthField ? healthPayload(healthField, healthForm.value) : null;
+        const healthChanged = !!healthField && (!editId || !sameHealthAnswer(healthNow, healthPayload(healthField, healthForm.original)));
+        // A new inscription, or an edit of a person with no authorization recorded (2.36.10), needs the personal one;
+        // on such an edit the health one too when health data is there, even unchanged.
+        const needGeneral = verbalGeneral.required;
+        const legacyHealth = !!editId && !!healthNow && verbal.required;
+        let blocked = false;
+        if (needGeneral && !verbalGeneral.checked) { setVerbalGeneral((v) => ({ ...v, error: consentT(language)('verbal.general.missing') })); blocked = true; }
+        if ((healthChanged || legacyHealth) && healthNow && verbal.required && !verbal.checked) { setVerbal((v) => ({ ...v, error: consentT(language)('verbal.missing') })); blocked = true; }
+        if (blocked) {
+            if (typeof document !== 'undefined') document.querySelector('[data-general-verbal] input, [data-health-verbal] input')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            return;
+        }
         setSaving(true);
         try {
             // Only defined form fields + location_id/notes/status travel; never the row's derived columns.
             const payload = buildInscriptionPayload(fields, formData, editId ? formOriginal : null);
+            if (needGeneral) payload.general_verbal_consent = true;
+            // The health answer goes with its tick when the person had no health authorization recorded.
+            if (legacyHealth && verbal.checked && healthField && payload[HEALTH_FIELD] === undefined) {
+                payload[HEALTH_FIELD] = healthNow;
+                payload.health_verbal_consent = true;
+            }
             if (healthField && (!editId || !sameHealthAnswer(healthPayload(healthField, healthForm.value), healthPayload(healthField, healthForm.original)))) {
                 payload[HEALTH_FIELD] = healthPayload(healthField, healthForm.value);
                 if (payload[HEALTH_FIELD] && verbal.required) {
@@ -1672,12 +1709,6 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                             epsPlaceholder: tx('health.eps.placeholder', 'Nombre de la EPS'), optional: tx('health.optional', 'opcional'),
                                                         }}
                                                     />
-                                                    {verbal.required && (
-                                                        <div className="mt-2">
-                                                            <VerbalHealthConsent id={`cm-health-verbal-${editId || 'new'}`} label={consentT(language)('verbal.statement')} checked={verbal.checked}
-                                                                error={verbal.error} onChange={(c) => setVerbal((v) => ({ ...v, checked: c, error: null }))} />
-                                                        </div>
-                                                    )}
                                                     </>
                                                 ) : (
                                                     <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm text-gray-800" data-health-readonly="">
@@ -1758,6 +1789,24 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                         className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm resize-none" />
                                 </div>
                             )}
+
+                            {/* 2.36.10: the verbal authorizations, at the end, right above «Guardar»: the personal data (a new
+                                inscription, or an edit with none recorded — locked when it is recorded) and, when health data
+                                is entered, the health one. */}
+                            {(verbalGeneral.required || !!verbalGeneral.locked) && (
+                                <VerbalHealthConsent scope="general" id={`cm-general-verbal-${editId || 'new'}`} label={consentT(language)('verbal.general.statement')} checked={verbalGeneral.checked}
+                                    disabled={!!verbalGeneral.locked} note={verbalGeneral.locked ? consentT(language)(`verbal.locked.${verbalGeneral.locked}`) : null}
+                                    error={verbalGeneral.error} onChange={(c) => setVerbalGeneral((v) => ({ ...v, checked: c, error: null }))} />
+                            )}
+                            {(() => {
+                                const hf = canHealthWrite ? fields.find(isHealthField) : null;
+                                if (!hf || !(verbal.required || verbal.locked) || !healthPayload(hf, healthForm.value)) return null;
+                                return (
+                                    <VerbalHealthConsent id={`cm-health-verbal-${editId || 'new'}`} label={consentT(language)('verbal.statement')} checked={verbal.checked}
+                                        disabled={!!verbal.locked} note={verbal.locked ? consentT(language)(`verbal.locked.${verbal.locked}`) : null}
+                                        error={verbal.error} onChange={(c) => setVerbal((v) => ({ ...v, checked: c, error: null }))} />
+                                );
+                            })()}
 
                             <div className="pt-6 flex justify-end gap-3 border-t border-gray-50" data-cm-sheet-foot="">
                                 <button type="button" onClick={closeForm} className="min-h-[44px] px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('cancel')}</button>

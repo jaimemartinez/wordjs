@@ -6,6 +6,46 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **conference-manager 2.36.10: every use of the health answers follows the data authorization.** The person's
+  health answer in the edit form and the meal priority now use the same rule as the roster and the export. While a
+  conference asks for the data authorization, they count an answer only when the person authorized their health
+  data, in writing or verbally to their coordinator. Because the meal groups (shown on the meal scanner, the
+  person's page and the badges) come from that priority, they follow the same rule. All these reads go through one
+  shared helper. Editing a health answer under a live authorization (written, or the verbal one already recorded)
+  no longer asks staff to tick the verbal statement again. Every edit is still logged («health_entered», with
+  whether it rests on the written or the verbal authorization, never the answer). Without an authorization the tick
+  is still needed, and after a revocation no edit is accepted.
+- **conference-manager 2.36.10: registrations made by staff record the person's verbal authorization of their
+  personal data.** While a conference asks for the data authorization, the admin's «Nueva inscripción» and the
+  coordinators' «Registrar nuevo» have a required box: «La persona me autorizó verbalmente a tratar sus datos
+  personales…».
+  - **Without it the registration is not saved**: an error under the box on the screen, and a refusal from the
+    server.
+  - **The health box appears only when health data was entered** (conditions, «Otros», blood type or EPS); then
+    both boxes are required.
+  - **Recorded like the verbal health one**: who, when, the statement and the policy version, as «verbal».
+  - **Shown in the consent list and the portal**: «Datos: autorización verbal, falta confirmarla por escrito».
+  - **Confirmed** by the person's written authorization (code or paper); **cleared** when they revoke everything.
+  - **Both boxes at the end of the form**, right above «Guardar».
+  - **When editing**:
+    - an authorization already recorded (written or verbal) shows ticked and locked; only «Revocar» withdraws it,
+      and the server refuses to clear it;
+    - a person registered before this version, with none recorded, needs the personal-data box to save a change
+      to their data, plus the health one when health data is present; the tick is then recorded;
+    - a person who revoked everything is not asked again.
+- **conference-manager 2.36.10: «Historial» in the person's sheet (admin) and the participant's sheet (portal).**
+  - **What it lists**: who registered the person and how (administration or portal), every edit with who, when
+    and which fields changed (never their values), withdrawals and restores, and the data-authorization events.
+  - **What it hides**: health events and health edits are shown only to «Datos de salud». The portal sees neither
+    them nor the internal notes, and it shows «Administración» instead of an administrator's login.
+  - **New records**: from now on each registration records who made it and each edit who made it
+    (`created_by`, `updated_by`).
+  - **Older registrations**: say «Sin registro».
+
+- **Admin › Auditoría fits a phone.** Below lg the log is cards, but the «Objetivo» cell never wrapped, so a long target (a URL, an email, an id) widened the page sideways. It wraps on phones now (no-wrap only in the desktop table), and a raw actor id can break anywhere (`app/admin/audit/page.tsx`).
+
 ## [2.11.5] - 2026-10-24
 
 ### Added
@@ -44,8 +84,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     audit and in the «granted» record of everyone ticked from the sheet.
 
 ### Fixed
-
-- **Admin › Auditoría fits a phone.** Below lg the log is cards, but the «Objetivo» cell never wrapped, so a long target (a URL, an email, an id) widened the page sideways. It wraps on phones now (no-wrap only in the desktop table), and a raw actor id can break anywhere (`app/admin/audit/page.tsx`).
 
 - **conference-manager 2.36.8: copying a link works on phones.** (The owner: «en móviles CM no me deja copiar el
   link de inscripciones».)

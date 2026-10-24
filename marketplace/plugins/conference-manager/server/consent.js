@@ -230,6 +230,9 @@ function createConsent(base) {
             'verbal_s INT',
             'verbal_by VARCHAR(120)',
             'verbal_event_id INT',
+            'vgeneral_s INT',
+            'vgeneral_by VARCHAR(120)',
+            'vgeneral_event_id INT',
         ]);
         // 2.34.0: how the live authorization was given ('otp' | 'paper', NULL before) and the paper sheet; and a live
         // verbal health authorization still waiting for its written confirmation (verbal_s set).
@@ -239,6 +242,11 @@ function createConsent(base) {
             await addColumnIfMissing(T.consentRequests, 'verbal_s', 'INT');
             await addColumnIfMissing(T.consentRequests, 'verbal_by', 'VARCHAR(120)');
             await addColumnIfMissing(T.consentRequests, 'verbal_event_id', 'INT');
+            // 2.36.10: the person's verbal authorization of their personal data, ticked by the staff who register
+            // them, waiting for its written confirmation (vgeneral_s set).
+            await addColumnIfMissing(T.consentRequests, 'vgeneral_s', 'INT');
+            await addColumnIfMissing(T.consentRequests, 'vgeneral_by', 'VARCHAR(120)');
+            await addColumnIfMissing(T.consentRequests, 'vgeneral_event_id', 'INT');
         }
         await createUniqueIndex(`${P}uidx_consent_requests_ins`, T.consentRequests, 'inscription_id');
         await createIndex(`${P}idx_consent_requests_conf`, T.consentRequests, 'conference_id');
@@ -737,6 +745,10 @@ function createConsent(base) {
                     verbal_health: r.verbal_s != null,
                     verbal_at: r.verbal_s != null ? isoUtc(Number(r.verbal_s) * 1000) : null,
                     verbal_overdue: r.verbal_s != null && nowS() - Number(r.verbal_s) > verbalDays * 86400,
+                    // 2.36.10: the verbal authorization of the personal data (staff registration), until confirmed in writing.
+                    verbal_general: r.vgeneral_s != null,
+                    verbal_general_at: r.vgeneral_s != null ? isoUtc(Number(r.vgeneral_s) * 1000) : null,
+                    verbal_general_by: r.vgeneral_s != null ? (r.vgeneral_by || null) : null,
                 });
             }
         };
@@ -768,6 +780,41 @@ function createConsent(base) {
         if (inscriptionId == null) return false;
         const r = await requestOf(inscriptionId);
         return !!(r && ((r.state === 'granted' && Number(r.health)) || r.verbal_s != null));
+    }
+    /**
+     * 2.36.10: how each authorization of the person is recorded — the personal data (`general`) and the health data
+     * (`health`): 'written' (code or paper), 'verbal' (ticked by staff, waiting for the written one) or null; and
+     * whether they revoked everything. The edit form locks a recorded one; a missing one is asked for.
+     */
+    async function authorizationOf(inscriptionId) {
+        const r = await requestOf(inscriptionId);
+        const granted = !!r && r.state === 'granted';
+        return {
+            revoked: !!r && r.state === 'revoked',
+            general: granted && Number(r.general) ? 'written' : (r && r.vgeneral_s != null ? 'verbal' : null),
+            health: granted && Number(r.health) ? 'written' : (r && r.verbal_s != null ? 'verbal' : null),
+        };
+    }
+    /**
+     * 2.36.10: the person's authorization events for the «Historial»: what happened, when, by whom — never an answer,
+     * an e-mail or a document (those stay in the evidence export). `scope` says personal data or health.
+     */
+    async function historyOf(inscriptionId) {
+        const KEEP = new Set(['link_sent', 'link_shared', 'verbal_granted', 'verbal_confirmed', 'granted', 'revoked', 'paper_unmarked', 'health_entered', 'health_deleted', 'health_purged']);
+        const rows = await db.all(`SELECT kind, at_utc, actor, general, health, image, data FROM ${T.consentEvents} WHERE inscription_id = ? ORDER BY id ASC`, [inscriptionId]);
+        return rows.filter(r => KEEP.has(r.kind)).map((r) => {
+            let d = {};
+            try { d = JSON.parse(r.data || '{}') || {}; } catch { /* no detail */ }
+            const scope = r.kind === 'verbal_granted' ? (d.scope === 'general' ? 'general' : 'health')
+                : r.kind === 'verbal_confirmed' ? (d.scope === 'general' ? 'general' : 'health')
+                : /^health_/.test(r.kind) ? 'health' : null;
+            const flag = (v) => (v == null ? null : !!Number(v));
+            return {
+                // A code signature's row carries the verified e-mail, not a method: it is 'otp' (paper says 'paper').
+                kind: r.kind, at: r.at_utc, actor: r.actor || null, scope, method: d.method || (r.kind === 'granted' && d.verified_email ? 'otp' : null), via: d.via || null,
+                ...(r.kind === 'granted' || r.kind === 'revoked' ? { general: flag(r.general), health: flag(r.health), image: flag(r.image) } : {}),
+            };
+        });
     }
     /** Has the person's WRITTEN health authorization (code or paper)? */
     async function healthWritten(inscriptionId) {
@@ -965,6 +1012,17 @@ function createConsent(base) {
                 res.json({ enabled: await isEnabled(cid), states: Object.fromEntries(await statesOf(cid, null)), no_email: await noEmailIds(cid) });
             } catch (e) { sendError(res, e); }
         });
+        // GET /consent/authorization/:id → { enabled, revoked, general, health } (2.36.10: the edit form's boxes).
+        http.route('get', '/consent/authorization/:id', { auth: true }, async (req, res) => {
+            if (!await allow(req, res, 'inscriptions', 'view')) return;
+            try {
+                const id = positiveInt(req.params.id);
+                const ins = id ? await db.get(`SELECT id, conference_id FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
+                if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+                const enabled = await isEnabled(ins.conference_id);
+                res.json({ enabled, ...(enabled && await ensureReady() ? await authorizationOf(id) : { revoked: false, general: null, health: null }) });
+            } catch (e) { sendError(res, e); }
+        });
         // POST /consent/send { inscription_id } → the link (inscriptions:manage).
         http.route('post', '/consent/send', { auth: true }, async (req, res) => {
             const perms = await allow(req, res, 'inscriptions', 'manage');
@@ -1010,6 +1068,7 @@ function createConsent(base) {
                     general: !!next.general, health: !!next.health, image: !!next.image, data: { revoked: { general: all, health, image }, note } });
                 await db.run(`UPDATE ${T.consentRequests} SET state = ?, general = ?, health = ?, image = ?, revoked_s = ?, updated_s = ? WHERE id = ?`,
                     [all ? 'revoked' : 'granted', next.general, next.health, next.image, ev.at_s, nowS(), r.id]);
+                if (all) await db.run(`UPDATE ${T.consentRequests} SET vgeneral_s = NULL, vgeneral_by = NULL, vgeneral_event_id = NULL WHERE id = ?`, [r.id]);
                 if (health) {
                     await D.health.clearInscription(id);
                     if (r.verbal_s != null) await db.run(`UPDATE ${T.consentRequests} SET verbal_s = NULL, verbal_by = NULL, verbal_event_id = NULL WHERE id = ?`, [r.id]);
@@ -1088,6 +1147,36 @@ function createConsent(base) {
 
     // ── verbal health authorization (2.34.0) ──
     const VERBAL_STATEMENT = 'La persona me autorizó verbalmente el tratamiento de sus datos de salud, tras informarle que es voluntario.';
+    // ── verbal authorization of the personal data (2.36.10) ──
+    const VERBAL_GENERAL_STATEMENT = 'La persona me autorizó verbalmente a tratar sus datos personales para gestionar su inscripción, según la Política de Tratamiento de Datos.';
+    /**
+     * Staff registered the person on the strength of their verbal authorization of the personal data (the ticked
+     * statement, required for every registration made by staff while the conference asks for consent). A
+     * «verbal_granted» row (scope general, method 'verbal', pending written confirmation): who, when, the statement
+     * and the policy version. The later written authorization (code or paper) confirms it (settleVerbal). Never a
+     * second one while it waits, nor once the person authorized in writing.
+     */
+    async function generalVerbalEntered(ins, { actor, via }) {
+        if (!await isEnabled(ins.conference_id)) return;
+        let r = await requestOf(ins.id);
+        if (!r) {
+            try {
+                await db.run(`INSERT INTO ${T.consentRequests} (conference_id, inscription_id, state, updated_s) VALUES (?, ?, 'pending', ?)`, [ins.conference_id, ins.id, nowS()]);
+            } catch { /* a concurrent first link made it */ }
+            r = await requestOf(ins.id);
+        }
+        if (!r || r.vgeneral_s != null || r.state === 'granted') return;
+        const s = await settingsOf(ins.conference_id);
+        const policy = await policySnapshot(ins.conference_id, s);
+        const ev = await append({
+            conference_id: ins.conference_id, inscription_id: ins.id, request_id: r.id, kind: 'verbal_granted', actor,
+            policy_version: s.policy_version, policy_sha256: policy.sha256, text_sha256: sha256(VERBAL_GENERAL_STATEMENT), general: true,
+            data: { method: 'verbal', scope: 'general', status: 'pending_written_confirmation', statement: VERBAL_GENERAL_STATEMENT,
+                entered_by: actor, via, policy: { url: s.policy_url, version: s.policy_version, sha256: policy.sha256, snapshot_id: policy.id },
+                subject: await identityOf(ins, await formOf(ins.conference_id)) },
+        });
+        await db.run(`UPDATE ${T.consentRequests} SET vgeneral_s = ?, vgeneral_by = ?, vgeneral_event_id = ?, updated_s = ? WHERE id = ?`, [ev.at_s, actor ? clean(actor, 120) : null, ev.id, nowS(), r.id]);
+    }
     /**
      * Staff entered a health answer for the person (`verbal` = on the strength of their ticked verbal statement). A
      * first verbal one is a «verbal_granted» row (scope health, pending written confirmation); every entry is also
@@ -1124,6 +1213,12 @@ function createConsent(base) {
     async function settleVerbal(req, grantedRow, healthYes, { via }) {
         const r = await requestOf(req.inscription_id);
         const grantId = grantedRow.id;
+        // 2.36.10: a written signature always gives the general authorization: it confirms the verbal one.
+        if (r && r.vgeneral_s != null) {
+            await append({ conference_id: r.conference_id, inscription_id: r.inscription_id, request_id: r.id, kind: 'verbal_confirmed', actor: grantedRow.actor || null,
+                data: { scope: 'general', verbal_event_id: r.vgeneral_event_id == null ? null : Number(r.vgeneral_event_id), confirmed_by_event_id: grantId == null ? null : Number(grantId), method: via, verbal_entered_by: r.vgeneral_by, verbal_at_utc: isoUtc(Number(r.vgeneral_s) * 1000) } });
+            await db.run(`UPDATE ${T.consentRequests} SET vgeneral_s = NULL, vgeneral_by = NULL, vgeneral_event_id = NULL WHERE id = ?`, [r.id]);
+        }
         if (r && r.verbal_s != null) {
             await append({ conference_id: r.conference_id, inscription_id: r.inscription_id, request_id: r.id, kind: healthYes ? 'verbal_confirmed' : 'health_deleted', actor: grantedRow.actor || null,
                 data: healthYes
@@ -1153,7 +1248,7 @@ function createConsent(base) {
     }
     /** A wrong paper tick undone: back to pending (the log row is written first by the caller). */
     async function ungrantPaper(r) {
-        await db.run(`UPDATE ${T.consentRequests} SET state = 'pending', general = 0, health = 0, image = 0, granted_s = NULL, method = NULL, sheet_id = NULL, verbal_s = NULL, verbal_by = NULL, verbal_event_id = NULL, updated_s = ? WHERE id = ?`, [nowS(), r.id]);
+        await db.run(`UPDATE ${T.consentRequests} SET state = 'pending', general = 0, health = 0, image = 0, granted_s = NULL, method = NULL, sheet_id = NULL, verbal_s = NULL, verbal_by = NULL, verbal_event_id = NULL, vgeneral_s = NULL, vgeneral_by = NULL, vgeneral_event_id = NULL, updated_s = ? WHERE id = ?`, [nowS(), r.id]);
     }
     const paper = createPaper({
         db, T, P, createIndex, createUniqueIndex, addColumnIfMissing, append, policySnapshot, formOf, conferenceOf, requestOf, isEnabled, ensureReady, minorByAge, settingsOf, identityOf,
@@ -1162,8 +1257,8 @@ function createConsent(base) {
     });
 
     return {
-        migrate, ensureReady, install, isEnabled, settingsOf, statesOf, isGranted, hasEmail, healthAllowed, healthWritten, healthRefused, healthEntered, issueLink, shareLink, purgeDue, eventsOf,
-        VERBAL_STATEMENT,
+        migrate, ensureReady, install, isEnabled, settingsOf, statesOf, isGranted, hasEmail, healthAllowed, healthWritten, healthRefused, healthEntered, generalVerbalEntered, authorizationOf, historyOf, issueLink, shareLink, purgeDue, eventsOf,
+        VERBAL_STATEMENT, VERBAL_GENERAL_STATEMENT,
         // 2.36.3: a paper sheet's PDF, for the file ticket the badge route answers.
         paperPdf: (cid, sheetId) => paper.pdfFile(cid, sheetId),
         // 2.36.6: a person's e-mail and WhatsApp number as the consent message reads them (the badge section), and the

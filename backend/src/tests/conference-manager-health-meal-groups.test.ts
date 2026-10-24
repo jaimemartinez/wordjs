@@ -437,3 +437,70 @@ test('2.36.9 the portal registers blood type and EPS (write-only); legacy rows a
     ok(await p2.call('delete', `/fields/${fid}`));
     assert.strictEqual(p2.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers WHERE conference_id = ?`, w.cid).n, 0);
 });
+
+// ── 2.36.10 «Historial» ──────────────────────────────────────────────────────────────────────────────────────
+
+test('2.36.10 «Historial»: who registered and how, each edit (field names, never values), withdrawals and restores; health only for health:view; the portal sees no admin login, notes nor health; legacy says «Sin registro»', async () => {
+    const w = await world();
+    const route = async (method: string, path: string, token: string, params: Record<string, string>, body?: any) => {
+        const r = w.p.routes.find((x: any) => x.method === method && x.path === path) as any;
+        const res: any = { statusCode: 200, _body: undefined, status(c: number) { this.statusCode = c; return this; }, json(x: any) { this._body = JSON.parse(JSON.stringify(x)); return this; }, cookie() { return this; }, clearCookie() { return this; }, setHeader() { return this; } };
+        await r.handler({ params, query: {}, body: body || {}, headers: { 'x-portal-token': token }, cookies: {}, user: null }, res);
+        return { status: res.statusCode, body: res._body };
+    };
+    const code = w.p.one(`SELECT code FROM ${PREFIX}locations WHERE id = ?`, w.norte).code;
+    const token = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: w.norte, code } })).token as string;
+    // Registered by the admin (the harness's administrator) and by the coordinator.
+    const ana = await w.person('Ana', { age: 30 });
+    const r = await portal(w.p, 'post', '/portal/inscriptions', token, { first_name: 'Luis', age: 41 });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const luis = r.body.id as number;
+    const cols = (id: number) => w.p.one(`SELECT created_by, updated_by FROM ${PREFIX}inscriptions WHERE id = ?`, id);
+    assert.deepStrictEqual({ ...cols(luis) }, { created_by: 'portal:Norte', updated_by: null });
+    assert.ok(cols(ana).created_by, 'the admin who registered');
+    // The admin edits Luis: his name, a note, and his health answer (by a nurse).
+    ok(await w.p.call('put', `/inscriptions/${luis}`, { body: { first_name: 'Luis Alberto', notes: 'Llega tarde' } }));
+    ok(await w.p.call('put', `/inscriptions/${luis}`, { user: NURSE, body: { health_conditions: { conditions: ['Diabetes'] } } }));
+    assert.strictEqual(cols(luis).updated_by, 'nurse');
+    // An edit that changes nothing is not an edit.
+    ok(await w.p.call('put', `/inscriptions/${luis}`, { body: { first_name: 'Luis Alberto' } }));
+    const hist = (user?: any) => w.p.call('get', `/inscriptions/${luis}/history`, user ? { user } : {});
+    const full = ok(await hist(NURSE));
+    const kinds = full.entries.map((e: any) => e.kind);
+    assert.deepStrictEqual(kinds, ['created', 'edited', 'edited']);
+    assert.deepStrictEqual([full.entries[0].via, full.entries[0].actor], ['portal', 'portal:Norte']);
+    assert.deepStrictEqual(full.entries[1].fields.sort(), ['Nombre', 'Notas internas'].sort());
+    assert.deepStrictEqual(full.entries[2].fields, ['Condiciones de salud']);
+    assert.strictEqual(full.entries[2].actor, 'nurse');
+    assert.strictEqual(full.legacy, false);
+    assert.ok(!JSON.stringify(full).includes('Luis Alberto') && !JSON.stringify(full).includes('Llega tarde') && !JSON.stringify(full).includes('Diabetes'), 'never a value');
+    // Without health:view the health edit is not there.
+    const noHealth = ok(await hist(NOHEALTH));
+    assert.deepStrictEqual(noHealth.entries.map((e: any) => e.kind), ['created', 'edited']);
+    // Withdrawn by the coordinator (deadline open), restored by the admin.
+    const d = new Date(Date.now() + 24 * 3600e3);
+    ok(await w.p.call('put', `/${w.cid}`, { body: { withdraw_until: d.toISOString().slice(0, 16), lodging_tz: 'UTC' } }));
+    const wd = await route('post', '/portal/inscriptions/:id/withdraw', token, { id: String(luis) }, { reason: 'Ya no viaja' });
+    assert.strictEqual(wd.status, 200, JSON.stringify(wd.body));
+    ok(await w.p.call('put', `/inscriptions/${luis}`, { body: { status: 'pending' } }));
+    const after = ok(await hist()).entries.map((e: any) => e.kind);
+    assert.ok(after.includes('withdrawn') && after.includes('restored'), after.join(','));
+    assert.strictEqual(ok(await hist()).entries.find((e: any) => e.kind === 'withdrawn').reason, 'Ya no viaja');
+    // The portal: no notes, no health, no administrator login («admin»).
+    const ph = await route('get', '/portal/inscriptions/:id/history', token, { id: String(luis) });
+    assert.strictEqual(ph.status, 200, JSON.stringify(ph.body));
+    const pe = ph.body.entries;
+    assert.ok(pe.every((e: any) => e.actor === null || e.actor === 'admin' || String(e.actor).startsWith('portal:')), JSON.stringify(pe));
+    assert.ok(!JSON.stringify(pe).includes('Notas internas') && !JSON.stringify(pe).includes('Condiciones de salud') && !JSON.stringify(pe).includes('nurse'));
+    assert.deepStrictEqual(pe.find((e: any) => e.kind === 'edited').fields, ['Nombre']);
+    // Another locality's person is not the coordinator's.
+    const sur = ok(await w.p.call('post', '/locations', { body: { conference_id: w.cid, name: 'Sur', capacity: 100 } })).id as number;
+    const other = ok(await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'Otro', location_id: sur } })).id as number;
+    assert.strictEqual((await route('get', '/portal/inscriptions/:id/history', token, { id: String(other) })).status, 404);
+    // A registration from before the history: «Sin registro».
+    w.p.exec(`DELETE FROM ${PREFIX}inscription_history WHERE inscription_id = ?`, ana);
+    const legacy = ok(await w.p.call('get', `/inscriptions/${ana}/history`));
+    assert.deepStrictEqual([legacy.legacy, legacy.entries.length], [true, 0]);
+    // created_by / updated_by are never form fields.
+    assert.strictEqual((await w.p.call('post', '/fields', { body: { conference_id: w.cid, name: 'created_by', label: 'X', type: 'text' } })).status, 400);
+});
