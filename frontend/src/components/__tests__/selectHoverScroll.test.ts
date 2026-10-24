@@ -29,6 +29,11 @@ describe("Select — hover never scrolls the list", () => {
         expect(src).toMatch(/"ArrowUp"\) \{ e\.preventDefault\(\); revealHighlight\.current = true; setHighlight/);
     });
 
+    it("a new options array (a parent re-rendering mid-scroll) does not reset or reveal the highlight", () => {
+        expect(src).toMatch(/if \(highlightKey\.current === key\) return;\s*highlightKey\.current = key;[\s\S]*?revealHighlight\.current = true;\s*setHighlight\(idx >= 0 \? idx : 0\)/);
+        expect(src).toMatch(/const key = `\$\{value \?\? ""\}\u0000\$\{query\}`;/);
+    });
+
     it("hovering a row highlights it without asking for a reveal", () => {
         const hover = src.match(/onMouseEnter=\{[^\n]*\}/);
         expect(hover?.[0]).toContain("setHighlight(i)");
