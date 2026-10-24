@@ -348,3 +348,92 @@ test('calling the groups (2.36.5): an uncalled group is warned and not served �
     assert.strictEqual((await call('Z')).status, 400);
     assert.strictEqual((await call('C', {}, NURSE)).status, 403, 'meals:view cannot call');
 });
+
+// ── 2.36.9 «Tipo de sangre» and «EPS» ────────────────────────────────────────────────────────────────────────
+
+test('2.36.9 blood type and EPS: stored with the health answer, shown only with health:view, validated, optional', async () => {
+    const w = await world();
+    const row = (id: number) => w.p.one(`SELECT answer, conditions, blood_type, eps FROM ${PREFIX}health_answers WHERE inscription_id = ?`, id);
+    // Saved with the conditions; a typed «o-» is the list's «O−», the EPS is trimmed.
+    const id = await w.person('Marta', { health_conditions: { conditions: ['Diabetes'], blood_type: 'o-', eps: '  Sura  ' } });
+    assert.deepStrictEqual({ ...row(id) }, { answer: 'list', conditions: JSON.stringify(['Diabetes']), blood_type: 'O−', eps: 'Sura' });
+    // «Ninguna» keeps them; only a blood type / EPS is an answer too (no conditions).
+    const none = await w.person('Iván', { health_conditions: { answer: 'none', blood_type: 'AB+' } });
+    assert.deepStrictEqual([row(none).answer, row(none).blood_type, row(none).eps], ['none', 'AB+', null]);
+    const only = await w.person('Nora', { health_conditions: { eps: 'Nueva EPS' } });
+    assert.deepStrictEqual([row(only).answer, row(only).conditions, row(only).blood_type, row(only).eps], ['list', '[]', null, 'Nueva EPS']);
+    const unknown = await w.person('Saúl', { health_conditions: { blood_type: 'No sabe' } });
+    assert.strictEqual(row(unknown).blood_type, 'No sabe');
+    // Shown to health:view: the dedicated read, the roster text, the export.
+    assert.deepStrictEqual(ok(await w.p.call('get', `/inscriptions/${id}/health`, { user: NURSE })).answer,
+        { conditions: ['Diabetes'], other: '', answer: 'list', blood_type: 'O−', eps: 'Sura' });
+    const rosterNurse = ok(await w.p.call('get', `/inscriptions?conference_id=${w.cid}`, { user: NURSE }));
+    assert.strictEqual(rosterNurse.find((r: any) => r.id === id).health_conditions, 'Diabetes · Tipo de sangre: O− · EPS: Sura');
+    assert.strictEqual(rosterNurse.find((r: any) => r.id === only).health_conditions, 'EPS: Nueva EPS');
+    const csv = ok(await w.p.call('get', `/inscriptions/export?conference_id=${w.cid}`)).csv as string;
+    assert.ok(csv.includes('Tipo de sangre: O−') && csv.includes('EPS: Sura'), csv);
+    // Hidden without health:view: no key in the roster or the person, 403 on the read, nothing in the export.
+    const rows = ok(await w.p.call('get', `/inscriptions?conference_id=${w.cid}`, { user: NOHEALTH }));
+    assert.ok(rows.every((r: any) => !('health_conditions' in r)));
+    assert.ok(!JSON.stringify(ok(await w.p.call('get', `/inscriptions/${id}`, { user: NOHEALTH }))).includes('Sura'));
+    assert.strictEqual((await w.p.call('get', `/inscriptions/${id}/health`, { user: NOHEALTH })).status, 403);
+    const csvNo = ok(await w.p.call('get', `/inscriptions/export?conference_id=${w.cid}`, { user: NOHEALTH })).csv as string;
+    assert.ok(!csvNo.includes('Sura') && !csvNo.includes('O−') && !csvNo.includes('Tipo de sangre'), 'no health in the export');
+    // …and cannot write them (they are health data).
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${id}`, { user: NOHEALTH, body: { health_conditions: { conditions: ['Diabetes'], blood_type: 'A+' } } })).status, 403);
+    // health:manage edits and clears them (the rest of the answer stays).
+    ok(await w.p.call('put', `/inscriptions/${id}`, { user: NURSE, body: { health_conditions: { conditions: ['Diabetes'], blood_type: 'B+' } } }));
+    assert.deepStrictEqual([row(id).blood_type, row(id).eps], ['B+', null]);
+    // Validation: a blood type outside the list, a too long EPS, a wrong type.
+    const bad = async (h: any) => (await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'X', location_id: w.norte, health_conditions: h } }));
+    const b1 = await bad({ blood_type: 'C+' });
+    assert.strictEqual(b1.status, 400);
+    assert.match(b1.body.error, /tipo de sangre/i);
+    assert.strictEqual((await bad({ eps: 'x'.repeat(121) })).status, 400);
+    assert.strictEqual((await bad({ blood_type: 7 })).status, 400);
+    assert.strictEqual((await bad({ eps: ['Sura'] })).status, 400);
+});
+
+test('2.36.9 a required health field still asks for the conditions: a blood type or an EPS alone does not answer it', async () => {
+    const w = await world({ publish: false });
+    const fid = w.p.one(`SELECT id, options FROM ${PREFIX}fields WHERE conference_id = ? AND name = 'health_conditions'`, w.cid);
+    ok(await w.p.call('post', '/fields', { body: { id: fid.id, conference_id: w.cid, label: 'Condiciones de salud', type: 'health', options: fid.options, is_required: true } }));
+    const r = await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'X', location_id: w.norte, health_conditions: { blood_type: 'A+', eps: 'Sura' } } });
+    assert.strictEqual(r.status, 400);
+    assert.match(r.body.error, /obligatorio/);
+    const id = await w.person('Sofía', { health_conditions: { answer: 'declined', blood_type: 'A+' } });
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: { eps: 'Sura' } } })).status, 400, 'an edit to only an EPS drops the required answer');
+});
+
+test('2.36.9 the portal registers blood type and EPS (write-only); legacy rows and a pre-2.36.9 table still load and export', async () => {
+    const w = await world();
+    const code = w.p.one(`SELECT code FROM ${PREFIX}locations WHERE id = ?`, w.norte).code;
+    const token = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: w.norte, code } })).token as string;
+    const r = await portal(w.p, 'post', '/portal/inscriptions', token, { first_name: 'Lucía', health_conditions: { answer: 'none', blood_type: 'A−', eps: 'Compensar' } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.deepStrictEqual({ ...w.p.one(`SELECT blood_type, eps FROM ${PREFIX}health_answers WHERE inscription_id = ?`, r.body.id) }, { blood_type: 'A−', eps: 'Compensar' });
+    assert.ok(!JSON.stringify((await portal(w.p, 'get', '/portal/inscriptions', token)).body).includes('Compensar'), 'the portal never reads it back');
+
+    // An install from before 2.36.9: the table without the two columns, a row from then.
+    const legacy = await w.person('Ramón', { health_conditions: { conditions: ['Hipertensión'] } });
+    w.p.raw.exec(`ALTER TABLE ${PREFIX}health_answers DROP COLUMN blood_type`);
+    w.p.raw.exec(`ALTER TABLE ${PREFIX}health_answers DROP COLUMN eps`);
+    const colsOf = (p: Plugin) => p.raw.prepare(`PRAGMA table_info(${PREFIX}health_answers)`).all().map((c: any) => c.name);
+    assert.ok(!colsOf(w.p).includes('blood_type'));
+    // Starting the plugin again adds them (the migration), and the old rows read as answers without them.
+    const p2 = await bootPlugin({ users: [NOHEALTH, NURSE], raw: w.p.raw });
+    assert.ok(colsOf(p2).includes('blood_type') && colsOf(p2).includes('eps'));
+    assert.deepStrictEqual(ok(await p2.call('get', `/inscriptions/${legacy}/health`, { user: NURSE })).answer, { conditions: ['Hipertensión'], other: '', answer: 'list' });
+    const roster = ok(await p2.call('get', `/inscriptions?conference_id=${w.cid}`, { user: NURSE }));
+    assert.strictEqual(roster.find((x: any) => x.id === legacy).health_conditions, 'Hipertensión');
+    const csv = ok(await p2.call('get', `/inscriptions/export?conference_id=${w.cid}`)).csv as string;
+    assert.ok(csv.includes('Hipertensión'), csv);
+    // …and a new answer on the old install keeps them.
+    ok(await p2.call('put', `/inscriptions/${legacy}`, { user: NURSE, body: { health_conditions: { conditions: ['Hipertensión'], blood_type: 'O+' } } }));
+    assert.strictEqual(p2.one(`SELECT blood_type FROM ${PREFIX}health_answers WHERE inscription_id = ?`, legacy).blood_type, 'O+');
+    // Deleting the field still clears everything, the new parts included.
+    ok(await p2.call('post', '/publish', { body: { conference_id: w.cid, published: false } }));
+    const fid = p2.one(`SELECT id FROM ${PREFIX}fields WHERE conference_id = ? AND name = 'health_conditions'`, w.cid).id;
+    ok(await p2.call('delete', `/fields/${fid}`));
+    assert.strictEqual(p2.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers WHERE conference_id = ?`, w.cid).n, 0);
+});

@@ -17,6 +17,14 @@
  * clear. `conditions` must be options of the field (in the field's order); «Otros» is the option OTHER and needs
  * `other` text. 'none' («Ninguna») and 'declined' («Prefiero no responder») carry no condition.
  *
+ * 2.36.9: «Tipo de sangre» (`blood_type`, one of BLOOD_TYPES) and «EPS» (`eps`, the health insurer, plain text)
+ * are two more parts of the same answer, stored in the same row (columns blood_type / eps). Being part of the
+ * health answer, they inherit every rule above with no path of their own: written only with the health consent
+ * (or the coordinator's verbal one), deleted with it (revoke, a signature without health, the purge, the field's
+ * deletion), read only with health:view. Both optional and independent of the conditions; on the wire they are
+ * present only when given. A row may carry only them (answer 'list', no condition): that is not a conditions
+ * answer, so a REQUIRED field still asks for the conditions (`conditionsAnswered`).
+ *
  * SQL: own prefixed tables, portable (SQLite / PostgreSQL / MySQL): VARCHAR for indexed text, no upsert syntax.
  */
 'use strict';
@@ -27,6 +35,25 @@ const OTHER = 'Otros';
 const ANSWERS = ['list', 'none', 'declined'];
 const MAX_OTHER = 200;
 const MAX_CONDITIONS = 40;
+/** «Tipo de sangre»: the eight groups and «No sabe» (the same list and order as client/lib/health.ts). */
+const BLOOD_TYPES = ['A+', 'A−', 'B+', 'B−', 'AB+', 'AB−', 'O+', 'O−', 'No sabe'];
+const MAX_EPS = 120;
+/** A sent «A-» is the list's «A−» (the minus sign); '' when not one of the list. */
+function bloodTypeOf(v) {
+    const raw = String(v == null ? '' : v).trim();
+    if (raw.toLowerCase() === 'no sabe') return 'No sabe';
+    const s = raw.replace(/-/g, '−').toUpperCase();
+    return BLOOD_TYPES.includes(s) ? s : '';
+}
+/** The extras of an answer object, only those given. */
+function extrasOf(a) {
+    const out = {};
+    if (a && a.blood_type) out.blood_type = a.blood_type;
+    if (a && a.eps) out.eps = a.eps;
+    return out;
+}
+/** Did the person answer the conditions part (a condition, «Ninguna» or «Prefiero no responder»)? */
+const conditionsAnswered = (a) => !!a && (a.answer !== 'list' || (a.conditions || []).length > 0);
 /** The options a new field starts with, in this order (the admin edits them like a select's). */
 const DEFAULT_OPTIONS = [
     'Diabetes', 'Movilidad reducida', 'Embarazo', 'Cáncer u otro tratamiento que debilita', 'Enfermedad del corazón',
@@ -64,7 +91,21 @@ function parseAnswer(field, raw, httpError) {
     if (typeof raw !== 'object' || Array.isArray(raw)) throw bad();
     const answer = raw.answer === undefined ? 'list' : raw.answer;
     if (!ANSWERS.includes(answer)) throw bad();
-    if (answer !== 'list') return { conditions: [], other: '', answer };
+    // 2.36.9: the blood type (one of the list, or nothing) and the EPS (plain text).
+    const extras = {};
+    if (raw.blood_type != null && raw.blood_type !== '') {
+        if (typeof raw.blood_type !== 'string') throw bad();
+        const b = bloodTypeOf(raw.blood_type);
+        if (!b) throw httpError(400, `El tipo de sangre no es una de las opciones (${BLOOD_TYPES.join(', ')}).`);
+        extras.blood_type = b;
+    }
+    if (raw.eps != null && raw.eps !== '') {
+        if (typeof raw.eps !== 'string') throw bad();
+        const e = raw.eps.replace(/\s+/g, ' ').trim();
+        if (e.length > MAX_EPS) throw httpError(400, `El nombre de la EPS es demasiado largo (máximo ${MAX_EPS} caracteres).`);
+        if (e) extras.eps = e;
+    }
+    if (answer !== 'list') return { conditions: [], other: '', answer, ...extras };
     if (raw.conditions !== undefined && !Array.isArray(raw.conditions)) throw bad();
     const picked = new Set();
     for (const c of raw.conditions || []) {
@@ -80,16 +121,21 @@ function parseAnswer(field, raw, httpError) {
     if (picked.has(OTHER) && !other) throw httpError(400, `Escribe cuál es la otra condición en «${label}».`);
     const conditions = opts.filter(o => picked.has(o));
     if (picked.has(OTHER)) conditions.push(OTHER);
-    if (!conditions.length) return null; // nothing marked = not answered
-    return { conditions, other: picked.has(OTHER) ? other : '', answer: 'list' };
+    // Nothing marked and nothing else = not answered; only a blood type / EPS = an answer without conditions.
+    if (!conditions.length) return Object.keys(extras).length ? { conditions: [], other: '', answer: 'list', ...extras } : null;
+    return { conditions, other: picked.has(OTHER) ? other : '', answer: 'list', ...extras };
 }
 
 /** The answer as one line of text (roster column, Excel, the person's sheet). */
 function answerText(a) {
     if (!a) return '';
-    if (a.answer === 'none') return 'Ninguna';
-    if (a.answer === 'declined') return 'Prefiere no responder';
-    return (a.conditions || []).map(c => (c === OTHER && a.other ? `${OTHER}: ${a.other}` : c)).join(', ');
+    const parts = [];
+    if (a.answer === 'none') parts.push('Ninguna');
+    else if (a.answer === 'declined') parts.push('Prefiere no responder');
+    else { const c = (a.conditions || []).map(c => (c === OTHER && a.other ? `${OTHER}: ${a.other}` : c)).join(', '); if (c) parts.push(c); }
+    if (a.blood_type) parts.push(`Tipo de sangre: ${a.blood_type}`);
+    if (a.eps) parts.push(`EPS: ${a.eps}`);
+    return parts.join(' · ');
 }
 
 function rowToAnswer(row) {
@@ -97,11 +143,17 @@ function rowToAnswer(row) {
     let conditions = [];
     try { const v = JSON.parse(row.conditions || '[]'); if (Array.isArray(v)) conditions = v.filter(x => typeof x === 'string'); } catch { /* stays [] */ }
     const answer = ANSWERS.includes(row.answer) ? row.answer : 'list';
-    return { conditions: answer === 'list' ? conditions : [], other: answer === 'list' ? String(row.other_text || '') : '', answer };
+    // A row from before 2.36.9 has no blood_type / eps (undefined or NULL): the answer simply carries none.
+    const blood = bloodTypeOf(row.blood_type);
+    const eps = String(row.eps == null ? '' : row.eps).trim();
+    return {
+        conditions: answer === 'list' ? conditions : [], other: answer === 'list' ? String(row.other_text || '') : '', answer,
+        ...(blood ? { blood_type: blood } : {}), ...(eps ? { eps } : {}),
+    };
 }
 
 function createHealth(base) {
-    const { db, T, P, createIndex, createUniqueIndex } = base;
+    const { db, T, P, createIndex, createUniqueIndex, addColumnIfMissing } = base;
     T.healthAnswers = `${P}health_answers`;
 
     async function migrate() {
@@ -112,11 +164,18 @@ function createHealth(base) {
             'answer VARCHAR(12) NOT NULL',          // list | none | declined
             'conditions TEXT',                      // JSON array of option names (list only)
             'other_text TEXT',                      // «Otros» (list only)
+            'blood_type VARCHAR(8)',                // 2.36.9: «Tipo de sangre» (BLOOD_TYPES), NULL = not given
+            'eps TEXT',                             // 2.36.9: «EPS», NULL = not given
             'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP',
             `FOREIGN KEY (inscription_id) REFERENCES ${T.inscriptions}(id) ON DELETE CASCADE`,
         ]);
         await createUniqueIndex(`${P}uidx_health_answers_ins`, T.healthAnswers, 'inscription_id');
         await createIndex(`${P}idx_health_answers_conf`, T.healthAnswers, 'conference_id');
+        // 2.36.9: tables created before get the two columns here (SQLite / PostgreSQL / MySQL ALTER TABLE ADD COLUMN).
+        if (addColumnIfMissing) {
+            await addColumnIfMissing(T.healthAnswers, 'blood_type', 'VARCHAR(8)');
+            await addColumnIfMissing(T.healthAnswers, 'eps', 'TEXT');
+        }
     }
 
     /** The conference's health field (definition only), or null. */
@@ -128,14 +187,14 @@ function createHealth(base) {
         const list = [...new Set((ids || []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
         for (let i = 0; i < list.length; i += 500) {
             const chunk = list.slice(i, i + 500);
-            const rows = await db.all(`SELECT inscription_id, answer, conditions, other_text FROM ${T.healthAnswers} WHERE inscription_id IN (${chunk.map(() => '?').join(', ')})`, chunk);
+            const rows = await db.all(`SELECT inscription_id, answer, conditions, other_text, blood_type, eps FROM ${T.healthAnswers} WHERE inscription_id IN (${chunk.map(() => '?').join(', ')})`, chunk);
             for (const r of rows) out.set(Number(r.inscription_id), rowToAnswer(r));
         }
         return out;
     }
     /** Every answer of a conference (the meal priority model). */
     async function answersOfConference(conferenceId) {
-        const rows = await db.all(`SELECT inscription_id, answer, conditions, other_text FROM ${T.healthAnswers} WHERE conference_id = ?`, [conferenceId]);
+        const rows = await db.all(`SELECT inscription_id, answer, conditions, other_text, blood_type, eps FROM ${T.healthAnswers} WHERE conference_id = ?`, [conferenceId]);
         return new Map(rows.map(r => [Number(r.inscription_id), rowToAnswer(r)]));
     }
 
@@ -143,14 +202,15 @@ function createHealth(base) {
     async function save(conferenceId, inscriptionId, answer) {
         if (answer === undefined) return;
         if (answer === null) { await db.run(`DELETE FROM ${T.healthAnswers} WHERE inscription_id = ?`, [inscriptionId]); return; }
-        const vals = [answer.answer, JSON.stringify(answer.conditions || []), answer.other || ''];
-        const r = await db.run(`UPDATE ${T.healthAnswers} SET answer = ?, conditions = ?, other_text = ?, updated_at = CURRENT_TIMESTAMP WHERE inscription_id = ?`, [...vals, inscriptionId]);
+        const vals = [answer.answer, JSON.stringify(answer.conditions || []), answer.other || '', answer.blood_type || null, answer.eps || null];
+        const SET = 'answer = ?, conditions = ?, other_text = ?, blood_type = ?, eps = ?, updated_at = CURRENT_TIMESTAMP';
+        const r = await db.run(`UPDATE ${T.healthAnswers} SET ${SET} WHERE inscription_id = ?`, [...vals, inscriptionId]);
         if (r && r.changes) return;
         try {
-            await db.run(`INSERT INTO ${T.healthAnswers} (conference_id, inscription_id, answer, conditions, other_text) VALUES (?, ?, ?, ?, ?)`, [conferenceId, inscriptionId, ...vals]);
+            await db.run(`INSERT INTO ${T.healthAnswers} (conference_id, inscription_id, answer, conditions, other_text, blood_type, eps) VALUES (?, ?, ?, ?, ?, ?, ?)`, [conferenceId, inscriptionId, ...vals]);
         } catch (e) {
             // A concurrent first write won the UNIQUE index: this one becomes the update it is.
-            await db.run(`UPDATE ${T.healthAnswers} SET answer = ?, conditions = ?, other_text = ?, updated_at = CURRENT_TIMESTAMP WHERE inscription_id = ?`, [...vals, inscriptionId]);
+            await db.run(`UPDATE ${T.healthAnswers} SET ${SET} WHERE inscription_id = ?`, [...vals, inscriptionId]);
         }
     }
     /** Deleting the field clears every answer of the conference. */
@@ -161,4 +221,4 @@ function createHealth(base) {
     return { migrate, fieldOf, answersOf, answersOfConference, save, clearConference, clearInscription };
 }
 
-module.exports = { createHealth, parseAnswer, answerText, optionsOf, optionsText, FIELD, TYPE, OTHER, DEFAULT_OPTIONS, OPTION_SEP, MAX_OTHER };
+module.exports = { createHealth, parseAnswer, answerText, optionsOf, optionsText, conditionsAnswered, extrasOf, bloodTypeOf, FIELD, TYPE, OTHER, DEFAULT_OPTIONS, OPTION_SEP, MAX_OTHER, BLOOD_TYPES, MAX_EPS };

@@ -15,7 +15,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { csrfHeaders } from "@/lib/csrf";
-import { HealthConditionsInput, HEALTH_LABELS_ES } from "../../lib/HealthConditionsInput";
+import { HealthConditionsInput, HEALTH_LABELS_ES, HEALTH_LABELS_EN, HEALTH_LABELS_PT } from "../../lib/HealthConditionsInput";
 import { healthAnswerError, healthPayload, type HealthAnswer } from "../../lib/health";
 import { consentLangOf, consentT } from "../../lib/consentI18n";
 import { Select } from "../../lib/Select";
@@ -69,8 +69,7 @@ async function post(path: string, body: unknown): Promise<{ status: number; body
 export const repLine = (r: { name: string; document: string; relationship: string }) =>
     `Representante legal: ${r.name} (${r.relationship}), documento ${r.document}. Otorga estas autorizaciones en nombre de la persona inscrita, menor de edad.`;
 
-const HEALTH_LABELS_EN = { consent: "We use this only to look after you better. Only the authorised team sees it. You may leave it unanswered.", other: "Other", otherPlaceholder: "Which one?", none: "None", declined: "I prefer not to answer" };
-const HEALTH_LABELS_PT = { consent: "Usaremos esta informação apenas para atendê-lo melhor. Só a equipe autorizada a vê. Você pode não responder.", other: "Outros", otherPlaceholder: "Qual?", none: "Nenhuma", declined: "Prefiro não responder" };
+// 2.36.9: the three languages (with «Tipo de sangre» and «EPS») live with the input (lib/HealthConditionsInput).
 const healthLabels = (lang: string) => (lang === "en" ? HEALTH_LABELS_EN : lang === "pt" ? HEALTH_LABELS_PT : HEALTH_LABELS_ES);
 
 export default function ConsentPage() {

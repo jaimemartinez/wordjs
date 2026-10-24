@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.8',
+    version: '2.36.9',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -845,7 +845,7 @@ exports.init = async function (wordjs) {
     // Boarding and bus notices (2.27.0): bus state, the passengers' phones and Web Push live in server/transport-push.js.
     const push = createPush({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex });
     // «Condiciones de salud» and «Turnos de comida» (2.32.0): see server/health.js and server/meal-priority.js.
-    const health = healthMod.createHealth({ db, T, P, createIndex, createUniqueIndex });
+    const health = healthMod.createHealth({ db, T, P, createIndex, createUniqueIndex, addColumnIfMissing });
     const mealPriority = createMealPriority({ db, T, P, createIndex, createUniqueIndex });
     // «Autorización de datos» (2.33.0): see server/consent.js.
     const consent = createConsent({ db, T, P, createIndex, createUniqueIndex, addColumnIfMissing });
@@ -2080,7 +2080,9 @@ exports.init = async function (wordjs) {
             }
             return { field, answer, verbal: !!answer && !written };
         }
-        if (mayWrite && Number(field.is_required) && ((creating && !answer) || (!creating && answer === null))) {
+        // A required field asks for the conditions part (2.36.9: a blood type or an EPS alone does not answer it).
+        const unanswered = !healthMod.conditionsAnswered(answer);
+        if (mayWrite && Number(field.is_required) && ((creating && unanswered) || (!creating && answer !== undefined && unanswered))) {
             throw httpError(400, `El campo «${field.label || 'Condiciones de salud'}» es obligatorio.`);
         }
         return { field, answer };
