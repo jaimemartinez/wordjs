@@ -31,6 +31,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     - **Missing actions explained**: a short hint says when WhatsApp or Enviar is missing because there is no phone
       or e-mail.
     - **Scope**: the server only acts for the coordinator's own locality.
+  - **Fixed: «Limpiar todas las asignaciones» frees the rooms too.** It used to take the people out but leave every
+    room and bed reserved for the locality it had been given to.
+    - **What is freed**: the rooms and beds that «Sugerir reparto» gave to localities go back to everyone, so the
+      next assignment starts from scratch.
+    - **Reservations by hand** stay with their locality unless the admin ticks «También liberar las habitaciones
+      reservadas a mano (N)». Reservations made before this version count as made by hand.
+    - **The confirmation** lists what will be cleared: people, rooms and beds of the split, and the count of
+      reservations by hand.
+    - **Untouched**: frozen localities, blocked rooms and people fixed by the administration.
+    - **Audit**: each clear is recorded (who, when, what it freed). Every allotment now records whether it came
+      from the split or was made by hand.
   - **Fixed: searchable lists scroll again.** Wheel, trackpad and touch work. The list used to jump up and down:
     every row the pointer passed over while scrolling was scrolled back into view. Now a row is brought into view
     only when the list opens (the chosen one) or on a keyboard move. A new search starts at the top. The list keeps

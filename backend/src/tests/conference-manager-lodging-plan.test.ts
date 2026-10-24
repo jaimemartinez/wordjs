@@ -1503,3 +1503,58 @@ test('2.36.6 the owner\'s hotel: 4 men and 1 woman of one location in rooms of 3
     // The run allots nothing: the free beds stay open to anyone.
     for (const n of ['B1', 'B2', 'B10']) assert.strictEqual(w.ownerOf(w.room[n]), null, n);
 });
+
+test('2.36.6 «Limpiar todas las asignaciones» frees the rooms the plan gave (any location may take them next); a reservation by hand only when asked; preview and audit', async () => {
+    const w = await world([['A3', 3], ['B3', 3], ['C2', 2], ['D2', 2]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    for (let i = 0; i < 3; i++) await w.person(`NM${i}`, w.M, norte);
+    await w.person('NF0', w.F, norte);
+    // A reservation by hand: «Dar camas» gives Sur 2 beds (a room of 2).
+    ok(await w.p.call('post', `/locations/${sur}/beds`, { body: { beds: 2 } }), 'dar camas');
+    const manualRoom = Object.values(w.room).find(id => w.ownerOf(id) === sur) as number;
+    assert.ok(manualRoom, 'Sur got a room by hand');
+    // The plan gives Norte its rooms and places its people.
+    const pl = await w.plan({ replan: true });
+    ok(await w.p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, replan: true, token: pl.token } }), 'apply');
+    const sourceOf = (id: number) => w.p.one(`SELECT allot_source FROM ${T('rooms')} WHERE id = ?`, id).allot_source;
+    const planRooms = Object.values(w.room).filter(id => w.ownerOf(id) === norte || w.shares(id).some((b: any) => b.location_id === norte));
+    assert.ok(planRooms.length > 0, 'the plan allotted rooms to Norte');
+    for (const id of planRooms) if (w.ownerOf(id) === norte) assert.strictEqual(sourceOf(id), 'plan');
+    assert.strictEqual(sourceOf(manualRoom), 'manual');
+    // An allotment made before 2.36.6 (no source) counts as made by hand.
+    w.p.exec(`UPDATE ${T('rooms')} SET allot_source = NULL WHERE id = ?`, manualRoom);
+
+    // The preview: counts only, nothing changes.
+    const pre = ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid, preview: true } }), 'preview');
+    assert.strictEqual(pre.people, 4);
+    assert.ok(pre.plan_allotments >= 1);
+    assert.strictEqual(pre.manual_allotments, 1);
+    assert.ok(w.roomOf((w.p.one(`SELECT id FROM ${T('inscriptions')} WHERE first_name = 'NM0'`) as any).id) != null, 'preview moved nobody');
+
+    // Clear all (box unticked): people out, the plan's rooms back to the pool, Sur's reservation by hand stays.
+    const done = ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid } }), 'reset');
+    assert.deepStrictEqual([done.people, done.plan_released, done.manual_released, done.manual_kept], [4, pre.plan_allotments, 0, 1]);
+    assert.strictEqual(Number(w.p.one(`SELECT COUNT(*) AS n FROM ${T('inscriptions')} WHERE conference_id = ? AND room_id IS NOT NULL`, w.cid).n), 0);
+    for (const id of Object.values(w.room)) {
+        if (id === manualRoom) { assert.strictEqual(w.ownerOf(id), sur); continue; }
+        assert.strictEqual(w.ownerOf(id), null, 'a pool room again');
+        assert.deepStrictEqual(w.shares(id), [], 'no bed left reserved');
+    }
+    // Any location may take them now: Sur's people go into the freed rooms too (the run fills pool rooms for everyone).
+    for (let i = 0; i < 3; i++) await w.person(`SM${i}`, w.M, sur);
+    await w.run();
+    const surMen = (w.p.q(`SELECT room_id FROM ${T('inscriptions')} WHERE first_name LIKE 'SM%'`) as any[]).map(r => r.room_id);
+    assert.ok(surMen.every(r => r != null), 'Sur placed');
+    assert.ok(surMen.some(r => r !== manualRoom), 'a room the plan had given Norte took Sur\'s people');
+
+    // Ticked: the reservation by hand goes too.
+    const all = ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid, release_manual: true } }), 'reset manual');
+    assert.deepStrictEqual([all.manual_released, all.manual_kept], [1, 0]);
+    assert.strictEqual(w.ownerOf(manualRoom), null);
+    // The audit: one row per reset, with who and what it freed.
+    const log = w.p.q(`SELECT actor, people, plan_released, manual_released, manual_kept FROM ${T('lodging_resets')} WHERE conference_id = ? ORDER BY id`, w.cid) as any[];
+    assert.strictEqual(log.length, 2);
+    assert.deepStrictEqual([Number(log[0].manual_kept), Number(log[1].manual_released)], [1, 1]);
+    assert.ok(log[0].actor);
+});

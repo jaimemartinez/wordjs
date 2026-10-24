@@ -62,6 +62,7 @@ exports.init = async function (wordjs) {
         rooms: `${P}rooms`,
         // Beds of a room SHARED between locations (2.18.0): room_id, location_id, beds. See sharesByRoom.
         roomBeds: `${P}room_beds`,
+        lodgingResets: `${P}lodging_resets`,
         inscriptions: `${P}inscriptions`,
         // Fee payments (2.18.0): a payment is one receipt (`payment_transfers`, the header) split into
         // parts — rows of `payments` linked by transfer_id. See server/fee-payments.js.
@@ -935,6 +936,25 @@ exports.init = async function (wordjs) {
         await addColumnIfMissing(T.locations, 'lodging_order', 'INT');
         await addColumnIfMissing(T.rooms, 'share_lock', 'TEXT');
         await addColumnIfMissing(T.rooms, 'blocked', 'INT');
+        // 2.36.6: who gave a room / a share of beds to a location — 'plan' («Sugerir reparto › Aplicar») or 'manual' (the
+        // admin's allotments, «Dar camas»). NULL on a pool room; on an allotment made before 2.36.6 it reads as
+        // 'manual' (the owner's choice): «Limpiar todas las asignaciones» frees the plan's, and the manual ones only
+        // when asked.
+        await addColumnIfMissing(T.rooms, 'allot_source', 'VARCHAR(8)');
+        await addColumnIfMissing(T.roomBeds, 'allot_source', 'VARCHAR(8)');
+        // 2.36.6: every «Limpiar todas las asignaciones» — who, when, and what it freed (the audit).
+        await db.createTable(T.lodgingResets, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'actor TEXT',
+            'at_utc VARCHAR(19) NOT NULL',
+            'people INT NOT NULL',
+            'plan_released INT NOT NULL',
+            'manual_released INT NOT NULL',
+            'manual_kept INT NOT NULL',
+            `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
+        ]);
+        await createIndex(`${P}idx_lodging_resets_conf`, T.lodgingResets, 'conference_id');
         await addColumnIfMissing(T.inscriptions, 'room_locked', 'INT');
         // The «Requiere hospedaje» switch's column (2.31.0) exists even before a form adds the field, so the
         // engine's SQL can always read it (lodgingSql).
@@ -3340,7 +3360,7 @@ exports.init = async function (wordjs) {
             await withAssignmentLock(async () => {
                 // Nobody held by the administration (see «HELD BY THE ADMINISTRATION»): their rooms become pool rooms.
                 await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE location_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?) AND ${NOT_HELD_SQL()}`, [id, id]);
-                await db.run(`UPDATE ${T.rooms} SET location_id = NULL WHERE location_id = ?`, [id]);
+                await db.run(`UPDATE ${T.rooms} SET location_id = NULL, allot_source = NULL WHERE location_id = ?`, [id]);
                 // Its beds in shared rooms (2.18.0) become pool beds; its attendees there leave them, like above.
                 await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE location_id = ? AND room_id IN (SELECT room_id FROM ${T.roomBeds} WHERE location_id = ?) AND ${NOT_HELD_SQL()}`, [id, id]);
                 await db.run(`DELETE FROM ${T.roomBeds} WHERE location_id = ?`, [id]);
@@ -3373,7 +3393,7 @@ exports.init = async function (wordjs) {
             // given it a room or beds in between: one last sweep, under the lock, once the row is gone (every
             // later write re-reads the location under the lock and finds nothing).
             await withAssignmentLock(async () => {
-                await db.run(`UPDATE ${T.rooms} SET location_id = NULL WHERE location_id = ?`, [id]);
+                await db.run(`UPDATE ${T.rooms} SET location_id = NULL, allot_source = NULL WHERE location_id = ?`, [id]);
                 await db.run(`DELETE FROM ${T.roomBeds} WHERE location_id = ?`, [id]);
                 await db.run(STALE_LOCKS_SQL());
             });
@@ -3589,7 +3609,7 @@ exports.init = async function (wordjs) {
                     `SELECT r.id, r.location_id FROM ${T.rooms} r WHERE r.hotel_id = ?${inSql} AND ${target ? `(r.location_id IS NULL OR r.location_id != ? OR ${hasShare})` : `(r.location_id IS NOT NULL OR ${hasShare})`}`,
                     [hotelId, ...inParams, ...(target ? [target.id] : [])]);
                 const movingShares = await sharesByRoom(moving.map(m => m.id));
-                const r = await db.run(`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL WHERE hotel_id = ?${roomIds ? ` AND id IN (${roomIds.map(() => '?').join(', ')})` : ''}`, [target ? target.id : null, hotelId, ...inParams]);
+                const r = await db.run(`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL, allot_source = ? WHERE hotel_id = ?${roomIds ? ` AND id IN (${roomIds.map(() => '?').join(', ')})` : ''}`, [target ? target.id : null, target ? 'manual' : null, hotelId, ...inParams]);
                 if (movingShares.size) {
                     const ids = [...movingShares.keys()];
                     await db.run(`DELETE FROM ${T.roomBeds} WHERE room_id IN (${ids.map(() => '?').join(', ')})`, ids);
@@ -3701,7 +3721,7 @@ exports.init = async function (wordjs) {
                         const foreign = await db.get(`SELECT COUNT(*) AS c FROM ${T.inscriptions} WHERE room_id = ? AND (location_id IS NULL OR location_id != ?)`, [id, target.id]);
                         if (Number(foreign && foreign.c) > 0) throw httpError(409, 'La habitación tiene ocupantes de otra localidad; libérala antes de asignarla.');
                     }
-                    sets.push('location_id = ?'); params.push(target ? target.id : null);
+                    sets.push('location_id = ?', 'allot_source = ?'); params.push(target ? target.id : null, target ? 'manual' : null);
                 }
                 if (!sets.length) return [];
                 params.push(id);
@@ -3786,8 +3806,8 @@ exports.init = async function (wordjs) {
                     return [];
                 }
                 const writes = [[`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [id]]];
-                if (whole == null) for (const x of shares) writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds) VALUES (?, ?, ?)`, [id, x.location_id, x.beds]]);
-                writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = ? WHERE id = ?`, [whole, keepLock, id]]);
+                if (whole == null) for (const x of shares) writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds, allot_source) VALUES (?, ?, ?, 'manual')`, [id, x.location_id, x.beds]]);
+                writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = ?, allot_source = ? WHERE id = ?`, [whole, keepLock, whole == null ? null : 'manual', id]]);
                 await runBatched(writes);
                 return stampAdminAdjustment(req, touched);
             });
@@ -3889,7 +3909,7 @@ exports.init = async function (wordjs) {
                 }
                 if (left > 0) return { available: want - left };
                 const writes = [];
-                for (const r of wholeRooms) writes.push([`UPDATE ${T.rooms} SET location_id = ? WHERE id = ?`, [location.id, r.id]]);
+                for (const r of wholeRooms) writes.push([`UPDATE ${T.rooms} SET location_id = ?, allot_source = 'manual' WHERE id = ?`, [location.id, r.id]]);
                 const shared = [];
                 for (const [roomId, beds] of shareAdds) {
                     const r = rows.find(x => x.id === roomId);
@@ -3903,12 +3923,12 @@ exports.init = async function (wordjs) {
                     const others = (shareMap.get(Number(roomId)) || []).filter(x => x.location_id !== Number(location.id));
                     if (!others.length && total === roomCapacityOf(r) && !(occ.get(Number(roomId)) || []).some(o => o.location_id == null || Number(o.location_id) !== Number(location.id))) {
                         writes.push([`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [roomId]]);
-                        writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL WHERE id = ?`, [location.id, roomId]]);
+                        writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL, allot_source = 'manual' WHERE id = ?`, [location.id, roomId]]);
                         wholeRooms.push(r);
                         continue;
                     }
-                    if (prev) writes.push([`UPDATE ${T.roomBeds} SET beds = ? WHERE room_id = ? AND location_id = ?`, [total, roomId, location.id]]);
-                    else writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds) VALUES (?, ?, ?)`, [roomId, location.id, total]]);
+                    if (prev) writes.push([`UPDATE ${T.roomBeds} SET beds = ?, allot_source = 'manual' WHERE room_id = ? AND location_id = ?`, [total, roomId, location.id]]);
+                    else writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds, allot_source) VALUES (?, ?, ?, 'manual')`, [roomId, location.id, total]]);
                     shared.push({ room_id: roomId, room_number: r.room_number, hotel_name: r.hotel_name, beds: total, added: beds });
                 }
                 await runBatched(writes);
@@ -6197,20 +6217,53 @@ exports.init = async function (wordjs) {
     // Clears every room of the conference EXCEPT those of frozen locations (their arrangement is under
     // review or validated: a bulk reset must not empty it as a side effect); those are listed in
     // `skipped_frozen` so the admin knows — they are adjusted one change at a time, or reopened.
+    //
+    // 2.36.6 (the owner: «Limpiar todas las asignaciones» left the rooms reserved for the locations): it also frees the
+    // rooms and beds «Sugerir reparto» gave to locations (allot_source 'plan'), so the next assignment starts from
+    // scratch; the ones the admin reserved by hand ('manual', and every allotment made before 2.36.6) only with
+    // `release_manual: true` (the confirmation's checkbox, unticked by default). Never a frozen location's, a blocked
+    // room's, nor a room still holding someone the administration fixed. `preview: true` answers the counts the
+    // confirmation shows and changes nothing. Every reset is a row of lodging_resets (who, when, what it freed).
     http.route('post', '/assignment/reset', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         const { conference_id } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
+        const preview = req.body.preview === true, releaseManual = req.body.release_manual === true;
         try {
             // Serialize with runs so a reset can't interleave with an in-flight assignment.
-            const skipped = await withAssignmentLock(async () => {
+            const out = await withAssignmentLock(async () => {
                 const frozen = await db.all(`SELECT id, name, lodging_status FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conference_id]);
                 // Nobody the administration fixed, nor anyone in a blocked room (see «HELD BY THE ADMINISTRATION»).
-                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE conference_id = ? AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )) AND ${NOT_HELD_SQL()}`, [conference_id]);
+                const whoSql = `conference_id = ? AND room_id IS NOT NULL AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )) AND ${NOT_HELD_SQL()}`;
+                const people = Number((await db.get(`SELECT COUNT(*) AS n FROM ${T.inscriptions} WHERE ${whoSql}`, [conference_id])).n) || 0;
+                // The allotments that may go: of this conference's rooms, to a location that is not frozen, in a room that
+                // is not blocked and holds nobody once the people above are out (a fixed person keeps their room's).
+                const kept = `(SELECT room_id FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NOT NULL AND NOT (${whoSql.replace('conference_id = ? AND ', '')}))`;
+                const scope = (col) => `${col} IN (SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON h.id = r.hotel_id WHERE h.conference_id = ? AND COALESCE(r.blocked, 0) = 0) AND ${col} NOT IN ${kept}`;
+                const freeLoc = `NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )`;
+                const PLAN = `allot_source = 'plan'`, MANUAL = `(allot_source IS NULL OR allot_source <> 'plan')`;
+                const roomsWhere = (src) => `location_id IS NOT NULL AND location_id ${freeLoc} AND ${src} AND ${scope('id')}`;
+                const bedsWhere = (src) => `location_id ${freeLoc} AND ${src} AND ${scope('room_id')}`;
+                const args = [conference_id, conference_id];
+                const count = async (src) => (Number((await db.get(`SELECT COUNT(*) AS n FROM ${T.rooms} WHERE ${roomsWhere(src)}`, args)).n) || 0)
+                    + (Number((await db.get(`SELECT COUNT(*) AS n FROM ${T.roomBeds} WHERE ${bedsWhere(src)}`, args)).n) || 0);
+                const plan = await count(PLAN), manual = await count(MANUAL);
+                const skipped = frozen.map(l => ({ location_id: l.id, name: l.name, status: lodgingStatusOf(l) }));
+                if (preview) return { people, plan_allotments: plan, manual_allotments: manual, skipped_frozen: skipped };
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE ${whoSql}`, [conference_id]);
+                const release = async (src) => {
+                    await db.run(`UPDATE ${T.rooms} SET location_id = NULL, allot_source = NULL, share_lock = NULL WHERE ${roomsWhere(src)}`, args);
+                    await db.run(`DELETE FROM ${T.roomBeds} WHERE ${bedsWhere(src)}`, args);
+                };
+                await release(PLAN);
+                if (releaseManual) await release(MANUAL);
+                await db.run(STALE_LOCKS_SQL());
+                await db.run(`INSERT INTO ${T.lodgingResets} (conference_id, actor, at_utc, people, plan_released, manual_released, manual_kept) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [conference_id, actorOf(req), new Date().toISOString().slice(0, 19).replace('T', ' '), people, plan, releaseManual ? manual : 0, releaseManual ? 0 : manual]);
                 // `status` as in the run's report: the admin panel names it («ya está validado» / «está enviado…»).
-                return frozen.map(l => ({ location_id: l.id, name: l.name, status: lodgingStatusOf(l) }));
+                return { people, plan_released: plan, manual_released: releaseManual ? manual : 0, manual_kept: releaseManual ? 0 : manual, skipped_frozen: skipped };
             });
-            res.json({ success: true, skipped_frozen: skipped });
+            res.json({ success: true, ...out });
         } catch (e) { sendError(res, e); }
     });
 
@@ -8177,12 +8230,12 @@ exports.init = async function (wordjs) {
         const writes = [];
         for (const c of changes) {
             writes.push([`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [c.room_id]]);
-            if (c.after.kind === 'whole') writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL WHERE id = ?`, [c.after.location_id, c.room_id]]);
+            if (c.after.kind === 'whole') writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL, allot_source = 'plan' WHERE id = ?`, [c.after.location_id, c.room_id]]);
             else {
                 // A shared room's class (see «THE CLASS OF A SHARED ROOM»); a pool room has none.
                 const lock = c.after.kind === 'shared' && c.after.lock && c.after.lock.length ? JSON.stringify(c.after.lock) : null;
-                writes.push([`UPDATE ${T.rooms} SET location_id = NULL, share_lock = ? WHERE id = ?`, [lock, c.room_id]]);
-                if (c.after.kind === 'shared') for (const x of c.after.shares) writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds) VALUES (?, ?, ?)`, [c.room_id, x.location_id, x.beds]]);
+                writes.push([`UPDATE ${T.rooms} SET location_id = NULL, share_lock = ?, allot_source = NULL WHERE id = ?`, [lock, c.room_id]]);
+                if (c.after.kind === 'shared') for (const x of c.after.shares) writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds, allot_source) VALUES (?, ?, ?, 'plan')`, [c.room_id, x.location_id, x.beds]]);
             }
         }
         for (const x of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ? AND room_id IS NULL AND ${lodgingSql()}`, [x.room_id, x.inscription_id]]);
