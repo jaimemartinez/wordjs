@@ -724,3 +724,77 @@ test('without an e-mail, the duplicate guard falls back to the name plus the ID 
     w.p.exec(`UPDATE ${PREFIX}inscriptions SET status = 'cancelled' WHERE conference_id = ? AND ${docCol} = '1.234.567'`, w.cid);
     ok(await w.register({ email: '' }));
 });
+
+// ── 2.36.9 «Tipo de sangre» and «EPS»: health data, under the same consent ──────────────────────────────────────
+
+test('2.36.9 blood type and EPS follow the health consent: not saved without it, saved with the verbal tick or the code, wiped on opt-out', async () => {
+    const w = await world();
+    const extras = (id: number) => w.p.one(`SELECT blood_type, eps FROM ${PREFIX}health_answers WHERE inscription_id = ?`, id);
+    // Only a blood type, without the verbal tick: refused, nothing stored.
+    const noTick = await w.register({ health_conditions: { blood_type: 'O+' } });
+    assert.strictEqual(noTick.status, 400);
+    assert.strictEqual(noTick.body.field, 'health_verbal_consent');
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers`).n, 0, 'nothing saved without the authorization');
+    // With the tick: saved, and the log names the entry, never the value.
+    const id = ok(await w.register({ health_conditions: { answer: 'none', blood_type: 'O+', eps: 'Sura' }, health_verbal_consent: true })).id as number;
+    assert.deepStrictEqual({ ...extras(id) }, { blood_type: 'O+', eps: 'Sura' });
+    assert.ok(!w.events(id).some(e => /Sura|O\+/.test(String(e.data || ''))), 'the log never holds the answer');
+    // Shown (health:view) while the verbal authorization is live.
+    assert.match(ok(await w.p.call('get', `/inscriptions/${id}`)).health_conditions, /Tipo de sangre: O\+ · EPS: Sura/);
+    // The person signs WITHOUT health: the whole answer goes, the blood type and the EPS with it.
+    const token = w.linkToken()!;
+    ok(await w.pub('code', { token }));
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT, health: false }));
+    assert.strictEqual(extras(id), undefined, 'a signature without health deletes them');
+    // The person answers them on the consent page (code) with health: saved; revoking health later wipes them.
+    const id2 = ok(await w.register({ email: 'luis@example.org', first_name: 'Luis' })).id as number;
+    const t2 = w.linkToken('luis@example.org')!;
+    ok(await w.pub('code', { token: t2 }, 'ck-luis'));
+    ok(await w.pub('confirm', { token: t2, code: w.lastCode('luis@example.org'), ...GRANT, health_answer: { answer: 'declined', blood_type: 'AB−', eps: 'Compensar' } }, 'ck-luis'));
+    assert.deepStrictEqual({ ...extras(id2) }, { blood_type: 'AB−', eps: 'Compensar' });
+    ok(await w.p.call('post', '/consent/revoke', { body: { inscription_id: id2, health: true, note: 'Pidió borrar su salud' } }));
+    assert.strictEqual(extras(id2), undefined, 'revoking health deletes them');
+    // A written «no» stands: no verbal tick brings them back.
+    const r = await w.p.call('put', `/inscriptions/${id2}`, { body: { health_conditions: { eps: 'Sura' }, health_verbal_consent: true } });
+    assert.strictEqual(r.status, 409);
+    assert.strictEqual(extras(id2), undefined);
+});
+
+test('2.36.9 the consent text names the blood type and the EPS; a signed version keeps the text it was signed with', async () => {
+    const C = require(path.join(PLUGIN_DIR, 'server/consent.js'));
+    assert.match(C.DEFAULTS.text_health, /tipo de sangre y EPS/);
+    assert.ok(!/tipo de sangre/.test(C.TEXT_HEALTH_BEFORE_2_36_9), 'the text up to 2.36.8');
+    // A new conference on the default shows (and signs) the new text: on the page and on the paper sheet.
+    const w = await world();
+    const id = (await w.register({})).body.id as number;
+    const token = w.linkToken()!;
+    const view = ok(await w.pub('open', { token })).view;
+    assert.match(JSON.stringify(view), /tipo de sangre y EPS/);
+    ok(await w.pub('code', { token }));
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    const signedWithNew = w.p.one(`SELECT body FROM ${PREFIX}consent_policies WHERE conference_id = ?`, w.cid).body;
+    assert.match(signedWithNew, /tipo de sangre y EPS/);
+    // Restarting pins the text that was signed (the new one here) into the settings: a restart never changes it.
+    const settings = () => w.p.one(`SELECT text_health FROM ${PREFIX}consent_settings WHERE conference_id = ?`, w.cid).text_health;
+    assert.ok(settings() == null || settings() === '', 'on the default before the restart');
+    await bootPlugin({ raw: w.p.raw });
+    assert.match(settings(), /tipo de sangre y EPS/);
+    // A conference that signed the OLD default (before 2.36.9) keeps it under the same version after the upgrade.
+    const w2 = await world();
+    const id2 = (await w2.register({})).body.id as number;
+    const t2 = w2.linkToken()!;
+    ok(await w2.pub('code', { token: t2 }));
+    ok(await w2.pub('confirm', { token: t2, code: w2.lastCode(), ...GRANT }));
+    // What a pre-2.36.9 install holds: the snapshot of that version carries the old text.
+    const snap = w2.p.one(`SELECT id, body FROM ${PREFIX}consent_policies WHERE conference_id = ?`, w2.cid);
+    const old = { ...JSON.parse(snap.body), text_health: C.TEXT_HEALTH_BEFORE_2_36_9 };
+    w2.p.exec(`UPDATE ${PREFIX}consent_policies SET body = ? WHERE id = ?`, JSON.stringify(old), snap.id);
+    await bootPlugin({ raw: w2.p.raw });
+    assert.strictEqual(w2.p.one(`SELECT text_health FROM ${PREFIX}consent_settings WHERE conference_id = ?`, w2.cid).text_health, C.TEXT_HEALTH_BEFORE_2_36_9);
+    // An unsigned conference on the default is left on it (it gets the new text).
+    const w3 = await world();
+    await bootPlugin({ raw: w3.p.raw });
+    const t3 = w3.p.one(`SELECT text_health FROM ${PREFIX}consent_settings WHERE conference_id = ?`, w3.cid).text_health;
+    assert.ok(t3 == null || t3 === '', 'nothing signed: still on the default');
+    assert.ok(id && id2);
+});

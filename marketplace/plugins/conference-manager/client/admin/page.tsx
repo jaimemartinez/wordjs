@@ -1667,6 +1667,9 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                             consent: tx('health.consent', 'Usaremos esta información solo para atenderte mejor (por ejemplo, el turno de comida). Solo la ve el equipo autorizado. Puedes no responder.'),
                                                             other: tx('health.other', 'Otros'), otherPlaceholder: tx('health.other.placeholder', '¿Cuál?'),
                                                             none: tx('health.none', 'Ninguna'), declined: tx('health.declined', 'Prefiero no responder'),
+                                                            blood: tx('health.blood', 'Tipo de sangre'), bloodPick: tx('health.blood.pick', 'Sin responder'),
+                                                            bloodUnknown: tx('health.blood.unknown', 'No sabe'), eps: tx('health.eps', 'EPS'),
+                                                            epsPlaceholder: tx('health.eps.placeholder', 'Nombre de la EPS'), optional: tx('health.optional', 'opcional'),
                                                         }}
                                                     />
                                                     {verbal.required && (

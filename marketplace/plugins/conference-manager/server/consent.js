@@ -68,6 +68,14 @@ const MAX_TEXT = 4000;
 const STATES = ['pending', 'granted', 'revoked'];
 const RELATIONSHIPS = ['Madre', 'Padre', 'Tutor legal', 'Otro representante legal'];
 
+/**
+ * The default health text up to 2.36.8. 2.36.9 names the blood type and the EPS too (DEFAULTS.text_health); a
+ * conference that kept the default and whose current policy version was already signed is pinned to this text
+ * (migrate), so what those people signed keeps proving the same version — the admin brings the new text in with a
+ * new version number, as for any change of text.
+ */
+const TEXT_HEALTH_BEFORE_2_36_9 = 'Autorizo expresamente el tratamiento de mis datos sensibles de salud (condiciones médicas, alergias, medicamentos y restricciones alimentarias) únicamente para atender emergencias y adaptar la logística del evento. Entiendo que no estoy obligado a suministrarlos y que se eliminarán después del evento.';
+
 /** The defaults a conference starts with (the admin edits every one). {responsable}, {conferencia}, {correo}. */
 const DEFAULTS = {
     policy_url: '',               // '' = <site>/politica-de-datos
@@ -75,7 +83,7 @@ const DEFAULTS = {
     responsible: '',
     contact_email: '',
     text_general: 'Autorizo a {responsable}, como Responsable, y al coordinador de mi localidad, que actúa por su cuenta, a tratar mis datos personales para gestionar mi inscripción a «{conferencia}», según la Política de Tratamiento de Datos. Conozco mis derechos a conocer, actualizar, rectificar y suprimir mis datos y a revocar esta autorización escribiendo a {correo}.',
-    text_health: 'Autorizo expresamente el tratamiento de mis datos sensibles de salud (condiciones médicas, alergias, medicamentos y restricciones alimentarias) únicamente para atender emergencias y adaptar la logística del evento. Entiendo que no estoy obligado a suministrarlos y que se eliminarán después del evento.',
+    text_health: 'Autorizo expresamente el tratamiento de mis datos sensibles de salud (condiciones médicas, alergias, medicamentos, restricciones alimentarias, tipo de sangre y EPS) únicamente para atender emergencias y adaptar la logística del evento. Entiendo que no estoy obligado a suministrarlos y que se eliminarán después del evento.',
     text_image: 'Autorizo el uso de mi imagen en fotografías y videos del evento para su publicación en los canales de {responsable}.',
     purge_days: 30,
     link_days: 14,
@@ -274,6 +282,21 @@ function createConsent(base) {
         ]);
         await createIndex(`${P}idx_consent_policies_conf`, T.consentPolicies, 'conference_id, policy_sha256');
         await paper.migrate();
+        // 2.36.9: the default health text now names the blood type and the EPS. A conference on the default whose
+        // current version was already signed keeps the text it signed — read from that version's policy snapshot
+        // (the text the signatures prove), else the pre-2.36.9 default — written into its settings, so a signed
+        // version never changes under the same number. Runs on every start; only rows still on the default whose
+        // version is signed are touched, and once pinned a row is not on the default any more.
+        const loose = await db.all(`SELECT conference_id, policy_version FROM ${T.consentSettings} WHERE text_health IS NULL OR text_health = ''`);
+        for (const r of loose) {
+            const cid = Number(r.conference_id);
+            const version = r.policy_version == null || r.policy_version === '' ? DEFAULTS.policy_version : r.policy_version;
+            if (!await versionSigned(cid, version)) continue;
+            const snap = await db.get(`SELECT body FROM ${T.consentPolicies} WHERE conference_id = ? AND policy_version = ? ORDER BY id DESC LIMIT 1`, [cid, version]);
+            let signed = '';
+            try { const b = snap ? JSON.parse(snap.body) : null; signed = b && typeof b.text_health === 'string' ? b.text_health : ''; } catch { /* the old default */ }
+            await db.run(`UPDATE ${T.consentSettings} SET text_health = ? WHERE conference_id = ? AND (text_health IS NULL OR text_health = '')`, [signed || TEXT_HEALTH_BEFORE_2_36_9, cid]);
+        }
         ready = true;
     }
     const ensureReady = async () => {
@@ -1156,4 +1179,4 @@ function createConsent(base) {
     };
 }
 
-module.exports = { createConsent, emailFieldIn, maskEmail, shownText, rowHashOf, policyHashOf, DEFAULTS, RELATIONSHIPS, LIMITS };
+module.exports = { createConsent, emailFieldIn, maskEmail, shownText, rowHashOf, policyHashOf, DEFAULTS, TEXT_HEALTH_BEFORE_2_36_9, RELATIONSHIPS, LIMITS };

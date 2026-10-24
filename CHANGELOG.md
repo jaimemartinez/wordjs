@@ -6,9 +6,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- **Admin › Auditoría fits a phone.** Below lg the log is cards, but the «Objetivo» cell never wrapped, so a long target (a URL, an email, an id) widened the page sideways. It wraps on phones now (no-wrap only in the desktop table), and a raw actor id can break anywhere (`app/admin/audit/page.tsx`).
+- **conference-manager 2.36.9: «Tipo de sangre» and «EPS» in the health section.**
+  - **Tipo de sangre**: a list with A+, A−, B+, B−, AB+, AB−, O+, O− and «No sabe». **EPS**: plain text (the
+    insurer's name), with no list. Both are optional and independent of the conditions: «Ninguna» or «Prefiero no
+    responder» keep them, and on a required health field they do not count as an answer.
+  - **Health data, with the same rules**:
+    - stored only with the health authorization (written, or the coordinator's verbal one);
+    - deleted with it (revocation, a signature without health, the purge after the event, deleting the field);
+    - shown only with «Datos de salud › ver».
+  - **Where they appear**: the admin's inscription form, the coordinators' portal, the person's own consent page
+    (es/en/pt), and next to the conditions in the roster, the person's sheet and the Excel/CSV export.
+  - **Consent text**: the default health text now names the blood type and the EPS. A conference already signed
+    on the default keeps the text it was signed with, under the same version number; to show the new text, the
+    admin publishes a new version.
+  - **Upgrades**: existing installs get the two new columns automatically (SQLite, PostgreSQL, MySQL), and older
+    answers load and export unchanged.
 
 ### Changed
 
@@ -28,6 +42,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     audit and in the «granted» record of everyone ticked from the sheet.
 
 ### Fixed
+
+- **Admin › Auditoría fits a phone.** Below lg the log is cards, but the «Objetivo» cell never wrapped, so a long target (a URL, an email, an id) widened the page sideways. It wraps on phones now (no-wrap only in the desktop table), and a raw actor id can break anywhere (`app/admin/audit/page.tsx`).
 
 - **conference-manager 2.36.8: copying a link works on phones.** (The owner: «en móviles CM no me deja copiar el
   link de inscripciones».)

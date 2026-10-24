@@ -108,3 +108,79 @@ describe('wiring', () => {
         expect(portal).not.toMatch(/fields=\{fields\}/);
     });
 });
+
+describe('2.36.9 «Tipo de sangre» and «EPS»: two more optional parts of the health answer', async () => {
+    const H = await import('../../../../../marketplace/plugins/conference-manager/client/lib/health');
+    const I = await import('../../../../../marketplace/plugins/conference-manager/client/lib/HealthConditionsInput');
+    it('the list: the eight groups and «No sabe», the same as the server; a typed «a-» is «A−»', () => {
+        expect([...H.BLOOD_TYPES]).toEqual(['A+', 'A−', 'B+', 'B−', 'AB+', 'AB−', 'O+', 'O−', 'No sabe']);
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const server = require(path.join(CM, 'server/health.js'));
+        expect(server.BLOOD_TYPES).toEqual([...H.BLOOD_TYPES]);
+        expect(H.EPS_MAX).toBe(server.MAX_EPS);
+        expect(H.bloodTypeOf('a-')).toBe('A−');
+        expect(H.bloodTypeOf(' ab+ ')).toBe('AB+');
+        expect(H.bloodTypeOf('no sabe')).toBe('No sabe');
+        expect(H.bloodTypeOf('C+')).toBe('');
+    });
+    it('independent of the conditions: ticking, «Ninguna» and «Otros» keep them; clearing everything is null', () => {
+        let a = H.setBloodType(null, 'O+');
+        expect(a).toEqual({ conditions: [], other: '', answer: 'list', blood_type: 'O+' });
+        expect(H.conditionsAnswered(a)).toBe(false);
+        a = H.setEps(a, 'Sura');
+        a = H.toggleCondition(a, 'Diabetes');
+        expect(a).toEqual({ conditions: ['Diabetes'], other: '', answer: 'list', blood_type: 'O+', eps: 'Sura' });
+        a = H.chooseSpecial(a, 'none');
+        expect(a).toEqual({ conditions: [], other: '', answer: 'none', blood_type: 'O+', eps: 'Sura' });
+        a = H.chooseSpecial(a, 'none'); // «Ninguna» again: the conditions part is unanswered, the rest stays
+        expect(a).toEqual({ conditions: [], other: '', answer: 'list', blood_type: 'O+', eps: 'Sura' });
+        a = H.setOtherText(a, 'migraña');
+        expect(a).toMatchObject({ conditions: [HEALTH_OTHER], other: 'migraña', blood_type: 'O+', eps: 'Sura' });
+        expect(H.setEps(H.setBloodType(H.setBloodType(null, 'A+'), ''), '')).toBeNull();
+        expect(H.toggleCondition(H.toggleCondition(H.setEps(null, 'Sura'), 'Diabetes'), 'Diabetes')).toEqual({ conditions: [], other: '', answer: 'list', eps: 'Sura' });
+    });
+    it('the payload and the text carry them only when given; a required field still asks for the conditions', () => {
+        expect(healthPayload(field, { conditions: ['Embarazo'], other: '', answer: 'list', blood_type: 'B−', eps: '  Nueva EPS ' }))
+            .toEqual({ conditions: ['Embarazo'], other: '', answer: 'list', blood_type: 'B−', eps: 'Nueva EPS' });
+        expect(healthPayload(field, { conditions: [], other: '', answer: 'list', eps: 'Sura' })).toEqual({ conditions: [], other: '', answer: 'list', eps: 'Sura' });
+        expect(healthPayload(field, { conditions: [], other: '', answer: 'declined', blood_type: 'No sabe' })).toEqual({ conditions: [], other: '', answer: 'declined', blood_type: 'No sabe' });
+        // Without them the payload is exactly what it was (old answers compare the same).
+        expect(healthPayload(field, { conditions: ['Diabetes'], other: '', answer: 'list' })).toEqual({ conditions: ['Diabetes'], other: '', answer: 'list' });
+        expect(healthAnswerText({ conditions: ['Diabetes'], other: '', answer: 'list', blood_type: 'O−', eps: 'Sura' })).toBe('Diabetes · Tipo de sangre: O− · EPS: Sura');
+        expect(healthAnswerText({ conditions: [], other: '', answer: 'list', eps: 'Sura' })).toBe('EPS: Sura');
+        expect(healthAnswerText({ conditions: [], other: '', answer: 'none', blood_type: 'A+' })).toBe('Ninguna · Tipo de sangre: A+');
+        expect(healthAnswerError(field, { conditions: [], other: '', answer: 'list', blood_type: 'A+' })).toBe('required');
+        expect(healthAnswerError({ is_required: 0 }, { conditions: [], other: '', answer: 'list', blood_type: 'A+' })).toBeNull();
+    });
+    it('the input: «Tipo de sangre» with the styled select (no native <select>), «EPS» as plain text, both optional, in es/en/pt', () => {
+        const html = renderToStaticMarkup(<HealthConditionsInput id="h" field={field} value={{ conditions: [], other: '', answer: 'list', blood_type: 'AB+', eps: 'Sura' }} onChange={() => {}} />);
+        expect(html).toContain('data-health-extras');
+        expect(html).toContain('data-health-blood');
+        expect(html).not.toMatch(/<select/);
+        expect(html).toContain('AB+');
+        expect(html).toMatch(/<input[^>]*type="text"[^>]*autoComplete="off"[^>]*data-health-eps=""[^>]*value="Sura"/);
+        expect(html).not.toContain('<datalist');
+        expect(html).toContain('Tipo de sangre');
+        expect(html).toContain('(opcional)');
+        expect(html).not.toContain('required');
+        for (const L of [I.HEALTH_LABELS_ES, I.HEALTH_LABELS_EN, I.HEALTH_LABELS_PT]) {
+            for (const k of ['blood', 'bloodPick', 'bloodUnknown', 'eps', 'epsPlaceholder', 'optional']) expect((L as any)[k], k).toBeTruthy();
+        }
+        // A screen that passes only the older labels still gets the new ones.
+        const old = renderToStaticMarkup(<HealthConditionsInput id="h" field={field} value={null} onChange={() => {}} labels={{ consent: 'c', other: 'o', otherPlaceholder: 'p', none: 'n', declined: 'd' }} />);
+        expect(old).toContain('Tipo de sangre');
+        expect(renderToStaticMarkup(<HealthConditionsInput id="h" field={field} value={null} onChange={() => {}} labels={I.HEALTH_LABELS_EN} />)).toContain('Blood type');
+    });
+    it('every screen that answers the health field gets them, in its language: the admin (tx keys ×3), the consent page, the portal', () => {
+        for (const k of ['health.blood', 'health.blood.pick', 'health.blood.unknown', 'health.eps', 'health.eps.placeholder', 'health.optional']) {
+            for (const l of ['es', 'en', 'pt'] as const) expect((translations as any)[l][k], `${l} ${k}`).toBeTruthy();
+        }
+        const page = fs.readFileSync(path.join(CM, 'client/admin/page.tsx'), 'utf8');
+        expect(page).toContain("blood: tx('health.blood', 'Tipo de sangre')");
+        expect(page).toContain("eps: tx('health.eps', 'EPS')");
+        const consent = fs.readFileSync(path.join(CM, 'client/portal/consent/ConsentPage.tsx'), 'utf8');
+        expect(consent).toContain('HEALTH_LABELS_EN, HEALTH_LABELS_PT } from "../../lib/HealthConditionsInput"');
+        // The portal renders the same input (Spanish labels, which now carry the two parts).
+        expect(fs.readFileSync(path.join(CM, 'client/portal/CoordinatorPortal.tsx'), 'utf8')).toContain('<HealthConditionsInput');
+    });
+});
