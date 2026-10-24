@@ -14,7 +14,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     folded inside «Herramientas de la localidad».
   - **«Escarapelas de tu localidad» is gone**: the copy-all, print and PDF buttons for the whole locality. Each
     person's badge (view, copy link, WhatsApp, PDF) stays in their sheet, section «Escarapela». The admin's
-    *Escarapelas* screen is unchanged.
+    *Escarapelas* screen is unchanged. Their two portal routes, `POST /portal/badges/links` and
+    `POST /portal/badges/ticket`, are removed: nothing else called them.
   - **«Herramientas de la localidad» is removed**: with both of its tools moved or gone, the panel was empty.
   - **A person's «Escarapela» has three actions**: WhatsApp, Copiar enlace and Enviar. «Ver» and «PDF» are gone.
     - *WhatsApp* shows only when the person has a phone on file. It uses the number as the consent message builds

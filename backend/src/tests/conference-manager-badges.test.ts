@@ -246,11 +246,8 @@ test('the portal: only its own people, only while coordinators may share; /porta
     const link = ok(await portal(p, 'post', '/portal/badges/link', tn, { inscription_id: w.ana })).link;
     ok(await view(w, link.token), 'the coordinator\'s link works');
     assert.strictEqual((await portal(p, 'post', '/portal/badges/link', tn, { inscription_id: w.carla })).status, 404, 'Sur\'s person');
-    const all = ok(await portal(p, 'post', '/portal/badges/links', tn)).links;
-    assert.deepStrictEqual(all.map((l: any) => l.inscription_id).sort(), [w.ana, w.beto].sort());
-    const d = ok(await portal(p, 'post', '/portal/badges/ticket', tn, { sheet: 'letter' })).d;
-    assert.strictEqual(ok(await p.call('get', `/public/badge/file?d=${d}`, { anonymous: true })).filename, 'Escarapelas-Norte.pdf');
-    assert.strictEqual((await portal(p, 'post', '/portal/badges/ticket', tn, { inscription_id: w.carla })).status, 404);
+    // 2.36.6: the locality-wide links and PDF (POST /portal/badges/links, /portal/badges/ticket) are gone with the portal's section.
+    for (const gone of ['/portal/badges/links', '/portal/badges/ticket']) assert.ok(!p.routes.some((r: any) => r.method === 'post' && r.path === gone), gone);
 
     // The switch off: the portal stops; the admin still can.
     ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, policy: { portal_enabled: false } } }));

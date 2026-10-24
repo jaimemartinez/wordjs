@@ -885,27 +885,6 @@ function createBadges(base) {
                 res.json({ sent: true, email_masked: maskEmail(email) });
             } catch (e) { send(res, e); }
         });
-        // POST /portal/badges/links → every active person of the location.
-        http.route('post', '/portal/badges/links', async (req, res) => {
-            const location = await portalGate(req, res);
-            if (!location) return;
-            try {
-                const ids = await ownIds(location, {});
-                res.json({ links: await ensureLinks(location.conference_id, ids.slice(0, LINKS_MAX), `portal:${location.id}`) });
-            } catch (e) { send(res, e); }
-        });
-        // POST /portal/badges/ticket { inscription_id?, sheet } → { d } (one person, or the whole location).
-        http.route('post', '/portal/badges/ticket', async (req, res) => {
-            const location = await portalGate(req, res);
-            if (!location) return;
-            try {
-                const body = req.body || {};
-                const ids = await ownIds(location, body);
-                if (!ids.length) return res.status(404).json({ error: 'No hay escarapelas para generar.' });
-                if (ids.length > PDF_MAX_BADGES) return res.status(400).json({ error: `Máximo ${PDF_MAX_BADGES} escarapelas por PDF.` });
-                res.json({ d: await mintTicket(location.conference_id, { ids, sheet: sheetOf(body.sheet), name: ids.length === 1 ? null : location.name }) });
-            } catch (e) { send(res, e); }
-        });
 
         // ── public (the token holder) ──
         // POST /public/badge/view { token } → { self } | 404 | 410. 2.28.0: never the badge — only where the person
