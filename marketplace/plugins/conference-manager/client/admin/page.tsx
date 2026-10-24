@@ -3219,12 +3219,12 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
             {/* Rule modal */}
             {showModal && form && draft && (
                 <Overlay layer={1}>
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[92dvh]" data-fee-rule-modal="">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200" data-fee-rule-modal="">
                         <div className="bg-gray-50/50 px-5 sm:px-8 py-5 border-b border-gray-100 flex items-center justify-between">
                             <h3 className="font-bold text-xl text-gray-900 italic">{form.id ? 'Editar regla' : 'Nueva regla de precio'}</h3>
                             <button type="button" onClick={closeModal} aria-label={tx('close', 'Cerrar')} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-lg"><i className="fa-solid fa-xmark text-lg"></i></button>
                         </div>
-                        <form {...fe.form(saveRule)} className="p-5 sm:p-8 space-y-5 overflow-y-auto">
+                        <form {...fe.form(saveRule)} className="p-5 sm:p-8 space-y-5">
                             <div>
                                 <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Nombre de la regla</label>
                                 <input value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="Ej. Estudiantes" className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
