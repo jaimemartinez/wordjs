@@ -7,8 +7,6 @@
  *   - 'not_entitled'  → «Entregar sin derecho (autorizar)» (deliver with force:true) or «Cancelar»;
  *   - 'group_not_called' (2.36.5) → «Tu grupo aún no ha sido llamado»: «Dejar pasar igual» (after its own in-card
  *     confirmation; deliver with allow_group:true, logged as an exception) or «Cancelar»;
- *   - 'group_not_called' (2.36.5) → «Tu grupo aún no ha sido llamado»: «Dejar pasar igual» (after its own in-card
- *     confirmation; deliver with allow_group:true, logged as an exception) or «Cancelar»;
  *   - anything else   → information + «Cerrar».
  * «Cancelar» records NOTHING: the person stays pending, and the next scan of the same badge opens the card
  * again. Only the server's 'delivered' verdict ever reads «Entregado».

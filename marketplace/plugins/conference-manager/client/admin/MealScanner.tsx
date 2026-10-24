@@ -2024,7 +2024,6 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                                     onDeliver={() => flow.deliver()}
                                     onAuthorize={() => flow.authorize(tx('meals.force.note', 'Autorizado en el escáner'))}
                                     onAllowGroup={() => flow.allowGroup(tx('meals.group.note', 'Dejado pasar antes de su grupo en el escáner'))}
-                                    onAllowGroup={() => flow.allowGroup(tx('meals.group.note', 'Dejado pasar antes de su grupo en el escáner'))}
                                     onCancel={() => flow.cancel()}
                                     onClose={() => flow.close()} />
                                 : <CheckingCard />}
