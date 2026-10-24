@@ -874,7 +874,11 @@ function createBadges(base) {
                 const log = (ok, error) => db.run(`INSERT INTO ${T.badgeMails} (conference_id, inscription_id, email, actor, at_s, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?)`,
                     [location.conference_id, ins.id, email, actor, now, ok ? 1 : 0, error ? String(error).slice(0, 300) : null]);
                 try {
-                    await D.mail({ to: email, ...badgeMail(await D.mailLangOf(location.conference_id), { conference: conf ? conf.name : '', name, link: url }) });
+                    // 2.36.11: through «Plantillas de correo» (the stored edit), else the default.
+                    const lang = await D.mailLangOf(location.conference_id);
+                    const vals = { conference: conf ? conf.name : '', name };
+                    const msg = D.mailTemplates ? await D.mailTemplates.render('badge.link', lang, vals, { action: { url } }) : badgeMail(lang, { ...vals, link: url });
+                    await D.mail({ to: email, ...msg });
                 } catch (e) {
                     const why = String(e && e.message || e);
                     await log(false, why);

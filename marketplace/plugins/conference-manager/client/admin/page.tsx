@@ -76,12 +76,14 @@ import FeePaymentsPage from "./FeePaymentsPage";
 import { money as feeMoney } from "./FeeBits";
 import LodgingPlan from "./LodgingPlan";
 import { Select } from "../lib/Select";
+import { CoordinatorMail } from "./CoordinatorMail";
+import MailTemplatesPage from "./MailTemplatesPage";
 import { useCopy } from "../lib/CopyFallback";
 
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'consent' | 'fees' | 'lodging' | 'transport' | 'meals' | 'badges' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing' | 'staff';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'consent' | 'fees' | 'lodging' | 'transport' | 'meals' | 'badges' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing' | 'staff' | 'emails';
 
 /**
  * The conference views in tab order (the first one the role may open is the default). 2.18.0: the money tabs
@@ -116,6 +118,8 @@ export const viewAllowed = (v: View, p: Perms): boolean => {
         case 'reports': return p.can('reports');
         case 'accounting': return p.can('accounting');
         case 'staff': return p.isAdmin;
+        // 2.36.11: «Plantillas de correo» — WordJS administrators only (the routes say so too).
+        case 'emails': return p.isAdmin;
         default: return false;
     }
 };
@@ -218,6 +222,7 @@ function ConferenceManagerContent() {
         { name: t('pricing') || 'Precios', view: 'pricing' as View, icon: 'fa-tags' },
         { name: t('reports'), view: 'reports' as View, icon: 'fa-file-lines' },
         { name: tx('staff', 'Equipo y permisos'), view: 'staff' as View, icon: 'fa-user-shield' },
+        { name: tx('mail.templates', 'Plantillas de correo'), view: 'emails' as View, icon: 'fa-envelope-open-text' },
     ].filter(tab => viewAllowed(tab.view, perms));
 
     // On a phone (lib/phoneLayout.ts SHELL_CSS) the shell takes its natural height and scrolls with the page;
@@ -279,6 +284,7 @@ function ConferenceManagerContent() {
                     {shown === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
                     {shown === 'reports' && <ReportsPage conferenceId={currentConference.id} />}
                     {shown === 'staff' && <StaffPage />}
+                    {shown === 'emails' && <MailTemplatesPage />}
                 </div>
             </div>
         </div>
@@ -5809,6 +5815,9 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                 <div className="text-xs font-black text-gray-700">{loc.responsible_phone || 'N/A'}</div>
                                             </div>
                                         </div>
+                                        {/* 2.36.11: «Correo del encargado» and the welcome e-mail (never the access code). */}
+                                        <CoordinatorMail loc={loc} canManage={canManage} tx={tx} addToast={addToast}
+                                            onChanged={(next: any) => setLocations((ls) => ls.map((l) => (l.id === next.id ? { ...l, ...next } : l)))} />
                                     </div>
                                 </div>
                             </div>

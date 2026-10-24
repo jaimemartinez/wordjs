@@ -791,3 +791,51 @@ describe('2.36.10 staff registrations: the verbal authorization of the personal 
         expect(granted).not.toContain('data-consent-verbal-general');
     });
 });
+
+describe('2.36.11 «Plantillas de correo» and «Correo del encargado» on the admin', async () => {
+    const CMC = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client');
+    const read = (rel: string) => fs.readFileSync(path.join(CMC, rel), 'utf8');
+    it('the page: administrators only; the preview rendered by the server in a sandboxed frame; chips insert at the cursor; restore asks in-app; desktop / phone widths', () => {
+        const page = read('admin/page.tsx');
+        expect(page).toContain("case 'emails': return p.isAdmin;");
+        expect(page).toContain("{shown === 'emails' && <MailTemplatesPage />}");
+        const m = read('admin/MailTemplatesPage.tsx');
+        expect(m).toContain('conferenceApi.previewMailTemplate(id, { lang, ...draft })');
+        expect(m).toMatch(/<iframe[^>]*sandbox=""[^>]*srcDoc=\{preview \? preview\.html : ''\}/);
+        expect(m).toContain("width: device === 'mobile' ? 375 : '100%'");
+        expect(m).toContain('const insert = (key: string) => {');
+        expect(m).toContain("await confirm(tx('mail.restore.confirm'");
+        expect(m).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
+        expect(m).toContain('conferenceApi.testMailTemplate(id, { lang, ...draft })');
+        expect(m).toContain('conferenceApi.restoreMailTemplate(id, lang)');
+        // Errors in place: the required fields checked before anything is sent.
+        expect(m).toContain("if (!draft.subject.trim()) e.subject = tx('mail.subject.missing', 'Escribe el asunto.');");
+        // The API it calls.
+        const api = read('lib/conference.ts');
+        for (const s of ['getMailTemplates:', 'saveMailTemplate:', 'restoreMailTemplate:', 'previewMailTemplate:', 'testMailTemplate:', 'sendLocationWelcome:']) expect(api, s).toContain(s);
+    });
+    it('«Correo del encargado» on each locality: edited in place, «Enviar bienvenida» / «Reenviar», when it was sent, and that it never carries the code', async () => {
+        const { CoordinatorMail } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/CoordinatorMail');
+        const tx = (_k: string, d: string) => d;
+        const none = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: null }} canManage tx={tx} />);
+        expect(none).toContain('Sin correo');
+        expect(none).toContain('data-coordinator-mail-edit');
+        expect(none).not.toContain('data-welcome-send');
+        const never = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: 'enc@example.org' }} canManage tx={tx} />);
+        expect(never).toContain('Enviar bienvenida');
+        expect(never).toContain('data-welcome-status="never"');
+        expect(never).toContain('no lleva el código de acceso');
+        const sent = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: 'enc@example.org', welcome_sent_s: 1900000000 }} canManage tx={tx} />);
+        expect(sent).toContain('Reenviar bienvenida');
+        expect(sent).toContain('data-welcome-status="sent"');
+        const view = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: 'enc@example.org' }} canManage={false} tx={tx} />);
+        expect(view).not.toContain('data-welcome-send');
+        expect(view).not.toContain('data-coordinator-mail-edit');
+        expect(read('admin/page.tsx')).toContain('<CoordinatorMail loc={loc} canManage={canManage} tx={tx} addToast={addToast}');
+        expect(read('admin/CoordinatorMail.tsx')).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
+    });
+    it('the admin words of both screens in es/en/pt', () => {
+        const keys = ['mail.templates', 'mail.restore', 'mail.test', 'mail.preview', 'mail.markup', 'mail.before', 'mail.after', 'loc.mail', 'loc.welcome.send', 'loc.welcome.resend', 'loc.welcome.nocode'];
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});

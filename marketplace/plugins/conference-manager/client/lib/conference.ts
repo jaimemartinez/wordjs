@@ -662,6 +662,14 @@ export const conferenceApi = {
     updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean, capacity?: number | string, payment_methods?: string[], lodging_opens?: string | null, lodging_closes?: string | null, lodging_tz?: string | null }) =>
         apiPut(`/plugin/conference-manager/locations/${id}`, data),
     deleteLocation: (id: number) => apiDelete(`/plugin/conference-manager/locations/${id}`),
+    /** 2.36.11: the welcome e-mail to the locality's coordinator («Correo del encargado») — never the access code. */
+    sendLocationWelcome: (id: number) => apiPost<{ sent: boolean; welcome_sent_at: string; email_masked: string }>(`/plugin/conference-manager/locations/${id}/welcome`, {}),
+    /** 2.36.11: «Plantillas de correo» (WordJS administrators). */
+    getMailTemplates: () => apiGet<{ langs: string[]; limits: Record<string, number>; templates: any[] }>(`/plugin/conference-manager/mail-templates`),
+    saveMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPut<{ success: boolean }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}`, data),
+    restoreMailTemplate: (id: string, lang: string) => apiDelete<{ success: boolean }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}?lang=${encodeURIComponent(lang)}`),
+    previewMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPost<{ subject: string; html: string; text: string }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}/preview`, data),
+    testMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPost<{ sent: boolean; to_masked: string }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}/test`, data),
 
     // Lodging per location: the admin allots rooms and validates the coordinator's arrangement — and may
     // change a submitted / validated one directly (2.17.0): every lodging write below answers

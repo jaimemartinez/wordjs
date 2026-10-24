@@ -1033,3 +1033,134 @@ test('2.36.10 editing: a recorded authorization cannot be cleared; with none rec
     assert.strictEqual(ok(await w.p.call('get', `/consent/authorization/${id}`)).revoked, true);
     ok(await w.p.call('put', `/inscriptions/${id}`, { body: { last_name: 'Pérez Gómez' } }));
 });
+
+// ── 2.36.11 «Plantillas de correo» and the coordinator's welcome ─────────────────────────────────────────────
+
+test('2.36.11 the templates: a safe markup (never HTML), values escaped after the markup is read, the link/code/record drawn by the layout, a text alternative', () => {
+    const MT = require(path.join(PLUGIN_DIR, 'server/mail-templates.js'));
+    assert.deepStrictEqual(MT.DEFS.map((d: any) => d.id), ['consent.link', 'consent.code', 'consent.confirmation', 'badge.link', 'location.welcome']);
+    for (const d of MT.DEFS) for (const l of ['es', 'en', 'pt']) assert.ok(d.subject[l] && d.body[l] && d.name[l], `${d.id} ${l}`);
+    const edit = {
+        subject: 'Hola {name} <script>',
+        body: 'Hola **{name}**: <b>no es html</b> <script>alert(1)</script>\n\n- uno\n- [la política](https://example.org/p?a=1&b=2)\n- [mal](javascript:alert(1))\n\nContacto: {conference}',
+        after: 'Fin.', action: 'Ir',
+    };
+    const m = MT.renderMessage('consent.link', 'es', { name: '<img src=x onerror=1> **x** [y](https://evil.example)', conference: '', days: '14' }, { action: { url: 'https://site.example/portal/conference/autorizacion#t=abc&x=1' } }, edit, { site: 'Iglesia <i>' });
+    // Typed tags are text; markup works; a javascript: link is not a link; a value never becomes markup or a link.
+    assert.ok(m.html.includes('&lt;b&gt;no es html&lt;/b&gt;') && m.html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+    assert.ok(!/<script/i.test(m.html) && !/<img/i.test(m.html) && !m.html.includes('href="javascript'));
+    assert.ok(m.html.includes('<a href="https://example.org/p?a=1&amp;b=2"'));
+    assert.ok(m.html.includes('<ul') && m.html.includes('<strong>'));
+    assert.ok(m.html.includes('&lt;img src=x onerror=1&gt; **x** [y](https://evil.example)'), 'the value as text');
+    assert.ok(!m.html.includes('href="https://evil.example"'));
+    // A line whose placeholders are all empty is left out («Contacto: {conference}» with no conference).
+    assert.ok(!m.text.includes('Contacto:'));
+    // The link is the layout's button (and copy line), never from the text; the subject is plain text.
+    assert.ok(m.html.includes('href="https://site.example/portal/conference/autorizacion#t=abc&amp;x=1"'));
+    assert.ok(m.text.includes('Ir: https://site.example/portal/conference/autorizacion#t=abc&x=1'));
+    assert.strictEqual(m.subject, 'Hola <img src=x onerror=1> **x** [y](https://evil.example) <script>');
+    assert.ok(m.html.includes('<title>Hola &lt;img'));
+    assert.ok(m.html.includes('Enviado por Iglesia &lt;i&gt;.'));
+    assert.ok(m.text.includes('[la política] (https://example.org/p?a=1&b=2)') || m.text.includes('la política (https://example.org/p?a=1&b=2)'));
+    // Responsive, e-mail-safe layout: tables, inline styles, a preheader, a phone rule.
+    assert.ok(m.html.startsWith('<!doctype html>') && m.html.includes('role="presentation"') && m.html.includes('@media (max-width:600px)') && m.html.includes('max-width:600px'));
+    // The code: in its box (and in the code message's subject only); the texts never receive it.
+    const c = MT.renderMessage('consent.code', 'en', { conference: 'Asume', code: '482913' }, { code: '482913' }, { subject: 'Code {code}', body: 'Here: {code}', after: '', action: '' });
+    assert.strictEqual(c.subject, 'Code 482913');
+    assert.ok(c.html.includes('>482913</div>') && !c.html.includes('Here: 482913') && c.text.includes('482913'));
+    // The welcome has no code to put anywhere, and no URL placeholder.
+    const wdef = MT.DEFS.find((d: any) => d.id === 'location.welcome');
+    assert.deepStrictEqual(wdef.placeholders.map((p: any) => p.key), ['location', 'conference', 'admin_contact']);
+    // Limits and checks of an edit.
+    assert.strictEqual(MT.cleanEdit({ subject: '', body: 'x' }).field, 'subject');
+    assert.strictEqual(MT.cleanEdit({ subject: 'x', body: ' ' }).field, 'body');
+    assert.strictEqual(MT.cleanEdit({ subject: 'x'.repeat(201), body: 'x' }).field, 'subject');
+    assert.ok(MT.cleanEdit({ subject: 'Hola\nmundo', body: 'x\u0001y' }).edit.subject === 'Hola mundo');
+    assert.strictEqual(MT.cleanEdit({ subject: 's', body: 'x\u0001y' }).edit.body, 'xy', 'control characters never reach a text');
+});
+
+test('2.36.11 «Plantillas de correo»: administrators edit, preview, test and restore; the edit is what the real e-mail says', async () => {
+    const w = await world();
+    const staff = { id: 77, role: 'conference_manager_team', userLogin: 'coord', extra: { pluginCapabilities: ['conference_manager_access'] } };
+    assert.strictEqual((await w.p.call('get', '/mail-templates', { user: staff as any })).status, 403, 'administrators only');
+    const list = ok(await w.p.call('get', '/mail-templates'));
+    assert.deepStrictEqual(list.langs, ['es', 'en', 'pt']);
+    const link = list.templates.find((t: any) => t.id === 'consent.link');
+    assert.ok(link.has_action && link.defaults.es.subject.includes('{conference}') && Object.keys(link.edits).length === 0);
+    // Invalid edits are said by field.
+    const bad = await w.p.call('put', '/mail-templates/consent.link', { body: { lang: 'es', subject: '', body: 'x' } });
+    assert.deepStrictEqual([bad.status, bad.body.field], [400, 'subject']);
+    assert.strictEqual((await w.p.call('put', '/mail-templates/consent.link', { body: { lang: 'fr', subject: 's', body: 'b' } })).status, 400);
+    assert.strictEqual((await w.p.call('put', '/mail-templates/nope', { body: { lang: 'es', subject: 's', body: 'b' } })).status, 404);
+    // Preview: the draft with samples, never stored.
+    const pv = ok(await w.p.call('post', '/mail-templates/consent.link/preview', { body: { lang: 'es', subject: 'Firma · {conference}', body: 'Hola **{name}**', after: '', action: 'Firmar ya' } }));
+    assert.ok(pv.subject === 'Firma · Asume el Riesgo' && pv.html.includes('<strong>Ana</strong>') && pv.html.includes('>Firmar ya</a>'));
+    assert.strictEqual(Object.keys(ok(await w.p.call('get', '/mail-templates')).templates.find((t: any) => t.id === 'consent.link').edits).length, 0);
+    // Saved: the real link e-mail says it.
+    ok(await w.p.call('put', '/mail-templates/consent.link', { body: { lang: 'es', subject: 'Por favor firma · {conference}', body: 'Hola {name}, falta tu firma.', after: '', action: 'Firmar' } }));
+    const saved = ok(await w.p.call('get', '/mail-templates')).templates.find((t: any) => t.id === 'consent.link').edits.es;
+    assert.deepStrictEqual([saved.subject, saved.updated_by], ['Por favor firma · {conference}', 'boss']);
+    (await w.register({}));
+    const sent = w.p.mails[w.p.mails.length - 1];
+    assert.strictEqual(sent.subject, 'Por favor firma · Asume el Riesgo');
+    assert.ok(sent.text.includes('Hola Ana Pérez, falta tu firma.') && /Firmar: http.*#t=[0-9a-f]{32}/.test(sent.text), sent.text);
+    // Test send: to the administrator's own e-mail, marked; a few per administrator.
+    const before = w.p.mails.length;
+    const t = ok(await w.p.call('post', '/mail-templates/badge.link/test', { body: { lang: 'en', subject: 'Badge {name}', body: 'Hi {name}', after: '', action: 'Open' } }));
+    assert.strictEqual(t.sent, true);
+    const tm = w.p.mails[before];
+    assert.deepStrictEqual([tm.to, tm.subject], ['boss@example.test', '[Prueba] Badge Ana']);
+    for (let i = 0; i < 4; i++) ok(await w.p.call('post', '/mail-templates/badge.link/test', { body: { lang: 'en', subject: 's', body: 'b' } }));
+    assert.strictEqual((await w.p.call('post', '/mail-templates/badge.link/test', { body: { lang: 'en', subject: 's', body: 'b' } })).status, 429);
+    // Restore: the default again.
+    ok(await w.p.call('delete', '/mail-templates/consent.link?lang=es'));
+    assert.strictEqual(Object.keys(ok(await w.p.call('get', '/mail-templates')).templates.find((t: any) => t.id === 'consent.link').edits).length, 0);
+    (await w.register({ first_name: 'Luis', email: 'luis@example.org' }));
+    assert.ok(w.p.mails[w.p.mails.length - 1].subject.startsWith('Autoriza el uso de tus datos'));
+});
+
+test('2.36.11 the welcome to a locality\'s coordinator: never the access code, the portal link and the admin contact; once a minute; logged; no admin login on the portal', async () => {
+    const w = await world();
+    const loc = () => w.p.one(`SELECT code, responsible_email, welcome_sent_s, welcome_sent_by FROM ${PREFIX}locations WHERE id = ?`, w.norte);
+    // No e-mail yet: nothing to send. A bad one is refused.
+    assert.strictEqual((await w.p.call('post', `/locations/${w.norte}/welcome`)).body.code, 'no_email');
+    const badMail = await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_email: 'no-es-correo' } });
+    assert.deepStrictEqual([badMail.status, badMail.body.field], [400, 'responsible_email']);
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_email: 'encargado@example.org' } }));
+    assert.strictEqual(loc().responsible_email, 'encargado@example.org');
+    // Sent: to the coordinator, with the portal's address and the administration's contact — never the code.
+    const before = w.p.mails.length;
+    const r = ok(await w.p.call('post', `/locations/${w.norte}/welcome`));
+    assert.deepStrictEqual([r.sent, r.email_masked], [true, 'e***@e***.org']);
+    const m = w.p.mails[before];
+    assert.strictEqual(m.to, 'encargado@example.org');
+    assert.ok(m.subject.includes('Norte') && m.subject.includes('Asume el Riesgo'));
+    const code = String(loc().code);
+    assert.ok(!m.text.includes(code) && !m.html.includes(code) && !m.subject.includes(code), 'the access code is never in it');
+    assert.ok(/\/portal\/conference\?slug=dc-\d+/.test(m.text) && m.html.includes('/portal/conference?slug='));
+    assert.ok(m.text.includes('datos@example.org'), 'the administration contact (Autorizaciones)');
+    assert.ok(m.text.includes('pídeselo a la administración'));
+    // Stamped and logged; a second one right away is refused (rate).
+    assert.ok(loc().welcome_sent_s && loc().welcome_sent_by === 'boss');
+    assert.strictEqual((await w.p.call('post', `/locations/${w.norte}/welcome`)).status, 429);
+    const log = w.p.q(`SELECT kind, email, actor, ok FROM ${PREFIX}location_mails WHERE location_id = ?`, w.norte) as any[];
+    assert.deepStrictEqual(log.map(x => [x.kind, x.email, x.actor, x.ok]), [['welcome', 'encargado@example.org', 'boss', 1]]);
+    // The locality list shows when; the portal never sees the administrator's login.
+    const row = ok(await w.p.call('get', `/locations?conference_id=${w.cid}`)).locations.find((x: any) => x.id === w.norte);
+    assert.ok(row.welcome_sent_s && row.responsible_email === 'encargado@example.org');
+    const me = ok(await portal(w.p, 'get', '/portal/me', w.ptoken));
+    assert.ok(!('welcome_sent_by' in me) && !('welcome_sent_s' in me));
+    // Without the data contact configured, the contact line is left out.
+    const w2 = await world({ enable: false });
+    ok(await w2.p.call('put', `/locations/${w2.norte}`, { body: { responsible_email: 'enc@example.org' } }));
+    ok(await w2.p.call('post', `/locations/${w2.norte}/welcome`));
+    assert.ok(!w2.p.mails[w2.p.mails.length - 1].text.includes('Contacto de la administración'));
+    // A mail failure is said, logged, and nothing is stamped.
+    const w3 = await world({ enable: false });
+    ok(await w3.p.call('put', `/locations/${w3.norte}`, { body: { responsible_email: 'enc@example.org' } }));
+    w3.p.setMailFail(true);
+    const failed = await w3.p.call('post', `/locations/${w3.norte}/welcome`);
+    assert.deepStrictEqual([failed.status, failed.body.code], [503, 'mail_off'], 'the site has no mail: said so');
+    assert.strictEqual(w3.p.one(`SELECT welcome_sent_s FROM ${PREFIX}locations WHERE id = ?`, w3.norte).welcome_sent_s, null);
+    assert.strictEqual(w3.p.one(`SELECT ok FROM ${PREFIX}location_mails WHERE location_id = ?`, w3.norte).ok, 0);
+});
