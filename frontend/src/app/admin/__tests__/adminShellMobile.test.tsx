@@ -162,3 +162,22 @@ describe("the shell's edges on a phone (live review, iPhone SE / 13)", () => {
         expect(header).toContain("border-gray-100");
     });
 });
+
+/**
+ * Plugins › Marketplace on a phone: the catalog source line printed the whole catalog URL in a mono span
+ * inside an inline-block, with nothing allowed to wrap it, so the page grew a sideways scroll. Long URLs
+ * wrap now, and the flex rows that hold a URL (the sources list, the add-a-source field) can shrink.
+ */
+describe("Plugins › Marketplace fits a phone", () => {
+    const src = fs.readFileSync(path.resolve(__dirname, "../plugins/MarketplaceTab.tsx"), "utf8");
+
+    it("the catalog source line wraps its URL and never outgrows the page", () => {
+        expect(src).toMatch(/rounded-xl inline-block max-w-full break-words[^"]*">\s*\{sourcesStatus\.length/);
+        expect(src).toMatch(/<span className="font-mono[^"]*break-all">\{isLocal/);
+    });
+
+    it("the rows that hold a source URL can shrink below the URL's width", () => {
+        expect(src).toMatch(/<span className="flex-1 min-w-0 font-mono[^"]*truncate" title=\{u\}>/);
+        expect(src).toMatch(/containerClassName="flex-1 min-w-0"\s*className="font-mono"/);
+    });
+});
