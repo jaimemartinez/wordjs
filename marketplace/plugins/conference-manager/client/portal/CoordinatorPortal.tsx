@@ -14,12 +14,12 @@ import ParticipantList from "./ParticipantList";
 import ParticipantSheet from "./ParticipantSheet";
 import { consentT } from "../lib/consentI18n";
 import { PortalPaperConsent } from "./ConsentBits";
+import { WithdrawDeadlineNote } from "./Withdraw";
 import { familyGroupsOf, isCancelled, payStateOf, personName, pruneSelection, type PayFilter, type PortalPerson } from "./participants";
 // «Pagos de cuotas» (conference-manager ≥ 2.18.0): the tab, its data hub and its sheets (feePayments.ts holds the rules).
 import FeePaymentsTab, { FeeSheets, useFeeHub } from "./FeePaymentsTab";
 import { feeBadge, hasFeePayments, mergeBalances, rowBalanceC, type PortalFeeView } from "./feePayments";
 import { hasBadges } from "./badges";
-import { PortalBadgeBulk } from "./PortalBadges";
 // Version skew: the old bulk-payment dialog, only for a plugin without «Pagos de cuotas».
 import LegacyBulkPayment from "./LegacyBulkPayment";
 import { useFieldErrors } from "../lib/useFieldErrors";
@@ -169,8 +169,8 @@ function LocationPortalContent() {
     const [showCode, setShowCode] = useState(false);
     // The dashboard's summary tiles open the roster on their filter (the list remounts on each tap).
     const [listPreset, setListPreset] = useState<{ pay: PayFilter; n: number }>({ pay: 'all', n: 0 });
-    // «Herramientas de la localidad» (escarapelas, consentimiento en papel): folded so the list comes first.
-    const [toolsOpen, setToolsOpen] = useState(() => readPortalPref('tools') === '1');
+    // «Consentimiento en papel» (2.36.6): a blue button next to «Registrar nuevo» opens it above the list.
+    const [paperOpen, setPaperOpen] = useState(false);
 
     // Dashboard State
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
@@ -449,6 +449,17 @@ function LocationPortalContent() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [step]);
 
+    // «Retirar inscripción» (2.36.6): the server decides (deadline, payments, this location's person); the list reloads.
+    const withdrawPerson = async (id: number, reason: string) => {
+        const res = await fetch(`/api/v1/plugin/conference-manager/portal/inscriptions/${id}/withdraw`, {
+            method: 'POST', credentials: 'include', headers: portalAuthHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ reason }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo retirar la inscripción.');
+        setSheetId(null);
+        addToast('Inscripción retirada.', 'success');
+        await loadInscriptions();
+    };
     const loadInscriptions = async () => {
         try {
             const res = await fetch('/api/v1/plugin/conference-manager/portal/inscriptions', {
@@ -829,16 +840,26 @@ function LocationPortalContent() {
                             </span>
                         ) : undefined}
                         actions={view === 'list' ? (
-                            <Button
-                                icon="fa-plus"
-                                block
-                                className="sm:w-auto"
-                                onClick={() => setView('add')}
-                                disabled={isLocationFull(myLocation)}
-                                title={isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
-                            >
-                                Registrar Nuevo
-                            </Button>
+                            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row" data-testid="participants-actions">
+                                <Button
+                                    icon="fa-plus"
+                                    block
+                                    className="sm:w-auto"
+                                    onClick={() => setView('add')}
+                                    disabled={isLocationFull(myLocation)}
+                                    title={isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
+                                >
+                                    Registrar Nuevo
+                                </Button>
+                                {/* 2.36.6: always in sight while the conference asks for the authorization (the owner's
+                                    «no escondas lo de consentimiento firmado»), the same blue button. */}
+                                {consentOn && (
+                                    <Button icon="fa-file-signature" block className="sm:w-auto" aria-expanded={paperOpen}
+                                        onClick={() => setPaperOpen((v) => !v)} data-action="paper-open">
+                                        Consentimiento en papel
+                                    </Button>
+                                )}
+                            </div>
                         ) : (
                             <Button variant="ghost" icon="fa-arrow-left" onClick={() => setView('list')}>
                                 Volver a la lista
@@ -846,29 +867,9 @@ function LocationPortalContent() {
                         )}
                     />
 
-                    {/* The locality's tools — «Escarapelas» and «Consentimiento en papel» (2.34.0, while the conference asks for
-                        the authorization) — folded behind one row, so on a phone the list comes first. Remembered per device. */}
-                    {view === 'list' && ((badgesOn && inscriptions.length > 0) || consentOn) && (
-                        <div className="border-b border-gray-100" data-testid="portal-tools">
-                            <button type="button" className="w-full flex items-center justify-between gap-3 px-4 sm:px-6 py-3 text-left hover:bg-gray-50/60"
-                                aria-expanded={toolsOpen} aria-controls="portal-tools-body" data-action="tools-toggle"
-                                onClick={() => setToolsOpen((v) => { writePortalPref('tools', v ? '0' : '1'); return !v; })}>
-                                <span className="flex items-center gap-2 min-w-0">
-                                    <i className="fa-solid fa-toolbox text-blue-600" aria-hidden="true"></i>
-                                    <span className="text-xs font-black uppercase tracking-widest text-gray-700">Herramientas de la localidad</span>
-                                    <span className="hidden sm:inline text-[11px] text-gray-500 truncate">
-                                        {[badgesOn && inscriptions.length > 0 ? 'Escarapelas' : null, consentOn ? 'Consentimiento en papel' : null].filter(Boolean).join(' · ')}
-                                    </span>
-                                </span>
-                                <i className={`fa-solid fa-chevron-down text-gray-400 transition-transform ${toolsOpen ? 'rotate-180' : ''}`} aria-hidden="true"></i>
-                            </button>
-                            {toolsOpen && (
-                                <div id="portal-tools-body" className="pb-3">
-                                    {badgesOn && inscriptions.length > 0 && <PortalBadgeBulk authHeaders={portalAuthHeaders} nameOf={nameOf} />}
-                                    {consentOn && <PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} />}
-                                </div>
-                            )}
-                        </div>
+                    {view === 'list' && <WithdrawDeadlineNote window={(myLocation as any)?.withdraw} />}
+                    {view === 'list' && consentOn && paperOpen && (
+                        <PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} onClose={() => setPaperOpen(false)} />
                     )}
                     {view === 'list' ? (
                         <ParticipantList
@@ -1038,6 +1039,7 @@ function LocationPortalContent() {
                     onSeePayments={feesOn ? seePaymentsOf : undefined}
                     badges={badgesOn ? { authHeaders: portalAuthHeaders, conferenceName } : null}
                     consent={sheetPerson.consent ? { authHeaders: portalAuthHeaders, onChanged: loadInscriptions } : null}
+                    withdraw={(myLocation as any)?.withdraw?.open ? { window: (myLocation as any).withdraw, onWithdraw: withdrawPerson } : null}
                     payBusy={feeHub.preparing}
                 />
             )}
@@ -1059,7 +1061,7 @@ function LocationPortalContent() {
 
 /**
  * What this device remembers between visits (localStorage, best effort): the conference and the locality last used to
- * sign in — never the access code — and whether «Herramientas de la localidad» was left open.
+ * sign in — never the access code.
  */
 const PORTAL_PREF = 'cm-portal:';
 function readPortalPref(key: string): string | null {

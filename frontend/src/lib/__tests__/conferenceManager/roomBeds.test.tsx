@@ -423,3 +423,16 @@ describe('«Sugerir reparto» counts today as an answer (2.21.0): when nothing b
         for (const lang of ['es', 'en', 'pt'] as const) for (const k of keys) expect((translations as any)[lang][k], `${lang} ${k}`).toBeTruthy();
     });
 });
+
+describe('2.36.6 option (a): a room holding several locations names each occupant\'s location', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/admin/LodgingExplorer.tsx'), 'utf8');
+    it('the room card shows the location chip when its people are of more than one location (not only under a filter)', () => {
+        expect(src).toContain("const mixedRoom = new Set(occupants.map(p => String(locationIdOf(p) ?? ''))).size > 1;");
+        expect(src).toContain('{(foreign || mixedRoom) && <span');
+        expect(src).toContain('data-occupant-location=""');
+    });
+    it('the coordinators\' portal counts only its own beds of a shared room and never lists the others', () => {
+        const portal = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/portal/LodgingExplorer.tsx'), 'utf8');
+        expect(portal).toContain('Compartida · tuyas ${beds} de ${total} camas');
+    });
+});

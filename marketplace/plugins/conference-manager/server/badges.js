@@ -37,6 +37,8 @@ const { createMetrics, isFace } = require('./badge-font');
 const { faceBytes, faceBase64, faceParsed } = require('./badge-font-files');
 const { docFieldsOf } = require('./selfpage');
 const phoneMod = require('./phone');
+const { maskEmail } = require('./consent');
+const { badgeMail } = require('./badge-mail');
 
 const MAX_FIELDS = 8;
 const LABEL_MAX = 40;
@@ -53,6 +55,8 @@ const ASSET_MAX_CHARS = 2 * 1024 * 1024;               // a data URL, ~1.5 MB of
 const TICKET_TTL_S = 120, TICKET_MAX_USES = 3;
 const PDF_MAX_BADGES = 1000;
 const LINKS_MAX = 2000;
+// 2.36.6: one «Enviar» of a person's badge every 5 minutes (a double tap, a coordinator sending again by mistake).
+const MAIL_GAP_S = 5 * 60;
 const HEX = /^#[0-9a-f]{6}$/i;
 const PANELS = new Set(['none', 'light', 'dark']);
 const BUILTINS = [
@@ -87,6 +91,10 @@ const MSG = {
     expired: 'Esta escarapela venció.',
     disabled: 'Las escarapelas de esta conferencia no están activas.',
     throttled: 'Demasiados intentos. Espera unos minutos.',
+    no_email: 'Esta persona no tiene correo registrado.',
+    mail_wait: (min) => `Ya se le envió hace poco. Espera ${min} ${min === 1 ? 'minuto' : 'minutos'} antes de enviarla otra vez.`,
+    mail_off: 'El correo del sitio no está configurado (o el plugin no tiene permiso para enviar correos): pídele al administrador que lo active.',
+    mail_failed: 'No se pudo enviar el correo. Inténtalo más tarde o comparte el enlace por WhatsApp.',
     ticket: 'El enlace de descarga venció. Vuelve a pedir el archivo.',
 };
 
@@ -95,6 +103,7 @@ function createBadges(base) {
     T.badgeAssets = `${P}badge_assets`;
     T.badgeLinks = `${P}badge_links`;
     T.badgeTickets = `${P}badge_tickets`;
+    T.badgeMails = `${P}badge_mails`;
     let D = null;
     let ready = false;
 
@@ -139,6 +148,20 @@ function createBadges(base) {
             'expires_s INT NOT NULL',
         ]);
         await createUniqueIndex(`${P}uidx_badge_tickets_nonce`, T.badgeTickets, 'nonce');
+        // 2.36.6: every «Enviar» of a person's badge by e-mail (who, to which address, when, sent or why not) — the
+        // audit, and the per-person pause between two e-mails.
+        await db.createTable(T.badgeMails, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'inscription_id INT NOT NULL',
+            'email VARCHAR(255) NOT NULL',
+            'actor TEXT',
+            'at_s INT NOT NULL',
+            'ok INT NOT NULL',
+            'error TEXT',
+            `FOREIGN KEY (inscription_id) REFERENCES ${T.inscriptions}(id) ON DELETE CASCADE`,
+        ]);
+        await createIndex(`${P}idx_badge_mails_ins`, T.badgeMails, 'inscription_id');
         // A link whose inscription is gone (a driver without enforced foreign keys) is dead weight.
         try { await db.run(`DELETE FROM ${T.badgeLinks} WHERE inscription_id NOT IN (SELECT id FROM ${T.inscriptions} )`); } catch (e) { /* best effort */ }
         ready = true;
@@ -813,28 +836,53 @@ function createBadges(base) {
                 if (!ids.length || !positiveInt((req.body || {}).inscription_id)) return res.status(404).json({ error: 'Inscripción no encontrada.' });
                 const [link] = await ensureLinks(location.conference_id, ids, `portal:${location.id}`);
                 const conf = await confOf(location.conference_id);
-                res.json({ link: link || null, country_code: await whatsappCodeOf(location.conference_id, await configOf(location.conference_id)), conference: conf ? conf.name : '' });
+                // 2.36.6: what the section offers — WhatsApp with the number as the consent message builds it, «Enviar»
+                // only with an e-mail on file (masked: the coordinator sees where it goes, not the whole address).
+                const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [ids[0]]);
+                const contact = await D.contactOf(ins);
+                res.json({
+                    link: link || null, country_code: await whatsappCodeOf(location.conference_id, await configOf(location.conference_id)), conference: conf ? conf.name : '',
+                    phone_wa: contact.phone_wa || '', email_masked: contact.email ? maskEmail(contact.email) : '',
+                });
             } catch (e) { send(res, e); }
         });
-        // POST /portal/badges/links → every active person of the location.
-        http.route('post', '/portal/badges/links', async (req, res) => {
+        // POST /portal/badges/email { inscription_id } → { sent: true, email_masked } (2.36.6): the person's badge link and
+        // how to use it, by e-mail, in the conference's e-mail language. Only a person of the coordinator's own location
+        // (404 otherwise), with an e-mail on file (400 no_email); one e-mail per person every MAIL_GAP_S (429 mail_wait,
+        // with retry_in). Every attempt — sent or not — is a row of badge_mails (the audit). The site's mail missing or
+        // not granted is a 503 mail_off, a provider failure a 502 mail_failed: never a silent «sent».
+        http.route('post', '/portal/badges/email', async (req, res) => {
             const location = await portalGate(req, res);
             if (!location) return;
             try {
-                const ids = await ownIds(location, {});
-                res.json({ links: await ensureLinks(location.conference_id, ids.slice(0, LINKS_MAX), `portal:${location.id}`) });
-            } catch (e) { send(res, e); }
-        });
-        // POST /portal/badges/ticket { inscription_id?, sheet } → { d } (one person, or the whole location).
-        http.route('post', '/portal/badges/ticket', async (req, res) => {
-            const location = await portalGate(req, res);
-            if (!location) return;
-            try {
-                const body = req.body || {};
-                const ids = await ownIds(location, body);
-                if (!ids.length) return res.status(404).json({ error: 'No hay escarapelas para generar.' });
-                if (ids.length > PDF_MAX_BADGES) return res.status(400).json({ error: `Máximo ${PDF_MAX_BADGES} escarapelas por PDF.` });
-                res.json({ d: await mintTicket(location.conference_id, { ids, sheet: sheetOf(body.sheet), name: ids.length === 1 ? null : location.name }) });
+                const ids = await ownIds(location, req.body || {});
+                if (!ids.length || !positiveInt((req.body || {}).inscription_id)) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+                const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [ids[0]]);
+                const { email } = await D.contactOf(ins);
+                if (!email) return res.status(400).json({ error: MSG.no_email, code: 'no_email' });
+                const now = Math.floor(Date.now() / 1000);
+                const last = await db.get(`SELECT MAX(at_s) AS at_s FROM ${T.badgeMails} WHERE inscription_id = ? AND ok = 1`, [ins.id]);
+                const wait = last && last.at_s != null ? Number(last.at_s) + MAIL_GAP_S - now : 0;
+                if (wait > 0) return res.status(429).json({ error: MSG.mail_wait(Math.ceil(wait / 60)), code: 'mail_wait', retry_in: wait });
+                const [link] = await ensureLinks(location.conference_id, ids, `portal:${location.id}`);
+                const base = await D.siteLinkBase();
+                if (!link || !base) return res.status(503).json({ error: MSG.mail_off, code: 'mail_off' });
+                const url = link.self ? `${base}${link.self}` : `${base}/portal/conference/badge#t=${link.token}`;
+                const conf = await confOf(location.conference_id);
+                const name = String((await D.personWithName(ins)).name || '').split(' ')[0] || '';
+                const actor = `portal:${location.id}`;
+                const log = (ok, error) => db.run(`INSERT INTO ${T.badgeMails} (conference_id, inscription_id, email, actor, at_s, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [location.conference_id, ins.id, email, actor, now, ok ? 1 : 0, error ? String(error).slice(0, 300) : null]);
+                try {
+                    await D.mail({ to: email, ...badgeMail(await D.mailLangOf(location.conference_id), { conference: conf ? conf.name : '', name, link: url }) });
+                } catch (e) {
+                    const why = String(e && e.message || e);
+                    await log(false, why);
+                    const off = /permission|denied|not available|not granted|permiso/i.test(why);
+                    return res.status(off ? 503 : 502).json({ error: off ? MSG.mail_off : MSG.mail_failed, code: off ? 'mail_off' : 'mail_failed' });
+                }
+                await log(true, null);
+                res.json({ sent: true, email_masked: maskEmail(email) });
             } catch (e) { send(res, e); }
         });
 

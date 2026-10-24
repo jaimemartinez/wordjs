@@ -386,7 +386,9 @@ export const selectAllCapped = (ids: number[], cap = MAX_PARTS): number[] => [..
 /** Drop ids that are gone (or no longer selectable) after a reload. */
 export const pruneSelection = (sel: number[], valid: Set<number> | number[]): number[] => {
     const v = valid instanceof Set ? valid : new Set(valid);
-    return sel.filter((id) => v.has(id));
+    // The same array when nothing goes (2.36.6): a caller that sets it as state does not re-render for nothing.
+    const kept = sel.filter((id) => v.has(id));
+    return kept.length === sel.length ? sel : kept;
 };
 
 // ── «Registrar pago» draft ─────────────────────────────────────────────────────────────────────────────

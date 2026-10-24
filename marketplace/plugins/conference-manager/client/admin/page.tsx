@@ -26,8 +26,9 @@ import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard
 import { Overlay } from "./Overlay";
 import { canAutoFocus, LAYER } from "../lib/overlay";
 // Phones (2.16.0): the shell scrolls with the page; the tab strip reveals the active tab.
-import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS, TAB_STRIP_CSS } from "../lib/phoneLayout";
-import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStripOverflow";
+import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS } from "../lib/phoneLayout";
+import { SectionPicker } from "./SectionPicker";
+import { WithdrawDeadlineSetting } from "./WithdrawDeadline";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
@@ -180,14 +181,6 @@ function ConferenceManagerContent() {
     const shown: View = viewAllowed(view, perms) ? view : firstView;
     const openStaff = perms.isAdmin ? () => setView('staff') : undefined;
 
-    // A phone shows three of the twelve tabs: bring the active one into the strip's view, clear of its edge
-    // fade (after a reload the saved «Campos» was off-screen; tapped at the edge it stayed under the fade).
-    // Scrolls the strip only, never the page.
-    const tabStripRef = useRef<HTMLDivElement | null>(null);
-    useRevealActive(tabStripRef, '[aria-current="page"]', [shown, !!currentConference]);
-    // Which sides of the strip have more tabs: it fades out there (lib/phoneLayout.ts TAB_STRIP_CSS).
-    const stripMore = useStripOverflow(tabStripRef, [shown, !!currentConference]);
-
     if (shown === 'list') {
         return <ConferenceList onManage={handleManageConference} onOpenStaff={openStaff} />;
     }
@@ -260,27 +253,10 @@ function ConferenceManagerContent() {
                     </div>
                 </div>
 
-                <style>{TAB_STRIP_CSS}</style>
-                <div ref={tabStripRef} className="flex border-b border-gray-200 mb-6 overflow-x-auto" data-cm-shell-tabs=""
-                    {...stripMoreAttrs(stripMore)}>
-                    {tabs.map((tab) => {
-                        const isActive = shown === tab.view;
-                        return (
-                            <button
-                                key={tab.view}
-                                onClick={() => setView(tab.view)}
-                                aria-current={isActive ? 'page' : undefined}
-                                className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap
-                                    ${isActive
-                                        ? 'border-blue-600 text-blue-600'
-                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    }`}
-                            >
-                                <i className={`fa-solid ${tab.icon}`}></i>
-                                {tab.name}
-                            </button>
-                        );
-                    })}
+                {/* 2.36.6 (the owner: the tab bar «no es responsive, no es user friendly»): one button names the section and opens
+                    them all, grouped and searchable (SectionPicker) — no row of fifteen tabs scrolling sideways. */}
+                <div className="mb-6" data-cm-shell-tabs="">
+                    <SectionPicker tabs={tabs} current={shown} onPick={(v) => setView(v as View)} tx={tx} lang={language} />
                 </div>
             </div>
 
@@ -1455,7 +1431,9 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
             // Cancelling frees the bed: in a submitted / validated arrangement that is recorded as an
             // administration adjustment (2.17.0), and the notice says so.
             const result = await conferenceApi.updateInscription(person.id, { status: cancelling ? 'cancelled' : 'active' });
-            setSheetNotice({ id: person.id, type: 'success', text: withAdjusted(tx, cancelling ? tx('roster.done.cancelled', 'Inscripción cancelada.') : tx('roster.done.reactivated', 'Inscripción reactivada.'), result) });
+            // 2.36.6: a withdrawn registration put back does not get its old bed back (the withdrawal freed it).
+            const restoredNote = !cancelling && result && (result as any).restored ? ` ${tx('roster.done.restored.room', 'No recupera su habitación anterior: asígnala de nuevo en Alojamiento si la necesita.')}` : '';
+            setSheetNotice({ id: person.id, type: 'success', text: withAdjusted(tx, (cancelling ? tx('roster.done.cancelled', 'Inscripción cancelada.') : tx('roster.done.reactivated', 'Inscripción reactivada.')) + restoredNote, result) });
             await patchRows([person.id]);
             setPaymentsKey((k) => k + 1);
         } catch (error: any) {
@@ -4242,6 +4220,72 @@ function PredicateEditor({ fields, value, onChange, label }: any) {
 
 // `focus` / `onFocusConsumed`: «Ver ocupación» in «Hoteles y habitaciones» opens the explorer at a
 // hotel (and room) once — see ConferenceManagerContent.openLodgingExplorer.
+/**
+ * «Limpiar todas las asignaciones» (2.36.6): before clearing, what will be cleared — the people taken out of their
+ * rooms, the rooms and beds «Sugerir reparto» gave to locations (freed for anyone) — and, UNTICKED, «También liberar
+ * las habitaciones reservadas a mano (N)»: the admin's own reservations, and every one made before 2.36.6, stay with
+ * their location unless ticked. The counts come from the server (POST /assignment/reset { preview: true }).
+ */
+function ResetAssignmentsDialog({ conferenceId, onClose, onDone }: { conferenceId: number; onClose: () => void; onDone: (result: any) => void }) {
+    const tx = useTx();
+    const { addToast } = useToast();
+    const [info, setInfo] = useState<any>(null);
+    const [manual, setManual] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    useEffect(() => {
+        let alive = true;
+        conferenceApi.resetAssignments(conferenceId, { preview: true })
+            .then((r) => { if (alive) setInfo(r); })
+            .catch((e) => { if (alive) setError(e?.message || 'Error'); });
+        return () => { alive = false; };
+    }, [conferenceId]);
+    const run = async () => {
+        if (busy) return;
+        setBusy(true);
+        try { onDone(await conferenceApi.resetAssignments(conferenceId, { release_manual: manual })); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); setBusy(false); }
+    };
+    const frozen: any[] = (info && info.skipped_frozen) || [];
+    return (
+        <Overlay layer={2} onBackdrop={busy ? undefined : onClose} onEscape={busy ? undefined : onClose}>
+            <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="reset-title" data-reset-dialog="">
+                <div className="px-6 py-5 border-b border-gray-100">
+                    <h3 id="reset-title" className="font-black text-xl text-gray-900 italic tracking-tighter">{tx('reset.dialog.title', 'Limpiar todas las asignaciones')}</h3>
+                </div>
+                <div className="px-6 py-5 space-y-3 text-sm text-gray-700">
+                    {error ? <p className="font-bold text-rose-700" role="alert">{error}</p> : !info ? <p className="text-gray-500">{tx('reset.dialog.loading', 'Calculando qué se va a limpiar…')}</p> : (
+                        <>
+                            <ul className="space-y-1.5 list-disc pl-5">
+                                <li data-reset-people={info.people}>{tx('reset.dialog.people', 'Personas que salen de sus habitaciones: {n}', { n: info.people })}</li>
+                                <li data-reset-plan={info.plan_allotments}>{tx('reset.dialog.plan', 'Habitaciones y camas que «Sugerir reparto» dio a las localidades y quedan libres para cualquiera: {n}', { n: info.plan_allotments })}</li>
+                            </ul>
+                            {info.manual_allotments > 0 ? (
+                                <div className="rounded-2xl border-2 border-amber-100 bg-amber-50/60 p-3 space-y-1.5">
+                                    <label className="flex items-start gap-2 font-bold text-amber-900 cursor-pointer">
+                                        <input type="checkbox" className="mt-0.5 w-4 h-4 shrink-0 accent-amber-600" checked={manual} onChange={(e) => setManual(e.target.checked)} data-reset-manual="" />
+                                        <span>{tx('reset.dialog.manual', 'También liberar las habitaciones reservadas a mano ({n})', { n: info.manual_allotments })}</span>
+                                    </label>
+                                    <p className="text-xs text-amber-900/80">{tx('reset.dialog.manual.hint', 'Sin marcar, cada reserva hecha a mano sigue siendo de su localidad. Las reservas de antes de esta versión cuentan como hechas a mano: márcalo para que la próxima asignación empiece desde cero.')}</p>
+                                </div>
+                            ) : <p className="text-xs text-gray-500">{tx('reset.dialog.manual.none', 'No hay habitaciones reservadas a mano.')}</p>}
+                            {frozen.length > 0 && <p className="text-xs text-gray-600">{tx('reset.dialog.frozen', 'No se tocan (hospedaje enviado o validado): {names}', { names: frozen.map(l => l.name).join(', ') })}</p>}
+                            <p className="text-xs text-gray-500">{tx('reset.dialog.held', 'Las personas fijadas por la administración y las habitaciones bloqueadas se quedan como están.')}</p>
+                        </>
+                    )}
+                </div>
+                <div className="px-6 py-4 border-t border-gray-100 flex flex-wrap justify-end gap-2">
+                    <button type="button" onClick={onClose} disabled={busy} className="px-5 py-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-700 hover:border-gray-300 font-black text-[10px] uppercase tracking-widest disabled:opacity-50">{tx('reset.dialog.cancel', 'Cancelar')}</button>
+                    <button type="button" onClick={run} disabled={!info || busy} data-reset-confirm=""
+                        className="px-5 py-3 rounded-2xl bg-rose-600 text-white hover:bg-rose-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-rose-500/30 disabled:opacity-50">
+                        <i className={`fa-solid ${busy ? 'fa-spinner animate-spin' : 'fa-broom'} mr-1.5`} aria-hidden="true"></i>{tx('reset.dialog.confirm', 'Limpiar')}
+                    </button>
+                </div>
+            </div>
+        </Overlay>
+    );
+}
+
 function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId: number; focus?: { hotelId?: number | null; roomId?: number | null; locationId?: number | null } | null; onFocusConsumed?: () => void }) {
     const { t, language } = useI18n();
     const fe = useFieldErrors(language);
@@ -4259,6 +4303,8 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
     const [runReport, setRunReport] = useState<any>(null);
     // «Sugerir reparto» (2.20.0) from here too — the run's own page is where the owner looked for it.
     const [showPlan, setShowPlan] = useState(false);
+    // 2.36.6: «Limpiar todas las asignaciones» asks first, with what it clears (ResetAssignmentsDialog).
+    const [showReset, setShowReset] = useState(false);
     // The lodging explorer's data: every attendee, every hotel with its rooms, every location.
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [hotels, setHotels] = useState<Hotel[]>([]);
@@ -4462,18 +4508,17 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
     const skippedFrozenLine = (l: { name: string; status?: string | null }) =>
         adjustText(tx, 'assignment.skipped.frozen', '«{name}» no se tocó: su hospedaje {state}. Ajústalo a mano en «Acomodación» (más abajo); volverá a entrar en la asignación automática {release}.', { name: l.name, lodging_status: l.status });
 
-    const handleReset = async () => {
-        if (!await confirm(t('confirm.reset.assignments') || 'Reset all assignments?', t('reset.assignments') || "Reset Assignments", true)) return;
-        try {
-            const result: any = await conferenceApi.resetAssignments(conferenceId);
-            const skipped: any[] = (result && result.skipped_frozen) || [];
-            if (skipped.length > 0) addToast(`${t('assignment.reset.done')}. ${skipped.map(s => skippedFrozenLine(s)).join(' ')}`, 'warning');
-            else addToast(t('assignment.reset.done'), 'success');
-            setRunReport(null);
-            reload();
-        } catch (e) {
-            addToast('Error resetting assignments', 'error');
-        }
+    const handleReset = () => setShowReset(true);
+    // After the dialog cleared: what it freed, and the locations it did not touch.
+    const afterReset = (result: any) => {
+        setShowReset(false);
+        const skipped: any[] = (result && result.skipped_frozen) || [];
+        const done = tx('reset.done.summary', 'Asignaciones limpiadas. Liberadas: {plan} del reparto, {manual} a mano. Reservas a mano que siguen: {kept}.',
+            { plan: result.plan_released || 0, manual: result.manual_released || 0, kept: result.manual_kept || 0 });
+        if (skipped.length > 0) addToast(`${done} ${skipped.map(s => skippedFrozenLine(s)).join(' ')}`, 'warning');
+        else addToast(done, 'success');
+        setRunReport(null);
+        reload();
     };
 
     // One object per run (the board re-opens every hotel when it changes, so it must not change per render).
@@ -4512,6 +4557,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
         <div className="space-y-10 animate-in fade-in duration-500">
             <ReadOnlyNotice section="lodging" />
             {showPlan && <LodgingPlan conferenceId={conferenceId} hotels={hotels} onClose={() => setShowPlan(false)} onApplied={() => loadData(true)} />}
+            {showReset && <ResetAssignmentsDialog conferenceId={conferenceId} onClose={() => setShowReset(false)} onDone={afterReset} />}
             {/* Premium Header & Summary */}
             <div className="relative overflow-hidden bg-white rounded-3xl p-8 border border-gray-100 shadow-xl shadow-gray-100/50">
                 <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-indigo-50/50 rounded-full blur-3xl"></div>
@@ -5335,6 +5381,9 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                     </div>
                 );
             })()}
+
+            {/* 2.36.6: until when the coordinators may withdraw their people's registrations from the portal. */}
+            <WithdrawDeadlineSetting conferenceId={conferenceId} value={(conference as any)?.withdraw_until} canEdit={canDeadline} tx={tx} addToast={addToast} onSaved={loadLocations} />
 
             <div className="flex flex-wrap items-center justify-between gap-4 bg-gray-50/50 p-5 sm:p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div className="min-w-0">

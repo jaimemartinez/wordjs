@@ -76,30 +76,22 @@ const phoneLang = () => {
     const l = typeof navigator !== "undefined" ? String(navigator.language || "").slice(0, 2).toLowerCase() : "";
     return ["es", "en", "pt"].includes(l) ? l : "es";
 };
+/** 2.36.6: ONE switch for every notice CM sends to this phone — bus boarding, departure and messages, and the meal call. */
 const SWITCH_TEXT = {
-    bus: {
-        on: "Avisos del bus activados en este teléfono.",
-        intro: "Recibe un aviso en este teléfono cuando tu bus empiece a embarcar, cuando salga o si hay un mensaje, aunque tengas la página cerrada.",
-        button: "Activar avisos del bus",
-        done: "Listo: te avisaremos cuando tu bus empiece a embarcar.",
-        unsupported: "Este navegador no recibe avisos: mantén esta página abierta para ver el estado de tu bus.",
-    },
-    meal: {
-        on: "Avisos de comida activados en este teléfono.",
-        intro: "Recibe un aviso en este teléfono cuando llamen a tu grupo a comer, aunque tengas la página cerrada.",
-        button: "Activar avisos de comida",
-        done: "Listo: te avisaremos cuando llamen a tu grupo a comer.",
-        unsupported: "Este navegador no recibe avisos: mantén esta página abierta; aquí verás cuando llamen a tu grupo.",
-    },
+    on: "Avisos activados en este teléfono.",
+    intro: "Recibe un aviso en este teléfono cuando llamen a tu grupo a comer, cuando tu bus empiece a embarcar o salga, y con los mensajes de la organización, aunque tengas la página cerrada.",
+    button: "Activar avisos",
+    done: "Listo: te avisaremos en este teléfono.",
+    unsupported: "Este navegador no recibe avisos: mantén esta página abierta para ver cuándo llaman a tu grupo y el estado de tu bus.",
 };
 
 /**
- * The switch for the notices on this phone (Web Push): the bus notices (2.27.0) and, since 2.36.5, the meal call of
- * the person's group — one subscription carries both. «Mi transporte» shows it for the bus; «Mis comidas» for the
- * meals when the person has no bus.
+ * The switch for the notices on this phone (Web Push): the bus notices (2.27.0) and the meal call of the person's
+ * group (2.36.5) — one subscription per phone carries every one of them (the server fans each notice out to the
+ * person's phones). 2.36.6: ONE switch, «Activar avisos», in the page's «Avisos» card (it was one per section).
  */
-export function PushSwitch({ session, pushKey, post, code, what = "bus" }: { session: string; pushKey: string | null; post: Post; code?: string; what?: "bus" | "meal" }) {
-    const T = SWITCH_TEXT[what] || SWITCH_TEXT.bus;
+export function PushSwitch({ session, pushKey, post, code }: { session: string; pushKey: string | null; post: Post; code?: string }) {
+    const T = SWITCH_TEXT;
     const [push, setPush] = useState<PushState>("busy");
     const [note, setNote] = useState("");
     // Where the notices stand on this phone; a granted phone re-sends its subscription (the session may be new).
@@ -194,8 +186,14 @@ export function PushSwitch({ session, pushKey, post, code, what = "bus" }: { ses
     );
 }
 
-export function BusAlerts({ session, initial, pushKey, post, code }: { session: string; initial: Bus[]; pushKey: string | null; post: Post; code?: string }) {
+/**
+ * «Mi transporte»: the person's buses, fresh while the page is open. `onBuses` (2.36.6) hears every refresh, so the
+ * page's alert strip at the top shows «Embarcando» / «Salió» without scrolling down to here.
+ */
+export function BusAlerts({ session, initial, post, onBuses }: { session: string; initial: Bus[]; post: Post; onBuses?: (buses: Bus[]) => void }) {
     const [buses, setBuses] = useState<Bus[]>(initial);
+    const heard = useRef(onBuses);
+    heard.current = onBuses;
     const [fresh, setFresh] = useState<Set<number>>(new Set());
     const prev = useRef<Map<number, string>>(new Map(initial.map((b) => [b.id, b.status])));
 
@@ -213,6 +211,7 @@ export function BusAlerts({ session, initial, pushKey, post, code }: { session: 
             prev.current = new Map(next.map((b) => [b.id, b.status]));
             if (changed.size) setFresh((f) => new Set([...f, ...changed]));
             setBuses(next);
+            if (heard.current) heard.current(next);
         } catch { /* the next tick tries again */ }
     }, [post, session]);
 
@@ -237,7 +236,7 @@ export function BusAlerts({ session, initial, pushKey, post, code }: { session: 
     const section = "bg-white rounded-3xl border border-gray-100 shadow-sm p-5 sm:p-6 space-y-3";
     const h2 = "text-[11px] font-black uppercase tracking-widest text-gray-500 flex items-center gap-2";
     return (
-        <section className={section} data-self-transport="">
+        <section className={section} id="mi-transporte" data-self-transport="">
             <h2 className={h2}><i className="fa-solid fa-bus" aria-hidden="true"></i>Mi transporte</h2>
             <ul className="space-y-3">
                 {buses.map((b) => {
@@ -279,8 +278,6 @@ export function BusAlerts({ session, initial, pushKey, post, code }: { session: 
                     );
                 })}
             </ul>
-
-            <PushSwitch session={session} pushKey={pushKey} post={post} code={code} what="bus" />
         </section>
     );
 }

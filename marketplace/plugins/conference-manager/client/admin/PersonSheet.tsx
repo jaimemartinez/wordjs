@@ -155,7 +155,14 @@ export function PersonSheet({
     const balanceC = Math.max(0, b.due - b.validated);
     const chips = (
         <div className="flex flex-wrap gap-1.5" data-cm-head-extra="" data-person-chips="">
-            {cancelled && <span className="px-2.5 py-1 rounded-full bg-gray-200 text-gray-800 text-[10px] font-black uppercase tracking-widest" data-chip="cancelled"><i className="fa-solid fa-ban mr-1" aria-hidden="true"></i>{tx('roster.cancelled', 'Cancelada')}</span>}
+            {cancelled && <span className="px-2.5 py-1 rounded-full bg-gray-200 text-gray-800 text-[10px] font-black uppercase tracking-widest" data-chip="cancelled"><i className={`fa-solid ${p.withdrawn_at ? 'fa-user-minus' : 'fa-ban'} mr-1`} aria-hidden="true"></i>{p.withdrawn_at ? tx('roster.withdrawn', 'Retirada') : tx('roster.cancelled', 'Cancelada')}</span>}
+            {/* 2.36.6: who withdrew it, when, and why (a coordinator, from the portal). */}
+            {cancelled && p.withdrawn_at && (
+                <span className="basis-full text-[11px] text-gray-600" data-withdrawn-detail="">
+                    {tx('roster.withdrawn.by', 'Retirada por el encargado de {location} el {when}.', { location: loc ? loc.name : (p.location || ''), when: String(p.withdrawn_at).slice(0, 16) + ' UTC' })}
+                    {p.withdraw_reason ? ` ${tx('roster.withdrawn.reason', 'Motivo: {reason}', { reason: p.withdraw_reason })}` : ''}
+                </span>
+            )}
             <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 text-[10px] font-black"><i className="fa-solid fa-location-dot mr-1" aria-hidden="true"></i>{loc ? loc.name : (p.location || tx('no.location', 'Sin localidad'))}</span>
             {family && <span className="px-2.5 py-1 rounded-full bg-violet-50 text-violet-800 text-[10px] font-black"><i className="fa-solid fa-people-roof mr-1" aria-hidden="true"></i>{family}</span>}
         </div>

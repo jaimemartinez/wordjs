@@ -6,6 +6,90 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **conference-manager 2.36.6: a simpler Participantes screen in the coordinators' portal.**
+  - **«Consentimiento en papel» is a blue button** next to «Registrar nuevo», with the same style. It shows while
+    the conference asks for the data authorization and opens the paper consent above the list. It is no longer
+    folded inside «Herramientas de la localidad».
+  - **«Escarapelas de tu localidad» is gone**: the copy-all, print and PDF buttons for the whole locality. Each
+    person's badge (view, copy link, WhatsApp, PDF) stays in their sheet, section «Escarapela». The admin's
+    *Escarapelas* screen is unchanged. Their two portal routes, `POST /portal/badges/links` and
+    `POST /portal/badges/ticket`, are removed: nothing else called them.
+  - **«Herramientas de la localidad» is removed**: with both of its tools moved or gone, the panel was empty.
+  - **A person's «Escarapela» has three actions**: WhatsApp, Copiar enlace and Enviar. «Ver» and «PDF» are gone.
+    - *WhatsApp* shows only when the person has a phone on file. It uses the number as the consent message builds
+      it, the conference's default calling code included, and the message carries the link plus a few lines on how
+      to use it.
+    - *Copiar enlace* is always there.
+    - *Enviar* shows only when the person has an e-mail on file. After an in-app confirmation naming the (masked)
+      address, it e-mails the person their badge link with instructions: open it, keep it on the home screen, turn
+      on the notices for meal calls and boarding, and keep it to themselves. The e-mail is in the conference's
+      e-mail language (*Autorizaciones › Idioma de los correos*); a toast says how it went.
+    - **Limits and errors**: one e-mail per person every 5 minutes. A site without mail, or a plugin without the
+      e-mail permission, gets a clear error, never a silent «sent».
+    - **Audit**: every attempt is recorded (who, to which address, when, sent or why not).
+    - **Missing actions explained**: a short hint says when WhatsApp or Enviar is missing because there is no phone
+      or e-mail.
+    - **Scope**: the server only acts for the coordinator's own locality.
+  - **A section menu instead of the row of tabs.** The admin's fifteen sections no longer scroll sideways in one row,
+    even on a wide screen. One button names the section you are in («Sección: Inscripciones ▾») and opens them all,
+    grouped (Personas · Dinero · Logística · Configuración) and searchable, on a computer and a phone. A role still
+    sees only the sections it may open.
+  - **Fixed: «Pagos de cuotas» re-rendered in a loop while loading** («Maximum update depth exceeded» in the
+    console).
+  - **Coordinators can withdraw registrations, until a deadline the administrator sets.**
+    - **The deadline**: in *Localidades*, «Los encargados pueden retirar inscripciones hasta» (date and time, the
+      admin's calendar). Empty means coordinators cannot withdraw.
+    - **In the portal**: a person's sheet offers «Retirar inscripción» until then, with an in-app confirmation naming
+      the person and an optional reason, and the list says «Puedes retirar inscripciones hasta…».
+    - **Payments**: a registration with any payment recorded cannot be withdrawn by the coordinator («Tiene pagos
+      registrados: pídele al administrador que la retire»).
+    - **Server checks**: the deadline, the payments and the coordinator's own locality are all re-checked on the
+      server. It also refuses a bed the administration fixed or a bed in a submitted or validated lodging.
+    - **Withdrawn is not deleted**: the registration leaves the lists, quotas, lodging, meal groups and the meal
+      scanner, badges and stickers, and the consent sheets, but the record stays with who withdrew it, when and why.
+      The admin sees it as «Retirada» (filter «Solo retiradas») and can reactivate it; it does not get its old room
+      back, and the confirmation says so.
+    - **Audit**: every withdrawal and restore is recorded.
+  - **«Mi inscripción»: the badge first, and one switch for every notice.**
+    - **Order**: «Mi escarapela», then «Avisos», «Mis comidas» and «Mi transporte».
+    - **Alerts at the top**: what is happening now — «Tu grupo ya puede pasar a comer», «Embarcando: Bus 1» — sits
+      in a strip at the very top, and each line leads down to its section.
+    - **One «Activar avisos»** turns on, on this phone, the meal calls and the bus boarding, departure and
+      messages. It replaces the separate bus and meal buttons, with one state («Avisos activados en este
+      teléfono», and «Desactivar»).
+    - **When notices can't be turned on**, the page says so: blocked in the browser, or on an iPhone, add the page to
+      the home screen from Safari.
+    - **Nothing to re-enable**: a phone already had one subscription for every notice, so existing bus subscriptions
+      keep working.
+  - **A locality holds only the beds its people use** (the owner: «asignó más camas que los inscritos de la
+    localidad»).
+    - **«Sugerir reparto»**: a room the plan gives to one locality is that locality's whole only when its people fill
+      it. Otherwise the locality holds the beds its people use, and the free beds go to people of other localities in
+      the same «Separar por» section (Hombres / Mujeres). With «no compartir habitaciones» the rooms stay exclusive.
+    - **The automatic assignment keeps a locality together**: each locality fills its own partly used rooms, then
+      empty rooms, and only then the free beds of another locality's room of the same section. A room mixing
+      localities now weighs more than one room saved.
+    - **Never mixed**: a different section, and rooms reserved by hand stay exclusive.
+    - **Lodging explorer**: a room with people of several localities shows each person's locality.
+    - **Coordinators' portal**: unchanged — only its own people, and «Compartida · tuyas N de M camas».
+  - **Fixed: «Limpiar todas las asignaciones» frees the rooms too.** It used to take the people out but leave every
+    room and bed reserved for the locality it had been given to.
+    - **What is freed**: the rooms and beds that «Sugerir reparto» gave to localities go back to everyone, so the
+      next assignment starts from scratch.
+    - **Reservations by hand** stay with their locality unless the admin ticks «También liberar las habitaciones
+      reservadas a mano (N)». Reservations made before this version count as made by hand.
+    - **The confirmation** lists what will be cleared: people, rooms and beds of the split, and the count of
+      reservations by hand.
+    - **Untouched**: frozen localities, blocked rooms and people fixed by the administration.
+    - **Audit**: each clear is recorded (who, when, what it freed). Every allotment now records whether it came
+      from the split or was made by hand.
+  - **Fixed: searchable lists scroll again.** Wheel, trackpad and touch work. The list used to jump up and down:
+    every row the pointer passed over while scrolling was scrolled back into view. Now a row is brought into view
+    only when the list opens (the chosen one) or on a keyboard move. A new search starts at the top. The list keeps
+    its scroll to itself.
+
 ## [2.11.2] - 2026-10-24
 
 ### Fixed

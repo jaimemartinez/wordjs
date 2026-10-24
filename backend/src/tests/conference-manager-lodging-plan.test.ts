@@ -237,7 +237,9 @@ test('«Aplicar» writes only the plan the admin saw: anything changed meanwhile
     assert.strictEqual(stale.body.code, 'plan_changed');
     assert.strictEqual((p.q(`SELECT id FROM ${T('rooms')} WHERE location_id IS NOT NULL`) as any[]).length, 0, 'nothing written');
     ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, token: stale.body.plan.token } }), 'the new plan applies');
-    assert.strictEqual((p.q(`SELECT id FROM ${T('rooms')} WHERE location_id = ?`, norte) as any[]).length, 2);
+    // 2.36.6 (option (a)): the full room is Norte's; the half one gives Norte its one bed, the other is a pool bed.
+    assert.strictEqual((p.q(`SELECT id FROM ${T('rooms')} WHERE location_id = ?`, norte) as any[]).length, 1);
+    assert.deepStrictEqual((p.q(`SELECT location_id, beds FROM ${T('room_beds')}`) as any[]).map(b => [b.location_id, b.beds]), [[norte, 1]]);
     assert.strictEqual((await p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid } })).status, 400, 'a token is required');
 });
 
@@ -1484,4 +1486,205 @@ test('an answer once applied is today’s: thought again with the same options, 
     ok(await w.p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, token: first.token, fresh: true } }), 'apply');
     const again = await w.plan({ fresh: true });
     assert.deepStrictEqual([again.keeps_today, again.moved, again.variants.keep.today], [true, 0, true]);
+});
+
+test('2.36.6 the owner\'s hotel: 4 men and 1 woman of one location in rooms of 3, genders apart — 3+1 and 1, nobody spread 2+2', async () => {
+    const w = await world([['B1', 3], ['B2', 3], ['B10', 3]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte');
+    const men = [];
+    for (let i = 0; i < 4; i++) men.push(await w.person(`M${i}`, w.M, norte));
+    const woman = await w.person('F0', w.F, norte);
+    await w.run();
+    const menRooms = men.map(w.roomOf);
+    const counts = [...new Set(menRooms)].map(r => menRooms.filter(x => x === r).length).sort();
+    assert.deepStrictEqual(counts, [1, 3], 'the men fill one room of 3 before opening another');
+    // The woman gets the third room, alone (the hard gender rule; a room's «Hombres / Mujeres» is only its label).
+    assert.ok(w.roomOf(woman) != null && !menRooms.includes(w.roomOf(woman)));
+    assert.deepStrictEqual(Object.values(w.used()).sort(), [[1, 3], [1, 3], [3, 3]]);
+    // The run allots nothing: the free beds stay open to anyone.
+    for (const n of ['B1', 'B2', 'B10']) assert.strictEqual(w.ownerOf(w.room[n]), null, n);
+});
+
+test('2.36.6 «Limpiar todas las asignaciones» frees the rooms the plan gave (any location may take them next); a reservation by hand only when asked; preview and audit', async () => {
+    const w = await world([['A3', 3], ['B3', 3], ['C2', 2], ['D2', 2]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    for (let i = 0; i < 3; i++) await w.person(`NM${i}`, w.M, norte);
+    await w.person('NF0', w.F, norte);
+    // A reservation by hand: «Dar camas» gives Sur 2 beds (a room of 2).
+    ok(await w.p.call('post', `/locations/${sur}/beds`, { body: { beds: 2 } }), 'dar camas');
+    const manualRoom = Object.values(w.room).find(id => w.ownerOf(id) === sur) as number;
+    assert.ok(manualRoom, 'Sur got a room by hand');
+    // The plan gives Norte its rooms and places its people.
+    const pl = await w.plan({ replan: true });
+    ok(await w.p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, replan: true, token: pl.token } }), 'apply');
+    const sourceOf = (id: number) => w.p.one(`SELECT allot_source FROM ${T('rooms')} WHERE id = ?`, id).allot_source;
+    const planRooms = Object.values(w.room).filter(id => w.ownerOf(id) === norte || w.shares(id).some((b: any) => b.location_id === norte));
+    assert.ok(planRooms.length > 0, 'the plan allotted rooms to Norte');
+    for (const id of planRooms) if (w.ownerOf(id) === norte) assert.strictEqual(sourceOf(id), 'plan');
+    assert.strictEqual(sourceOf(manualRoom), 'manual');
+    // An allotment made before 2.36.6 (no source) counts as made by hand.
+    w.p.exec(`UPDATE ${T('rooms')} SET allot_source = NULL WHERE id = ?`, manualRoom);
+
+    // The preview: counts only, nothing changes.
+    const pre = ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid, preview: true } }), 'preview');
+    assert.strictEqual(pre.people, 4);
+    assert.ok(pre.plan_allotments >= 1);
+    assert.strictEqual(pre.manual_allotments, 1);
+    assert.ok(w.roomOf((w.p.one(`SELECT id FROM ${T('inscriptions')} WHERE first_name = 'NM0'`) as any).id) != null, 'preview moved nobody');
+
+    // Clear all (box unticked): people out, the plan's rooms back to the pool, Sur's reservation by hand stays.
+    const done = ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid } }), 'reset');
+    assert.deepStrictEqual([done.people, done.plan_released, done.manual_released, done.manual_kept], [4, pre.plan_allotments, 0, 1]);
+    assert.strictEqual(Number(w.p.one(`SELECT COUNT(*) AS n FROM ${T('inscriptions')} WHERE conference_id = ? AND room_id IS NOT NULL`, w.cid).n), 0);
+    for (const id of Object.values(w.room)) {
+        if (id === manualRoom) { assert.strictEqual(w.ownerOf(id), sur); continue; }
+        assert.strictEqual(w.ownerOf(id), null, 'a pool room again');
+        assert.deepStrictEqual(w.shares(id), [], 'no bed left reserved');
+    }
+    // Any location may take them now: Sur's people go into the freed rooms too (the run fills pool rooms for everyone).
+    for (let i = 0; i < 3; i++) await w.person(`SM${i}`, w.M, sur);
+    await w.run();
+    const surMen = (w.p.q(`SELECT room_id FROM ${T('inscriptions')} WHERE first_name LIKE 'SM%'`) as any[]).map(r => r.room_id);
+    assert.ok(surMen.every(r => r != null), 'Sur placed');
+    assert.ok(surMen.some(r => r !== manualRoom), 'a room the plan had given Norte took Sur\'s people');
+
+    // Ticked: the reservation by hand goes too.
+    const all = ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid, release_manual: true } }), 'reset manual');
+    assert.deepStrictEqual([all.manual_released, all.manual_kept], [1, 0]);
+    assert.strictEqual(w.ownerOf(manualRoom), null);
+    // The audit: one row per reset, with who and what it freed.
+    const log = w.p.q(`SELECT actor, people, plan_released, manual_released, manual_kept FROM ${T('lodging_resets')} WHERE conference_id = ? ORDER BY id`, w.cid) as any[];
+    assert.strictEqual(log.length, 2);
+    assert.deepStrictEqual([Number(log[0].manual_kept), Number(log[1].manual_released)], [1, 1]);
+    assert.ok(log[0].actor);
+});
+
+// The coordinators' portal of a location, as the core calls a portal route (x-portal-token).
+async function portalOf(w: Awaited<ReturnType<typeof world>>, locationId: number) {
+    const code = w.p.one(`SELECT code FROM ${T('locations')} WHERE id = ?`, locationId).code;
+    const token = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: locationId, code } })).token as string;
+    return async (method: string, url: string, body?: any) => {
+        const r = w.p.routes.find((x: any) => x.method === method && x.path === url) as any;
+        const res: any = { statusCode: 200, _body: undefined, status(c: number) { this.statusCode = c; return this; }, json(x: any) { this._body = JSON.parse(JSON.stringify(x)); return this; }, cookie() { return this; }, clearCookie() { return this; }, setHeader() { return this; } };
+        await r.handler({ params: {}, query: {}, body: body || {}, headers: { 'x-portal-token': token }, cookies: {}, user: null }, res);
+        return { status: res.statusCode, body: res._body };
+    };
+}
+
+test('2.36.6 option (a): a location holds only the beds its people use — its leftover beds go to another location of the same gender, never another gender, never a room reserved by hand', async () => {
+    const w = await world([['A3', 3], ['B3', 3], ['D2', 2]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    // D2 reserved for Norte by hand (the admin's own allotment): exclusive.
+    ok(await w.p.call('put', `/rooms/${w.room.D2}`, { body: { location_id: norte } }), 'D2 by hand');
+    for (let i = 0; i < 4; i++) await w.person(`NM${i}`, w.M, norte);
+    const pl = await w.plan({ replan: false });
+    ok(await w.p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, token: pl.token } }), 'apply');
+    // Norte's four men: two of them in D2 (its own room by hand), two in a 3-bed room — that room is not Norte's whole:
+    // Norte holds the beds its men use, the free bed is a pool bed of the men's class.
+    const menRooms = (w.p.q(`SELECT room_id FROM ${T('inscriptions')} WHERE first_name LIKE 'NM%'`) as any[]).map(r => r.room_id);
+    const mixedRoom = [w.room.A3, w.room.B3].find(id => menRooms.includes(id)) as number;
+    assert.ok(mixedRoom);
+    const usedThere = menRooms.filter(r => r === mixedRoom).length;
+    assert.strictEqual(w.ownerOf(mixedRoom), null, 'not a whole room of Norte');
+    assert.deepStrictEqual(w.shares(mixedRoom).map((b: any) => [b.location_id, b.beds]), [[norte, usedThere]], 'Norte holds exactly the beds it uses');
+    const lock = JSON.parse(w.p.one(`SELECT share_lock FROM ${T('rooms')} WHERE id = ?`, mixedRoom).share_lock);
+    assert.deepStrictEqual(lock.map((x: any) => x.value), [w.M], 'the room keeps the men\'s class');
+
+    // Sur: men and a woman. The run fills the empty room first, then Norte's leftover men's beds — the woman never goes there.
+    const sm = [await w.person('SM0', w.M, sur), await w.person('SM1', w.M, sur), await w.person('SM2', w.M, sur), await w.person('SM3', w.M, sur)];
+    const sf = await w.person('SF0', w.F, sur);
+    await w.run();
+    const otherRoom = mixedRoom === w.room.A3 ? w.room.B3 : w.room.A3;
+    const surRooms = sm.map(w.roomOf);
+    assert.strictEqual(surRooms.filter(r => r === otherRoom).length, 3, 'the empty room first (a location kept together)');
+    assert.strictEqual(surRooms.filter(r => r === mixedRoom).length, 3 - usedThere, 'then the free beds of Norte\'s room, same gender');
+    assert.ok(!surRooms.includes(w.room.D2), 'never a room reserved by hand for Norte');
+    assert.strictEqual(w.roomOf(sf), null, 'a woman never takes a bed of the men\'s room (no bed left for her)');
+    assert.deepStrictEqual(w.gendersIn(mixedRoom), new Set([w.M]));
+    // Norte still holds only its occupied beds there.
+    assert.deepStrictEqual(w.shares(mixedRoom).map((b: any) => [b.location_id, b.beds]), [[norte, usedThere]]);
+
+    // Norte's portal: its own people, the room marked shared — Sur's names never reach it.
+    const portal = await portalOf(w, norte);
+    const view = ok(await portal('get', '/portal/lodging'), 'portal view');
+    const text = JSON.stringify(view);
+    for (const name of ['SM0', 'SM1', 'SM2', 'SM3', 'SF0']) assert.ok(!text.includes(name), name);
+    assert.ok(text.includes('NM0'));
+});
+
+test('2.36.6 option (a): with an empty room free, another location never goes into a location\'s half-used room', async () => {
+    const w = await world([['A3', 3], ['B3', 3], ['C3', 3]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    for (let i = 0; i < 4; i++) await w.person(`NM${i}`, w.M, norte);
+    for (let i = 0; i < 2; i++) await w.person(`SM${i}`, w.M, sur);
+    await w.run();
+    // Each location in rooms of its own: 3 + 1 for Norte, 2 for Sur — no room mixes them, though one fewer room would.
+    for (const id of Object.values(w.room)) {
+        const locs = new Set((w.p.q(`SELECT location_id FROM ${T('inscriptions')} WHERE room_id = ?`, id) as any[]).map(r => r.location_id));
+        assert.ok(locs.size <= 1, `room ${id} mixes locations`);
+    }
+});
+
+test('2.36.6 «Retirar inscripción»: a coordinator withdraws their own people before the deadline — never with a payment, never another location\'s; out of lists, counts, rooms and the scanner; the admin restores', async () => {
+    const w = await world([['A3', 3]]);
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    const ana = await w.person('Ana', w.F, norte), beto = await w.person('Beto', w.M, norte), carla = await w.person('Carla', w.F, sur);
+    await w.run();
+    assert.ok(w.roomOf(ana) != null, 'Ana has a bed');
+    const portal = await portalOf(w, norte);
+    const code = w.p.one(`SELECT code FROM ${T('locations')} WHERE id = ?`, norte).code;
+    const token = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: norte, code } })).token as string;
+    const withdraw = async (id: number, body: any = {}) => {
+        const r = w.p.routes.find((x: any) => x.method === 'post' && x.path === '/portal/inscriptions/:id/withdraw') as any;
+        const res: any = { statusCode: 200, _body: undefined, status(c: number) { this.statusCode = c; return this; }, json(x: any) { this._body = JSON.parse(JSON.stringify(x)); return this; }, cookie() { return this; }, clearCookie() { return this; }, setHeader() { return this; } };
+        await r.handler({ params: { id: String(id) }, query: {}, body, headers: { 'x-portal-token': token }, cookies: {}, user: null }, res);
+        return { status: res.statusCode, body: res._body };
+    };
+    const refused = async (id: number) => { const r = await withdraw(id); return [r.status, r.body.code]; };
+    const stamp = (when: number) => { const d = new Date(when); const p2 = (n: number) => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}T${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; };
+    const setDeadline = async (v: string | null) => ok(await w.p.call('put', `/${w.cid}`, { body: { withdraw_until: v, lodging_tz: 'UTC' } }), 'deadline');
+
+    // No deadline set: coordinators cannot withdraw; /portal/me says so.
+    const me0 = ok(await portal('get', '/portal/me'));
+    assert.deepStrictEqual([me0.withdraw.until, me0.withdraw.open], [null, false]);
+    assert.deepStrictEqual(await refused(beto), [409, 'withdraw_closed']);
+    // Past the deadline: refused too.
+    await setDeadline(stamp(Date.now() - 3600e3));
+    assert.deepStrictEqual(await refused(beto), [409, 'withdraw_closed']);
+    // Before the deadline: open.
+    await setDeadline(stamp(Date.now() + 24 * 3600e3));
+    assert.strictEqual(ok(await portal('get', '/portal/me')).withdraw.open, true);
+    // Another location's person: not theirs.
+    assert.strictEqual((await withdraw(carla)).status, 404);
+    // Any payment recorded: the administrator withdraws them.
+    w.p.exec(`UPDATE ${T('inscriptions')} SET amount_paid = 10 WHERE id = ?`, beto);
+    assert.deepStrictEqual(await refused(beto), [409, 'has_payments']);
+    w.p.exec(`UPDATE ${T('inscriptions')} SET amount_paid = 0 WHERE id = ?`, beto);
+
+    // Ana withdrawn (with her bed): cancelled, stamped, the bed freed; gone from the portal list and the seat count.
+    const seats = (m: any) => JSON.stringify(m.inscribed);
+    const before = seats(ok(await portal('get', '/portal/me')));
+    ok(await withdraw(ana, { reason: 'Se enfermó' }), 'withdraw Ana');
+    const row = w.p.one(`SELECT status, room_id, withdrawn_at, withdrawn_by, withdraw_reason FROM ${T('inscriptions')} WHERE id = ?`, ana);
+    assert.deepStrictEqual([row.status, row.room_id, !!row.withdrawn_at, row.withdrawn_by, row.withdraw_reason], ['cancelled', null, true, `portal:${norte}`, 'Se enfermó']);
+    const list = ok(await portal('get', '/portal/inscriptions')) as any[];
+    assert.deepStrictEqual(list.map(x => x.id), [beto], 'gone from the coordinator\'s list');
+    assert.notStrictEqual(seats(ok(await portal('get', '/portal/me'))), before, 'the seat count drops');
+    assert.deepStrictEqual(await refused(ana), [409, 'not_active']);
+    // The meal scanner does not serve her.
+    const svc = ok(await w.p.call('post', '/meals/services', { body: { conference_id: w.cid, service_date: '2027-03-01', meal: 'almuerzo', location_ids: [norte] } }), 'service').id;
+    assert.notStrictEqual(ok(await w.p.call('post', '/meals/check', { body: { service_id: svc, inscription_id: ana } })).result, 'ready');
+
+    // The admin restores her: active again, the stamp gone, her old bed NOT given back; both steps audited.
+    const back = ok(await w.p.call('put', `/inscriptions/${ana}`, { body: { status: 'pending' } }), 'restore');
+    assert.strictEqual(back.restored, true);
+    const after = w.p.one(`SELECT status, room_id, withdrawn_at FROM ${T('inscriptions')} WHERE id = ?`, ana);
+    assert.deepStrictEqual([after.status, after.room_id, after.withdrawn_at], ['pending', null, null]);
+    const log = w.p.q(`SELECT kind, actor, reason FROM ${T('inscription_withdrawals')} WHERE inscription_id = ? ORDER BY id`, ana) as any[];
+    assert.deepStrictEqual(log.map(x => [x.kind, x.reason]), [['withdraw', 'Se enfermó'], ['restore', null]]);
+    assert.strictEqual(log[0].actor, `portal:${norte}`);
 });

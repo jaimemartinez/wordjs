@@ -254,7 +254,9 @@ export const selectAllCapped = (ids: readonly number[], cap = SELECTION_MAX): { 
 /** After a reload: drop ids that are gone or can no longer be selected. */
 export const pruneSelection = (selected: readonly number[], validIds: readonly number[]): number[] => {
     const ok = new Set(validIds);
-    return selected.filter((id) => ok.has(id));
+    // The same array when nothing goes (2.36.6): a caller that sets it as state does not re-render for nothing.
+    const kept = selected.filter((id) => ok.has(id));
+    return kept.length === selected.length ? (selected as number[]) : kept;
 };
 
 /** The sorted, de-duplicated key of a set of ids (to compare two selections). */

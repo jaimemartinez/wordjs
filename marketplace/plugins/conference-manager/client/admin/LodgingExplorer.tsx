@@ -1186,6 +1186,8 @@ function RoomCard({ room, onOpen, env }: any) {
     const freeLines = Math.min(s.free, CARD_FREE_LINES_CAP);
     // With a location filter, occupants of other locations stay visible (full information) but muted.
     const locFilter = filters.location && filters.location !== POOL_FILTER ? filters.location : '';
+    // 2.36.6 (option (a)): a room holding people of several locations names each one's location.
+    const mixedRoom = new Set(occupants.map(p => String(locationIdOf(p) ?? ''))).size > 1;
     const onKey = (e: React.KeyboardEvent) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
@@ -1237,7 +1239,7 @@ function RoomCard({ room, onOpen, env }: any) {
                             <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${genderDot(p.gender)}`} aria-hidden="true"></span>
                             <span className={`font-semibold text-gray-800 break-words min-w-0 ${p.status === 'cancelled' ? 'line-through text-gray-400' : ''}`}>{nameOf(p)}</span>
                             {block === 'board.moving' && <i className="fa-solid fa-spinner fa-spin text-[10px] text-indigo-400 mt-1 shrink-0" aria-hidden="true"></i>}
-                            {foreign && <span className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-0.5 shrink-0 truncate max-w-[7rem]">{locNameOf(p) || tx('board.no.location', 'Sin localidad')}</span>}
+                            {(foreign || mixedRoom) && <span className={`text-[9px] font-black uppercase tracking-widest mt-0.5 shrink-0 truncate max-w-[7rem] ${foreign ? 'text-gray-400' : 'rounded-full bg-indigo-50 text-indigo-700 px-1.5 py-0.5'}`} data-occupant-location="">{locNameOf(p) || tx('board.no.location', 'Sin localidad')}</span>}
                         </li>
                     );
                 })}

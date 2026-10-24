@@ -751,7 +751,7 @@ export const conferenceApi = {
     // What the automatic assignment would do now (nothing is written).
     simulateAssignment: (conferenceId: number) => apiPost<AssignmentRunReport & { placements: { inscription_id: number; room_id: number | null; from_room_id: number | null }[] }>('/plugin/conference-manager/assignment/simulate', { conference_id: conferenceId }),
     // Clears every scope except the frozen locations, which come back in `skipped_frozen`.
-    resetAssignments: (conferenceId: number) => apiPost<{ success: boolean; skipped_frozen?: { location_id: number; name: string }[] }>('/plugin/conference-manager/assignment/reset', { conference_id: conferenceId }),
+    resetAssignments: (conferenceId: number, opts: { preview?: boolean; release_manual?: boolean } = {}) => apiPost<{ success: boolean; people?: number; plan_allotments?: number; manual_allotments?: number; plan_released?: number; manual_released?: number; manual_kept?: number; skipped_frozen?: { location_id: number; name: string; status?: string }[] }>('/plugin/conference-manager/assignment/reset', { conference_id: conferenceId, ...opts }),
 
     // Fields
     // «Condiciones de salud» (2.32.0) is left out unless asked for (`health: true`): its answers are not a column, so

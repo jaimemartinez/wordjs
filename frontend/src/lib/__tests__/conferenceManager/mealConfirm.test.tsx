@@ -1878,12 +1878,45 @@ describe('«Llamar grupos» (2.36.5): an uncalled group waits; «Dejar pasar igu
         expect(m).toContain('data-self-meal-called=""');
         expect(m).toContain('const t = setInterval(again, 30000);');
         expect(m).toContain('e.data.type === "cm-meal-call"');
-        expect(m).toContain('<PushSwitch session={state.session} pushKey={view.push_key} post={post} code={view.code} what="meal" />');
+        // 2.36.6: ONE switch for every notice (the «Avisos» card), no longer one per section.
+        expect(m).toContain('<PushSwitch session={state.session} pushKey={view.push_key} post={post} code={view.code} />');
+        expect((m.match(/<PushSwitch /g) || []).length).toBe(1);
         const b = read('client/portal/yo/BusAlerts.tsx');
         expect(b).toContain('export function PushSwitch(');
-        expect(b).toContain('<PushSwitch session={session} pushKey={pushKey} post={post} code={code} what="bus" />');
+        expect(b).not.toContain('<PushSwitch ');
         expect((b.match(/lang: phoneLang\(\)/g) || []).length).toBe(2);
         const sw = read('client/portal/sw.js');
         expect(sw).toContain("c.postMessage({ type: meal ? 'cm-meal-call' : 'cm-bus-notice' })");
+    });
+});
+
+describe('2.36.6 «Mi inscripción»: the badge first, then meals, then transport; one «Activar avisos»', () => {
+    const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager', rel), 'utf8');
+    const m = read('client/portal/yo/MyRegistration.tsx');
+    it('the sections in the owner\'s order, with what is happening now in a strip at the top that leads down to them', () => {
+        const at = (needle: string) => { const i = m.indexOf(needle); expect(i, needle).toBeGreaterThan(0); return i; };
+        const order = ['data-self-alerts=""', 'data-self-badge=""', 'data-self-notices=""', 'data-self-meals=""', '<BusAlerts ', 'data-self-lodging=""'].map(at);
+        expect([...order].sort((x, y) => x - y)).toEqual(order);
+        expect(m).toContain('href="#mis-comidas"');
+        expect(m).toContain('href="#mi-transporte"');
+        expect(m).toContain('id="mis-comidas"');
+        expect(read('client/portal/yo/BusAlerts.tsx')).toContain('id="mi-transporte"');
+        // The strip hears the buses as «Mi transporte» polls them.
+        expect(m).toContain('onBuses={setLiveBuses}');
+        expect(m).toContain('const boarding = buses.filter((b) => b.status === "boarding");');
+    });
+    it('one switch, one state, every notice: meal calls, bus boarding / departure / messages; iPhone and blocked said', () => {
+        const b = read('client/portal/yo/BusAlerts.tsx');
+        expect(b).toContain('button: "Activar avisos",');
+        expect(b).toContain('on: "Avisos activados en este teléfono.",');
+        expect(b).toContain('cuando llamen a tu grupo a comer, cuando tu bus empiece a embarcar o salga');
+        expect(b).not.toMatch(/Activar avisos (del bus|de comida)/);
+        expect(b).toContain('data-push-ios=""');
+        expect(b).toContain('Los avisos están bloqueados en este navegador.');
+        // The server keeps one subscription per phone and fans every notice out to it: no «bus only» kind to migrate.
+        const push = read('server/transport-push.js');
+        expect(push).toContain("await createUniqueIndex(`${P}uidx_push_subs_endpoint`, T.pushSubs, 'endpoint_hash');");
+        const subsTable = push.slice(push.indexOf('await db.createTable(T.pushSubs'), push.indexOf('await db.createTable(T.busNotices'));
+        expect(subsTable).not.toMatch(/kind|what/);
     });
 });

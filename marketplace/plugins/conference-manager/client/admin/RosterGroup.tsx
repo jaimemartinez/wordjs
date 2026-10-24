@@ -47,7 +47,7 @@ const pillText = (tx, state) => { const k = PILL_TEXT[state] || PILL_TEXT.unpaid
 export function rosterRowLabel(tx, name: string, p: any): string {
     const b = personBalance(p);
     const parts = p.status === 'cancelled'
-        ? [tx('roster.cancelled', 'Cancelada')]
+        ? [p.withdrawn_at ? tx('roster.withdrawn', 'Retirada') : tx('roster.cancelled', 'Cancelada')]
         : [pillText(tx, b.state), tx('fees.person.paid.of', '{paid} de {due}', { paid: money(b.validated), due: money(b.due) })];
     parts.push(roomText(tx, p));
     if (p.status !== 'cancelled' && b.pending > 0) parts.push(tx('fees.chip.pending', '{amount} por validar', { amount: money(b.pending) }));
@@ -112,7 +112,7 @@ export function RosterGroup({ group, page, size, onPage, collapsed, onToggle, co
                                         <span className="min-w-0 flex-1 space-y-1">
                                             <span className="flex flex-wrap items-center gap-2">
                                                 <span className={`text-sm font-black text-gray-900 break-words ${cancelled ? 'line-through decoration-2 text-gray-500' : ''}`}>{name}</span>
-                                                {cancelled && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-[9px] font-black uppercase tracking-widest">{tx('roster.cancelled', 'Cancelada')}</span>}
+                                                {cancelled && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-[9px] font-black uppercase tracking-widest">{p.withdrawn_at ? tx('roster.withdrawn', 'Retirada') : tx('roster.cancelled', 'Cancelada')}</span>}
                                             </span>
                                             {/* Wraps between its parts, never cut: on a 390 px phone the room used to end as «Sin h…». */}
                                             <span className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 text-[11px] font-bold text-gray-600" data-row-facts="">
@@ -155,7 +155,7 @@ export function RosterGroup({ group, page, size, onPage, collapsed, onToggle, co
                                             <td className="px-4 py-2.5">
                                                 <button type="button" onClick={() => onOpen(p)} className="text-left min-h-[44px] w-full">
                                                     <span className={`block font-black text-gray-900 break-words ${cancelled ? 'line-through decoration-2 text-gray-500' : ''}`}>{name}</span>
-                                                    {cancelled && <span className="inline-block mt-0.5 px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-[9px] font-black uppercase tracking-widest">{tx('roster.cancelled', 'Cancelada')}</span>}
+                                                    {cancelled && <span className="inline-block mt-0.5 px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-[9px] font-black uppercase tracking-widest">{p.withdrawn_at ? tx('roster.withdrawn', 'Retirada') : tx('roster.cancelled', 'Cancelada')}</span>}
                                                 </button>
                                                 {/* A chosen column the card has no room for: its value here (ROSTER_CSS shows it then). */}
                                                 {columns.map((f, i) => {

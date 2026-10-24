@@ -134,14 +134,18 @@ export type RosterFilters = {
     /** Owner decision D8: «Ocultar canceladas», OFF by default (the counts do not change). */
     hideCancelled: boolean;
     room: '' | 'with' | 'without';
+    /** 2.36.6: only the registrations a coordinator withdrew («Retiradas»). */
+    withdrawn?: boolean;
 };
-export const EMPTY_ROSTER_FILTERS: RosterFilters = { q: '', locationIds: [], payment: '', pending: false, hideCancelled: false, room: '' };
+export const EMPTY_ROSTER_FILTERS: RosterFilters = { q: '', locationIds: [], payment: '', pending: false, hideCancelled: false, room: '', withdrawn: false };
 
 /** How many filters (besides the search) are on — the «Filtros (n)» badge. */
 export const activeFilterCount = (f: RosterFilters): number =>
-    (f.locationIds.length ? 1 : 0) + (f.payment ? 1 : 0) + (f.pending ? 1 : 0) + (f.hideCancelled ? 1 : 0) + (f.room ? 1 : 0);
+    (f.locationIds.length ? 1 : 0) + (f.payment ? 1 : 0) + (f.pending ? 1 : 0) + (f.hideCancelled ? 1 : 0) + (f.room ? 1 : 0) + (f.withdrawn ? 1 : 0);
 
 export const isCancelled = (p: RosterPerson): boolean => p.status === 'cancelled';
+/** 2.36.6: a coordinator withdrew it (a cancellation that says who, when and why) — «Retirada». */
+export const isWithdrawn = (p: RosterPerson): boolean => !!(p as any).withdrawn_at;
 export const hasPending = (p: RosterPerson): boolean => Math.round((Number(p.pending_amount) || 0) * 100) > 0;
 
 /**
@@ -160,6 +164,7 @@ export function applyRosterFilters(
         if (f.payment && String(p.payment_status || 'unpaid') !== f.payment) return false;
         if (f.pending && !hasPending(p)) return false;
         if (f.hideCancelled && isCancelled(p)) return false;
+        if (f.withdrawn && !isWithdrawn(p)) return false;
         if (f.room === 'with' && p.room_id == null) return false;
         // «Sin habitación» = still waiting for a bed: «Requiere hospedaje: No» is not (2.31.0, as GET /inscriptions?assigned=false).
         if (f.room === 'without' && (p.room_id != null || !needsLodging(p))) return false;
@@ -269,6 +274,7 @@ export function parseRosterNav(raw: string | null | undefined): RosterNav {
         pending: f.pending === true,
         hideCancelled: f.hideCancelled === true,
         room: f.room === 'with' || f.room === 'without' ? f.room : '',
+        withdrawn: f.withdrawn === true,
     };
     const pages: Record<string, number> = {};
     if (v.pages && typeof v.pages === 'object') {

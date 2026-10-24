@@ -87,6 +87,10 @@ const mealName = (m: Meal) => m.label || MEAL_NAMES[m.meal] || m.meal;
 
 export default function MyRegistrationPage() {
     const [state, setState] = useState<State>({ kind: "loading" });
+    // 2.36.6: the buses as «Mi transporte» last heard them (it polls), for the alert strip at the top.
+    const [liveBuses, setLiveBuses] = useState<Bus[] | null>(null);
+    const sessionNow = state.kind === "ok" ? state.session : null;
+    useEffect(() => { setLiveBuses(null); }, [sessionNow]);
     // 2.36.5: while a meal is still to come, the page asks again (every 30 s while visible, at once on a call notice),
     // so «Tu grupo ya puede pasar a comer» shows without a reload.
     const waiting = state.kind === "ok" && !!state.view.meal_group && state.view.meals.pending.length > 0 ? state.session : null;
@@ -287,9 +291,35 @@ export default function MyRegistrationPage() {
                     <button type="button" onClick={leave} className="shrink-0 min-h-[40px] px-3 rounded-xl bg-white border-2 border-gray-200 text-gray-700 font-black text-[10px] uppercase tracking-widest" data-self-leave="">Salir</button>
                 </header>
 
-                {view.transport && view.transport.length > 0 && (
-                    <BusAlerts session={state.session} initial={view.transport} pushKey={view.push_key || null} post={post} code={view.code} />
-                )}
+                {/* 2.36.6: what is happening NOW, at the top — a compact strip, each line leading to its section. */}
+                {(() => {
+                    const buses = liveBuses || view.transport || [];
+                    const boarding = buses.filter((b) => b.status === "boarding");
+                    const called = view.meals.pending.find((m) => m.called_at);
+                    if (!boarding.length && !called) return null;
+                    return (
+                        <nav className="space-y-2" aria-label="Avisos de ahora" data-self-alerts="">
+                            {called && (
+                                <a href="#mis-comidas" className="flex items-start gap-3 rounded-2xl bg-emerald-600 text-white px-4 py-3 shadow-sm" role="status" aria-live="polite" data-self-meal-called="">
+                                    <i className="fa-solid fa-bullhorn text-xl mt-0.5" aria-hidden="true"></i>
+                                    <span className="min-w-0">
+                                        <span className="block text-base font-black leading-tight">Tu grupo ya puede pasar a comer</span>
+                                        <span className="block text-sm text-emerald-50">{mealName(called)} · {dayLabel(called.date)}. Acércate con tu escarapela.</span>
+                                    </span>
+                                </a>
+                            )}
+                            {boarding.map((b) => (
+                                <a key={b.id} href="#mi-transporte" className="flex items-start gap-3 rounded-2xl bg-amber-500 text-white px-4 py-3 shadow-sm" role="status" aria-live="polite" data-self-bus-boarding="">
+                                    <i className="fa-solid fa-bus text-xl mt-0.5" aria-hidden="true"></i>
+                                    <span className="min-w-0">
+                                        <span className="block text-base font-black leading-tight">Embarcando: {b.name}</span>
+                                        <span className="block text-sm text-amber-50">Acércate al punto de salida con tu escarapela.</span>
+                                    </span>
+                                </a>
+                            ))}
+                        </nav>
+                    );
+                })()}
 
                 {view.badge && (
                     <section className={section} data-self-badge="">
@@ -304,21 +334,16 @@ export default function MyRegistrationPage() {
                     </section>
                 )}
 
-                <section className={section} data-self-meals="">
+                {/* 2.36.6: ONE switch for every notice this phone can get (meal calls, bus boarding / departure / messages). */}
+                {view.push_key && ((view.transport && view.transport.length > 0) || (view.meal_group && view.meals.pending.length > 0)) && (
+                    <section className={section} data-self-notices="">
+                        <h2 className={h2}><i className="fa-solid fa-bell" aria-hidden="true"></i>Avisos</h2>
+                        <PushSwitch session={state.session} pushKey={view.push_key} post={post} code={view.code} />
+                    </section>
+                )}
+
+                <section className={section} id="mis-comidas" data-self-meals="">
                     <h2 className={h2}><i className="fa-solid fa-utensils" aria-hidden="true"></i>Mis comidas</h2>
-                    {/* 2.36.5: their group has been called on a meal still to come. */}
-                    {(() => {
-                        const called = view.meals.pending.find((m) => m.called_at);
-                        return called ? (
-                            <div className="flex items-start gap-3 rounded-2xl bg-emerald-600 text-white px-4 py-3" role="status" aria-live="polite" data-self-meal-called="">
-                                <i className="fa-solid fa-bullhorn text-xl mt-0.5" aria-hidden="true"></i>
-                                <div className="min-w-0">
-                                    <p className="text-base font-black leading-tight">Tu grupo ya puede pasar a comer</p>
-                                    <p className="text-sm text-emerald-50">{mealName(called)} · {dayLabel(called.date)}. Acércate con tu escarapela.</p>
-                                </div>
-                            </div>
-                        ) : null;
-                    })()}
                     {view.meal_group && (
                         <div className="flex items-center gap-3 rounded-2xl bg-blue-50 border border-blue-100 px-3 py-2.5" data-self-meal-group="">
                             <span className="w-10 h-10 shrink-0 rounded-xl bg-blue-600 text-white flex items-center justify-center text-lg font-black" aria-hidden="true">{view.meal_group}</span>
@@ -327,9 +352,6 @@ export default function MyRegistrationPage() {
                                 <p className="text-xs text-gray-600">Acércate a la hora de tu grupo: así nadie espera de pie.</p>
                             </div>
                         </div>
-                    )}
-                    {view.meal_group && view.meals.pending.length > 0 && view.push_key && !(view.transport && view.transport.length) && (
-                        <PushSwitch session={state.session} pushKey={view.push_key} post={post} code={view.code} what="meal" />
                     )}
                     {!view.meals.delivered.length && !view.meals.pending.length && <p className="text-sm text-gray-500">No tienes comidas asignadas.</p>}
                     {view.meals.delivered.length > 0 && (
@@ -364,6 +386,10 @@ export default function MyRegistrationPage() {
                         </>
                     )}
                 </section>
+
+                {view.transport && view.transport.length > 0 && (
+                    <BusAlerts session={state.session} initial={view.transport} post={post} onBuses={setLiveBuses} />
+                )}
 
                 <section className={section} data-self-lodging="">
                     <h2 className={h2}><i className="fa-solid fa-bed" aria-hidden="true"></i>Mi alojamiento</h2>

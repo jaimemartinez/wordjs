@@ -1143,6 +1143,15 @@ function createConsent(base) {
         VERBAL_STATEMENT,
         // 2.36.3: a paper sheet's PDF, for the file ticket the badge route answers.
         paperPdf: (cid, sheetId) => paper.pdfFile(cid, sheetId),
+        // 2.36.6: a person's e-mail and WhatsApp number as the consent message reads them (the badge section), and the
+        // conference's e-mail language («Autorizaciones › Idioma de los correos»).
+        contactOf: async (ins) => {
+            const form = await formOf(ins.conference_id);
+            const conf = await conferenceOf(ins.conference_id);
+            const phone = await phoneOf(ins, form);
+            return { email: await emailOf(ins, form), phone, phone_wa: waDigits(phone, conf && conf.phone_country) || '' };
+        },
+        mailLangOf,
         MSG, LIMITS,
     };
 }

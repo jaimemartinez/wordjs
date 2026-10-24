@@ -178,11 +178,10 @@ describe('the tab strip reveals the active tab (revealDelta)', () => {
         // The fade the CSS draws is that width.
         expect(TAB_STRIP_CSS).toContain(`#000 calc(100% - ${STRIP_FADE_PX}px)`);
     });
-    it('the strip is the one scrolled, by the active tab (aria-current), clear of its fade', () => {
+    it('the hook scrolls the strip itself, by the active tab, clear of its fade (the «Alimentación» sub-tabs)', () => {
         const src = fnSource(PAGE, 'ConferenceManagerContent');
-        expect(src).toContain('ref={tabStripRef}');
-        expect(src).toContain("aria-current={isActive ? 'page' : undefined}");
-        expect(src).toContain(`useRevealActive(tabStripRef, '[aria-current="page"]', [shown, !!currentConference]);`);
+        // 2.36.6: the sections are one menu button (SectionPicker), not a strip.
+        expect(src).toContain('<SectionPicker tabs={tabs} current={shown} onPick={(v) => setView(v as View)} tx={tx} lang={language} />');
         expect(src).not.toMatch(/scrollIntoView/);   // would scroll the page as well
         const hook = STRIP_HOOK.slice(STRIP_HOOK.indexOf('export function useRevealActive'));
         expect(hook).toContain('revealDelta(strip.getBoundingClientRect(), active.getBoundingClientRect(), stripFade(stripOverflow(strip)))');
