@@ -96,6 +96,9 @@ export function Select({
     const dropdownRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
     const searchRef = useRef<HTMLInputElement>(null);
+    // Set by opening and by the arrow keys, never by the pointer: hovering a row (which also fires while the
+    // list scrolls under a still pointer) must not scroll the list, or wheel and touch scrolling jump back.
+    const revealHighlight = useRef(false);
 
     const shown = useMemo(() => {
         const q = query.trim().toLocaleLowerCase();
@@ -128,12 +131,14 @@ export function Select({
     useEffect(() => {
         if (!isOpen) return;
         const idx = shown.findIndex((opt) => String(opt.value) === String(value));
+        revealHighlight.current = true;
         setHighlight(idx >= 0 ? idx : 0);
     }, [isOpen, value, shown]);
 
-    // Keep the highlighted row scrolled into view during keyboard navigation.
+    // Keep the highlighted row scrolled into view on open and during keyboard navigation (not on hover).
     useEffect(() => {
-        if (!isOpen) return;
+        if (!isOpen || !revealHighlight.current) return;
+        revealHighlight.current = false;
         listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`)?.scrollIntoView({ block: "nearest" });
     }, [highlight, isOpen]);
 
@@ -181,8 +186,8 @@ export function Select({
             }
             return;
         }
-        if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => step(h, 1)); }
-        else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => step(h, -1)); }
+        if (e.key === "ArrowDown") { e.preventDefault(); revealHighlight.current = true; setHighlight((h) => step(h, 1)); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); revealHighlight.current = true; setHighlight((h) => step(h, -1)); }
         else if (e.key === "Enter") { e.preventDefault(); if (shown[highlight]) handleSelect(shown[highlight]); }
         else if (e.key === "Escape") { e.preventDefault(); close(true); }
         else if (e.key === "Tab") setIsOpen(false);

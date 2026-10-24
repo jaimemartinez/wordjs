@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Searchable selects no longer jump while you scroll the list.** Hovering a row highlighted it and scrolled it into view; as the list moved under a still pointer, each row passing under it did the same, so wheel and touch scrolling bounced back. The highlight is now revealed only on open and with the arrow keys (`components/ui/Select.tsx`).
+
 ### Added
 
 - **conference-manager 2.36.5: calling the meal groups, one after another.**
