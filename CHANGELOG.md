@@ -38,6 +38,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     sees only the sections it may open.
   - **Fixed: «Pagos de cuotas» re-rendered in a loop while loading** («Maximum update depth exceeded» in the
     console).
+  - **«Mi inscripción»: the badge first, and one switch for every notice.**
+    - **Order**: «Mi escarapela», then «Avisos», «Mis comidas» and «Mi transporte».
+    - **Alerts at the top**: what is happening now — «Tu grupo ya puede pasar a comer», «Embarcando: Bus 1» — sits
+      in a strip at the very top, and each line leads down to its section.
+    - **One «Activar avisos»** turns on, on this phone, the meal calls and the bus boarding, departure and
+      messages. It replaces the separate bus and meal buttons, with one state («Avisos activados en este
+      teléfono», and «Desactivar»).
+    - **When notices can't be turned on**, the page says so: blocked in the browser, or on an iPhone, add the page to
+      the home screen from Safari.
+    - **Nothing to re-enable**: a phone already had one subscription for every notice, so existing bus subscriptions
+      keep working.
   - **A locality holds only the beds its people use** (the owner: «asignó más camas que los inscritos de la
     localidad»).
     - **«Sugerir reparto»**: a room the plan gives to one locality is that locality's whole only when its people fill
