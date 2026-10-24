@@ -27,6 +27,20 @@ export const COMPRESSION_PLAN: readonly { side: number; quality: number }[] = [
     { side: 1024, quality: 0.82 }, { side: 1024, quality: 0.7 }, { side: 1024, quality: 0.6 },
 ];
 const RAW_OK = /^image\/(png|jpe?g|gif|webp)$/i;
+/**
+ * 2.36.7, a signed consent sheet (small handwriting): a larger picture first — longest side about 2000 px at JPEG
+ * 0.85 — within the sheet's own cap (the caller's `maxChars`), then the receipt's steps.
+ */
+export const SHEET_PLAN: readonly { side: number; quality: number }[] = [
+    { side: 2000, quality: 0.85 }, { side: 2000, quality: 0.75 }, { side: 1800, quality: 0.8 }, ...COMPRESSION_PLAN,
+];
+/**
+ * An iPhone photo kept as HEIC / HEIF: its type, or — where the system does not know the type (Windows) — its name.
+ * iOS converts a picked photo to JPEG for `accept="image/*"`, and Safari decodes HEIC itself; elsewhere it may not
+ * decode, and then the caller says so (`heic`) instead of a generic «unreadable».
+ */
+export const isHeic = (file: { type?: string; name?: string } | null | undefined): boolean =>
+    !!file && (/^image\/hei[cf](-sequence)?$/i.test(String(file.type || '')) || (!file.type && /\.(heic|heif)$/i.test(String(file.name || ''))));
 
 /** Width × height scaled so the longest side is at most `max` (never enlarged; at least 1 px). */
 export function fitWithin(width: number, height: number, max: number): { width: number; height: number } {
@@ -55,10 +69,10 @@ export function formatBytes(n: number): string {
 export const isImageDataUrl = (p?: string | null): boolean =>
     typeof p === 'string' && /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(p.trim());
 
-export type ProofError = 'not_image' | 'too_large' | 'unreadable';
+export type ProofError = 'not_image' | 'too_large' | 'unreadable' | 'heic';
 export type ProofResult = { ok: true; dataUrl: string; bytes: number; width?: number; height?: number; compressed: boolean } | { ok: false; error: ProofError };
 
-type FileLike = { type: string; size: number };
+type FileLike = { type: string; size: number; name?: string };
 type Bitmap = { width: number; height: number; close?: () => void };
 type Canvas = { width: number; height: number; getContext: (k: '2d') => { drawImage: (img: any, x: number, y: number, w: number, h: number) => void } | null; toDataURL: (type: string, q?: number) => string };
 export type ProofDeps = {
@@ -93,9 +107,13 @@ const defaultRead = (file: any): Promise<string> => new Promise((resolve, reject
     r.readAsDataURL(file);
 });
 
-/** Turn a picked file into a receipt data URL ≤ PROOF_MAX_CHARS (see the header). Never throws. */
-export async function prepareProof(file: FileLike | null | undefined, deps: ProofDeps = {}, maxChars = PROOF_MAX_CHARS): Promise<ProofResult> {
-    if (!file || !/^image\//i.test(String(file.type || ''))) return { ok: false, error: 'not_image' };
+/**
+ * Turn a picked file into a receipt data URL ≤ PROOF_MAX_CHARS (see the header). Never throws. `plan` (2.36.7): the
+ * attempts, the receipts' by default (a consent sheet passes SHEET_PLAN). A HEIC photo is decoded like any image
+ * when the browser can (Safari): it then leaves as JPEG; otherwise `heic`.
+ */
+export async function prepareProof(file: FileLike | null | undefined, deps: ProofDeps = {}, maxChars = PROOF_MAX_CHARS, plan: readonly { side: number; quality: number }[] = COMPRESSION_PLAN): Promise<ProofResult> {
+    if (!file || !(/^image\//i.test(String(file.type || '')) || isHeic(file))) return { ok: false, error: 'not_image' };
     if (file.size > PROOF_MAX_FILE_BYTES) return { ok: false, error: 'too_large' };
     const decode = deps.decode || defaultDecode;
     const makeCanvas = deps.canvas || defaultCanvas;
@@ -103,7 +121,7 @@ export async function prepareProof(file: FileLike | null | undefined, deps: Proo
     try {
         const bmp = await decode(file);
         try {
-            for (const step of COMPRESSION_PLAN) {
+            for (const step of plan) {
                 const size = fitWithin(bmp.width, bmp.height, step.side);
                 const canvas = makeCanvas();
                 canvas.width = size.width; canvas.height = size.height;
@@ -126,7 +144,7 @@ export async function prepareProof(file: FileLike | null | undefined, deps: Proo
             if (isImageDataUrl(url) && url.length <= maxChars) return { ok: true, dataUrl: url, bytes: dataUrlBytes(url), compressed: false };
         } catch { /* unreadable */ }
     }
-    return { ok: false, error: 'unreadable' };
+    return { ok: false, error: isHeic(file) ? 'heic' : 'unreadable' };
 }
 
 /**
@@ -158,6 +176,8 @@ export const PROOF_ERROR_TEXT: Record<ProofError, { key: string; fallback: strin
     not_image: { key: 'fees.proof.error.not.image', fallback: 'El comprobante debe ser una imagen (foto o captura de pantalla).' },
     too_large: { key: 'fees.proof.error.too.large', fallback: 'La imagen pesa más de 15 MB; prueba con una captura de pantalla.' },
     unreadable: { key: 'fees.proof.error.unreadable', fallback: 'No pudimos reducir la imagen; prueba con una captura de pantalla.' },
+    // 2.36.7: an iPhone HEIC photo this browser cannot decode.
+    heic: { key: 'fees.proof.error.heic', fallback: 'Esta foto está en formato HEIC (iPhone) y este navegador no la puede leer: súbela desde el iPhone o como captura de pantalla.' },
 };
 
 /**

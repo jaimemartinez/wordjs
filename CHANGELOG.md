@@ -6,6 +6,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **conference-manager 2.36.7: the signed consent sheet can be uploaded as photos.** (The owner: «para subir la
+  autorización firmada puede ser también imagen».)
+  - **The button**: «Subir foto o PDF firmado», used by the admin's *Autorizaciones* and the coordinators'
+    portal. It takes several files at once (one photo per page) and offers the gallery and files.
+  - **«Tomar foto»** opens the camera straight away on a phone, as a second button, so the gallery stays
+    available.
+  - **Formats**: JPG, PNG, WebP and iPhone HEIC. A photo is reduced in the browser to about 2000 px at JPEG
+    quality 0.85, within the 2 MB a sheet file may weigh, so the handwriting stays readable and uploads stay
+    fast.
+  - **HEIC**: converted to JPEG where the browser can read it. Otherwise it is refused with a clear message (upload
+    it from the iPhone, or set the camera to «Más compatible»), on the page and on the server. A PDF or a HEIC
+    with no type (Windows) is recognised by its name.
+  - **Evidence**: photos show in the sheet's viewer and count exactly like a PDF. Each page's SHA-256 is in the
+    audit and in the «granted» record of everyone ticked from the sheet.
+
 ## [2.11.4] - 2026-10-24
 
 ### Fixed
