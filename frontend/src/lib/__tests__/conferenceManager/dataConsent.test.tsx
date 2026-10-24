@@ -688,3 +688,106 @@ describe('2.36.8 «en móviles no me deja copiar el link»: one copy helper, wit
         expect(read('lib/consentMessage.ts')).toContain("export { copyText } from './clipboard';");
     });
 });
+
+describe('2.36.10 staff registrations: the verbal authorization of the personal data, and the health one only with health data', async () => {
+    const { VerbalHealthConsent } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/VerbalHealthConsent');
+    const CMC = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client');
+    const read = (rel: string) => fs.readFileSync(path.join(CMC, rel), 'utf8');
+    it('the box: «general» is its own (its own marks), the health one unchanged; an error in place, never `required`', () => {
+        const g = renderToStaticMarkup(<VerbalHealthConsent scope="general" id="g" label="L" checked={false} onChange={() => {}} error="E" />);
+        expect(g).toContain('data-general-verbal=""');
+        expect(g).toContain('data-general-verbal-box=""');
+        expect(g).not.toContain('data-health-verbal');
+        expect(g).toContain('role="alert"');
+        expect(g).not.toContain('required');
+        const h = renderToStaticMarkup(<VerbalHealthConsent id="h" label="L" checked={false} onChange={() => {}} />);
+        expect(h).toContain('data-health-verbal=""');
+        expect(h).not.toContain('data-general-verbal');
+    });
+    it('its words in es/en/pt (statement, the missing message, the record badge)', () => {
+        for (const l of ['es', 'en', 'pt']) {
+            const t = consentT(l);
+            for (const k of ['verbal.general.statement', 'verbal.general.missing', 'verbal.general.pending']) expect(t(k), `${l} ${k}`).not.toBe(k);
+        }
+        expect(consentT('es')('verbal.general.statement')).toMatch(/verbalmente.*datos personales/);
+    });
+    it('the admin form: both boxes at the END (right above «Guardar»); the health one only with health data; on an edit a recorded authorization is ticked and LOCKED, a legacy one required', () => {
+        const page = read('admin/page.tsx');
+        // (a) Both boxes come after the last field and right before the footer with «Guardar».
+        const general = page.indexOf('<VerbalHealthConsent scope="general" id={`cm-general-verbal-${editId || \'new\'}`}');
+        const healthBox = page.indexOf("<VerbalHealthConsent id={`cm-health-verbal-${editId || 'new'}`}");
+        const foot = page.indexOf('data-cm-sheet-foot=""', general);
+        const notes = page.indexOf('id="cm-inscription-notes"');
+        expect(general).toBeGreaterThan(notes);
+        expect(healthBox).toBeGreaterThan(general);
+        expect(foot).toBeGreaterThan(healthBox);
+        expect(page.match(/<VerbalHealthConsent/g)!.length).toBe(2); // not inside the health field any more
+        expect(page).toContain('if (!hf || !(verbal.required || verbal.locked) || !healthPayload(hf, healthForm.value)) return null;');
+        // (b) The edit form asks how the person's authorizations are recorded: locked when recorded, required when not.
+        expect(page).toContain('conferenceApi.getConsentAuthorization(person.id)');
+        expect(page).toContain('setVerbalGeneral({ required: !a.general && !a.revoked, checked: !!a.general, error: null, locked: a.general || null });');
+        expect(page).toContain("if (a.health) setVerbal((v) => ({ ...v, required: false, checked: true, locked: a.health }));");
+        expect(page).toContain('disabled={!!verbalGeneral.locked}');
+        expect(page).toContain('disabled={!!verbal.locked}');
+        // Submit: the personal box for a new inscription AND a legacy edit; the health box also for unchanged health data then.
+        expect(page).toContain('const needGeneral = verbalGeneral.required;');
+        expect(page).toContain('const legacyHealth = !!editId && !!healthNow && verbal.required;');
+        expect(page).toContain("if (needGeneral && !verbalGeneral.checked) { setVerbalGeneral((v) => ({ ...v, error: consentT(language)('verbal.general.missing') })); blocked = true; }");
+        expect(page).toContain('if (needGeneral) payload.general_verbal_consent = true;');
+        // A late health read never unlocks a recorded authorization.
+        expect(page).toContain('setVerbal((v) => ({ required: !!r.verbal_required && !v.locked, checked: !!v.locked, error: null, locked: v.locked }));');
+    });
+    it('the portal form: both boxes at the end too (the personal one from /portal/me, the health one with health data); both checked on submit; the flags sent', () => {
+        const portal = read('portal/CoordinatorPortal.tsx');
+        const general = portal.indexOf('<VerbalHealthConsent scope="general" id="cm-general-verbal"');
+        const healthBox = portal.indexOf('<VerbalHealthConsent id="cm-health-verbal"');
+        const save = portal.indexOf('Guardar Inscripción');
+        expect(general).toBeGreaterThan(portal.indexOf('<HealthConditionsInput'));
+        expect(healthBox).toBeGreaterThan(general);
+        expect(save).toBeGreaterThan(healthBox);
+        expect(portal).toContain('if (!hf || !(hf as any).verbal_consent || !healthPayload(hf, formData[hf.name] || null)) return null;');
+        expect(portal).toContain('const generalNeeded = !!(myLocation as any)?.consent_verbal_general;');
+        expect(portal).toContain("if (generalNeeded && !verbalGeneralOk) { setVerbalGeneralError(consentT('es')('verbal.general.missing'));");
+        expect(portal).toContain('...(generalNeeded ? { general_verbal_consent: true } : {})');
+        // Right after the login (the login answer has the location only): /portal/me is read at once.
+        expect(portal).toMatch(/setMyLocation\(data\.location\);[\s\S]{0,300}refreshMyLocation\(\);/);
+    });
+    it('a locked box: ticked, disabled, with the note of how it was recorded (es/en/pt)', () => {
+        const html = renderToStaticMarkup(<VerbalHealthConsent scope="general" id="g" label="L" checked onChange={() => {}} disabled note="N" />);
+        const input = html.match(/<input[^>]*>/)![0];
+        expect(input).toContain('checked=""');
+        expect(input).toContain('disabled=""');
+        expect(html).toContain('data-verbal-locked=""');
+        for (const l of ['es', 'en', 'pt']) for (const k of ['verbal.locked.written', 'verbal.locked.verbal']) expect(consentT(l)(k), `${l} ${k}`).not.toBe(k);
+    });
+    it('«Historial»: each kind said in words (es/en/pt), the actor named without an admin login on the portal, «Sin registro» for a legacy registration', async () => {
+        const H = await import('../../../../../marketplace/plugins/conference-manager/client/lib/HistoryList');
+        expect(H.historyText({ kind: 'created', via: 'portal' })).toBe('Inscripción creada desde el portal');
+        expect(H.historyText({ kind: 'created', via: 'admin' }, 'en')).toBe('Registered from the administration');
+        expect(H.historyText({ kind: 'edited', fields: ['Nombre', 'Teléfono'] })).toBe('Editó: Nombre, Teléfono');
+        expect(H.historyText({ kind: 'consent_verbal_granted', scope: 'general' })).toBe('Autorización verbal de los datos personales');
+        expect(H.historyText({ kind: 'consent_verbal_granted', scope: 'health' }, 'pt')).toBe('Autorização verbal dos dados de saúde');
+        expect(H.historyText({ kind: 'consent_granted', method: 'paper' })).toBe('Autorizó por escrito en papel');
+        for (const k of ['withdrawn', 'restored', 'consent_link_sent', 'consent_revoked', 'consent_health_entered']) expect(H.historyText({ kind: k })).not.toBe(k);
+        expect(H.historyActor('admin')).toBe('Administración');
+        expect(H.historyActor('portal:Norte')).toBe('Portal · Norte');
+        expect(H.historyActor(null)).toBe('—');
+        for (const l of ['es', 'en', 'pt']) expect(Object.keys(H.historyWords(l)).sort()).toEqual(Object.keys(H.historyWords('es')).sort());
+        // Wired into both sheets with a STABLE loader (a new function each render would reload it forever).
+        const sheet = read('admin/PersonSheet.tsx');
+        expect(sheet).toContain('const loadHistory = useCallback(() => conferenceApi.getInscriptionHistory(p.id), [p && p.id]);');
+        expect(sheet).toContain('<HistoryList load={loadHistory} lang={language} titleClass={titleCls} />');
+        const ps = read('portal/ParticipantSheet.tsx');
+        expect(ps).toContain('const loadHistory = React.useCallback(async () => {');
+        expect(ps).toContain('{history && <HistoryList load={loadHistory} lang="es" titleClass={labelCls} />}');
+        expect(read('portal/CoordinatorPortal.tsx')).toContain('history={{ authHeaders: portalAuthHeaders }}');
+    });
+    it('the record: the admin list and the portal chip say a verbal authorization of the data is waiting for the written one', () => {
+        expect(read('admin/ConsentAdmin.tsx')).toContain('data-consent-verbal-general=""');
+        const chip = renderToStaticMarkup(<ConsentChip consent={{ state: 'pending', granted_at: null, revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, verbal_general: true } as any} />);
+        expect(chip).toContain('data-consent-verbal-general');
+        expect(chip).toContain(consentT('es')('verbal.general.pending'));
+        const granted = renderToStaticMarkup(<ConsentChip consent={{ state: 'granted', granted_at: '2030-01-01T00:00:00Z', revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, verbal_general: false } as any} />);
+        expect(granted).not.toContain('data-consent-verbal-general');
+    });
+});

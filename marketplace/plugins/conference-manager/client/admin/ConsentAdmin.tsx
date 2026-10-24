@@ -348,6 +348,12 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                                                     <i className="fa-solid fa-comment-dots mr-1" aria-hidden="true"></i>{st.verbal_overdue ? t("verbal.overdue") : t("verbal.pending")}
                                                 </span>
                                             )}
+                                            {st && st.verbal_general && (
+                                                <span className="ml-2 inline-block border border-amber-200 bg-amber-50 text-amber-800 rounded-full px-2 py-0.5 text-[10px] font-bold" data-consent-verbal-general=""
+                                                    title={[st.verbal_general_by, st.verbal_general_at && when(st.verbal_general_at)].filter(Boolean).join(" · ")}>
+                                                    <i className="fa-solid fa-comment-dots mr-1" aria-hidden="true"></i>{t("verbal.general.pending")}
+                                                </span>
+                                            )}
                                             {st && st.method === "paper" && <span className="ml-2 inline-block border border-gray-200 rounded-full px-2 py-0.5 text-[10px] font-bold text-gray-600" data-consent-method="paper"><i className="fa-solid fa-file-signature mr-1" aria-hidden="true"></i>{t("paper.method")}</span>}
                                         </td>
                                         <td className="px-4 py-3 text-xs text-gray-500">

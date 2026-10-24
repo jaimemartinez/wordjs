@@ -38,7 +38,10 @@ async function world({ lang = '' } = {}) {
         return ok(await p.call('post', '/portal/login', { anonymous: true, body: { location_id: loc, code } })).token as string;
     };
     const tNorte = await tokenOf(norte), tSur = await tokenOf(sur);
-    const portal = (method: string, url: string, token: string, body?: any) => p.call(method, url, { anonymous: true, headers: { 'x-portal-token': token }, body });
+    // 2.36.10: a coordinator's registration carries the ticked verbal authorization of the personal data (a test
+    // that needs it missing passes general_verbal_consent itself).
+    const withVerbal = (method: string, url: string, body?: any) => (method === 'post' && url === '/portal/inscriptions' && body && !('general_verbal_consent' in body) ? { general_verbal_consent: true, ...body } : body);
+    const portal = (method: string, url: string, token: string, body?: any) => p.call(method, url, { anonymous: true, headers: { 'x-portal-token': token }, body: withVerbal(method, url, body) });
     const register = async (token: string, first: string, age = 34) => ok(await portal('post', '/portal/inscriptions', token, { first_name: first, last_name: 'Pérez', email: `${first.toLowerCase()}@example.org`, age })).id as number;
     const events = (id: number) => p.q(`SELECT * FROM ${PREFIX}consent_events WHERE inscription_id = ? ORDER BY id`, id) as any[];
     return { p, cid, norte, sur, tNorte, tSur, portal, register, events };
@@ -175,7 +178,7 @@ test('a wrong tick is undone with a reason: a new row, back to pending, health d
     assert.strictEqual((await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'unmark', inscription_id: ana })).body.field, 'reason');
     ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'unmark', inscription_id: ana, reason: 'Se marcó a la persona equivocada' }));
     const kinds = w.events(ana).map(e => e.kind);
-    assert.deepStrictEqual(kinds.filter(k => k !== 'health_entered').slice(-2), ['granted', 'paper_unmarked']);
+    assert.deepStrictEqual(kinds.filter(k => k !== 'health_entered' && k !== 'verbal_confirmed').slice(-2), ['granted', 'paper_unmarked']);
     const un = w.events(ana).at(-1);
     assert.strictEqual(JSON.parse(un.data).reason, 'Se marcó a la persona equivocada');
     assert.strictEqual(JSON.parse(un.data).undoes_event_id, w.events(ana).find(e => e.kind === 'granted').id);
@@ -236,7 +239,7 @@ test('a verbal health authorization is confirmed by the paper signature, or its 
     ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'marks', sheet_id: sheet.id, marks: [{ inscription_id: ana }, { inscription_id: beto, health: false }] }));
     // Ana: confirmed, linked to her paper signature; the answer stays.
     const g = w.events(ana).find(e => e.kind === 'granted');
-    const c = JSON.parse(w.events(ana).find(e => e.kind === 'verbal_confirmed').data);
+    const c = JSON.parse(w.events(ana).find(e => e.kind === 'verbal_confirmed' && JSON.parse(e.data || '{}').scope !== 'general').data);
     assert.deepStrictEqual([c.confirmed_by_event_id, c.method, c.verbal_entered_by], [g.id, 'paper', 'portal:Norte']);
     assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers WHERE inscription_id = ?`, ana).n, 1);
     // Beto marked «No autorizo datos de salud»: the answer is deleted, and that is logged.

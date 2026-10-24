@@ -24,6 +24,7 @@ import type { HubNotice } from "./feePayments";
 import { PortalBadgeSection } from "./PortalBadges";
 import { PortalWithdrawSection, hasRecordedMoney, type WithdrawWindow } from "./Withdraw";
 import { ConsentChip, PortalConsentSection } from "./ConsentBits";
+import { HistoryList } from "../lib/HistoryList";
 
 const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/;
 
@@ -62,12 +63,21 @@ export type ParticipantSheetProps = {
     badges?: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; conferenceName?: string } | null;
     /** «Autorización de datos» (2.33.0, while the conference asks for it): the state and «Reenviar enlace». */
     consent?: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; onChanged?: () => void } | null;
+    /** 2.36.10: «Historial» of the person (registration, edits, withdrawals, authorizations), read with the portal's token. */
+    history?: { authHeaders: (extra?: Record<string, string>) => Record<string, string> } | null;
     /** «Retirar inscripción» (2.36.6, until the administration's deadline): the window and the action. */
     withdraw?: { window: WithdrawWindow; onWithdraw: (id: number, reason: string) => Promise<void> } | null;
 };
 
-export default function ParticipantSheet({ person, fields, onClose, feesOn, canRecord, onPay, onSeePayments, payBusy, notice, badges, consent, withdraw }: ParticipantSheetProps) {
+export default function ParticipantSheet({ person, fields, onClose, feesOn, canRecord, onPay, onSeePayments, payBusy, notice, badges, consent, withdraw, history }: ParticipantSheetProps) {
     const id = Number(person.id);
+    // Stable per person: a new function each render would reload the history on every render.
+    const historyHeaders = history ? history.authHeaders : null;
+    const loadHistory = React.useCallback(async () => {
+        const res = await fetch(`/api/v1/plugin/conference-manager/portal/inscriptions/${id}/history`, { credentials: "include", headers: historyHeaders ? historyHeaders() : {} });
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json();
+    }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
     const name = personName(person, fields);
     const cancelled = isCancelled(person);
     const st = payStateOf(person);
@@ -139,6 +149,8 @@ export default function ParticipantSheet({ person, fields, onClose, feesOn, canR
                     <InfoRow label="Fecha de inscripción">{registered || null}</InfoRow>
                 </dl>
             </section>
+
+            {history && <HistoryList load={loadHistory} lang="es" titleClass={labelCls} />}
 
             {withdraw && !cancelled && (
                 <PortalWithdrawSection inscriptionId={id} name={name} window={withdraw.window} hasMoney={hasRecordedMoney(b, person.amount_paid)} onWithdraw={withdraw.onWithdraw} />

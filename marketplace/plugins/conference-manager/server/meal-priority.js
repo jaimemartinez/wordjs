@@ -307,7 +307,8 @@ function createMealPriority(base) {
         if (ageField) cols.push(`i.${ageField.name} AS age_value`);
         if (familyField) cols.push(`i.${familyField.name} AS family_value`);
         const rows = await db.all(`SELECT ${cols.join(', ')} FROM ${T.inscriptions} i WHERE i.conference_id = ? AND (i.status IS NULL OR i.status != 'cancelled') ORDER BY i.id`, [cid]);
-        const answers = healthField ? await D.health.answersOfConference(cid) : new Map();
+        // 2.36.10: only answers whose health authorization is live count (index.js consentedAnswersOfConference).
+        const answers = healthField ? await D.healthAnswersOfConference(cid) : new Map();
         const stored = new Map((await db.all(`SELECT inscription_id, grp, score, manual FROM ${T.mealGroups} WHERE conference_id = ?`, [cid]))
             .map(r => [Number(r.inscription_id), { grp: r.grp, score: r.score == null ? null : Number(r.score), manual: !!Number(r.manual) }]));
 

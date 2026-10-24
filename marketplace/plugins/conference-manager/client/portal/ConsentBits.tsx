@@ -26,6 +26,8 @@ export type PortalConsent = {
     email_masked: string; mail_failed: boolean; link_expired: boolean; never_sent?: boolean;
     /** 2.34.0: a verbal health authorization waiting for its written confirmation (late after the conference's days). */
     verbal_health?: boolean; verbal_overdue?: boolean;
+    /** 2.36.10: the verbal authorization of the personal data (given when registered), waiting for the written one. */
+    verbal_general?: boolean;
     /** 2.35.0: no e-mail on file — the link is shared with «Copiar mensaje», or the person signs on paper. */
     no_email?: boolean;
 };
@@ -43,6 +45,9 @@ export function ConsentChip({ consent }: { consent?: PortalConsent | null }) {
     const verbal = consent.verbal_overdue ? (
         <Badge tone="rose" size="xs" icon="fa-comment-dots" data-consent-verbal="overdue">{t("verbal.overdue")}</Badge>
     ) : null;
+    const verbalGeneral = consent.state === "pending" && consent.verbal_general ? (
+        <Badge tone="amber" size="xs" icon="fa-comment-dots" data-consent-verbal-general="">{t("verbal.general.pending")}</Badge>
+    ) : null;
     const label = consent.state === "granted" ? t("portal.state.granted") : consent.state === "revoked" ? t("portal.state.revoked") : t("portal.state.pending");
     const title = consent.state === "granted" ? t("portal.state.granted.at", { when: dateOf(consent.granted_at) }) : consent.mail_failed ? t("portal.mail.failed") : undefined;
     return (
@@ -50,6 +55,7 @@ export function ConsentChip({ consent }: { consent?: PortalConsent | null }) {
             <Badge tone={TONE[consent.state] || "amber"} size="xs" icon={consent.mail_failed && consent.state === "pending" ? "fa-triangle-exclamation" : ICON[consent.state]} title={title} data-consent-state={consent.state}>
                 {label}
             </Badge>
+            {verbalGeneral}
             {verbal}
         </>
     );

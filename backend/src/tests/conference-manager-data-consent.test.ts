@@ -65,6 +65,7 @@ async function world({ enable = true, extra = [] as string[] } = {}) {
     const ptoken = ok(await p.call('post', '/portal/login', { anonymous: true, body: { location_id: norte, code } })).token as string;
     const docCols = p.q(`SELECT name, label FROM ${PREFIX}fields WHERE conference_id = ? AND label LIKE '%documento%' ORDER BY id`, cid) as any[];
     const register = (body: Record<string, unknown>) => portal(p, 'post', '/portal/inscriptions', ptoken, {
+        general_verbal_consent: true, // 2.36.10: the coordinator ticks the person's verbal authorization
         first_name: 'Ana', last_name: 'Pérez', email: 'ana.perez@example.org', age: 34,
         [docCols[0].name]: 'Cédula', [docCols[1].name]: '1.234.567', ...body,
     });
@@ -153,7 +154,8 @@ test('the code: expiry, 5 tries, resend gap and hourly cap, single use — and i
         for (const c of codes) assert.ok(!dump.includes(`"${c}"`) && !dump.includes(`:${c}`), `${t} holds a code`);
     }
     // Only «sent» events for the codes (no code value in them).
-    assert.deepStrictEqual(w.events(id).map(e => e.kind), ['link_sent', 'otp_sent', 'otp_sent', 'otp_sent', 'otp_sent', 'otp_sent']);
+    // 2.36.10: the coordinator's registration records the person's verbal authorization of the personal data.
+    assert.deepStrictEqual(w.events(id).map(e => e.kind), ['link_sent', 'verbal_granted', 'otp_sent', 'otp_sent', 'otp_sent', 'otp_sent', 'otp_sent']);
 });
 
 test('signing: the evidence row, health only with its box, the confirmation e-mail, the link spent', async () => {
@@ -168,8 +170,9 @@ test('signing: the evidence row, health only with its box, the confirmation e-ma
     const r = ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT, health_answer: { conditions: ['Diabetes'] } }));
     assert.strictEqual(r.state, 'granted');
     const ev = w.events(id);
-    assert.deepStrictEqual(ev.map(e => e.kind), ['link_sent', 'otp_sent', 'otp_verified', 'granted']);
-    const g = ev[3];
+    // 2.36.10: the verbal authorization of the personal data, then confirmed by the signature.
+    assert.deepStrictEqual(ev.map(e => e.kind), ['link_sent', 'verbal_granted', 'otp_sent', 'otp_verified', 'granted', 'verbal_confirmed']);
+    const g = ev.find(e => e.kind === 'granted');
     const data = JSON.parse(g.data);
     assert.strictEqual(g.email, 'ana.perez@example.org');
     assert.strictEqual(g.policy_version, '1.0');
@@ -429,7 +432,7 @@ test('phones (2.33.2): E.164 on write, the conference default for national numbe
     const r1 = await w.register({ phone: '300 123 4567' });
     assert.strictEqual(w.p.one(`SELECT phone FROM ${PREFIX}inscriptions WHERE id = ?`, r1.body.id).phone, '+573001234567');
     assert.strictEqual((await w.register({ email: 'x@example.org', phone: '12' })).status, 400);
-    const a = ok(await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'Li', last_name: 'Wei', email: 'li@example.org', location_id: w.norte, phone: '+1 (305) 555-0100' } }));
+    const a = ok(await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'Li', last_name: 'Wei', email: 'li@example.org', location_id: w.norte, phone: '+1 (305) 555-0100', general_verbal_consent: true } }));
     assert.strictEqual(w.p.one(`SELECT phone FROM ${PREFIX}inscriptions WHERE id = ?`, a.id).phone, '+13055550100');
     // The default country: validated, stored, used for national numbers from then on.
     assert.strictEqual((await w.p.call('put', `/${w.cid}`, { body: { phone_country: 'ZZ' } })).status, 400);
@@ -506,7 +509,7 @@ test('the e-mail field is found by its label too (a custom «Correo electrónico
     const f = ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Correo electrónico', type: 'text' } }));
     const col = p.one(`SELECT name FROM ${PREFIX}fields WHERE conference_id = ? AND label = 'Correo electrónico'`, cid).name;
     ok(await p.call('put', '/consent/settings', { body: { conference_id: cid, enabled: true } }));
-    const r = ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: 'Ana', [col]: 'ana@example.org' } }));
+    const r = ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: 'Ana', [col]: 'ana@example.org', general_verbal_consent: true } }));
     assert.strictEqual(r.consent.email_masked, 'a***@e***.org');
     assert.ok(p.mails.some((m: any) => m.to === 'ana@example.org'));
     assert.ok(f);
@@ -598,7 +601,7 @@ test('verbal: no answer without the tick; with it, a verbal record (pending writ
     assert.strictEqual((await w.register({ health_conditions: { conditions: ['Diabetes'] } })).body.field, 'health_verbal_consent');
     assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers`).n, 0, 'nothing saved without the tick');
     const id = ok(await w.register(DIABETES)).id as number;
-    const v = w.events(id).find(e => e.kind === 'verbal_granted');
+    const v = w.events(id).find(e => e.kind === 'verbal_granted' && JSON.parse(e.data || '{}').scope === 'health');
     const d = JSON.parse(v.data);
     assert.strictEqual(d.method, 'verbal');
     assert.strictEqual(d.scope, 'health');
@@ -629,9 +632,9 @@ test('verbal: the code signature confirms it (linked), or deletes the answer whe
     ok(await w.pub('code', { token }));
     ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
     const granted = w.events(id).find(e => e.kind === 'granted');
-    const c = JSON.parse(w.events(id).find(e => e.kind === 'verbal_confirmed').data);
+    const c = JSON.parse(w.events(id).find(e => e.kind === 'verbal_confirmed' && JSON.parse(e.data || '{}').scope !== 'general').data);
     assert.strictEqual(c.confirmed_by_event_id, granted.id);
-    assert.strictEqual(c.verbal_event_id, w.events(id).find(e => e.kind === 'verbal_granted').id);
+    assert.strictEqual(c.verbal_event_id, w.events(id).find(e => e.kind === 'verbal_granted' && JSON.parse(e.data || '{}').scope === 'health').id);
     assert.strictEqual(c.method, 'otp');
     assert.strictEqual(ok(await w.p.call('get', `/inscriptions/${id}`)).health_conditions, 'Diabetes', 'the answer stays');
     assert.strictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id].verbal_health, false);
@@ -660,7 +663,7 @@ test('verbal: never confirmed within the days is flagged, not deleted; the admin
     const id2 = ok(await w.register({ first_name: 'Beto', email: 'beto@example.org' })).id as number;
     assert.strictEqual((await w.p.call('put', `/inscriptions/${id2}`, { body: { health_conditions: { answer: 'none' } } })).body.field, 'health_verbal_consent');
     ok(await w.p.call('put', `/inscriptions/${id2}`, { body: { health_conditions: { answer: 'none' }, health_verbal_consent: true } }));
-    assert.strictEqual(JSON.parse(w.events(id2).find(e => e.kind === 'verbal_granted').data).via, 'admin');
+    assert.strictEqual(JSON.parse(w.events(id2).find(e => e.kind === 'verbal_granted' && JSON.parse(e.data || '{}').scope === 'health').data).via, 'admin');
     const staff = { id: 79, role: 'conference_manager_team', userLogin: 'nohealth', extra: { pluginCapabilities: ['conference_manager_access'] } };
     assert.notStrictEqual((await w.p.call('put', `/inscriptions/${id2}`, { body: DIABETES, user: staff as any })).status, 200);
     advance(16 * 86400 * 1000);
@@ -797,4 +800,236 @@ test('2.36.9 the consent text names the blood type and the EPS; a signed version
     const t3 = w3.p.one(`SELECT text_health FROM ${PREFIX}consent_settings WHERE conference_id = ?`, w3.cid).text_health;
     assert.ok(t3 == null || t3 === '', 'nothing signed: still on the default');
     assert.ok(id && id2);
+});
+
+// ── 2.36.10 every read of health answers applies the consent filter ───────────────────────────────────────────
+
+test('2.36.10 the edit form read and the meal priority use an answer only while its health authorization is live: pending, verbal, granted, revoked', async () => {
+    // Answers given while the conference did not ask for consent; then it starts asking.
+    const w = await world({ enable: false });
+    const id = (await w.register({ health_conditions: { conditions: ['Diabetes'], blood_type: 'O+' } })).body.id as number;
+    const nora = (await w.register({ first_name: 'Nora', email: 'nora@example.org', health_conditions: { conditions: ['Embarazo'] } })).body.id as number;
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, enabled: true, responsible: 'La iglesia en Barranquilla', contact_email: 'datos@example.org', policy_url: 'https://example.org/politica-de-datos', policy_version: '1.0' } }));
+    const read = async (pid: number) => ok(await w.p.call('get', `/inscriptions/${pid}/health`)).answer;
+    const roster = async (pid: number) => ok(await w.p.call('get', `/inscriptions/${pid}`)).health_conditions;
+    const csv = async () => ok(await w.p.call('get', `/inscriptions/export?conference_id=${w.cid}`)).csv as string;
+    const priority = async (pid: number) => ok(await w.p.call('get', `/meals/priority?conference_id=${w.cid}`)).people.find((p: any) => p.id === pid);
+    const stored = (pid: number) => w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers WHERE inscription_id = ?`, pid).n;
+
+    // PENDING (no authorization yet): the answer is kept but used nowhere — not the edit form's read, not the
+    // roster, not the export, not the meal priority's score.
+    assert.strictEqual(stored(id), 1);
+    assert.strictEqual(await read(id), null, 'GET /inscriptions/:id/health hides a pending answer');
+    assert.strictEqual(await roster(id), '');
+    assert.ok(!(await csv()).includes('Diabetes'));
+    assert.strictEqual((await priority(id)).health_points, 0, 'the meal priority does not score it');
+    assert.strictEqual((await priority(id)).health_answer, null);
+    assert.strictEqual(ok(await w.p.call('get', `/meals/priority?conference_id=${w.cid}`)).health_answered, 0);
+
+    // VERBAL only (the coordinator's tick, pending the written confirmation): in use.
+    ok(await w.p.call('put', `/inscriptions/${nora}`, { body: { health_conditions: { conditions: ['Embarazo'] }, health_verbal_consent: true } }));
+    assert.deepStrictEqual(await read(nora), { conditions: ['Embarazo'], other: '', answer: 'list' });
+    assert.strictEqual(await roster(nora), 'Embarazo');
+    assert.ok((await priority(nora)).health_points > 0);
+
+    // GRANTED with health (the code): in use, every part of it. (Ana registered before consent: her link now.)
+    ok(await portal(w.p, 'post', '/portal/consent/resend', w.ptoken, { inscription_id: id }));
+    const token = w.linkToken()!;
+    ok(await w.pub('code', { token }));
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    assert.deepStrictEqual(await read(id), { conditions: ['Diabetes'], other: '', answer: 'list', blood_type: 'O+' });
+    assert.strictEqual(await roster(id), 'Diabetes · Tipo de sangre: O+');
+    assert.ok((await csv()).includes('Diabetes'));
+    assert.ok((await priority(id)).health_points > 0);
+
+    // REVOKED: the answers are deleted; one left behind (say, restored from a backup) is still used nowhere.
+    ok(await w.p.call('post', '/consent/revoke', { body: { inscription_id: id, general: true, note: 'Retira su inscripción' } }));
+    assert.strictEqual(stored(id), 0);
+    w.p.exec(`INSERT INTO ${PREFIX}health_answers (conference_id, inscription_id, answer, conditions, other_text) VALUES (?, ?, 'list', ?, '')`, w.cid, id, JSON.stringify(['Diabetes']));
+    assert.strictEqual(await read(id), null);
+    assert.strictEqual(await roster(id), '');
+    const p = await priority(id);
+    assert.ok(!p || p.health_points === 0, 'not scored');
+});
+
+test('2.36.10 no read of health answers bypasses the consent filter (source sweep)', () => {
+    const files = ['index.js', ...fs.readdirSync(path.join(PLUGIN_DIR, 'server')).map(f => `server/${f}`)].filter(f => f.endsWith('.js') && f !== 'server/health.js');
+    const reads: string[] = [];
+    for (const f of files) {
+        const src = fs.readFileSync(path.join(PLUGIN_DIR, f), 'utf8');
+        for (const m of src.matchAll(/^.*\.(answersOf|answersOfConference)\(.*$/gm)) reads.push(`${f}: ${m[0].trim()}`);
+    }
+    // The two helpers, and the one existence check of the signature flow (it deletes, never shows or scores).
+    assert.strictEqual(reads.length, 3, reads.join('\n'));
+    assert.ok(reads.some(r => r.startsWith('index.js: const consentedAnswersOf = async (conferenceId, ids) => consentedHealth(conferenceId, await health.answersOf(ids));')), reads.join('\n'));
+    assert.ok(reads.some(r => r.startsWith('index.js: const consentedAnswersOfConference = async (conferenceId) => consentedHealth(conferenceId, await health.answersOfConference(conferenceId));')), reads.join('\n'));
+    assert.ok(reads.some(r => r.startsWith('server/consent.js:') && r.includes('!healthYes')), reads.join('\n'));
+    // The meal priority gets the filtered reader, not the raw module.
+    const mp = fs.readFileSync(path.join(PLUGIN_DIR, 'server/meal-priority.js'), 'utf8');
+    assert.ok(mp.includes('await D.healthAnswersOfConference(cid)') && !/D\.health\./.test(mp));
+});
+
+test('2.36.10 editing a health answer under a live authorization (verbal or written) needs no new tick and is logged; without one, or revoked, it is refused', async () => {
+    const w = await world();
+    const entries = (pid: number) => w.events(pid).filter(e => e.kind === 'health_entered').map(e => JSON.parse(e.data));
+    const verbals = (pid: number) => w.events(pid).filter(e => e.kind === 'verbal_granted' && JSON.parse(e.data || '{}').scope === 'health').length;
+    // Verbal authorization recorded at registration (the coordinator's tick).
+    const id = ok(await w.register({ health_conditions: { conditions: ['Diabetes'] }, health_verbal_consent: true })).id as number;
+    assert.strictEqual(verbals(id), 1);
+    // The edit form sees no tick is needed, and an edit saves without one — no second verbal record, one more entry.
+    assert.strictEqual(ok(await w.p.call('get', `/inscriptions/${id}/health`)).verbal_required, false);
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: { conditions: ['Diabetes'], blood_type: 'A+' } } }));
+    assert.strictEqual(w.p.one(`SELECT blood_type FROM ${PREFIX}health_answers WHERE inscription_id = ?`, id).blood_type, 'A+');
+    assert.strictEqual(verbals(id), 1, 'no new verbal authorization');
+    assert.deepStrictEqual(entries(id).map(d => [d.basis, d.via]), [['verbal', 'portal'], ['verbal', 'admin']]);
+    assert.ok(!w.events(id).some(e => /A\+|Diabetes/.test(String(e.data || ''))), 'the log never holds the answer');
+    // Written authorization (the code): edits save, logged as «written».
+    const token = w.linkToken()!;
+    ok(await w.pub('code', { token }));
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: { answer: 'none', eps: 'Sura' } } }));
+    assert.strictEqual(entries(id).pop().basis, 'written');
+    // Clearing is always allowed and logged as a clearing.
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: null } }));
+    assert.strictEqual(entries(id).pop().cleared, true);
+    // No authorization at all (registered without health): the tick is still needed.
+    const nora = ok(await w.register({ first_name: 'Nora', email: 'nora@example.org' })).id as number;
+    assert.strictEqual(ok(await w.p.call('get', `/inscriptions/${nora}/health`)).verbal_required, true);
+    const noTick = await w.p.call('put', `/inscriptions/${nora}`, { body: { health_conditions: { blood_type: 'O+' } } });
+    assert.strictEqual(noTick.status, 400);
+    assert.strictEqual(noTick.body.field, 'health_verbal_consent');
+    // Revoked: the verbal authorization goes with it, and no edit (nor a new tick) brings the answer back.
+    ok(await w.p.call('put', `/inscriptions/${nora}`, { body: { health_conditions: { blood_type: 'O+' }, health_verbal_consent: true } }));
+    const tn = w.linkToken('nora@example.org')!;
+    ok(await w.pub('code', { token: tn }, 'ck-nora'));
+    ok(await w.pub('confirm', { token: tn, code: w.lastCode('nora@example.org'), ...GRANT }, 'ck-nora'));
+    ok(await w.p.call('post', '/consent/revoke', { body: { inscription_id: nora, health: true, note: 'Lo pidió' } }));
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${nora}`, { body: { health_conditions: { blood_type: 'O+' } } })).status, 409);
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${nora}`, { body: { health_conditions: { blood_type: 'O+' }, health_verbal_consent: true } })).status, 409);
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}health_answers WHERE inscription_id = ?`, nora).n, 0);
+});
+
+// ── 2.36.10 the verbal authorization of the personal data (staff registrations) ───────────────────────────────
+
+test('2.36.10 a staff registration needs the verbal authorization of the personal data; health data needs the health one too; none without consent on', async () => {
+    const w = await world();
+    const gv = (pid: number) => w.events(pid).filter(e => e.kind === 'verbal_granted' && JSON.parse(e.data || '{}').scope === 'general');
+    // Portal, no tick: refused before anything is written (the field names the box).
+    const before = w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}inscriptions`).n;
+    const r = await w.register({ general_verbal_consent: false });
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual(r.body.field, 'general_verbal_consent');
+    assert.strictEqual(w.p.one(`SELECT COUNT(*) AS n FROM ${PREFIX}inscriptions`).n, before, 'nothing written');
+    assert.strictEqual((await portal(w.p, 'post', '/portal/inscriptions', w.ptoken, { first_name: 'Sin', last_name: 'Tick', email: 'sin@example.org', age: 30 })).body.field, 'general_verbal_consent', 'the key missing');
+    // Admin, no tick: refused too.
+    const a = await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'Li', last_name: 'Wei', email: 'li@example.org', location_id: w.norte } });
+    assert.deepStrictEqual([a.status, a.body.field], [400, 'general_verbal_consent']);
+    // No health data: only the personal-data box — no health tick is asked.
+    const id = ok(await w.register({})).id as number;
+    const ev = gv(id);
+    assert.strictEqual(ev.length, 1);
+    const d = JSON.parse(ev[0].data);
+    assert.deepStrictEqual([d.method, d.scope, d.status, d.entered_by, d.via, ev[0].actor, ev[0].general, ev[0].policy_version], ['verbal', 'general', 'pending_written_confirmation', 'portal:Norte', 'portal', 'portal:Norte', 1, '1.0']);
+    assert.ok(d.statement.includes('verbalmente') && d.statement.includes('datos personales'));
+    assert.strictEqual(ev[0].text_sha256, sha256(d.statement));
+    assert.deepStrictEqual({ name: d.subject.name }, { name: 'Ana Pérez' });
+    // It shows in the person's consent record (the admin's states, the portal's list).
+    const st = ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id];
+    assert.deepStrictEqual([st.state, st.verbal_general, st.verbal_general_by, !!st.verbal_general_at, st.verbal_health], ['pending', true, 'portal:Norte', true, false]);
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/inscriptions', w.ptoken)).find((x: any) => x.id === id).consent.verbal_general, true);
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).consent_verbal_general, true);
+    // Health data: the health box is required as well (both ticks).
+    const h1 = await w.register({ first_name: 'Beto', email: 'beto@example.org', health_conditions: { eps: 'Sura' } });
+    assert.deepStrictEqual([h1.status, h1.body.field], [400, 'health_verbal_consent']);
+    const h2 = await w.register({ first_name: 'Beto', email: 'beto@example.org', general_verbal_consent: false, health_conditions: { eps: 'Sura' }, health_verbal_consent: true });
+    assert.deepStrictEqual([h2.status, h2.body.field], [400, 'general_verbal_consent']);
+    const beto = ok(await w.register({ first_name: 'Beto', email: 'beto@example.org', health_conditions: { eps: 'Sura' }, health_verbal_consent: true })).id as number;
+    const scopes = w.events(beto).filter(e => e.kind === 'verbal_granted').map(e => JSON.parse(e.data).scope);
+    assert.deepStrictEqual(scopes, ['general', 'health']);
+    // Editing a registered person never asks for the personal-data box again.
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { last_name: 'Pérez Gómez' } }));
+    assert.strictEqual(gv(id).length, 1, 'no second verbal record');
+
+    // The written signature (code) confirms it, linked; the record no longer shows it waiting.
+    const token = w.linkToken()!;
+    ok(await w.pub('code', { token }));
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    const conf = w.events(id).filter(e => e.kind === 'verbal_confirmed').map(e => JSON.parse(e.data)).find(x => x.scope === 'general');
+    assert.deepStrictEqual([conf.verbal_event_id, conf.confirmed_by_event_id, conf.method, conf.verbal_entered_by], [ev[0].id, w.events(id).find(e => e.kind === 'granted').id, 'otp', 'portal:Norte']);
+    assert.strictEqual(ok(await w.p.call('get', `/consent/states?conference_id=${w.cid}`)).states[id].verbal_general, false);
+    assert.strictEqual(ok(await w.p.call('get', `/consent/evidence/${id}`)).chain_ok, true);
+
+    // A conference that does not ask for consent: no box, no record.
+    const off = await world({ enable: false });
+    const plain = await portal(off.p, 'post', '/portal/inscriptions', off.ptoken, { first_name: 'Ana', last_name: 'Pérez', email: 'ana@example.org', age: 34 });
+    assert.strictEqual(plain.status, 200, JSON.stringify(plain.body));
+    assert.strictEqual(ok(await portal(off.p, 'get', '/portal/me', off.ptoken)).consent_verbal_general, false);
+    assert.strictEqual(ok(await off.p.call('post', '/inscriptions', { body: { conference_id: off.cid, first_name: 'Li', last_name: 'Wei', email: 'li@example.org', location_id: off.norte } })).success, true);
+});
+
+test('2.36.10 the paper signature confirms the verbal authorization of the personal data; revoking everything clears it', async () => {
+    const w = await world();
+    const id = ok(await w.register({})).id as number;
+    // Paper: create a sheet and tick the person.
+    const sheet = ok(await portal(w.p, 'post', '/portal/consent/paper', w.ptoken, { action: 'create' })).sheet;
+    ok(await portal(w.p, 'post', '/portal/consent/paper', w.ptoken, { action: 'upload', sheet_id: sheet.id, data_url: `data:image/jpeg;base64,${Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]), crypto.randomBytes(80)]).toString('base64')}` }));
+    ok(await portal(w.p, 'post', '/portal/consent/paper', w.ptoken, { action: 'marks', sheet_id: sheet.id, marks: [{ inscription_id: id }] }));
+    const conf = w.events(id).filter(e => e.kind === 'verbal_confirmed').map(e => JSON.parse(e.data)).find(x => x.scope === 'general');
+    assert.strictEqual(conf.method, 'paper');
+    // A second registration, revoked as a whole before any signature is not possible (409: nothing granted); after a
+    // code signature, revoking everything leaves nothing verbal behind.
+    const id2 = ok(await w.register({ first_name: 'Luis', email: 'luis@example.org' })).id as number;
+    const t2 = w.linkToken('luis@example.org')!;
+    ok(await w.pub('code', { token: t2 }, 'ck-luis'));
+    ok(await w.pub('confirm', { token: t2, code: w.lastCode('luis@example.org'), ...GRANT }, 'ck-luis'));
+    ok(await w.p.call('post', '/consent/revoke', { body: { inscription_id: id2, general: true, note: 'Lo pidió por correo' } }));
+    const row = w.p.one(`SELECT vgeneral_s, verbal_s, state FROM ${PREFIX}consent_requests WHERE inscription_id = ?`, id2);
+    assert.deepStrictEqual([row.vgeneral_s, row.verbal_s, row.state], [null, null, 'revoked']);
+});
+
+test('2.36.10 editing: a recorded authorization cannot be cleared; with none recorded (legacy) changing the data needs the personal tick, then recorded; the history shows the authorization events', async () => {
+    // Registered while the conference did not ask for consent (a legacy person); then it starts asking.
+    const w = await world({ enable: false });
+    const id = (await w.register({ health_conditions: { conditions: ['Diabetes'] } })).body.id as number;
+    ok(await w.p.call('put', '/consent/settings', { body: { conference_id: w.cid, enabled: true, responsible: 'La iglesia en Barranquilla', contact_email: 'datos@example.org', policy_url: 'https://example.org/politica-de-datos', policy_version: '1.0' } }));
+    assert.deepStrictEqual(ok(await w.p.call('get', `/consent/authorization/${id}`)), { enabled: true, revoked: false, general: null, health: null });
+    // Changing their data without the tick: refused; a status-only change is not a data change.
+    const no = await w.p.call('put', `/inscriptions/${id}`, { body: { last_name: 'Pérez Ruiz' } });
+    assert.deepStrictEqual([no.status, no.body.field], [400, 'general_verbal_consent']);
+    assert.strictEqual(w.p.one(`SELECT last_name FROM ${PREFIX}inscriptions WHERE id = ?`, id).last_name, 'Pérez', 'nothing written');
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { notes: 'Llamar' } }));
+    // With the tick: saved and recorded (scope general, by the admin).
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { last_name: 'Pérez Ruiz', general_verbal_consent: true } }));
+    const gv = w.events(id).filter(e => e.kind === 'verbal_granted').map(e => JSON.parse(e.data));
+    assert.deepStrictEqual(gv.map(d => [d.scope, d.via]), [['general', 'admin']]);
+    assert.strictEqual(ok(await w.p.call('get', `/consent/authorization/${id}`)).general, 'verbal');
+    // Now recorded: no tick asked, and it cannot be cleared here (409 — «Revocar» does that).
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { last_name: 'Pérez' } }));
+    const clear = await w.p.call('put', `/inscriptions/${id}`, { body: { last_name: 'X', general_verbal_consent: false } });
+    assert.deepStrictEqual([clear.status, clear.body.field], [409, 'general_verbal_consent']);
+    // Health: the legacy answer needs the health tick (with the data sent), then recorded and locked too.
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: { conditions: ['Diabetes'] }, health_verbal_consent: true } }));
+    assert.strictEqual(ok(await w.p.call('get', `/consent/authorization/${id}`)).health, 'verbal');
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${id}`, { body: { health_verbal_consent: false } })).status, 409);
+    // Written (the code): 'written', still locked.
+    ok(await portal(w.p, 'post', '/portal/consent/resend', w.ptoken, { inscription_id: id }));
+    const token = w.linkToken()!;
+    ok(await w.pub('code', { token }));
+    ok(await w.pub('confirm', { token, code: w.lastCode(), ...GRANT }));
+    assert.deepStrictEqual(ok(await w.p.call('get', `/consent/authorization/${id}`)), { enabled: true, revoked: false, general: 'written', health: 'written' });
+    // The «Historial» lists the authorization events (personal and health) — never the e-mail or an answer.
+    const h = ok(await w.p.call('get', `/inscriptions/${id}/history`));
+    const k = h.entries.map((e: any) => e.kind + (e.scope ? `:${e.scope}` : ''));
+    for (const x of ['consent_verbal_granted:general', 'consent_verbal_granted:health', 'consent_granted', 'consent_verbal_confirmed:general', 'consent_verbal_confirmed:health', 'consent_link_sent']) assert.ok(k.includes(x), `${x} in ${k.join(', ')}`);
+    assert.ok(!JSON.stringify(h).includes('ana.perez@example.org') && !JSON.stringify(h).includes('Diabetes'));
+    assert.strictEqual(h.entries.find((e: any) => e.kind === 'consent_granted').method, 'otp');
+    // The portal's history has no health events.
+    const r = w.p.routes.find((x: any) => x.method === 'get' && x.path === '/portal/inscriptions/:id/history') as any;
+    const res: any = { statusCode: 200, _body: undefined, status(c: number) { this.statusCode = c; return this; }, json(x: any) { this._body = JSON.parse(JSON.stringify(x)); return this; }, cookie() { return this; }, clearCookie() { return this; }, setHeader() { return this; } };
+    await r.handler({ params: { id: String(id) }, query: {}, body: {}, headers: { 'x-portal-token': w.ptoken }, cookies: {}, user: null }, res);
+    assert.ok(res._body.entries.every((e: any) => e.scope !== 'health'), JSON.stringify(res._body.entries));
+    // Revoked everything: not asked again (a written «no» is not overridden), edits of other data still allowed.
+    ok(await w.p.call('post', '/consent/revoke', { body: { inscription_id: id, general: true, note: 'Lo pidió' } }));
+    assert.strictEqual(ok(await w.p.call('get', `/consent/authorization/${id}`)).revoked, true);
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { last_name: 'Pérez Gómez' } }));
 });

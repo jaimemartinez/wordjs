@@ -191,6 +191,9 @@ function LocationPortalContent() {
     // 2.34.0: with «Autorización de datos» on, a health answer needs the person's verbal authorization (ticked here).
     const [verbalOk, setVerbalOk] = useState(false);
     const [verbalError, setVerbalError] = useState<string | null>(null);
+    // 2.36.10: every registration made here needs the person's verbal authorization of the personal data (consent on).
+    const [verbalGeneralOk, setVerbalGeneralOk] = useState(false);
+    const [verbalGeneralError, setVerbalGeneralError] = useState<string | null>(null);
     const [groups, setGroups] = useState<any[]>([]);
     // Live fee quote for the form being filled (POST /public/quote). `null` = not available yet, or the
     // current values are not quotable (a 400 for an invalid number just hides the line until it is fixed).
@@ -369,6 +372,9 @@ function LocationPortalContent() {
                 setCode(''); setShowCode(false);
                 setToken(data.token);
                 setMyLocation(data.location);
+                // 2.36.10: what only /portal/me says (the verbal authorization box, the withdraw window…) right away,
+                // not at the next refresh — the login answer carries the location only.
+                refreshMyLocation();
                 setStep('dashboard');
                 loadInscriptions();
                 if (data.location?.conference_id) loadFields(data.location.conference_id);
@@ -500,9 +506,13 @@ function LocationPortalContent() {
         }
         setHealthError(null);
         const verbalNeeded = !!healthField && !!(healthField as any).verbal_consent && !!healthPayload(healthField, formData[HEALTH_FIELD] || null);
-        if (verbalNeeded && !verbalOk) {
-            setVerbalError(consentT('es')('verbal.missing'));
-            if (typeof document !== 'undefined') document.getElementById('cm-health-verbal')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        const generalNeeded = !!(myLocation as any)?.consent_verbal_general;
+        // Both said in place at once: the personal data (always) and, with health data entered, the health one.
+        let blocked: string | null = null;
+        if (verbalNeeded && !verbalOk) { setVerbalError(consentT('es')('verbal.missing')); blocked = 'cm-health-verbal'; }
+        if (generalNeeded && !verbalGeneralOk) { setVerbalGeneralError(consentT('es')('verbal.general.missing')); blocked = blocked || 'cm-general-verbal'; }
+        if (blocked) {
+            if (typeof document !== 'undefined') document.getElementById(blocked)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
             return;
         }
         setLoading(true);
@@ -513,7 +523,7 @@ function LocationPortalContent() {
                 headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
                 // Strings only, trimmed, '' kept — the server canonicalises and runs the required checks. The health
                 // answer travels as its own object.
-                body: JSON.stringify({ ...formBody(rest), ...(healthField ? { [HEALTH_FIELD]: healthPayload(healthField, healthValue || null) } : {}), ...(verbalNeeded ? { health_verbal_consent: true } : {}) }),
+                body: JSON.stringify({ ...formBody(rest), ...(healthField ? { [HEALTH_FIELD]: healthPayload(healthField, healthValue || null) } : {}), ...(verbalNeeded ? { health_verbal_consent: true } : {}), ...(generalNeeded ? { general_verbal_consent: true } : {}) }),
                 credentials: 'include'
             });
             if (res.ok) {
@@ -527,6 +537,7 @@ function LocationPortalContent() {
                 // Reset form with initials
                 setFormData(initialFormValues(fields));
                 setVerbalOk(false);
+                setVerbalGeneralOk(false);
                 loadInscriptions();
                 refreshMyLocation();
             } else {
@@ -920,10 +931,6 @@ function LocationPortalContent() {
                                                             onChange={(v) => { setFormData({ ...formData, [field.name]: v }); setHealthError(null); }}
                                                             error={healthError}
                                                         />
-                                                        {(field as any).verbal_consent && healthPayload(field, formData[field.name] || null) && (
-                                                            <VerbalHealthConsent id="cm-health-verbal" label={consentT('es')('verbal.statement')} checked={verbalOk}
-                                                                error={verbalError} onChange={(c) => { setVerbalOk(c); setVerbalError(null); }} />
-                                                        )}
                                                     </div>
                                                 ) : field.is_group ? (
                                                     <GroupPicker
@@ -1013,6 +1020,21 @@ function LocationPortalContent() {
                                     </Notice>
                                 )}
 
+                                {/* 2.36.10: the verbal authorizations, at the end, right above «Guardar»: the personal data (always,
+                                    while consent is on) and, when health data is entered, the health one. */}
+                                {(myLocation as any)?.consent_verbal_general && (
+                                    <VerbalHealthConsent scope="general" id="cm-general-verbal" label={consentT('es')('verbal.general.statement')} checked={verbalGeneralOk}
+                                        error={verbalGeneralError} onChange={(c) => { setVerbalGeneralOk(c); setVerbalGeneralError(null); }} />
+                                )}
+                                {(() => {
+                                    const hf = fields.find(isHealthField);
+                                    if (!hf || !(hf as any).verbal_consent || !healthPayload(hf, formData[hf.name] || null)) return null;
+                                    return (
+                                        <VerbalHealthConsent id="cm-health-verbal" label={consentT('es')('verbal.statement')} checked={verbalOk}
+                                            error={verbalError} onChange={(c) => { setVerbalOk(c); setVerbalError(null); }} />
+                                    );
+                                })()}
+
                                 <div className="flex flex-wrap justify-end gap-3 pt-6 border-t border-gray-50">
                                     <Button variant="ghost" onClick={() => setView('list')}>
                                         Cancelar
@@ -1039,6 +1061,7 @@ function LocationPortalContent() {
                     onSeePayments={feesOn ? seePaymentsOf : undefined}
                     badges={badgesOn ? { authHeaders: portalAuthHeaders, conferenceName } : null}
                     consent={sheetPerson.consent ? { authHeaders: portalAuthHeaders, onChanged: loadInscriptions } : null}
+                    history={{ authHeaders: portalAuthHeaders }}
                     withdraw={(myLocation as any)?.withdraw?.open ? { window: (myLocation as any).withdraw, onWithdraw: withdrawPerson } : null}
                     payBusy={feeHub.preparing}
                 />

@@ -763,6 +763,10 @@ export const conferenceApi = {
     getInscriptionHealth: (id: number) => apiGet<{ field: { name: string; label: string } | null; answer: HealthAnswer | null; verbal_required?: boolean }>(`/plugin/conference-manager/inscriptions/${id}/health`),
     /** 2.33.0: does the conference ask for «Autorización de datos»? (2.34.0: a new health answer then needs the verbal tick.) */
     getConsentEnabled: (conferenceId: number) => apiGet<{ enabled: boolean }>(`/plugin/conference-manager/consent/states?conference_id=${conferenceId}`).then((r) => !!(r && r.enabled)),
+    /** 2.36.10: how the person's data / health authorizations are recorded ('written' | 'verbal' | null) — the edit form's boxes. */
+    getConsentAuthorization: (id: number) => apiGet<{ enabled: boolean; revoked: boolean; general: 'written' | 'verbal' | null; health: 'written' | 'verbal' | null }>(`/plugin/conference-manager/consent/authorization/${id}`),
+    /** 2.36.10: «Historial» — registration, edits (field names), withdrawals, authorization events. */
+    getInscriptionHistory: (id: number) => apiGet<{ entries: any[]; legacy: boolean }>(`/plugin/conference-manager/inscriptions/${id}/history`),
     /** 2.32.0: «Turnos de comida». */
     getMealPriority: (conferenceId: number) => apiGet<any>(`/plugin/conference-manager/meals/priority?conference_id=${conferenceId}`),
     saveMealPriorityConfig: (conferenceId: number, data: Record<string, unknown>) => apiPut<any>('/plugin/conference-manager/meals/priority/config', { conference_id: conferenceId, ...data }),

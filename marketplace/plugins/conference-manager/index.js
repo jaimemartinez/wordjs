@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.9',
+    version: '2.36.10',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -64,6 +64,8 @@ exports.init = async function (wordjs) {
         roomBeds: `${P}room_beds`,
         lodgingResets: `${P}lodging_resets`,
         withdrawals: `${P}inscription_withdrawals`,
+        // 2.36.10: «Historial» — who registered a person and how, and every edit (which fields, never the values).
+        history: `${P}inscription_history`,
         inscriptions: `${P}inscriptions`,
         // Fee payments (2.18.0): a payment is one receipt (`payment_transfers`, the header) split into
         // parts — rows of `payments` linked by transfer_id. See server/fee-payments.js.
@@ -140,6 +142,8 @@ exports.init = async function (wordjs) {
     const RESERVED_INSCRIPTION_COLUMNS = new Set([
         'id', 'conference_id', 'location', 'location_id', 'custom_data', 'registration_date', 'status',
         'payment_status', 'total_due', 'amount_paid', 'room_id', 'notes', 'reg_code', 'room_locked',
+        // 2.36.10: who registered and who last edited the person (never a form field).
+        'created_by', 'updated_by',
         // Not a column at all: the health field's answers live in server/health.js's table (2.32.0).
         healthMod.FIELD,
     ]);
@@ -950,6 +954,23 @@ exports.init = async function (wordjs) {
         await addColumnIfMissing(T.inscriptions, 'withdrawn_at', 'VARCHAR(19)');
         await addColumnIfMissing(T.inscriptions, 'withdrawn_by', 'TEXT');
         await addColumnIfMissing(T.inscriptions, 'withdraw_reason', 'TEXT');
+        // 2.36.10: who registered the person and who last edited them (admin login / «portal:<locality>»), from now on;
+        // and the «Historial» of each registration and edit (the fields' names, never their values). A row from
+        // before has neither: its history says «Sin registro» for the registration.
+        await addColumnIfMissing(T.inscriptions, 'created_by', 'TEXT');
+        await addColumnIfMissing(T.inscriptions, 'updated_by', 'TEXT');
+        await db.createTable(T.history, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'inscription_id INT NOT NULL',
+            'kind VARCHAR(12) NOT NULL',
+            'actor VARCHAR(120)',
+            'via VARCHAR(12)',
+            'at_utc VARCHAR(19) NOT NULL',
+            'fields TEXT',
+            `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
+        ]);
+        await createIndex(`${P}idx_history_ins`, T.history, 'inscription_id');
         // Every withdrawal and every restore (the audit); kept when the person is deleted (no foreign key to them).
         await db.createTable(T.withdrawals, [
             'id INT_PK',
@@ -2073,7 +2094,10 @@ exports.init = async function (wordjs) {
                 throw httpError(409, 'La persona no autorizó por escrito el tratamiento de sus datos de salud: no se pueden registrar.');
             }
             const written = inscriptionId != null && await consent.healthWritten(inscriptionId);
-            if (answer && !written && !(body && body.health_verbal_consent === true)) {
+            // 2.36.10: a live authorization covers later edits — the written one, or the verbal one already recorded
+            // (verbal = authorized): no new tick. The edit is still logged (health_entered, basis written / verbal).
+            const live = written || (inscriptionId != null && await consent.healthAllowed(conferenceId, inscriptionId));
+            if (answer && !live && !(body && body.health_verbal_consent === true)) {
                 const e = httpError(400, 'Marca que la persona te autorizó verbalmente el tratamiento de sus datos de salud, tras informarle que es voluntario. Sin esa autorización no se guardan.');
                 e.field = 'health_verbal_consent';
                 throw e;
@@ -2094,10 +2118,16 @@ exports.init = async function (wordjs) {
         const states = await consent.statesOf(conferenceId, [...answers.keys()]);
         return new Map([...answers].filter(([id]) => { const st = states.get(id); return st && ((st.state === 'granted' && st.health) || st.verbal_health); }));
     }
+    // 2.36.10: the ONE way to read health answers for use — shown, exported or scored: these ids', or a whole
+    // conference's, through `consentedHealth`. The roster, the export, the edit form's read (GET /inscriptions/:id/health)
+    // and the meal priority model (and so every meal group shown on the scanner, the person's page and the badges)
+    // all go through these two, so an answer whose health authorization is pending or revoked is used nowhere.
+    const consentedAnswersOf = async (conferenceId, ids) => consentedHealth(conferenceId, await health.answersOf(ids));
+    const consentedAnswersOfConference = async (conferenceId) => consentedHealth(conferenceId, await health.answersOfConference(conferenceId));
     // Roster rows of ONE conference + the health answer as text, for health:view only (and only when the form has it).
     async function withHealthText(rows, conferenceId, perms) {
         if (!rows.length || !canSeeHealth(perms) || !await health.fieldOf(conferenceId)) return rows;
-        const answers = await consentedHealth(conferenceId, await health.answersOf(rows.map(r => r.id)));
+        const answers = await consentedAnswersOf(conferenceId, rows.map(r => r.id));
         return rows.map(r => ({ ...r, [HEALTH_FIELD]: healthMod.answerText(answers.get(Number(r.id))) }));
     }
 
@@ -3201,6 +3231,7 @@ exports.init = async function (wordjs) {
             assertRequired(confFields, values, false);
             const healthIn = await healthFromBody(confId, fieldValues, { mayWrite: canWriteHealth(perms), creating: true });
             const consentOn = await consent.isEnabled(confId);
+            assertGeneralVerbal(consentOn, fieldValues);
             if (consentOn) await assertConsentEmail(confId, values);
 
             // The admin explicitly PICKS the location (unlike the portal, which forces the coordinator's
@@ -3226,6 +3257,7 @@ exports.init = async function (wordjs) {
             // (generic — the admin can mark any field, e.g. a document number or an email, as unique).
             await assertUnique(confFields, values, { conference_id: confId });
             await assertNoEmailDuplicate(confId, values, { conference_id: confId });
+            values.created_by = actorOf(req);
 
             const keys = Object.keys(values);
             const insert = () => db.run(
@@ -3235,6 +3267,8 @@ exports.init = async function (wordjs) {
             const result = loc ? await takeSeat(loc, insert) : await insert();
             if (healthIn.answer) await health.save(confId, result.lastID, healthIn.answer);
             const consentOut = consentOn ? await askConsent(result.lastID, actorOf(req), 'admin') : undefined;
+            await recordHistory(confId, result.lastID, 'created', actorOf(req), 'admin');
+            if (consentOn) await consentGeneralEntered(result.lastID, actorOf(req), 'admin');
             if (consentOn && healthIn.answer) await consentHealthEntered(result.lastID, actorOf(req), 'admin', healthIn);
             res.json({ success: true, id: result.lastID, ...(consentOut ? { consent: consentOut } : {}) });
         } catch (e) { sendError(res, e); }
@@ -5465,6 +5499,9 @@ exports.init = async function (wordjs) {
             assertRequired(confFields, vals, true);
             await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
             const healthIn = await healthFromBody(existing.conference_id, fieldValues, { mayWrite: canWriteHealth(perms), creating: false, inscriptionId: id });
+            // 2.36.10: the form fields this edit really changes (their names go to the «Historial»; never the values).
+            const changedFields = Object.keys(vals).filter(k => String(existing[k] == null ? '' : existing[k]) !== String(vals[k] == null ? '' : vals[k]));
+            const recordGeneral = await consent.isEnabled(existing.conference_id) ? await assertEditAuthorizations(id, fieldValues, changedFields.length > 0) : false;
 
             const sets = [], params = [];
             for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
@@ -5491,6 +5528,13 @@ exports.init = async function (wordjs) {
             else if (loc) { sets.push('location_id = ?', 'location = ?'); params.push(loc.id, loc.name); }
             const currentLocationId = existing.location_id == null ? null : Number(existing.location_id);
             const locationChanges = loc !== undefined && (loc ? Number(loc.id) : null) !== currentLocationId;
+            // 2.36.10: what the «Historial» will say this edit changed, and who did it (updated_by).
+            const historyFields = [...changedFields];
+            if (newStatus !== existing.status) historyFields.push('status');
+            if (locationChanges) historyFields.push('location');
+            if (fieldValues.notes !== undefined && String(existing.notes == null ? '' : existing.notes) !== String(fieldValues.notes == null ? '' : fieldValues.notes)) historyFields.push('notes');
+            if (healthIn.answer !== undefined) historyFields.push(HEALTH_FIELD);
+            if (historyFields.length) { sets.push('updated_by = ?'); params.push(actorOf(req)); }
             // Capacity: the edit takes a seat when the attendee ends up counted in a location where they were
             // not counted before — moved in from elsewhere (or from no location), or un-cancelled in place.
             // Staying put, cancelling, or leaving a location never needs a free seat.
@@ -5599,6 +5643,8 @@ exports.init = async function (wordjs) {
                 await health.save(existing.conference_id, id, healthIn.answer);
                 await consentHealthEntered(id, actorOf(req), 'admin', healthIn);
             }
+            if (historyFields.length) await recordHistory(existing.conference_id, id, 'edited', actorOf(req), 'admin', historyFields);
+            if (recordGeneral) await consentGeneralEntered(id, actorOf(req), 'admin');
             if (restored) {
                 await db.run(`INSERT INTO ${T.withdrawals} (conference_id, inscription_id, kind, actor, at_utc, reason) VALUES (?, ?, 'restore', ?, ?, NULL)`,
                     [existing.conference_id, id, actorOf(req), new Date().toISOString().slice(0, 19).replace('T', ' ')]);
@@ -5922,6 +5968,45 @@ exports.init = async function (wordjs) {
         if (same) throw httpError(409, `Ya hay una inscripción con el mismo nombre y ${keys.map(f => `«${f.label || f.name}»`).join(' o ')}. Si es otra persona, escribe su correo para distinguirla.`);
     }
     // A health answer staff entered (2.34.0): the verbal authorization it rests on, and who entered or changed it.
+    // 2.36.10: a registration made by staff (the admin's «Nueva inscripción», the portal's «Registrar nuevo») while the
+    // conference asks for consent needs the person's verbal authorization of their personal data — the ticked
+    // statement, `general_verbal_consent: true`. Checked before anything is written; recorded right after.
+    function assertGeneralVerbal(consentOn, body) {
+        if (!consentOn || (body && body.general_verbal_consent === true)) return;
+        const e = httpError(400, 'Marca que la persona te autorizó verbalmente a tratar sus datos personales. Sin esa autorización no se guarda la inscripción.');
+        e.field = 'general_verbal_consent';
+        throw e;
+    }
+    // 2.36.10: editing a person while consent is on. A recorded authorization (written or verbal) cannot be cleared
+    // here (409 — «Revocar» does that); with none recorded (a registration from before 2.36.10) an edit that changes
+    // their data needs the personal-data tick, which is then recorded. Revoked people are not asked: a written «no»
+    // is not overridden by a verbal tick. Returns whether to record the verbal authorization after the write.
+    async function assertEditAuthorizations(inscriptionId, body, changesData) {
+        const auth = await consent.authorizationOf(inscriptionId);
+        const b = body || {};
+        if ((b.general_verbal_consent === false && auth.general) || (b.health_verbal_consent === false && auth.health)) {
+            const e = httpError(409, 'Esta autorización ya está registrada: no se quita editando la inscripción. Para retirarla, usa «Revocar» en Autorizaciones.');
+            e.field = b.general_verbal_consent === false && auth.general ? 'general_verbal_consent' : 'health_verbal_consent';
+            throw e;
+        }
+        if (auth.general || auth.revoked) return false;
+        if (b.general_verbal_consent === true) return true;
+        if (changesData) assertGeneralVerbal(true, b);
+        return false;
+    }
+    // 2.36.10: one «Historial» row (kind created / edited), with the names of the fields an edit changed.
+    async function recordHistory(conferenceId, inscriptionId, kind, actor, via, fields = []) {
+        try {
+            await db.run(`INSERT INTO ${T.history} (conference_id, inscription_id, kind, actor, via, at_utc, fields) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [conferenceId, inscriptionId, kind, actor ? String(actor).slice(0, 120) : null, via, new Date().toISOString().slice(0, 19).replace('T', ' '), JSON.stringify(fields)]);
+        } catch (e) { console.warn('[conference-manager] history not recorded:', e && e.message); }
+    }
+    async function consentGeneralEntered(inscriptionId, actor, via) {
+        try {
+            const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [inscriptionId]);
+            if (ins) await consent.generalVerbalEntered(ins, { actor, via });
+        } catch (e) { console.warn('[conference-manager] verbal authorization not logged:', e && e.message); }
+    }
     async function consentHealthEntered(inscriptionId, actor, via, healthIn) {
         try {
             const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [inscriptionId]);
@@ -5950,7 +6035,9 @@ exports.init = async function (wordjs) {
     };
     mealPriority.install({
         http, allow, allowAny, hasLevel, positiveInt, sendError, httpError, actorOf, runBatched, isFieldColumn,
-        entitlementFrom, health, withPriorityLock,
+        entitlementFrom, withPriorityLock,
+        // 2.36.10: the model scores only the answers whose health authorization is live (see consentedAnswersOf).
+        healthAnswersOfConference: consentedAnswersOfConference,
         // 2.36.5: a called group's phones (the boarding notices' Web Push).
         pushToPeople: (ids, payloadFor) => push.pushToPeople(ids, payloadFor),
         // Names for the groups list: the meals section's own (name fallback included), live location.
@@ -6165,6 +6252,52 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
+    // 2.36.10: «Historial» of one person — who registered them and how, every edit (the fields' NAMES, never their
+    // values), the withdrawals and restores, and the authorization events (never an answer, e-mail or document).
+    // Health events and the health field's edits only for health:view; the coordinators' portal never sees them,
+    // nor «Notas internas», nor an administrator's login («Administración» instead). `legacy`: registered before
+    // 2.36.10, so who registered them is unknown («Sin registro»).
+    async function historyEntries(ins, { seesHealth, portal }) {
+        const fields = await db.all(`SELECT name, label FROM ${T.fields} WHERE conference_id = ?`, [ins.conference_id]);
+        const labelOf = new Map(fields.map(f => [f.name, f.label]));
+        const NAMED = { status: 'Estado', location: 'Localidad', notes: 'Notas internas', [HEALTH_FIELD]: labelOf.get(HEALTH_FIELD) || 'Datos de salud' };
+        const iso = (s) => (s && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? `${s.replace(' ', 'T')}Z` : s || null);
+        const who = (actor) => (!portal || !actor || String(actor).startsWith('portal:') ? (actor || null) : 'admin');
+        const hidden = new Set([...(seesHealth && !portal ? [] : [HEALTH_FIELD]), ...(portal ? ['notes'] : [])]);
+        const out = [];
+        for (const r of await db.all(`SELECT kind, actor, via, at_utc, fields FROM ${T.history} WHERE inscription_id = ? ORDER BY id`, [ins.id])) {
+            let names = [];
+            try { names = JSON.parse(r.fields || '[]'); } catch { /* none */ }
+            const shown = names.filter(n => !hidden.has(n)).map(n => labelOf.get(n) || NAMED[n] || n);
+            if (r.kind === 'edited' && !shown.length) continue; // only what this viewer may not see changed
+            out.push({ kind: r.kind, at: iso(r.at_utc), actor: who(r.actor), via: r.via || null, fields: shown });
+        }
+        for (const r of await db.all(`SELECT kind, actor, at_utc, reason FROM ${T.withdrawals} WHERE inscription_id = ? ORDER BY id`, [ins.id])) {
+            out.push({ kind: r.kind === 'restore' ? 'restored' : 'withdrawn', at: iso(r.at_utc), actor: who(r.actor), reason: r.reason || null });
+        }
+        if (await consent.ensureReady()) {
+            for (const e of await consent.historyOf(ins.id)) {
+                if (e.scope === 'health' && (portal || !seesHealth)) continue;
+                out.push({ ...e, kind: `consent_${e.kind}`, actor: who(e.actor) });
+            }
+        }
+        // By time (the history rows have whole seconds, the authorization log milliseconds: compared as times, not
+        // text); within the same second the registration comes first.
+        const ms = (e) => { const t = Date.parse(e.at || ''); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
+        out.sort((a, b) => ms(a) - ms(b) || (a.kind === 'created' ? -1 : b.kind === 'created' ? 1 : 0));
+        return { entries: out, legacy: !out.some(e => e.kind === 'created'), registered_at: ins.registration_date || null };
+    }
+    http.route('get', '/inscriptions/:id/history', { auth: true }, async (req, res) => {
+        const perms = await allow(req, res, 'inscriptions', 'view');
+        if (!perms) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const ins = id ? await db.get(`SELECT id, conference_id, registration_date FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
+            if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            res.json(await historyEntries(ins, { seesHealth: canSeeHealth(perms), portal: false }));
+        } catch (e) { sendError(res, e); }
+    });
+
     // GET /inscriptions/:id/health → { field, answer } — the answer as the edit form needs it (health:view). The
     // field is null when the form has no «Condiciones de salud»; the answer null when the person gave none.
     http.route('get', '/inscriptions/:id/health', { auth: true }, async (req, res) => {
@@ -6174,9 +6307,11 @@ exports.init = async function (wordjs) {
             const ins = id ? await db.get(`SELECT id, conference_id FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
             if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
             const field = await health.fieldOf(ins.conference_id);
-            const answer = field ? ((await health.answersOf([id])).get(id) || null) : null;
+            // 2.36.10: the same consent filter as the roster: a pending or revoked authorization shows no answer.
+            const answer = field ? ((await consentedAnswersOf(ins.conference_id, [id])).get(id) || null) : null;
             // 2.34.0: entering an answer needs the person's verbal authorization until they authorize health in writing.
-            const verbalRequired = !!field && await consent.isEnabled(ins.conference_id) && !await consent.healthWritten(id) && !await consent.healthRefused(id);
+            // 2.36.10: not while a verbal authorization is live either (the form shows no tick then).
+            const verbalRequired = !!field && await consent.isEnabled(ins.conference_id) && !await consent.healthAllowed(ins.conference_id, id) && !await consent.healthRefused(id);
             res.json({ field: field ? { name: field.name, label: field.label } : null, answer, verbal_required: verbalRequired });
         } catch (e) { sendError(res, e); }
     });
@@ -8727,7 +8862,8 @@ exports.init = async function (wordjs) {
             lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes, ...safe } = location;
         try {
             const withdraw = withdrawWindow(await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
-            res.json({ ...safe, withdraw, conference_name: await conferenceNameOf(location.conference_id), inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
+            // 2.36.10: «Registrar nuevo» asks for the verbal authorization of the personal data while consent is on.
+            res.json({ ...safe, withdraw, consent_verbal_general: await consent.isEnabled(location.conference_id), conference_name: await conferenceNameOf(location.conference_id), inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
         } catch (e) { sendError(res, e); }
     });
 
@@ -8818,7 +8954,7 @@ exports.init = async function (wordjs) {
             const noEmail = (r) => !emailField || !CONSENT_EMAIL_RE.test(String(r[emailField.name] == null ? '' : r[emailField.name]).trim());
             const consentOf = (r) => {
                 const st = consentStates.get(Number(r.id));
-                return st ? { state: st.state, granted_at: st.granted_at, revoked_at: st.revoked_at, email_masked: st.email_masked, mail_failed: st.mail_failed, link_expired: st.link_expired, verbal_health: st.verbal_health, verbal_overdue: st.verbal_overdue, no_email: noEmail(r) }
+                return st ? { state: st.state, granted_at: st.granted_at, revoked_at: st.revoked_at, email_masked: st.email_masked, mail_failed: st.mail_failed, link_expired: st.link_expired, verbal_health: st.verbal_health, verbal_overdue: st.verbal_overdue, verbal_general: st.verbal_general, no_email: noEmail(r) }
                     : { state: 'pending', granted_at: null, revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, never_sent: true, no_email: noEmail(r) };
             };
             res.json(list.map(r => ({ ...r, pending_amount: roundMoney(r.pending_amount), returned_amount: roundMoney(r.returned_amount), cancelled: !!Number(r.cancelled), ...(consentStates ? { consent: consentOf(r) } : {}) })));
@@ -8864,6 +9000,18 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
+    // 2.36.10: «Historial» of one of the locality's people (see historyEntries: no health, no notes, no admin login).
+    http.route('get', '/portal/inscriptions/:id/history', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        try {
+            const id = positiveInt(req.params.id);
+            const ins = id ? await db.get(`SELECT id, conference_id, location_id, registration_date FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
+            if (!ins || Number(ins.location_id) !== Number(location.id) || Number(ins.conference_id) !== Number(location.conference_id)) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            res.json(await historyEntries(ins, { seesHealth: false, portal: true }));
+        } catch (e) { sendError(res, e); }
+    });
+
     // 6. Create Inscription (Portal)
     http.route('post', '/portal/inscriptions', async (req, res) => {
         const location = await resolvePortalLocation(req);
@@ -8903,6 +9051,7 @@ exports.init = async function (wordjs) {
             // «Condiciones de salud» (2.32.0): the coordinator answers it while registering — write-only.
             const healthIn = await healthFromBody(conference_id, fieldValues, { mayWrite: true, creating: true });
             const consentOn = await consent.isEnabled(conference_id);
+            assertGeneralVerbal(consentOn, fieldValues);
             if (consentOn) await assertConsentEmail(conference_id, values);
 
             // Enforce required fields SERVER-SIDE — is_required was only advisory on the public form, so a
@@ -8924,6 +9073,7 @@ exports.init = async function (wordjs) {
             values.total_due = await computeFee(conference_id, values, conf.fee_default);
             values.reg_code = await newRegCode();
 
+            values.created_by = `portal:${location.name}`;
             // The seat is taken under the location's seat lock (takeSeat re-counts there).
             const keys = Object.keys(values);
             const result = await takeSeat(location, () => db.run(
@@ -8932,6 +9082,8 @@ exports.init = async function (wordjs) {
             ));
             if (healthIn.answer) await health.save(conference_id, result.lastID, healthIn.answer);
             const consentOut = consentOn ? await askConsent(result.lastID, `portal:${location.name}`, 'portal') : undefined;
+            await recordHistory(conference_id, result.lastID, 'created', `portal:${location.name}`, 'portal');
+            if (consentOn) await consentGeneralEntered(result.lastID, `portal:${location.name}`, 'portal');
             if (consentOn && healthIn.answer) await consentHealthEntered(result.lastID, `portal:${location.name}`, 'portal', healthIn);
             res.json({ success: true, id: result.lastID, ...(consentOut ? { consent: consentOut } : {}) });
         } catch (e) { sendError(res, e); }

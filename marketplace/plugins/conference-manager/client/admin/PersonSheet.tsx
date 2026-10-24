@@ -35,8 +35,10 @@
  * who they are and their money, nothing else — so only the header, «Pago» and the code are drawn; never a
  * room, form answers or notes shown empty as if the person had none.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { conferenceApi } from "../lib/conference";
+import { HistoryList } from "../lib/HistoryList";
+import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { needsLodging } from "../lib/lodgingView";
 import { LAYER, revealInOverlay } from "../lib/overlay";
 import { toCents } from "../lib/feeSplit";
@@ -109,6 +111,9 @@ export function PersonSheet({
     onClose, onEdit, onAssign, onBarcode, onBadge, onToggleCancel, onDelete, onRegister, onOpenTransfer, onSeePayments, busy = '', notice = null,
 }: any) {
     const tx = useTx();
+    const { language } = useI18n();
+    // 2.36.10: «Historial» — stable per person (a new function each render would reload it on every render).
+    const loadHistory = useCallback(() => conferenceApi.getInscriptionHistory(p.id), [p && p.id]); // eslint-disable-line react-hooks/exhaustive-deps
     const payRef = useRef<HTMLElement | null>(null);
     const noticeRef = useRef<HTMLDivElement | null>(null);
     // A phone held sideways: the chips under the name scroll with the body (Overlay useShortTouch, UX6-8).
@@ -264,6 +269,11 @@ export function PersonSheet({
                         <InfoRow className="sm:col-span-2" label={tx('roster.notes', 'Notas internas')}>{p.notes ? <span className="whitespace-pre-wrap">{p.notes}</span> : <span className="text-gray-400">—</span>}</InfoRow>
                     </dl>
                 </section>}
+
+                {/* 6b. «Historial» (2.36.10): who registered, every edit (field names), withdrawals, authorizations. */}
+                {!brief && <div className={sectionCls} data-person-section="history">
+                    <HistoryList load={loadHistory} lang={language} titleClass={titleCls} />
+                </div>}
 
                 {/* What the last action of the sheet did — right above its buttons (an error stays until the next one). */}
                 {notice && notice.text && (
