@@ -6,6 +6,63 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **conference-manager 2.36.6: a simpler Participantes screen in the coordinators' portal.**
+  - **«Consentimiento en papel» is a blue button** next to «Registrar nuevo», with the same style. It shows while
+    the conference asks for the data authorization and opens the paper consent above the list. It is no longer
+    folded inside «Herramientas de la localidad».
+  - **«Escarapelas de tu localidad» is gone**: the copy-all, print and PDF buttons for the whole locality. Each
+    person's badge (view, copy link, WhatsApp, PDF) stays in their sheet, section «Escarapela». The admin's
+    *Escarapelas* screen is unchanged.
+  - **«Herramientas de la localidad» is removed**: with both of its tools moved or gone, the panel was empty.
+
+### Added
+
+- **conference-manager 2.36.5: calling the meal groups, one after another.**
+  - **«Alimentación › Llamar grupos»**: the live screen of a meal service. For every group it shows how many people it
+    has for that service, how many were served, how many are still to come, and how many were let in before their
+    group was called. A big «Llamar grupo B» calls the next group in the service's order; any group can be called.
+    A called group stays called. «Deshacer» undoes a mistaken call after an in-app confirmation. The kitchen team
+    can call groups too (Entrega de comidas › gestionar).
+  - **The scanner follows the calls.** Once a group of a service has been called, a person whose group has not
+    is not served on a scan. A red warning says «Tu grupo aún no ha sido llamado», with their letter and the groups
+    called so far. «Dejar pasar igual», after its own confirmation, serves them as an exception, recorded with who
+    allowed it, when, the person and their group. Priority people get no bypass: priority only decides their group.
+    Before the first call of a service, the scanner serves everyone, as before.
+  - **The group is told**: a notification on the phones of that group's people (the boarding notices' Web Push, in
+    the phone's language: Spanish, English or Portuguese). «Mi inscripción» shows «Tu grupo ya puede pasar a comer»
+    on its own, refreshing while a meal is still to come. People without a bus can now turn the notices on in «Mis
+    comidas».
+  - **The audit**: every call, undo and exception is logged per service, and shown on the screen with the
+    exceptions' names.
+- **conference-manager 2.36.4: a friendlier price-rule builder.** In *Precios › Nueva regla*, the value of a condition
+  now follows the field picked, from what this conference's data really has, instead of free text:
+  - **Personas que escojo**: the roster, searched by name, document or locality and filtered by locality; tick one
+    person or several.
+  - **The locality, a list field or a short text** (church, role, gender…): the values people really have, each with
+    how many people have it, ticked as «es uno de» / «no es ninguno de»; another value can be added.
+  - **A number**: a range (either end open) or a bound (≥, ≤ …).
+  - **A date**: between, before or after, with the admin's calendar.
+  - **A Yes / No switch**: Sí or No.
+  - **Live preview**: under the condition, «Esta regla aplica a N de M personas» and the first few names. A value the
+    server refuses (an empty list, a backwards range) is said in place.
+  - **Rules list**: says each condition in words («Localidad es: Norte, Sur», «Edad entre 18 y 65»).
+  - **Older rules**: rules saved before work as they did. A rule on a list field written as «es igual a X» opens as
+    «es uno de [X]» (the same people) when edited.
+- **conference-manager 2.36.4: any signed-sheet PDF shows in place.** The viewer from 2.36.3 showed only scanned PDFs
+  and turned away a typed or exported one («not a picture or a scan»). Now every PDF (typed, vector, mixed or scanned)
+  is drawn page by page in the sheet's viewer, with zoom, pan and page arrows, on a computer or a phone. It is never a
+  download and never the browser's own PDF viewer.
+  - **pdf.js 4.10.38** (Apache-2.0, legacy build) is bundled with the plugin, with its licence in
+    `server/pdfjs.LICENSE.txt`.
+  - **Loaded on demand**: the plugin's bundles stay the same size. The first PDF opened fetches pdf.js once from the
+    new `GET /public/pdfjs` (cached).
+  - **No new permissions**: it runs on the page, with no Worker and no `eval`, so nothing more is needed under the
+    admin's CSP or the sandbox. The plugin now has 176 routes.
+  - **Unchanged**: a phone's «scan to PDF» still shows its pictures directly, without pdf.js, and a photo shows as it
+    is.
+
 ## [2.11.2] - 2026-10-24
 
 ### Fixed

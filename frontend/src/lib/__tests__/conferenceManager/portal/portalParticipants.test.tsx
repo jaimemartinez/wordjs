@@ -285,10 +285,13 @@ describe("the coordinators' portal UX (2.36.1)", () => {
         expect(page).toContain("initialFilter={{ pay: listPreset.pay }}");
         expect(page).toContain('testId="kpi-consent"');
     });
-    it("the locality's tools fold behind one row, remembered per device", () => {
-        expect(page).toContain('data-action="tools-toggle"');
-        expect(page).toContain('aria-expanded={toolsOpen}');
-        expect(page).toContain("writePortalPref('tools', v ? '0' : '1')");
+    it("«Consentimiento en papel» is a blue button next to «Registrar nuevo», not folded away (2.36.6)", () => {
+        const actions = page.slice(page.indexOf('data-testid="participants-actions"'), page.indexOf('data-action="paper-open"'));
+        expect(actions).toContain("Registrar Nuevo");
+        // The same Button as «Registrar nuevo» (the primary, blue variant), shown while the conference asks for consent.
+        expect(actions).toMatch(/\{consentOn && \(\s+<Button icon="fa-file-signature" block className="sm:w-auto" aria-expanded=\{paperOpen\}/);
+        expect(page).toContain("<PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} onClose={() => setPaperOpen(false)} />");
+        for (const gone of ['data-action="tools-toggle"', "Herramientas de la localidad", "toolsOpen", "writePortalPref('tools'"]) expect(page, gone).not.toContain(gone);
     });
     it("a list opened on a filter shows that filter", () => {
         // Luis owes everything (unpaid); Rosa paid; Ana paid part.

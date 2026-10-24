@@ -8,7 +8,8 @@
  * `consent` only while the conference asks for it (GET /portal/inscriptions).
  *
  * «Consentimiento en papel» (2.34.0): PortalPaperConsent — the locality's printable sheet, the signed pages and the
- * checklist of who signed (lib/PaperConsent), in the portal's own Modal.
+ * checklist of who signed (lib/PaperConsent), in the portal's own Modal. 2.36.6: opened by a blue button in the
+ * Participantes header, no longer folded inside «Herramientas de la localidad».
  */
 import React, { useState } from "react";
 import { useToast } from "@/contexts/ToastContext";
@@ -168,10 +169,12 @@ function PortalDialog({ title, onClose, children, footer, testId, wide }: { titl
     return <Modal title={title} onClose={onClose} size={wide ? "xl" : "lg"} testId={testId} footer={footer}>{children}</Modal>;
 }
 
-/** The coordinator's paper consent for their own locality (the portal session's). */
-export function PortalPaperConsent({ authHeaders, onChanged }: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; onChanged?: () => void }) {
+/**
+ * The coordinator's paper consent for their own locality (the portal session's). 2.36.6: opened by the blue
+ * «Consentimiento en papel» button next to «Registrar nuevo»; «Cerrar» (onClose) folds it again.
+ */
+export function PortalPaperConsent({ authHeaders, onChanged, onClose }: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; onChanged?: () => void; onClose: () => void }) {
     const { addToast } = useToast();
-    const [open, setOpen] = useState(false);
     // The host hands in new functions on every render: kept in refs, so the panel does not reload each time.
     const headersRef = React.useRef(authHeaders);
     const changedRef = React.useRef(onChanged);
@@ -189,15 +192,9 @@ export function PortalPaperConsent({ authHeaders, onChanged }: { authHeaders: (e
         return data;
     }, []);
     return (
-        <div className="px-4 sm:px-6 pt-4" data-portal-paper="">
-            {!open ? (
-                <Button variant="outline" icon="fa-file-signature" onClick={() => setOpen(true)} data-action="paper-open">{t("paper.title")}</Button>
-            ) : (
-                <div className="space-y-2">
-                    <PaperConsent t={t} request={request} Dialog={PortalDialog} addToast={addToast} canManage dateLang="es" />
-                    <Button variant="ghost" icon="fa-chevron-up" onClick={() => setOpen(false)}>{t("paper.close")}</Button>
-                </div>
-            )}
+        <div className="px-4 sm:px-6 py-4 space-y-2 border-b border-gray-100" data-portal-paper="">
+            <PaperConsent t={t} request={request} Dialog={PortalDialog} addToast={addToast} canManage dateLang="es" />
+            <Button variant="ghost" icon="fa-chevron-up" onClick={onClose} data-action="paper-close">{t("paper.close")}</Button>
         </div>
     );
 }

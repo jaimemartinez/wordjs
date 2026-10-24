@@ -79,11 +79,9 @@ export const portalBadgeLink = async (headers: Headers, inscriptionId: number): 
     if (!r.link) throw new Error("Esta inscripción no tiene escarapela.");
     return { link: r.link, countryCode: r.country_code || "57", conference: r.conference || "" };
 };
-export const portalBadgeLinks = async (headers: Headers): Promise<PortalBadgeLink[]> =>
-    (await post<{ links: PortalBadgeLink[] }>(headers, "/links", {})).links || [];
 
 /**
- * Open a PDF (one person, or the whole location) in a NEW tab: the tab opens now, inside the tap (a popup
+ * Open a person's badge PDF in a NEW tab: the tab opens now, inside the tap (a popup
  * blocker allows that), and goes to the file once the ticket arrives — the coordinator keeps the portal.
  */
 export async function openPortalBadgePdf(headers: Headers, scope: { inscription_id?: number }, sheet: "single" | "letter"): Promise<void> {
@@ -114,17 +112,4 @@ export async function copyText(text: string): Promise<boolean> {
         ta.remove();
         return ok;
     } catch { return false; }
-}
-/**
- * Copy text that is still being fetched — call it IN the tap: Safari lets a page write the clipboard only inside
- * the gesture, so the write starts now with a promise of the text. false when nothing could be copied.
- */
-export async function copyLater(text: Promise<string>): Promise<boolean> {
-    const CI = typeof window !== "undefined" ? (window as unknown as { ClipboardItem?: new (items: Record<string, Promise<Blob>>) => unknown }).ClipboardItem : undefined;
-    const clip = typeof navigator !== "undefined" ? (navigator.clipboard as unknown as { write?: (items: unknown[]) => Promise<void> } | undefined) : undefined;
-    if (CI && clip && typeof clip.write === "function" && window.isSecureContext) {
-        try { await clip.write([new CI({ "text/plain": text.then((t) => new Blob([t], { type: "text/plain" })) })]); return true; }
-        catch { /* fall back */ }
-    }
-    try { return await copyText(await text); } catch { return false; }
 }

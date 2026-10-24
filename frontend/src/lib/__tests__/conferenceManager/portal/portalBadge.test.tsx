@@ -183,7 +183,8 @@ describe("the review fixes, in the sources", () => {
         expect(page).toContain("openBadgeFileFrom(");
         expect(actions).toContain("openBadgeFileFrom(");
         expect(page).toContain("copyLater(text)");
-        expect(portal).toContain("copyLater(text)");
+        // 2.36.6: the portal has no «copy every link» any more (the bulk section is gone), so no copyLater there.
+        expect(portal).not.toContain("copyLater");
         // The portal's «Ver» and «WhatsApp» are real links once the person's link is known (no window.open after a request).
         expect(portal).not.toContain("window.open(");
         expect(portal).toContain('data-action="badge-open"');
@@ -228,9 +229,15 @@ describe("each person's badge, in the admin and the portal", () => {
         }
         expect((translations as any).es["badges.people.opened.one"]).toBe("Abierta 1 vez");
     });
-    it("the portal says how to reach one person's badge, and re-reads its flags when the coordinator comes back", () => {
-        expect(read("../../../../../../marketplace/plugins/conference-manager/client/portal/PortalBadges.tsx")).toContain("data-portal-badges-hint");
+    it("the portal: one person's badge in their sheet only (2.36.6: no locality-wide section), and its flags re-read when the coordinator comes back", () => {
+        const badges = read("../../../../../../marketplace/plugins/conference-manager/client/portal/PortalBadges.tsx");
         const page = read("../../../../../../marketplace/plugins/conference-manager/client/portal/CoordinatorPortal.tsx");
+        expect(badges).toContain('data-sheet-section="escarapela"');
+        for (const gone of ["PortalBadgeBulk", "data-portal-badges", "badges-copy", "badges-sheet", "Escarapelas de tu localidad"]) {
+            expect(badges, gone).not.toContain(gone);
+            expect(page, gone).not.toContain(gone);
+        }
+        expect(read("../../../../../../marketplace/plugins/conference-manager/client/portal/badges.ts")).not.toContain("portalBadgeLinks");
         expect(page).toMatch(/refreshMyLocation\(\);[\s\S]{0,120}addEventListener\('visibilitychange'/);
         // A portal that never leaves the screen still learns it: focus, back-forward restore, and once a minute.
         for (const ev of ["focus", "pageshow"]) expect(page).toContain(`window.addEventListener('${ev}', reread)`);
