@@ -23,6 +23,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Evidence**: photos show in the sheet's viewer and count exactly like a PDF. Each page's SHA-256 is in the
     audit and in the «granted» record of everyone ticked from the sheet.
 
+### Fixed
+
+- **conference-manager 2.36.8: copying a link works on phones.** (The owner: «en móviles CM no me deja copiar el
+  link de inscripciones».)
+  - **The cause**: on a site served over http (a LAN address, a site before its certificate) the browser has no
+    Clipboard API. The fallback then selected its hidden field with `select()`, which selects nothing on an
+    iPhone, so nothing was copied. The link was then shown in a toast that disappears and cannot be selected on a
+    phone. Some buttons had no fallback at all and failed silently.
+  - **One copy helper** for every «Copiar enlace / mensaje / código» on the admin and the coordinators' portal.
+    It writes the clipboard inside the tap, and falls back to a field selected the iPhone way. It says «Copiado»
+    only when something was really copied.
+  - **When the phone still refuses**, the link or message opens in a field to copy by hand («Mantén presionado el
+    texto…»), with «Copiar de nuevo» and, on phones, «Compartir» (WhatsApp, Messages…).
+  - **«Compartir»** next to the registration link's «Copiar enlace» on phones.
+  - **«Copiar mensaje»** of the data authorization starts the copy in the tap, while the new link is still being
+    made.
+
 ## [2.11.4] - 2026-10-24
 
 ### Fixed

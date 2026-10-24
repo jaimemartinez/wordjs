@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.7',
+    version: '2.36.8',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };

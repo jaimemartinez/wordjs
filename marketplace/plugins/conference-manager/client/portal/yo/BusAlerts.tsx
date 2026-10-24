@@ -12,6 +12,7 @@
  * the switch explains how to do that instead.
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCopy } from "../../lib/CopyFallback";
 
 export type BusNotice = { kind: "boarding" | "departed" | "message"; text: string | null; at: string | null };
 export type Bus = {
@@ -94,6 +95,8 @@ export function PushSwitch({ session, pushKey, post, code }: { session: string; 
     const T = SWITCH_TEXT;
     const [push, setPush] = useState<PushState>("busy");
     const [note, setNote] = useState("");
+    // 2.36.8: the shared copy (lib/clipboard); a phone that does not let it gets the link to copy by hand.
+    const { copy: copyNow, copyUi } = useCopy({ onCopied: () => setNote("Enlace copiado: pégalo en Safari."), lang: "es" });
     // Where the notices stand on this phone; a granted phone re-sends its subscription (the session may be new).
     useEffect(() => {
         let gone = false;
@@ -116,9 +119,7 @@ export function PushSwitch({ session, pushKey, post, code }: { session: string; 
 
     // iPhone outside Safari: the page's own address (with the code) to open in Safari.
     const selfUrl = code && typeof window !== "undefined" ? `${window.location.origin}/portal/conference/yo#c=${code}` : "";
-    const copySelf = async () => {
-        try { await navigator.clipboard.writeText(selfUrl); setNote("Enlace copiado: pégalo en Safari."); } catch { setNote(selfUrl); }
-    };
+    const copySelf = () => { copyNow(selfUrl); };
     const enable = async () => {
         if (!pushKey) return;
         setPush("busy"); setNote("");
@@ -150,6 +151,7 @@ export function PushSwitch({ session, pushKey, post, code }: { session: string; 
 
     return (
         <div className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-3 space-y-2" data-push-state={push}>
+            {copyUi}
             {push === "on" ? (
                 <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-bold text-emerald-800"><i className="fa-solid fa-bell mr-1.5" aria-hidden="true"></i>{T.on}</p>

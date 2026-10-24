@@ -41,14 +41,11 @@ export function whatsappUrl(text: string, waDigits?: string | null): string {
     return `https://wa.me/${/^\d{8,15}$/.test(digits) ? digits : ''}?text=${encodeURIComponent(text)}`;
 }
 
-/** Copy with the Clipboard API. false when there is none or it refused: show the text to copy by hand. */
-export async function copyText(text: string, nav: any = typeof navigator !== 'undefined' ? navigator : null): Promise<boolean> {
-    try {
-        if (!nav || !nav.clipboard || typeof nav.clipboard.writeText !== 'function') return false;
-        await nav.clipboard.writeText(text);
-        return true;
-    } catch { return false; }
-}
+/**
+ * Copy (2.36.8: the plugin's one helper, lib/clipboard — the Clipboard API, else the iOS-proof textarea copy).
+ * false when nothing was copied: show the text to copy by hand.
+ */
+export { copyText } from './clipboard';
 
 // «Copiar mensaje» in another language (2.33.4): the dialog starts in the conference's e-mail language, or in the
 // last language this staff member chose on this device.

@@ -18,7 +18,8 @@
 import React, { useEffect, useState } from "react";
 import { useToast } from "@/contexts/ToastContext";
 import { Button } from "./ui";
-import { portalLinkUrl, copyText, portalBadgeEmail, portalBadgeLink, publicBase, type PortalBadgeLink } from "./badges";
+import { useCopy } from "../lib/CopyFallback";
+import { portalLinkUrl, portalBadgeEmail, portalBadgeLink, publicBase, type PortalBadgeLink } from "./badges";
 import { whatsappUrl } from "../lib/consentMessage";
 
 type Headers = (extra?: Record<string, string>) => Record<string, string>;
@@ -48,6 +49,8 @@ export function PortalBadgeSection({ inscriptionId, firstName, conferenceName, a
     const [busy, setBusy] = useState("");
     const [asking, setAsking] = useState(false);
     const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
+    // 2.36.8: a phone that does not let the page copy gets the link in a field to copy by hand (lib/CopyFallback).
+    const { copy: copyNow, copyUi } = useCopy({ onCopied: () => setNote({ text: "Enlace copiado." }), lang: "es" });
     useEffect(() => {
         let alive = true;
         setNote(null); setAsking(false); setLoaded(false);
@@ -60,10 +63,10 @@ export function PortalBadgeSection({ inscriptionId, firstName, conferenceName, a
     }, [inscriptionId]);
     const url = link ? portalLinkUrl(link, base) : "";
     const conf = conferenceName || confName;
-    const copy = async () => {
-        if (busy) return;
-        setBusy("copy"); setNote(null);
-        try { setNote({ text: (await copyText(url)) ? "Enlace copiado." : url }); } finally { setBusy(""); }
+    const copy = () => {
+        if (busy || !url) return;
+        setNote(null);
+        copyNow(url);
     };
     const send = async () => {
         if (busy) return;
@@ -78,6 +81,7 @@ export function PortalBadgeSection({ inscriptionId, firstName, conferenceName, a
     const missing = loaded ? [!phoneWa ? "WhatsApp: no tiene teléfono registrado" : null, !email ? "Enviar: no tiene correo registrado" : null].filter(Boolean) : [];
     return (
         <section className="space-y-3" aria-labelledby={`badge-${inscriptionId}`} data-sheet-section="escarapela">
+            {copyUi}
             <h4 id={`badge-${inscriptionId}`} className="text-[11px] font-black uppercase tracking-widest text-gray-500">Escarapela</h4>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {phoneWa && (link ? (

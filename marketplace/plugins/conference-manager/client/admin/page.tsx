@@ -76,6 +76,7 @@ import FeePaymentsPage from "./FeePaymentsPage";
 import { money as feeMoney } from "./FeeBits";
 import LodgingPlan from "./LodgingPlan";
 import { Select } from "../lib/Select";
+import { useCopy } from "../lib/CopyFallback";
 
 // Register plugin translations
 registerTranslations(translations);
@@ -897,8 +898,10 @@ function ConferenceDashboard({ conferenceId, onNavigate, onOpenFees }: { confere
 // Registration-code viewer (admin-only): the QR of an attendee's reg_code (2.22.0; Code 128 before), with
 // print, SVG download and copy. The SVG is generated locally from a code of a fixed alphabet (escaped anyway).
 function BarcodeModal({ code, name, onClose, conferenceId }: { code: string; name: string; onClose: () => void; conferenceId?: number }) {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const { addToast } = useToast();
+    // 2.36.8: the shared copy (lib/clipboard) — a phone without the Clipboard API gets the code to copy by hand.
+    const { copy: copyNow, copyUi } = useCopy({ onCopied: (m) => addToast(m, 'success'), lang: language });
     // 2.23.0: the same QR as the badge — the «Mi inscripción» link with the code when the page is on.
     const [prefix, setPrefix] = useState<string | null>(null);
     useEffect(() => {
@@ -925,11 +928,10 @@ function BarcodeModal({ code, name, onClose, conferenceId }: { code: string; nam
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
-    const copy = async () => {
-        try { await navigator.clipboard.writeText(code); addToast(t('reg.code.copied') || 'Código copiado', 'success'); }
-        catch { addToast(code, 'info'); }
-    };
+    const copy = () => { copyNow(code, { done: t('reg.code.copied') || 'Código copiado' }); };
     return (
+        <>
+        {copyUi}
         <Overlay layer={2} onBackdrop={onClose} onEscape={onClose}>
             <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
                 <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-start justify-between gap-4">
@@ -953,6 +955,7 @@ function BarcodeModal({ code, name, onClose, conferenceId }: { code: string; nam
                 </div>
             </div>
         </Overlay>
+        </>
     );
 }
 
@@ -4902,9 +4905,12 @@ export default function ConferenceManagerAdmin() {
 
 // Locations Page Component
 function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number; onOpenExplorer?: (focus: { locationId: number }) => void }) {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const tx = useTx();
     const { addToast } = useToast();
+    // 2.36.8: every copy here goes through lib/clipboard — on a phone the old fallback copied nothing and showed
+    // the link in a toast that cannot be selected; now the link opens in a field to copy by hand, or is shared.
+    const { copy: copyNow, share: shareNow, canShare, copyUi } = useCopy({ onCopied: (m) => addToast(m, 'success'), lang: language });
     // Localidades › gestionar = create / delete, coordinators' codes (rotate), seats, forms of payment,
     // the lodging dates (general and each location's own), and the lodging review (validate / return / reopen).
     // «ver» reads all of it (the review included) and can still copy a code or the portal link.
@@ -5009,33 +5015,20 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
         }
     };
 
-    // Clipboard access throws on non-secure origins (LAN-IP HTTP deployments this repo has hit).
-    // Feature-check + fall back to a hidden-textarea copy; only report success when it worked.
-    const copyToClipboard = async (text: string): Promise<boolean> => {
-        try {
-            if (navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(text);
-                return true;
-            }
-            const ta = document.createElement('textarea');
-            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-            document.body.appendChild(ta); ta.select();
-            const ok = document.execCommand('copy');
-            document.body.removeChild(ta);
-            return ok;
-        } catch {
-            return false;
-        }
+    const portalUrl = () => `${window.location.protocol}//${window.location.host}/portal/conference?slug=${currentConference?.slug}`;
+    const warnDraft = () => {
+        if (!conference?.is_form_published) addToast('El formulario no está publicado. El enlace no funcionará para el público.', 'warning');
     };
-
-    const handleCopyLink = async () => {
+    // Copied inside the tap (no await before it); when the phone does not let it, the link opens to copy by hand.
+    const handleCopyLink = () => {
         if (!currentConference?.slug) return;
-        if (!conference?.is_form_published) {
-            addToast('El formulario no está publicado. El enlace no funcionará para el público.', 'warning');
-        }
-        const fullUrl = `${window.location.protocol}//${window.location.host}/portal/conference?slug=${currentConference.slug}`;
-        if (await copyToClipboard(fullUrl)) addToast('Enlace copiado al portapapeles', 'success');
-        else addToast(fullUrl, 'info'); // fallback: show the link so it can be copied manually
+        warnDraft();
+        copyNow(portalUrl(), { done: 'Enlace copiado al portapapeles' });
+    };
+    const handleShareLink = () => {
+        if (!currentConference?.slug) return;
+        warnDraft();
+        shareNow({ title: currentConference?.name || undefined, url: portalUrl() }, { done: 'Enlace copiado al portapapeles' });
     };
 
     const isPublished = !!conference?.is_form_published;
@@ -5079,13 +5072,12 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
 
     const [copiedId, setCopiedId] = useState<number | null>(null);
 
-    const handleCopyCode = async (code: string, id: number) => {
-        if (await copyToClipboard(code)) {
+    const handleCopyCode = (code: string, id: number) => {
+        copyNow(code, { title: `${t('code') || 'Código'}`, done: t('copied') || '¡Copiado!' }).then((ok) => {
+            if (!ok) return;
             setCopiedId(id);
             setTimeout(() => setCopiedId(null), 2000);
-        } else {
-            addToast(`${t('code') || 'Código'}: ${code}`, 'info');
-        }
+        });
     };
 
     // Enable or disable one form of payment for a location (the server stores the whole enabled set).
@@ -5239,6 +5231,7 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            {copyUi}
             <ReadOnlyNotice section="locations" alsoManage={['settings']} />
             {/* Premium Public Link Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 max-sm:p-6 border-2 transition-all duration-500 shadow-2xl ${isPublished
@@ -5286,15 +5279,30 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                             {t('portal.publish.hint') || 'Los encargados necesitan el formulario publicado para entrar al portal (inscripciones y hospedaje).'}
                         </p>
                     </div>
-                    <button
-                        onClick={handleCopyLink}
-                        className={`px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all duration-500 flex items-center gap-3 shadow-xl transform active:scale-95 ${isPublished
-                            ? 'bg-white text-emerald-600 hover:bg-emerald-50 border-2 border-emerald-100 shadow-emerald-100/50'
-                            : 'bg-white text-orange-600 hover:bg-orange-50 border-2 border-orange-100 shadow-orange-100/50'
-                            }`}
-                    >
-                        <i className="fa-solid fa-copy text-[8px]"></i> Copiar Enlace
-                    </button>
+                    <div className="flex flex-wrap gap-3">
+                        <button
+                            type="button"
+                            onClick={handleCopyLink}
+                            data-portal-link="copy"
+                            className={`min-h-[44px] px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all duration-500 flex items-center gap-3 shadow-xl transform active:scale-95 ${isPublished
+                                ? 'bg-white text-emerald-600 hover:bg-emerald-50 border-2 border-emerald-100 shadow-emerald-100/50'
+                                : 'bg-white text-orange-600 hover:bg-orange-50 border-2 border-orange-100 shadow-orange-100/50'
+                                }`}
+                        >
+                            <i className="fa-solid fa-copy text-[8px]"></i> Copiar Enlace
+                        </button>
+                        {/* On a phone: the share sheet (WhatsApp, Messages…), where the browser has one. */}
+                        {canShare && (
+                            <button
+                                type="button"
+                                onClick={handleShareLink}
+                                data-portal-link="share"
+                                className={`sm:hidden min-h-[44px] px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center gap-3 shadow-xl transform active:scale-95 text-white ${isPublished ? 'bg-emerald-600' : 'bg-orange-500'}`}
+                            >
+                                <i className="fa-solid fa-share-nodes text-[8px]"></i> Compartir
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
 

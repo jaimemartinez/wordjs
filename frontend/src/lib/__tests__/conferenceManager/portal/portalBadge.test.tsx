@@ -209,7 +209,8 @@ describe("each person's badge, in the admin and the portal", () => {
         expect(page).toContain('data-badges-tab="people"');
         for (const act of ["view", "copy", "whatsapp"]) expect(page).toContain(`data-badge-row="${act}"`);
         // One person's copy starts inside the tap (a promise of the link), and a revoked link is not shown again.
-        expect(page).toContain("copyLater(url)");
+        // 2.36.8: through useCopy, so a phone that refuses gets the link to copy by hand.
+        expect(page).toContain("copyLaterNow(url, ");
         expect(page).toContain("badgesApi.existingLinks(conferenceId)");
         expect(page).toContain("tx('badges.bulk.copy', 'Copiar todos los enlaces')");
         // The designer is hidden, not unmounted, behind the other tabs (an unsaved edit and its undo history stay).

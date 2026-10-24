@@ -134,38 +134,9 @@ export function whatsappUrl(phone: unknown, text: string, cc = '57'): string {
     return n ? `https://wa.me/${n}?${q}` : `https://wa.me/?${q}`;
 }
 
-/**
- * Copy text that is still being fetched — call it IN the click: Safari lets a page write the clipboard only
- * inside the gesture, so the write starts now with a promise of the text (ClipboardItem). Elsewhere it waits and
- * copies. false when nothing could be copied: the caller then shows the text to copy by hand.
- */
-export async function copyLater(text: Promise<string>): Promise<boolean> {
-    const CI = typeof window !== 'undefined' ? (window as any).ClipboardItem : undefined;
-    const clip: any = typeof navigator !== 'undefined' ? navigator.clipboard : null;
-    if (CI && clip && typeof clip.write === 'function' && window.isSecureContext) {
-        try { await clip.write([new CI({ 'text/plain': text.then((t) => new Blob([t], { type: 'text/plain' })) })]); return true; }
-        catch { /* fall back */ }
-    }
-    try { return await copyText(await text); } catch { return false; }
-}
-
-/** Copy to the clipboard, with the old execCommand fallback (an http LAN address has no Clipboard API). */
-export async function copyText(text: string): Promise<boolean> {
-    try {
-        if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
-    } catch { /* fall back */ }
-    try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        const ok = document.execCommand('copy');
-        ta.remove();
-        return ok;
-    } catch { return false; }
-}
+// Copying (2.36.8): the plugin's one helper, lib/clipboard — the Clipboard API inside the tap, the iOS-proof
+// textarea fallback, false when nothing was copied (the caller then shows the text to copy by hand).
+export { copyLater, copyText } from './clipboard';
 
 /** The Web Share sheet (a phone); false when the browser has none (the caller copies instead). */
 export async function nativeShare(data: { title?: string; text?: string; url?: string }): Promise<boolean> {
