@@ -258,7 +258,7 @@ export default function AuditPage() {
                                                 {t("audit.actor.system")}
                                             </span>
                                         ) : (
-                                            <span className={`text-sm ${actor.kind === "named" ? "text-gray-700 font-medium break-words" : "text-gray-500 font-mono"}`}>
+                                            <span className={`text-sm ${actor.kind === "named" ? "text-gray-700 font-medium break-words" : "text-gray-500 font-mono break-all"}`}>
                                                 {actor.text}
                                             </span>
                                         );
@@ -282,7 +282,7 @@ export default function AuditPage() {
                                     key: "target",
                                     header: t("audit.column.target"),
                                     cell: (entry) => (
-                                        <span className="inline-flex items-center gap-2 break-words text-sm text-gray-600 whitespace-nowrap">
+                                        <span className="inline-flex items-center gap-2 max-w-full min-w-0 break-all lg:break-normal text-sm text-gray-600 lg:whitespace-nowrap">
                                             <i className={`fa-solid ${auditTargetIcon(entry.targetType)} text-gray-300`} aria-hidden="true"></i>
                                             {auditTargetLabel(entry)}
                                         </span>

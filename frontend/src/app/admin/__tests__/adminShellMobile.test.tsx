@@ -214,3 +214,25 @@ describe("Phones: focusing a field never zooms the page", () => {
         }
     });
 });
+
+/**
+ * Admin › Auditoría on a phone: the table stacks into cards below lg, but the «Objetivo» cell kept
+ * `whitespace-nowrap` at every size, so a long target (a URL, an email, an id) stretched the page sideways.
+ * It wraps below lg now (no-wrap only in the desktop table), and a raw actor id can break anywhere.
+ */
+describe("Admin › Auditoría fits a phone", () => {
+    const src = fs.readFileSync(path.resolve(__dirname, "../audit/page.tsx"), "utf8");
+
+    it("the target cell only refuses to wrap in the desktop table", () => {
+        const target = src.match(/<span className="inline-flex items-center gap-2[^"]*">\s*<i className=\{`fa-solid \$\{auditTargetIcon/);
+        expect(target, "the target cell").not.toBeNull();
+        expect(target![0]).toContain("lg:whitespace-nowrap");
+        expect(target![0]).not.toMatch(/(^|[\s"])whitespace-nowrap/);
+        expect(target![0]).toContain("break-all");
+        expect(target![0]).toContain("max-w-full");
+    });
+
+    it("a raw (unnamed) actor id can break anywhere", () => {
+        expect(src).toMatch(/"text-gray-500 font-mono break-all"/);
+    });
+});
