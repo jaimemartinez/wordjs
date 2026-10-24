@@ -923,3 +923,25 @@ test('the portal session names its conference (the header shows it after a reloa
     assert.strictEqual(me.conference_name, 'Congreso Nacional de Jóvenes');
     assert.strictEqual(me.code, undefined, 'the access code never leaves');
 });
+
+test('«Mi inscripción» (2.36.5): a called group shows on the pending meal, and the notices can be turned on without a bus', async () => {
+    const w = await selfWorld();
+    const { p } = w;
+    const code = w.codeOf(w.ana);
+    const svc = ok(await p.call('post', '/meals/services', { body: { conference_id: w.cid, service_date: '2027-03-01', meal: 'cena' } })).id;
+    ok(await p.call('post', '/meals/plan/toggle', { body: { location_id: w.norte, service_id: svc, enabled: true } }), 'plan');
+    ok(await p.call('put', '/meals/priority/config', { body: { conference_id: w.cid, enabled: true } }), 'turnos');
+    const view = async () => ok(await pub(p, 'post', '/public/me/verify', { code, doc_type: 'Cédula', doc_number: '1045678901' })).view;
+    const before = await view();
+    assert.ok(before.meal_group, 'a meal group');
+    assert.ok(before.push_key, 'the notices key, with no bus');
+    assert.strictEqual(before.meals.pending[0].called_at, undefined);
+    ok(await p.call('post', '/meals/priority/call', { body: { service_id: svc, group: before.meal_group } }), 'call');
+    const after = await view();
+    assert.match(after.meals.pending[0].called_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    // Another group called instead: theirs is not.
+    ok(await p.call('post', '/meals/priority/call', { body: { service_id: svc, group: before.meal_group, undo: true } }), 'undo');
+    const other = ['A', 'B', 'C', 'D', 'E', 'F'].find((g) => g !== before.meal_group);
+    ok(await p.call('post', '/meals/priority/call', { body: { service_id: svc, group: other } }), 'call other');
+    assert.strictEqual((await view()).meals.pending[0].called_at, undefined);
+});

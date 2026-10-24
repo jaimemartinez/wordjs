@@ -768,6 +768,9 @@ export const conferenceApi = {
     saveMealPriorityConfig: (conferenceId: number, data: Record<string, unknown>) => apiPut<any>('/plugin/conference-manager/meals/priority/config', { conference_id: conferenceId, ...data }),
     freezeMealGroups: (conferenceId: number, unfreeze = false) => apiPost<any>('/plugin/conference-manager/meals/priority/freeze', { conference_id: conferenceId, ...(unfreeze ? { unfreeze: true } : {}) }),
     setMealGroup: (inscriptionId: number, group: string | null) => apiPut<any>(`/plugin/conference-manager/meals/priority/people/${inscriptionId}`, { group }),
+    /** 2.36.5 «Llamar grupos»: a service's calling state, and a call (or its undo). */
+    getMealCalls: (conferenceId: number, serviceId: number) => apiGet<any>(`/plugin/conference-manager/meals/priority?conference_id=${conferenceId}&service_id=${serviceId}`),
+    callMealGroup: (serviceId: number, group: string, undo = false) => apiPost<any>('/plugin/conference-manager/meals/priority/call', { service_id: serviceId, group, ...(undo ? { undo: true } : {}) }),
     saveField: (data: Partial<ConferenceField>) => apiPost('/plugin/conference-manager/fields', data),
     /** 2.16.0: add a base field from its template (lib/fields.ts FIELD_TEMPLATES). 409 = the form already has it. */
     addFieldTemplate: (conferenceId: number, template: string, label?: string) =>

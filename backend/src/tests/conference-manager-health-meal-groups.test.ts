@@ -289,3 +289,62 @@ test('the letter reaches the scanner only while «Turnos de comida» is on, and 
     assert.strictEqual(ok(await w.p.call('post', '/meals/deliver', { body: { service_id: svc, inscription_id: late.id } })).result, 'delivered');
     assert.strictEqual((await w.p.call('put', '/meals/priority/config', { body: { conference_id: w.cid, enabled: 'yes' } })).status, 400);
 });
+
+test('calling the groups (2.36.5): an uncalled group is warned and not served — priority people too; «Dejar pasar igual» serves and logs it', async () => {
+    const w = await world();
+    // Ana (88, Movilidad reducida) is a priority person: group A. The others, 30 years old, fill B–F.
+    const ana = await w.person('Ana', { age: 88, health_conditions: { conditions: ['Movilidad reducida'] } });
+    for (let i = 0; i < 11; i++) await w.person(`P${i}`, { age: 30 });
+    const svc = ok(await w.p.call('post', '/meals/services', { body: { conference_id: w.cid, service_date: '2027-03-01', meal: 'almuerzo', location_ids: [w.norte] } })).id as number;
+    const people = async () => ok(await w.p.call('get', `/meals/priority?conference_id=${w.cid}`)).people as any[];
+    const call = (group: string, extra: any = {}, user?: HarnessUser) => w.p.call('post', '/meals/priority/call', { body: { service_id: svc, group, ...extra }, ...(user ? { user } : {}) });
+    // Off: nothing to call.
+    assert.strictEqual((await call('A')).status, 409);
+    ok(await w.p.call('put', '/meals/priority/config', { body: { conference_id: w.cid, enabled: true } }));
+    const all = await people();
+    assert.strictEqual(all.find((p: any) => p.id === ana).group, 'A', 'priority puts Ana in group A');
+    const inB = all.find((p: any) => p.group === 'B').id, inC = all.find((p: any) => p.group === 'C').id;
+    // Before any call nothing changes: everyone is served whenever they come.
+    assert.strictEqual(ok(await w.p.call('post', '/meals/check', { body: { service_id: svc, inscription_id: inC } })).result, 'ready');
+
+    // Call B first (out of order on purpose). The service is now calling: A — Ana — has not been called.
+    const called = ok(await call('B'));
+    assert.deepStrictEqual(called.state.called, ['B']);
+    assert.strictEqual(called.push.subscribers, 0, 'nobody turned notices on');
+    const priority = ok(await w.p.call('post', '/meals/check', { body: { service_id: svc, inscription_id: ana } }));
+    assert.strictEqual(priority.result, 'group_not_called', 'a priority person waits for their group like everyone else');
+    assert.deepStrictEqual([priority.group, priority.called_groups], ['A', ['B']]);
+    // Not served on a plain scan…
+    const warned = ok(await w.p.call('post', '/meals/deliver', { body: { service_id: svc, inscription_id: inC } }));
+    assert.strictEqual(warned.result, 'group_not_called');
+    assert.strictEqual(w.p.q(`SELECT id FROM ${PREFIX}meal_deliveries WHERE service_id = ? AND inscription_id = ?`, svc, inC).length, 0, 'not served');
+    // …the called group is.
+    assert.strictEqual(ok(await w.p.call('post', '/meals/deliver', { body: { service_id: svc, inscription_id: inB } })).result, 'delivered');
+    // «Dejar pasar igual»: served as an exception, logged with who, when, the person and their group.
+    const allowed = ok(await w.p.call('post', '/meals/deliver', { body: { service_id: svc, inscription_id: inC, allow_group: true } }));
+    assert.strictEqual(allowed.result, 'delivered');
+    assert.strictEqual(allowed.method, 'group_exception');
+    const ex = w.p.one(`SELECT grp, kind, inscription_id, actor, at_utc FROM ${PREFIX}meal_calls WHERE service_id = ? AND kind = 'exception'`, svc);
+    assert.deepStrictEqual([ex.grp, Number(ex.inscription_id)], ['C', inC]);
+    assert.ok(ex.actor, 'who allowed it');
+    assert.match(ex.at_utc, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    // The «Turnos de comida» screen: per group, entitled / served / pending / exceptions; the audit in order.
+    const st = ok(await w.p.call('get', `/meals/priority?conference_id=${w.cid}&service_id=${svc}`)).calls;
+    const g = (x: string) => st.groups.find((r: any) => r.group === x);
+    assert.deepStrictEqual([g('B').served, g('C').served, g('C').exceptions, g('A').served], [1, 1, 1, 0]);
+    assert.strictEqual(g('B').pending, g('B').entitled - 1);
+    assert.ok(g('B').called_at && !g('A').called_at);
+    assert.deepStrictEqual(st.exceptions.map((x: any) => [x.group, x.inscription_id]), [['C', inC]]);
+    assert.deepStrictEqual(st.log.map((x: any) => x.kind), ['call', 'exception']);
+    // Calling A lets Ana through; a called group stays called; calling it again is refused.
+    ok(await call('A'));
+    assert.strictEqual(ok(await w.p.call('post', '/meals/deliver', { body: { service_id: svc, inscription_id: ana } })).result, 'delivered');
+    assert.strictEqual((await call('A')).status, 409);
+    // Undo (a mistaken call): logged; undoing a group not called is refused; the kitchen team may call too.
+    const undone = ok(await call('B', { undo: true }));
+    assert.deepStrictEqual(undone.state.called, ['A']);
+    assert.strictEqual((await call('D', { undo: true })).status, 409);
+    assert.deepStrictEqual(ok(await w.p.call('get', `/meals/priority?conference_id=${w.cid}&service_id=${svc}`)).calls.log.map((x: any) => x.kind), ['call', 'exception', 'call', 'undo']);
+    assert.strictEqual((await call('Z')).status, 400);
+    assert.strictEqual((await call('C', {}, NURSE)).status, 403, 'meals:view cannot call');
+});

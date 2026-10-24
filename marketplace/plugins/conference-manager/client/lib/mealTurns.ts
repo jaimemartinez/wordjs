@@ -30,3 +30,9 @@ export function peopleFilter<T extends PersonRow>(rows: readonly T[], q: string,
 /** «12:15» or «12:15–12:23» for a slot (one time when the group takes under a minute). */
 export const turnLine = (s: { start?: string | null; end?: string | null } | null | undefined): string =>
     !s || !s.start ? '' : s.end && s.end !== s.start ? `${s.start}–${s.end}` : s.start;
+
+/** «Llamar grupos» (2.36.5): the next group to call — the first of the service's order not called yet (null: all called). */
+export function nextToCall(order: readonly string[] | null | undefined, called: readonly string[] | null | undefined): string | null {
+    const done = new Set(called || []);
+    return (order || []).find((g) => !done.has(g)) || null;
+}

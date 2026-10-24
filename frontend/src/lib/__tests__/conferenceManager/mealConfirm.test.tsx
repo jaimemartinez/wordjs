@@ -1796,3 +1796,94 @@ describe('2.17.0 live round (r6): «Autorizar» at every phone width; WHY there 
         expect(fitHeight({ top: 77, bottom: 460 }, 389)).toBeNull();
     });
 });
+
+// ── 2.36.5: calling the meal groups ─────────────────────────────────────────────────────────────────────
+describe('«Llamar grupos» (2.36.5): an uncalled group waits; «Dejar pasar igual» only after its own confirmation', () => {
+    const CM = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager');
+    const read = (rel: string) => fs.readFileSync(path.join(CM, rel), 'utf8');
+    const group = { result: 'group_not_called', verdict: { person: { id: 3, name: 'Carla', meal_group: 'C' }, group: 'C', called_groups: ['A', 'B'], service: { id: 7, service_date: '2027-03-01', meal: 'almuerzo' } } };
+
+    it('the flow: a decision card; Enter never lets them in; allowGroup() delivers with allow_group, nothing else does', async () => {
+        expect(isDecision('group_not_called' as any)).toBe(true);
+        expect(cardKeyAction('Enter', 'group_not_called' as any, '')).toBe(null);
+        expect(cardKeyAction('Escape', 'group_not_called' as any, '')).toBe('cancel');
+        const delivered: any[] = [];
+        const flow = createConfirmFlow({ check: async () => group as any, deliver: async (sid, body) => { delivered.push({ sid, ...body }); return { result: 'delivered', method: 'group_exception' }; } });
+        flow.scan(7, { inscription_id: 3 });
+        await tick();
+        expect(flow.state().card?.result).toBe('group_not_called');
+        expect(flow.deliver()).toBe(false);
+        expect(flow.authorize('x')).toBe(false);
+        expect(flow.allowGroup('Dejado pasar')).toBe(true);
+        await tick();
+        expect(delivered).toEqual([{ sid: 7, inscription_id: 3, allow_group: true, note: 'Dejado pasar' }]);
+        // allowGroup() never serves a ready card.
+        const ready = createConfirmFlow({ check: async () => ({ result: 'ready', verdict: { person: { id: 1, name: 'Ana' } } }) as any, deliver: async () => ({ result: 'delivered' }) });
+        ready.scan(7, { inscription_id: 1 });
+        await tick();
+        expect(ready.allowGroup('x')).toBe(false);
+    });
+
+    it('the confirm card: red, the letter and the groups called so far, «Dejar pasar igual» and «Cancelar»', () => {
+        expect(confirmTone('group_not_called')).toBe('group');
+        const html = render(<ConfirmCard card={{ ...group, seq: 1, shownAt: 0 }} service={group.verdict.service} language="es" onAllowGroup={() => {}} onCancel={() => {}} />);
+        expect(html).toContain('data-confirm-card="group_not_called"');
+        expect(html).toContain('Tu grupo aún no ha sido llamado');
+        expect(html).toContain('Es del grupo C. Llamados hasta ahora: A, B.');
+        expect(html).toContain('data-confirm-allow=""');
+        expect(html).toContain('Dejar pasar igual');
+        expect(html).toContain('data-confirm-cancel=""');
+        expect(html).not.toContain('data-confirm-deliver=""');
+        expect(html).toContain('border:3px solid #be123c');
+    });
+
+    it('the verdict card: the same warning, «Dejar pasar igual» through the in-card confirmation; an exception is labelled', () => {
+        const html = render(<VerdictCard outcome={{ ...group, seq: 1, at: 0 }} service={group.verdict.service} language="es" onForce={() => {}} />);
+        expect(html).toContain('data-verdict="group_not_called"');
+        expect(html).toContain('Tu grupo aún no ha sido llamado');
+        expect(html).toContain('Grupo C · llamados: A, B');
+        expect(html).toContain('Dejar pasar igual');
+        const done = render(<VerdictCard outcome={{ result: 'delivered', verdict: { person: { id: 3, name: 'Carla' }, method: 'group_exception', service: group.verdict.service }, seq: 2, at: 0 }} service={group.verdict.service} language="es" />);
+        expect(done).toContain('data-verdict-method="group_exception"');
+        expect(done).toContain('Antes de su grupo (excepción)');
+        const s = read('client/admin/MealScanner.tsx');
+        expect(s).toContain("if (o.result === 'group_not_called') await submit({ inscription_id: p.id, allow_group: true");
+        expect(read('client/admin/MealsPage.tsx')).toContain("if (o.result === 'group_not_called') run({ inscription_id: p.id, allow_group: true");
+    });
+
+    it('the control screen: next group in order, per-group counts, undo behind the in-app confirmation, the audit; fresh every 10 s', async () => {
+        const { nextToCall } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/mealTurns');
+        expect(nextToCall(['A', 'B', 'C'], [])).toBe('A');
+        expect(nextToCall(['A', 'B', 'C'], ['A', 'C'])).toBe('B');
+        expect(nextToCall(['A', 'B'], ['A', 'B'])).toBe(null);
+        const t = read('client/admin/MealCallsTab.tsx');
+        expect(t).toContain('conferenceApi.callMealGroup(sid, g, undo)');
+        expect(t).toMatch(/if \(undo && !await confirm\(tx\('calls\.undo\.confirm'/);
+        expect(t).toContain('const POLL_MS = 10000;');
+        expect(t).toContain('data-calls-next={next}');
+        expect(t).toContain('data-calls-exception-list=""');
+        expect(t).toContain('<Select ');
+        expect(t).not.toMatch(/<select\b/);
+        expect(t).not.toMatch(/\bwindow\.(alert|confirm|prompt)\s*\(|[^.\w](alert|prompt)\s*\(/);
+        const page = read('client/admin/MealsPage.tsx');
+        expect(page).toContain("k === 'calls' ? canPlan || canDeliver");
+        expect(read('client/lib/conference.ts')).toContain("'/plugin/conference-manager/meals/priority/call'");
+        for (const k of [...t.matchAll(/tx\('((?:calls|meals)\.[a-z_.]+)'/g)].map((m) => m[1])) for (const l of ['es', 'en', 'pt'] as const) expect((translations as any)[l][k], `${l} ${k}`).toBeTruthy();
+        for (const k of ['meals.verdict.group_not_called', 'meals.group.allow', 'meals.group.confirm', 'meals.group.why', 'meals.method.group_exception', 'meals.tab.calls']) for (const l of ['es', 'en', 'pt'] as const) expect((translations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+
+    it('«Mi inscripción»: «Tu grupo ya puede pasar a comer», fresh while waiting; the notices switch without a bus; the phone\'s language', () => {
+        const m = read('client/portal/yo/MyRegistration.tsx');
+        expect(m).toContain('Tu grupo ya puede pasar a comer');
+        expect(m).toContain('data-self-meal-called=""');
+        expect(m).toContain('const t = setInterval(again, 30000);');
+        expect(m).toContain('e.data.type === "cm-meal-call"');
+        expect(m).toContain('<PushSwitch session={state.session} pushKey={view.push_key} post={post} code={view.code} what="meal" />');
+        const b = read('client/portal/yo/BusAlerts.tsx');
+        expect(b).toContain('export function PushSwitch(');
+        expect(b).toContain('<PushSwitch session={session} pushKey={pushKey} post={post} code={code} what="bus" />');
+        expect((b.match(/lang: phoneLang\(\)/g) || []).length).toBe(2);
+        const sw = read('client/portal/sw.js');
+        expect(sw).toContain("c.postMessage({ type: meal ? 'cm-meal-call' : 'cm-bus-notice' })");
+    });
+});

@@ -13,7 +13,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { csrfHeaders } from "@/lib/csrf";
 import { BadgeCard, type DisplayList } from "../badge/BadgeCard";
 import { OsmMap } from "./OsmMap";
-import { BusAlerts, dropPushSubscription, type Bus } from "./BusAlerts";
+import { BusAlerts, PushSwitch, dropPushSubscription, type Bus } from "./BusAlerts";
 import { Select } from "../../lib/Select";
 
 type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null; turn_start?: string; turn_end?: string };
@@ -87,6 +87,26 @@ const mealName = (m: Meal) => m.label || MEAL_NAMES[m.meal] || m.meal;
 
 export default function MyRegistrationPage() {
     const [state, setState] = useState<State>({ kind: "loading" });
+    // 2.36.5: while a meal is still to come, the page asks again (every 30 s while visible, at once on a call notice),
+    // so «Tu grupo ya puede pasar a comer» shows without a reload.
+    const waiting = state.kind === "ok" && !!state.view.meal_group && state.view.meals.pending.length > 0 ? state.session : null;
+    useEffect(() => {
+        if (!waiting) return;
+        let alive = true;
+        const again = async () => {
+            if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+            try {
+                const r = await post("view", { session: waiting });
+                if (alive && r.status === 200 && r.body.view) setState((s) => (s.kind === "ok" && s.session === waiting ? { ...s, view: r.body.view } : s));
+            } catch { /* the next tick tries again */ }
+        };
+        const t = setInterval(again, 30000);
+        const onMessage = (e: MessageEvent) => { if (e.data && e.data.type === "cm-meal-call") again(); };
+        const sw = typeof navigator !== "undefined" && "serviceWorker" in navigator ? navigator.serviceWorker : null;
+        if (sw) sw.addEventListener("message", onMessage);
+        document.addEventListener("visibilitychange", again);
+        return () => { alive = false; clearInterval(t); if (sw) sw.removeEventListener("message", onMessage); document.removeEventListener("visibilitychange", again); };
+    }, [waiting]);
     const [busy, setBusy] = useState(false);
     const [docType, setDocType] = useState("");
     const [docNumber, setDocNumber] = useState("");
@@ -286,6 +306,19 @@ export default function MyRegistrationPage() {
 
                 <section className={section} data-self-meals="">
                     <h2 className={h2}><i className="fa-solid fa-utensils" aria-hidden="true"></i>Mis comidas</h2>
+                    {/* 2.36.5: their group has been called on a meal still to come. */}
+                    {(() => {
+                        const called = view.meals.pending.find((m) => m.called_at);
+                        return called ? (
+                            <div className="flex items-start gap-3 rounded-2xl bg-emerald-600 text-white px-4 py-3" role="status" aria-live="polite" data-self-meal-called="">
+                                <i className="fa-solid fa-bullhorn text-xl mt-0.5" aria-hidden="true"></i>
+                                <div className="min-w-0">
+                                    <p className="text-base font-black leading-tight">Tu grupo ya puede pasar a comer</p>
+                                    <p className="text-sm text-emerald-50">{mealName(called)} · {dayLabel(called.date)}. Acércate con tu escarapela.</p>
+                                </div>
+                            </div>
+                        ) : null;
+                    })()}
                     {view.meal_group && (
                         <div className="flex items-center gap-3 rounded-2xl bg-blue-50 border border-blue-100 px-3 py-2.5" data-self-meal-group="">
                             <span className="w-10 h-10 shrink-0 rounded-xl bg-blue-600 text-white flex items-center justify-center text-lg font-black" aria-hidden="true">{view.meal_group}</span>
@@ -294,6 +327,9 @@ export default function MyRegistrationPage() {
                                 <p className="text-xs text-gray-600">Acércate a la hora de tu grupo: así nadie espera de pie.</p>
                             </div>
                         </div>
+                    )}
+                    {view.meal_group && view.meals.pending.length > 0 && view.push_key && !(view.transport && view.transport.length) && (
+                        <PushSwitch session={state.session} pushKey={view.push_key} post={post} code={view.code} what="meal" />
                     )}
                     {!view.meals.delivered.length && !view.meals.pending.length && <p className="text-sm text-gray-500">No tienes comidas asignadas.</p>}
                     {view.meals.delivered.length > 0 && (
@@ -318,7 +354,9 @@ export default function MyRegistrationPage() {
                                         <i className="fa-regular fa-clock text-gray-400 mt-0.5" aria-hidden="true"></i>
                                         <div className="min-w-0">
                                             <p className="text-sm text-gray-800"><span className="font-black">{mealName(m)}</span> · {dayLabel(m.date)}{m.start_time ? ` · ${m.start_time}${m.end_time ? `–${m.end_time}` : ""}` : ""}</p>
-                                            {m.turn_start && <p className="text-xs font-bold text-blue-700" data-meal-turn="">Tu turno: {m.turn_start}{m.turn_end && m.turn_end !== m.turn_start ? `–${m.turn_end}` : ""}</p>}
+                                            {m.called_at
+                                                ? <p className="text-xs font-black text-emerald-700" data-meal-called="">Tu grupo ya fue llamado</p>
+                                                : m.turn_start && <p className="text-xs font-bold text-blue-700" data-meal-turn="">Tu turno: {m.turn_start}{m.turn_end && m.turn_end !== m.turn_start ? `–${m.turn_end}` : ""}</p>}
                                         </div>
                                     </li>
                                 ))}
