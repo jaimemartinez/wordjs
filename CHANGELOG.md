@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.5] - 2026-10-24
+
 ### Added
 
 - **conference-manager 2.36.9: «Tipo de sangre» and «EPS» in the health section.**
