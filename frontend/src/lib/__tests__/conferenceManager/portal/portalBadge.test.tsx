@@ -356,20 +356,20 @@ describe("«Mi inscripción»: the bus, its boarding state and the notices", () 
         boarding_at: status !== "scheduled" ? "2026-11-02T10:05:00.000Z" : null, departed_at: status === "departed" ? "2026-11-02T10:40:00.000Z" : null, notices,
     });
     const post = async () => ({ status: 200, body: {} });
-    it("shows each state, the team's messages, and the switch (server render: before the browser is asked)", async () => {
+    it("shows each state and the team's messages (2.36.6: the notices switch is the page's «Avisos» card)", async () => {
         const { BusAlerts } = await import("../../../../../../marketplace/plugins/conference-manager/client/portal/yo/BusAlerts");
-        const scheduled = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("scheduled")]} pushKey="BKEY" post={post} />);
+        const scheduled = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("scheduled")]} post={post} />);
         expect(scheduled).toContain('data-bus-status="scheduled"');
         expect(scheduled).toContain("Programado");
         expect(scheduled).toContain("Medellín → Cartagena");
-        const boarding = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("boarding", [{ kind: "message", text: "Puerta 3", at: "2026-11-02T10:06:00.000Z" }, { kind: "boarding", text: null, at: null }])]} pushKey="BKEY" post={post} />);
+        const boarding = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("boarding", [{ kind: "message", text: "Puerta 3", at: "2026-11-02T10:06:00.000Z" }, { kind: "boarding", text: null, at: null }])]} post={post} />);
         expect(boarding).toContain('data-bus-status="boarding"');
         expect(boarding).toContain("Tu bus está embarcando");
         expect(boarding).toContain("Puerta 3");
         expect(boarding.match(/data-bus-message=/g)?.length).toBe(1);
-        const departed = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("departed")]} pushKey="BKEY" post={post} />);
+        const departed = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("departed")]} post={post} />);
         expect(departed).toContain("El bus salió");
-        expect(renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[]} pushKey="BKEY" post={post} />)).toBe("");
+        expect(renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[]} post={post} />)).toBe("");
     });
     it("the service worker shows the notice and opens the page; the page is installable for iPhone", () => {
         const root = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
