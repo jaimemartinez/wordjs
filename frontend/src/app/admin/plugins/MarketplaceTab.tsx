@@ -478,7 +478,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             return (
                                 <div key={u} className="flex items-center gap-2 bg-slate-50 border border-slate-150 rounded-xl px-3 py-2">
                                     <span className="text-[11px] font-mono text-slate-400 w-4 shrink-0">{i + 1}</span>
-                                    <span className="flex-1 font-mono text-[11px] text-slate-700 truncate" title={u}>{u}</span>
+                                    <span className="flex-1 min-w-0 font-mono text-[11px] text-slate-700 truncate" title={u}>{u}</span>
                                     {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
                                     {st && (st.ok
                                         ? <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">{st.count ?? 0}</span>
@@ -493,7 +493,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                         <Input
                             size="sm"
                             type="url"
-                            containerClassName="flex-1"
+                            containerClassName="flex-1 min-w-0"
                             className="font-mono"
                             aria-label={t("plugins.marketplace.newSource")}
                             value={newSrc}
@@ -510,10 +510,10 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                 </div>
             )}
 
-            <p className="text-[11px] font-semibold text-slate-450/80 mb-6 bg-slate-50 border border-slate-150/60 px-4 py-2.5 rounded-xl inline-block shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
+            <p className="text-[11px] font-semibold text-slate-450/80 mb-6 bg-slate-50 border border-slate-150/60 px-4 py-2.5 rounded-xl inline-block max-w-full break-words shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
                 {sourcesStatus.length > 1
                     ? <>{fill(t("plugins.marketplace.sourcesCount"), { count: sourcesStatus.length })}</>
-                    : <>{t("plugins.marketplace.source")} <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? t("plugins.marketplace.localCatalog") : (source || t("plugins.marketplace.noSourcesShort"))}</span></>}
+                    : <>{t("plugins.marketplace.source")} <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded break-all">{isLocal ? t("plugins.marketplace.localCatalog") : (source || t("plugins.marketplace.noSourcesShort"))}</span></>}
                 {" · "}{fill(t("plugins.marketplace.pluginsCount"), { count: entries.length })}
                 {sourcesStatus.some((s) => !s.ok) && <span className="text-rose-500 font-bold"> · {fill(t("plugins.marketplace.sourcesWithErrors"), { count: sourcesStatus.filter((s) => !s.ok).length })}</span>}
                 {" · "}{t("plugins.marketplace.installNote")}

@@ -90,6 +90,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     only when the list opens (the chosen one) or on a keyboard move. A new search starts at the top. The list keeps
     its scroll to itself.
 
+### Fixed
+
+- **Plugins › Marketplace fits a phone.** The catalog source line printed the whole catalog URL with nothing allowed to wrap it, so the admin page scrolled sideways on a phone. Long source URLs wrap now, and the sources list and the add-a-source field can shrink (`app/admin/plugins/MarketplaceTab.tsx`).
+
 ## [2.11.2] - 2026-10-24
 
 ### Fixed
