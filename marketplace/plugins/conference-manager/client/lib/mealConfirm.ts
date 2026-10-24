@@ -294,12 +294,6 @@ export function createConfirmFlow(opts: ConfirmFlowOptions) {
             runDeliver({ allow_group: true, ...(note ? { note } : {}) });
             return true;
         },
-        /** «Dejar pasar igual» (2.36.5) — only a 'group_not_called' card: served as an exception to the group calling. */
-        allowGroup(note?: string): boolean {
-            if (disposed || busy() || !card || card.result !== 'group_not_called') return false;
-            runDeliver({ allow_group: true, ...(note ? { note } : {}) });
-            return true;
-        },
         /** «Cancelar»: records NOTHING — the card closes, the person stays pending. */
         cancel(): boolean {
             if (disposed || delivering || !card || !isDecision(card.result)) return false;
