@@ -393,7 +393,7 @@ describe('paper sheets (2.36.2): delete an unused one, and the sheet next to the
         expect(s).toContain('const openFile = (f: any) => setView({ kind: "file", file: f });');
         expect(s).toContain('<PageViewer t={t} files={[view.file]} load={loadFile} />');
         const v = src('client/lib/PageViewer.tsx');
-        expect(v).toContain('scanPages(dataUrlBytes(r.data_url))');
+        expect(v).toContain('const bytes = dataUrlBytes(r.data_url);');
         expect(v).not.toMatch(/window\.open|download\s*=|\.download\b|saveAs/);
         expect(v).toContain('onPointerMove={move}');
         expect(v).toContain('el.addEventListener("wheel", onWheel, { passive: false })');
@@ -443,7 +443,7 @@ describe('the signed page shown in place (2.36.3): a scanned PDF\'s pages as ima
             expect(px[0], f).toBeGreaterThan(240);
         }
     });
-    it('not a PDF, or a typed PDF with no picture: nothing to show (the screen says so, no download)', async () => {
+    it('not a PDF, or a PDF with no picture: nothing for the scan fast path (pdf.js draws those, 2.36.4)', async () => {
         const { scanPages } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/pdfScan');
         expect(scanPages(new TextEncoder().encode('hello'))).toEqual([]);
         expect(scanPages(new TextEncoder().encode('%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n%%EOF'))).toEqual([]);
@@ -476,5 +476,69 @@ describe('the paper sheet as a real PDF (2.36.3): «Descargar PDF» saves a .pdf
             expect(consentT(l)('paper.reprint')).toMatch(re);
             expect(consentT(l)('paper.download')).toMatch(re);
         }
+    });
+});
+
+describe('any PDF in the viewer (2.36.4): pdf.js, served by the plugin when a PDF is opened', () => {
+    const CMDIR = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager');
+    // The vendored pdf.js, as the browser gets it (GET /public/pdfjs): two ES modules from base64.
+    async function pdfjs() {
+        const vendor = require(path.join(CMDIR, 'server/pdfjs-legacy.js'));
+        const crypto = require('node:crypto');
+        const os = require('node:os');
+        const { pathToFileURL } = require('node:url');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-pdfjs-'));
+        const files: Record<string, string> = {};
+        for (const part of ['main', 'worker']) {
+            const bytes = Buffer.from(vendor[part], 'base64');
+            expect(crypto.createHash('sha256').update(bytes).digest('hex'), part).toBe(vendor.sha256[part]);
+            files[part] = path.join(dir, `${part}.mjs`);
+            fs.writeFileSync(files[part], bytes);
+        }
+        const worker = await import(/* @vite-ignore */ pathToFileURL(files.worker).href);
+        (globalThis as any).pdfjsWorker = { WorkerMessageHandler: worker.WorkerMessageHandler };
+        return import(/* @vite-ignore */ pathToFileURL(files.main).href);
+    }
+    it('a typed, multi-page PDF (the consent sheet we generate) opens with the viewer\'s options — every page, its text', async () => {
+        const { sheetPdf } = require(path.join(CMDIR, 'server/consent-paper-pdf.js'));
+        const people = Array.from({ length: 12 }, (_, i) => ({ row: i + 1, name: `Persona ${i + 1}` }));
+        const typed = sheetPdf({ lang: 'es', paper: 'letter', code: 'TYPED00001', created_utc: '2026-10-24T10:00:00Z', conference: 'Congreso', location: 'Norte',
+            policy: { url: 'https://example.org/p', version: '1.0', sha256: 'a'.repeat(64) }, responsible: 'La iglesia', contact: 'datos@example.org',
+            texts: { general: 'Autorizo el tratamiento de mis datos.', health: 'Autorizo mis datos de salud.', image: 'Autorizo el uso de mi imagen.' }, people, blank: 4 });
+        const { PDF_OPEN, scansCoverEveryPage } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/pdfRender');
+        expect(scansCoverEveryPage(new Uint8Array(typed))).toBe(false);
+        const lib = await pdfjs();
+        const doc = await lib.getDocument({ data: new Uint8Array(typed), ...PDF_OPEN }).promise;
+        expect(doc.numPages).toBe(2);
+        for (let n = 1; n <= doc.numPages; n++) {
+            const text = (await (await doc.getPage(n)).getTextContent()).items.map((x: any) => x.str).join(' ');
+            expect(text, `page ${n}`).toContain('Autorización para el tratamiento de datos personales');
+        }
+        await doc.destroy();
+    }, 30000);
+    it('a scanned PDF keeps the fast path (no renderer to download); pdf.js opens it too', async () => {
+        const { scansCoverEveryPage, PDF_OPEN } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/pdfRender');
+        const scan = new Uint8Array(fs.readFileSync(path.join(__dirname, 'fixtures', 'scan-jpeg-2p.pdf')));
+        expect(scansCoverEveryPage(scan)).toBe(true);
+        expect(scansCoverEveryPage(new Uint8Array(fs.readFileSync(path.join(__dirname, 'fixtures', 'scan-flate-1p.pdf'))))).toBe(true);
+        const lib = await pdfjs();
+        const doc = await lib.getDocument({ data: scan, ...PDF_OPEN }).promise;
+        expect(doc.numPages).toBe(2);
+        await doc.destroy();
+    }, 30000);
+    it('the viewer: no «not a scan» dead end; pdf.js loads only for a PDF, as blob modules, no Worker, no eval; never a download', () => {
+        const v = src('client/lib/PageViewer.tsx');
+        expect(v).toContain('if (scansCoverEveryPage(bytes))');
+        expect(v).toContain('await renderPdf(bytes, (n, total, url) => {');
+        const r = src('client/lib/pdfRender.ts');
+        expect(r).toContain("const PDFJS_URL = '/api/v1/plugin/conference-manager/public/pdfjs';");
+        expect(r).toContain("new Blob([bytes], { type: 'text/javascript' })");
+        expect(r).toContain('(globalThis as any).pdfjsWorker = { WorkerMessageHandler: worker.WorkerMessageHandler };');
+        expect(r).toContain('isEvalSupported: false');
+        expect(r).not.toMatch(/new Worker\(|window\.open|\.download\b|<iframe/);
+        // Not bundled: nothing imports pdf.js statically.
+        for (const f of ['client/lib/PageViewer.tsx', 'client/lib/PaperConsent.tsx', 'client/lib/pdfRender.ts']) expect(src(f), f).not.toMatch(/from ['"][^'"]*pdfjs/);
+        expect(fs.existsSync(path.join(CMDIR, 'server/pdfjs.LICENSE.txt'))).toBe(true);
+        expect(src('server/pdfjs.LICENSE.txt')).toContain('Apache License');
     });
 });

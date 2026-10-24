@@ -3048,6 +3048,21 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
+    // GET /public/pdfjs?part=main|worker (2.36.4) → { version, part, sha256, b64 } — the PDF renderer (pdf.js, Apache-2.0,
+    // server/pdfjs-legacy.js) the signed-sheet viewer loads only when a PDF is opened, to show ANY PDF page by page.
+    // Public and immutable: code, no data. Read from disk the first time it is asked for.
+    let pdfjsVendor = null;
+    http.route('get', '/public/pdfjs', async (req, res) => {
+        const q = req.query || {};
+        const part = q.part === 'main' || q.part === 'worker' ? q.part : null;
+        if (!part) return res.status(400).json({ error: 'part: main o worker.' });
+        try {
+            if (!pdfjsVendor) pdfjsVendor = require('./server/pdfjs-legacy');
+            try { res.set({ 'Cache-Control': 'public, max-age=31536000, immutable' }); } catch (e) { /* a bridge without headers */ }
+            res.json({ version: pdfjsVendor.version, part, sha256: pdfjsVendor.sha256[part], b64: pdfjsVendor[part] });
+        } catch (e) { sendError(res, e); }
+    });
+
     // Public price quote — the portal shows the live total before submitting. Returns only a number
     // (no PII). Only for a published conference. Values are canonicalised exactly like a registration
     // (a value that cannot be canonicalised → 400 with the same message the form would get).
