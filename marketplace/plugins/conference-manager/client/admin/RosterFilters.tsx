@@ -131,12 +131,18 @@ function FilterFields({ filters, setFilters, locationOptions, pendingTotal, size
             <i className="fa-solid fa-eye-slash" aria-hidden="true"></i>{tx('roster.filter.hide.cancelled', 'Ocultar canceladas')}
         </button>
     );
+    // 2.36.6: the registrations coordinators withdrew (to review or restore them).
+    const withdrawn = (
+        <button type="button" onClick={() => setFilters({ ...filters, withdrawn: !filters.withdrawn })} aria-pressed={filters.withdrawn ? 'true' : 'false'} className={chip(!!filters.withdrawn)} data-filter-withdrawn="">
+            <i className="fa-solid fa-user-minus" aria-hidden="true"></i>{tx('roster.filter.withdrawn', 'Solo retiradas')}
+        </button>
+    );
     if (stacked) {
         return (
             <div className="space-y-4">
                 <div><p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">{tx('location', 'Localidad')}</p>{locList}</div>
                 <div className="grid grid-cols-1 gap-2">{payment}{room}</div>
-                <div className="flex flex-wrap gap-2">{pending}{cancelled}</div>
+                <div className="flex flex-wrap gap-2">{pending}{cancelled}{withdrawn}</div>
                 <div><p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">{tx('roster.page.size', 'Mostrar')}</p>{sizeSel}</div>
             </div>
         );
@@ -148,6 +154,7 @@ function FilterFields({ filters, setFilters, locationOptions, pendingTotal, size
             {payment}
             {pending}
             {cancelled}
+            {withdrawn}
             {room}
             {sizeSel}
         </>

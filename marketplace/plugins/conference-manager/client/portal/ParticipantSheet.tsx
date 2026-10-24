@@ -22,6 +22,7 @@ import { PAY_STATE_TONE, SoftWrap } from "./ParticipantList";
 import { Badge, Button, InfoRow, Modal, Notice, SheetNotice, labelCls } from "./ui";
 import type { HubNotice } from "./feePayments";
 import { PortalBadgeSection } from "./PortalBadges";
+import { PortalWithdrawSection, hasRecordedMoney, type WithdrawWindow } from "./Withdraw";
 import { ConsentChip, PortalConsentSection } from "./ConsentBits";
 
 const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/;
@@ -61,9 +62,11 @@ export type ParticipantSheetProps = {
     badges?: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; conferenceName?: string } | null;
     /** «Autorización de datos» (2.33.0, while the conference asks for it): the state and «Reenviar enlace». */
     consent?: { authHeaders: (extra?: Record<string, string>) => Record<string, string>; onChanged?: () => void } | null;
+    /** «Retirar inscripción» (2.36.6, until the administration's deadline): the window and the action. */
+    withdraw?: { window: WithdrawWindow; onWithdraw: (id: number, reason: string) => Promise<void> } | null;
 };
 
-export default function ParticipantSheet({ person, fields, onClose, feesOn, canRecord, onPay, onSeePayments, payBusy, notice, badges, consent }: ParticipantSheetProps) {
+export default function ParticipantSheet({ person, fields, onClose, feesOn, canRecord, onPay, onSeePayments, payBusy, notice, badges, consent, withdraw }: ParticipantSheetProps) {
     const id = Number(person.id);
     const name = personName(person, fields);
     const cancelled = isCancelled(person);
@@ -136,6 +139,10 @@ export default function ParticipantSheet({ person, fields, onClose, feesOn, canR
                     <InfoRow label="Fecha de inscripción">{registered || null}</InfoRow>
                 </dl>
             </section>
+
+            {withdraw && !cancelled && (
+                <PortalWithdrawSection inscriptionId={id} name={name} window={withdraw.window} hasMoney={hasRecordedMoney(b, person.amount_paid)} onWithdraw={withdraw.onWithdraw} />
+            )}
         </Modal>
     );
 }

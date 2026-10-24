@@ -63,6 +63,7 @@ exports.init = async function (wordjs) {
         // Beds of a room SHARED between locations (2.18.0): room_id, location_id, beds. See sharesByRoom.
         roomBeds: `${P}room_beds`,
         lodgingResets: `${P}lodging_resets`,
+        withdrawals: `${P}inscription_withdrawals`,
         inscriptions: `${P}inscriptions`,
         // Fee payments (2.18.0): a payment is one receipt (`payment_transfers`, the header) split into
         // parts — rows of `payments` linked by transfer_id. See server/fee-payments.js.
@@ -229,6 +230,18 @@ exports.init = async function (wordjs) {
         if (!tz) throw httpError(400, 'Zona horaria inválida.');
         return tz;
     }
+    // 2.36.6: the coordinators' withdrawal deadline — a date-time 'YYYY-MM-DDTHH:MM' in the conference's zone; open
+    // until that instant. { until, open }: until = the stored value (null = they cannot withdraw).
+    function withdrawEnd(v, tz) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(String(v || ''));
+        if (!m) return NaN;
+        return zoneDayStart(+m[1], +m[2], +m[3], tz) + ((+m[4]) * 60 + (+m[5])) * 60000;
+    }
+    const withdrawWindow = (conf) => {
+        const until = conf && conf.withdraw_until ? String(conf.withdraw_until) : null;
+        const end = until ? withdrawEnd(until, lodgingZone(conf.lodging_tz)) : NaN;
+        return { until, tz: conf ? lodgingZone(conf.lodging_tz) : null, open: !!until && Number.isFinite(end) && Date.now() < end };
+    };
 
     // Indexes for the common filtered/joined lookups. Names AND targets must use the plugin prefix
     // (assertSqlAllowed enforces this). CREATE INDEX IF NOT EXISTS works on both SQLite and Postgres.
@@ -585,10 +598,11 @@ exports.init = async function (wordjs) {
     // also serve the public form and the location portal, and a driver's message names tables and
     // constraints ("no such table: wjp_conference_manager_conferences").
     class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
-    const httpError = (status, message) => new HttpError(status, message);
+    // `extra` (2.36.6): fields the answer carries too — `code`, a refusal the client tells apart.
+    const httpError = (status, message, extra) => Object.assign(new HttpError(status, message), extra && extra.code ? { code: extra.code } : {});
     const sendError = (res, e) => {
         // `field` names the form field an error belongs to (the screens show it there).
-        if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.field ? { field: e.field } : {}) });
+        if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.field ? { field: e.field } : {}), ...(e.code ? { code: e.code } : {}) });
         console.error('[conference-manager] request failed:', e && e.message ? e.message : e);
         return res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
     };
@@ -929,6 +943,25 @@ exports.init = async function (wordjs) {
         // DATETIME) keeps a bare date bare on every driver.
         await addColumnIfMissing(T.conferences, 'lodging_opens', 'TEXT');
         await addColumnIfMissing(T.conferences, 'lodging_tz', 'TEXT');
+        // 2.36.6: «Los encargados pueden retirar inscripciones hasta» — a date-time in the conference's zone (lodging_tz);
+        // NULL = coordinators cannot withdraw. A withdrawal is a cancellation that says who, when and why (withdrawn_*),
+        // so every list, count, room, meal, badge and export that leaves cancelled people out leaves it out too.
+        await addColumnIfMissing(T.conferences, 'withdraw_until', 'TEXT');
+        await addColumnIfMissing(T.inscriptions, 'withdrawn_at', 'VARCHAR(19)');
+        await addColumnIfMissing(T.inscriptions, 'withdrawn_by', 'TEXT');
+        await addColumnIfMissing(T.inscriptions, 'withdraw_reason', 'TEXT');
+        // Every withdrawal and every restore (the audit); kept when the person is deleted (no foreign key to them).
+        await db.createTable(T.withdrawals, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'inscription_id INT NOT NULL',
+            'kind VARCHAR(10) NOT NULL',
+            'actor TEXT',
+            'at_utc VARCHAR(19) NOT NULL',
+            'reason TEXT',
+            `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
+        ]);
+        await createIndex(`${P}idx_withdrawals_ins`, T.withdrawals, 'inscription_id');
         // 2.33.2: the default country (ISO 3166 alpha-2) of the conference's phone numbers; NULL = CO.
         await addColumnIfMissing(T.conferences, 'phone_country', 'TEXT');
         await addColumnIfMissing(T.locations, 'lodging_opens', 'TEXT');
@@ -2492,7 +2525,7 @@ exports.init = async function (wordjs) {
     const CONFERENCE_STATUSES = new Set(['draft', 'active', 'archived']);
     http.route('put', '/:id', { auth: true }, async (req, res) => {
         // Only the lodging dates (the «fechas» of Localidades) → locations:manage suffices too.
-        const LODGING_DATE_KEYS = ['lodging_opens', 'lodging_deadline', 'lodging_tz'];
+        const LODGING_DATE_KEYS = ['lodging_opens', 'lodging_deadline', 'lodging_tz', 'withdraw_until'];
         const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', 'phone_country', ...LODGING_DATE_KEYS].filter(k => (req.body || {})[k] !== undefined);
         const datesOnly = editKeys.length > 0 && editKeys.every(k => LODGING_DATE_KEYS.includes(k));
         if (!await (datesOnly ? allowAny(req, res, [['settings', 'manage'], ['locations', 'manage']]) : allow(req, res, 'settings', 'manage'))) return;
@@ -2538,6 +2571,13 @@ exports.init = async function (wordjs) {
                 if (lodging_deadline !== undefined) { sets.push('lodging_deadline = ?'); params.push(closes); }
             }
             if (lodging_tz !== undefined) { sets.push('lodging_tz = ?'); params.push(tz); }
+            // 2.36.6: «Los encargados pueden retirar inscripciones hasta» — '' / null = they cannot.
+            const withdrawUntil = (req.body || {}).withdraw_until;
+            if (withdrawUntil !== undefined) {
+                const v = withdrawUntil == null || withdrawUntil === '' ? null : String(withdrawUntil).trim();
+                if (v != null && !Number.isFinite(withdrawEnd(v, tz))) return res.status(400).json({ error: 'Fecha y hora inválidas (retiro de inscripciones).', field: 'withdraw_until' });
+                sets.push('withdraw_until = ?'); params.push(v == null ? null : v.slice(0, 16));
+            }
             // «Indicativo por defecto» (2.33.2): the country national phone numbers belong to.
             const phoneCountry = (req.body || {}).phone_country;
             if (phoneCountry !== undefined) {
@@ -5439,6 +5479,10 @@ exports.init = async function (wordjs) {
                 sets.push('status = ?'); params.push(st);
                 newStatus = st;
             }
+            // 2.36.6: a withdrawn registration put back (restored) loses its withdrawal stamp — and NOT its old bed: the
+            // withdrawal freed it and nothing gives it back (the answer says so: `restored`).
+            const restored = !!existing.withdrawn_at && fieldValues.status !== undefined && newStatus !== 'cancelled';
+            if (restored) { sets.push('withdrawn_at = ?', 'withdrawn_by = ?', 'withdraw_reason = ?'); params.push(null, null, null); }
             if (fieldValues.notes !== undefined) { sets.push('notes = ?'); params.push(fieldValues.notes == null ? null : String(fieldValues.notes)); }
             const loc = await resolveAdminLocation(existing.conference_id, { location_id: fieldValues.location_id });
             if (loc === null) { sets.push('location_id = ?', 'location = ?'); params.push(null, null); }
@@ -5553,7 +5597,11 @@ exports.init = async function (wordjs) {
                 await health.save(existing.conference_id, id, healthIn.answer);
                 await consentHealthEntered(id, actorOf(req), 'admin', healthIn);
             }
-            res.json({ success: true, lodging_adjusted: adjusted });
+            if (restored) {
+                await db.run(`INSERT INTO ${T.withdrawals} (conference_id, inscription_id, kind, actor, at_utc, reason) VALUES (?, ?, 'restore', ?, ?, NULL)`,
+                    [existing.conference_id, id, actorOf(req), new Date().toISOString().slice(0, 19).replace('T', ' ')]);
+            }
+            res.json({ success: true, lodging_adjusted: adjusted, ...(restored ? { restored: true } : {}) });
         } catch (e) { sendError(res, e); }
     });
     http.route('delete', '/inscriptions/:id', { auth: true }, async (req, res) => {
@@ -8654,7 +8702,8 @@ exports.init = async function (wordjs) {
 
             // `features.fee_payments` (2.18.0) tells a core portal that «Pagos de cuotas» exists here (an older
             // plugin sends no flag and the portal keeps its previous payment flow); `fees` = the badge counters.
-            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, conference_name: await conferenceNameOf(location.conference_id), capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) } });
+            const withdraw = withdrawWindow(await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
+            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, withdraw, conference_id: location.conference_id, conference_name: await conferenceNameOf(location.conference_id), capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) } });
         } catch (e) { sendError(res, e); }
     });
 
@@ -8675,7 +8724,60 @@ exports.init = async function (wordjs) {
         const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until,
             lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes, ...safe } = location;
         try {
-            res.json({ ...safe, conference_name: await conferenceNameOf(location.conference_id), inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
+            const withdraw = withdrawWindow(await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
+            res.json({ ...safe, withdraw, conference_name: await conferenceNameOf(location.conference_id), inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // 2.36.6: «Retirar inscripción» — a coordinator takes one of THEIR location's people out, before the conference's
+    // deadline (withdraw_until, 409 withdraw_closed after it or without one), never someone with any payment recorded
+    // (fees, transport, packages — 409 has_payments: the administrator withdraws them), never a bed the administration
+    // fixed nor one in a submitted / validated arrangement (409). It is a cancellation (status 'cancelled', the bed
+    // freed — every list, count, room, meal, badge and export already leaves cancelled people out) stamped with who,
+    // when and why; the record stays, and the admin may restore it. A row of inscription_withdrawals (the audit).
+    // Under the payments lock, then the assignment lock: no payment or bed can land between the checks and the write.
+    // Any payment recorded for the person: a fee payment part (any state), a transport or package payment, or money
+    // the old single-payment model counted (amount_paid).
+    async function hasPaymentsRecorded(id) {
+        const r = await db.get(`SELECT (SELECT COUNT(*) FROM ${T.payments} WHERE inscription_id = ? )`
+            + ` + (SELECT COUNT(*) FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? ))`
+            + ` + (SELECT COUNT(*) FROM ${T.packagePayments} WHERE sale_id IN (SELECT id FROM ${T.packageSales} WHERE inscription_id = ? ))`
+            + ` + (SELECT COUNT(*) FROM ${T.inscriptions} WHERE id = ? AND COALESCE(amount_paid, 0) > 0) AS n`, [id, id, id, id]);
+        return Number(r && r.n) > 0;
+    }
+    http.route('post', '/portal/inscriptions/:id/withdraw', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        try {
+            const id = positiveInt(req.params.id);
+            const mine = id ? await db.get(`SELECT id FROM ${T.inscriptions} WHERE id = ? AND location_id = ? AND conference_id = ?`, [id, location.id, location.conference_id]) : null;
+            if (!mine) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            const reason = String(((req.body || {}).reason) == null ? '' : req.body.reason).replace(/\s+/g, ' ').trim().slice(0, 300) || null;
+            const actor = `portal:${location.id}`;
+            const at = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            if (!fees.ready) await fees.ensureReady();
+            await fees.withPaymentsLock(async () => {
+                const conf = await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]);
+                const win = withdrawWindow(conf);
+                if (!win.open) {
+                    throw httpError(409, win.until
+                        ? 'El plazo para retirar inscripciones ya venció: pídele al administrador que la retire.'
+                        : 'En esta conferencia los encargados no retiran inscripciones: pídeselo al administrador.', { code: 'withdraw_closed' });
+                }
+                if (await hasPaymentsRecorded(id)) throw httpError(409, 'Tiene pagos registrados: pídele al administrador que la retire.', { code: 'has_payments' });
+                await withAssignmentLock(async () => {
+                    const cur = await db.get(`SELECT i.status, i.room_id, i.room_locked, r.blocked FROM ${T.inscriptions} i LEFT JOIN ${T.rooms} r ON r.id = i.room_id WHERE i.id = ?`, [id]);
+                    if (!cur || cur.status === 'cancelled') throw httpError(409, 'Esta inscripción ya no está activa.', { code: 'not_active' });
+                    if (cur.room_id != null) {
+                        if (isPinned(cur) || isBlocked(cur)) throw httpError(409, 'La administración fijó la cama de esta persona: pídele al administrador que la retire.', { code: 'held' });
+                        if (await frozenLocationRow(location.id)) throw httpError(409, 'El hospedaje de tu localidad ya está enviado o validado: pídele al administrador que la retire.', { code: 'lodging_frozen' });
+                    }
+                    await db.run(`UPDATE ${T.inscriptions} SET status = 'cancelled', room_id = NULL, room_locked = NULL, withdrawn_at = ?, withdrawn_by = ?, withdraw_reason = ? WHERE id = ? AND status <> 'cancelled'`,
+                        [at, actor, reason, id]);
+                });
+            });
+            await db.run(`INSERT INTO ${T.withdrawals} (conference_id, inscription_id, kind, actor, at_utc, reason) VALUES (?, ?, 'withdraw', ?, ?, ?)`, [location.conference_id, id, actor, at, reason]);
+            res.json({ success: true, withdrawn_at: at });
         } catch (e) { sendError(res, e); }
     });
 
@@ -8707,7 +8809,7 @@ exports.init = async function (wordjs) {
             const emailField = emailFieldIn(fields, isFieldColumn);
             const list = await db.all(`SELECT ${cols.map(c => `i.${c}`).join(', ')}, ${fees.personSum('pending', 'i.id')} AS pending_amount,`
                 + ` ${fees.personSum('returned', 'i.id')} AS returned_amount, CASE WHEN i.status = 'cancelled' THEN 1 ELSE 0 END AS cancelled`
-                + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? ORDER BY i.first_name, i.id`, [location.id, location.conference_id]);
+                + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND i.withdrawn_at IS NULL ORDER BY i.first_name, i.id`, [location.id, location.conference_id]);
             // «Autorización de datos» (2.33.0): each person's state (pending / granted with its time / revoked), while asked.
             const consentStates = await consent.isEnabled(location.conference_id) ? await consent.statesOf(location.conference_id, list.map(r => r.id)) : null;
             // 2.35.0: «sin correo» — nobody to e-mail the link to (the coordinator copies the message or uses paper).

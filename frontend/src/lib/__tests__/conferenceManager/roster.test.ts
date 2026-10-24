@@ -174,7 +174,7 @@ describe('columns (D4) and navigation memory', () => {
     });
     it('parseRosterNav keeps what is valid, drops the rest', () => {
         const nav = parseRosterNav(JSON.stringify({ filters: { q: 'ana', locationIds: ['1', 'x', 'none'], payment: 'bogus', pending: true, hideCancelled: 'yes', room: 'with' }, pages: { 1: 3, none: 0, x: 2 }, collapsed: ['2', 5] }));
-        expect(nav.filters).toEqual({ q: 'ana', locationIds: ['1', 'none'], payment: '', pending: true, hideCancelled: false, room: 'with' });
+        expect(nav.filters).toEqual({ q: 'ana', locationIds: ['1', 'none'], payment: '', pending: true, hideCancelled: false, room: 'with', withdrawn: false });
         expect(nav.pages).toEqual({ 1: 3 });
         expect(nav.collapsed).toEqual(['2']);
         expect(parseRosterNav('{').filters).toEqual(EMPTY_ROSTER_FILTERS);
@@ -191,5 +191,40 @@ describe('ROSTER_CSS: the phone / desktop switch without `md:` classes', () => {
         expect(ROSTER_CSS).toMatch(/\[data-cm-roster-card\] \{ overflow: clip;/);
         expect(ROSTER_CSS).toMatch(/\[data-cm-roster-head\] \{ position: sticky; top: 0;/);
         expect(ROSTER_CSS).not.toMatch(/@layer/);
+    });
+});
+
+describe('2.36.6 «Retirar inscripción»: withdrawn registrations in the admin and the coordinators\' portal', () => {
+    const read = (rel: string) => require('node:fs').readFileSync(require('node:path').resolve(__dirname, '../../../../../marketplace/plugins/conference-manager', rel), 'utf8');
+    it('the admin\'s «Solo retiradas» filter keeps only the withdrawn ones (and counts as a filter)', () => {
+        const rows: any[] = [{ id: 1, status: 'active' }, { id: 2, status: 'cancelled' }, { id: 3, status: 'cancelled', withdrawn_at: '2026-10-24 10:00:00' }];
+        expect(applyRosterFilters(rows, { ...EMPTY_ROSTER_FILTERS, withdrawn: true }, {}).map((p) => p.id)).toEqual([3]);
+        expect(activeFilterCount({ ...EMPTY_ROSTER_FILTERS, withdrawn: true })).toBe(1);
+        expect(parseRosterNav(JSON.stringify({ filters: { withdrawn: true } })).filters.withdrawn).toBe(true);
+    });
+    it('the admin says «Retirada» (by whom, when, why) and that restoring does not give the room back', () => {
+        expect(read('client/admin/RosterGroup.tsx')).toContain("p.withdrawn_at ? tx('roster.withdrawn', 'Retirada') : tx('roster.cancelled', 'Cancelada')");
+        const sheet = read('client/admin/PersonSheet.tsx');
+        expect(sheet).toContain('data-withdrawn-detail=""');
+        expect(sheet).toContain("tx('roster.withdrawn.reason', 'Motivo: {reason}'");
+        expect(read('client/admin/page.tsx')).toContain("(result as any).restored ? ` ${tx('roster.done.restored.room'");
+        expect(read('client/admin/page.tsx')).toContain('<WithdrawDeadlineSetting conferenceId={conferenceId}');
+        expect(read('client/admin/WithdrawDeadline.tsx')).toContain('<DateField id="withdraw-until" withTime');
+    });
+    it('the portal: the action only while the deadline is open, an in-app confirm naming the person, the payments hint', async () => {
+        const w = read('client/portal/Withdraw.tsx');
+        expect(w).toContain('if (!win || !win.open) return null;');
+        expect(w).toContain('¿Retirar la inscripción de <span style={{ overflowWrap: "anywhere" }}>{name}</span>?');
+        expect(w).toContain('Tiene pagos registrados: pídele al administrador que la retire.');
+        expect(w).toContain('Puedes retirar inscripciones hasta el {withdrawUntilLabel(win.until)}');
+        expect(w).not.toMatch(/window\.(confirm|alert|prompt)\(/);
+        const mod = await import('../../../../../marketplace/plugins/conference-manager/client/portal/Withdraw');
+        expect(mod.withdrawUntilLabel('2026-10-30T18:00')).toBe('30 de octubre, 18:00');
+        expect(mod.hasRecordedMoney({ validated: 0, pending: 0, returned: 0 }, 0)).toBe(false);
+        expect(mod.hasRecordedMoney({ validated: 0, pending: 50, returned: 0 }, 0)).toBe(true);
+        expect(mod.hasRecordedMoney({}, 10)).toBe(true);
+        const portal = read('client/portal/CoordinatorPortal.tsx');
+        expect(portal).toContain("withdraw={(myLocation as any)?.withdraw?.open ? { window: (myLocation as any).withdraw, onWithdraw: withdrawPerson } : null}");
+        expect(portal).toContain("{view === 'list' && <WithdrawDeadlineNote window={(myLocation as any)?.withdraw} />}");
     });
 });

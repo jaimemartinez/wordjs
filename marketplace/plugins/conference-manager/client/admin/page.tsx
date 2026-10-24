@@ -28,6 +28,7 @@ import { canAutoFocus, LAYER } from "../lib/overlay";
 // Phones (2.16.0): the shell scrolls with the page; the tab strip reveals the active tab.
 import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS } from "../lib/phoneLayout";
 import { SectionPicker } from "./SectionPicker";
+import { WithdrawDeadlineSetting } from "./WithdrawDeadline";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
@@ -1430,7 +1431,9 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
             // Cancelling frees the bed: in a submitted / validated arrangement that is recorded as an
             // administration adjustment (2.17.0), and the notice says so.
             const result = await conferenceApi.updateInscription(person.id, { status: cancelling ? 'cancelled' : 'active' });
-            setSheetNotice({ id: person.id, type: 'success', text: withAdjusted(tx, cancelling ? tx('roster.done.cancelled', 'Inscripción cancelada.') : tx('roster.done.reactivated', 'Inscripción reactivada.'), result) });
+            // 2.36.6: a withdrawn registration put back does not get its old bed back (the withdrawal freed it).
+            const restoredNote = !cancelling && result && (result as any).restored ? ` ${tx('roster.done.restored.room', 'No recupera su habitación anterior: asígnala de nuevo en Alojamiento si la necesita.')}` : '';
+            setSheetNotice({ id: person.id, type: 'success', text: withAdjusted(tx, (cancelling ? tx('roster.done.cancelled', 'Inscripción cancelada.') : tx('roster.done.reactivated', 'Inscripción reactivada.')) + restoredNote, result) });
             await patchRows([person.id]);
             setPaymentsKey((k) => k + 1);
         } catch (error: any) {
@@ -5378,6 +5381,9 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                     </div>
                 );
             })()}
+
+            {/* 2.36.6: until when the coordinators may withdraw their people's registrations from the portal. */}
+            <WithdrawDeadlineSetting conferenceId={conferenceId} value={(conference as any)?.withdraw_until} canEdit={canDeadline} tx={tx} addToast={addToast} onSaved={loadLocations} />
 
             <div className="flex flex-wrap items-center justify-between gap-4 bg-gray-50/50 p-5 sm:p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div className="min-w-0">

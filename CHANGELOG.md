@@ -38,6 +38,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     sees only the sections it may open.
   - **Fixed: «Pagos de cuotas» re-rendered in a loop while loading** («Maximum update depth exceeded» in the
     console).
+  - **Coordinators can withdraw registrations, until a deadline the administrator sets.**
+    - **The deadline**: in *Localidades*, «Los encargados pueden retirar inscripciones hasta» (date and time, the
+      admin's calendar). Empty means coordinators cannot withdraw.
+    - **In the portal**: a person's sheet offers «Retirar inscripción» until then, with an in-app confirmation naming
+      the person and an optional reason, and the list says «Puedes retirar inscripciones hasta…».
+    - **Payments**: a registration with any payment recorded cannot be withdrawn by the coordinator («Tiene pagos
+      registrados: pídele al administrador que la retire»).
+    - **Server checks**: the deadline, the payments and the coordinator's own locality are all re-checked on the
+      server. It also refuses a bed the administration fixed or a bed in a submitted or validated lodging.
+    - **Withdrawn is not deleted**: the registration leaves the lists, quotas, lodging, meal groups and the meal
+      scanner, badges and stickers, and the consent sheets, but the record stays with who withdrew it, when and why.
+      The admin sees it as «Retirada» (filter «Solo retiradas») and can reactivate it; it does not get its old room
+      back, and the confirmation says so.
+    - **Audit**: every withdrawal and restore is recorded.
   - **«Mi inscripción»: the badge first, and one switch for every notice.**
     - **Order**: «Mi escarapela», then «Avisos», «Mis comidas» and «Mi transporte».
     - **Alerts at the top**: what is happening now — «Tu grupo ya puede pasar a comer», «Embarcando: Bus 1» — sits

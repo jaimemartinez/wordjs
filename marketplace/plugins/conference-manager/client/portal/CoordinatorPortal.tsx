@@ -14,6 +14,7 @@ import ParticipantList from "./ParticipantList";
 import ParticipantSheet from "./ParticipantSheet";
 import { consentT } from "../lib/consentI18n";
 import { PortalPaperConsent } from "./ConsentBits";
+import { WithdrawDeadlineNote } from "./Withdraw";
 import { familyGroupsOf, isCancelled, payStateOf, personName, pruneSelection, type PayFilter, type PortalPerson } from "./participants";
 // «Pagos de cuotas» (conference-manager ≥ 2.18.0): the tab, its data hub and its sheets (feePayments.ts holds the rules).
 import FeePaymentsTab, { FeeSheets, useFeeHub } from "./FeePaymentsTab";
@@ -448,6 +449,17 @@ function LocationPortalContent() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [step]);
 
+    // «Retirar inscripción» (2.36.6): the server decides (deadline, payments, this location's person); the list reloads.
+    const withdrawPerson = async (id: number, reason: string) => {
+        const res = await fetch(`/api/v1/plugin/conference-manager/portal/inscriptions/${id}/withdraw`, {
+            method: 'POST', credentials: 'include', headers: portalAuthHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ reason }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo retirar la inscripción.');
+        setSheetId(null);
+        addToast('Inscripción retirada.', 'success');
+        await loadInscriptions();
+    };
     const loadInscriptions = async () => {
         try {
             const res = await fetch('/api/v1/plugin/conference-manager/portal/inscriptions', {
@@ -855,6 +867,7 @@ function LocationPortalContent() {
                         )}
                     />
 
+                    {view === 'list' && <WithdrawDeadlineNote window={(myLocation as any)?.withdraw} />}
                     {view === 'list' && consentOn && paperOpen && (
                         <PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} onClose={() => setPaperOpen(false)} />
                     )}
@@ -1026,6 +1039,7 @@ function LocationPortalContent() {
                     onSeePayments={feesOn ? seePaymentsOf : undefined}
                     badges={badgesOn ? { authHeaders: portalAuthHeaders, conferenceName } : null}
                     consent={sheetPerson.consent ? { authHeaders: portalAuthHeaders, onChanged: loadInscriptions } : null}
+                    withdraw={(myLocation as any)?.withdraw?.open ? { window: (myLocation as any).withdraw, onWithdraw: withdrawPerson } : null}
                     payBusy={feeHub.preparing}
                 />
             )}

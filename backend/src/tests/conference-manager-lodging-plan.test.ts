@@ -1628,3 +1628,63 @@ test('2.36.6 option (a): with an empty room free, another location never goes in
         assert.ok(locs.size <= 1, `room ${id} mixes locations`);
     }
 });
+
+test('2.36.6 «Retirar inscripción»: a coordinator withdraws their own people before the deadline — never with a payment, never another location\'s; out of lists, counts, rooms and the scanner; the admin restores', async () => {
+    const w = await world([['A3', 3]]);
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    const ana = await w.person('Ana', w.F, norte), beto = await w.person('Beto', w.M, norte), carla = await w.person('Carla', w.F, sur);
+    await w.run();
+    assert.ok(w.roomOf(ana) != null, 'Ana has a bed');
+    const portal = await portalOf(w, norte);
+    const code = w.p.one(`SELECT code FROM ${T('locations')} WHERE id = ?`, norte).code;
+    const token = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: norte, code } })).token as string;
+    const withdraw = async (id: number, body: any = {}) => {
+        const r = w.p.routes.find((x: any) => x.method === 'post' && x.path === '/portal/inscriptions/:id/withdraw') as any;
+        const res: any = { statusCode: 200, _body: undefined, status(c: number) { this.statusCode = c; return this; }, json(x: any) { this._body = JSON.parse(JSON.stringify(x)); return this; }, cookie() { return this; }, clearCookie() { return this; }, setHeader() { return this; } };
+        await r.handler({ params: { id: String(id) }, query: {}, body, headers: { 'x-portal-token': token }, cookies: {}, user: null }, res);
+        return { status: res.statusCode, body: res._body };
+    };
+    const refused = async (id: number) => { const r = await withdraw(id); return [r.status, r.body.code]; };
+    const stamp = (when: number) => { const d = new Date(when); const p2 = (n: number) => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}T${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; };
+    const setDeadline = async (v: string | null) => ok(await w.p.call('put', `/${w.cid}`, { body: { withdraw_until: v, lodging_tz: 'UTC' } }), 'deadline');
+
+    // No deadline set: coordinators cannot withdraw; /portal/me says so.
+    const me0 = ok(await portal('get', '/portal/me'));
+    assert.deepStrictEqual([me0.withdraw.until, me0.withdraw.open], [null, false]);
+    assert.deepStrictEqual(await refused(beto), [409, 'withdraw_closed']);
+    // Past the deadline: refused too.
+    await setDeadline(stamp(Date.now() - 3600e3));
+    assert.deepStrictEqual(await refused(beto), [409, 'withdraw_closed']);
+    // Before the deadline: open.
+    await setDeadline(stamp(Date.now() + 24 * 3600e3));
+    assert.strictEqual(ok(await portal('get', '/portal/me')).withdraw.open, true);
+    // Another location's person: not theirs.
+    assert.strictEqual((await withdraw(carla)).status, 404);
+    // Any payment recorded: the administrator withdraws them.
+    w.p.exec(`UPDATE ${T('inscriptions')} SET amount_paid = 10 WHERE id = ?`, beto);
+    assert.deepStrictEqual(await refused(beto), [409, 'has_payments']);
+    w.p.exec(`UPDATE ${T('inscriptions')} SET amount_paid = 0 WHERE id = ?`, beto);
+
+    // Ana withdrawn (with her bed): cancelled, stamped, the bed freed; gone from the portal list and the seat count.
+    const seats = (m: any) => JSON.stringify(m.inscribed);
+    const before = seats(ok(await portal('get', '/portal/me')));
+    ok(await withdraw(ana, { reason: 'Se enfermó' }), 'withdraw Ana');
+    const row = w.p.one(`SELECT status, room_id, withdrawn_at, withdrawn_by, withdraw_reason FROM ${T('inscriptions')} WHERE id = ?`, ana);
+    assert.deepStrictEqual([row.status, row.room_id, !!row.withdrawn_at, row.withdrawn_by, row.withdraw_reason], ['cancelled', null, true, `portal:${norte}`, 'Se enfermó']);
+    const list = ok(await portal('get', '/portal/inscriptions')) as any[];
+    assert.deepStrictEqual(list.map(x => x.id), [beto], 'gone from the coordinator\'s list');
+    assert.notStrictEqual(seats(ok(await portal('get', '/portal/me'))), before, 'the seat count drops');
+    assert.deepStrictEqual(await refused(ana), [409, 'not_active']);
+    // The meal scanner does not serve her.
+    const svc = ok(await w.p.call('post', '/meals/services', { body: { conference_id: w.cid, service_date: '2027-03-01', meal: 'almuerzo', location_ids: [norte] } }), 'service').id;
+    assert.notStrictEqual(ok(await w.p.call('post', '/meals/check', { body: { service_id: svc, inscription_id: ana } })).result, 'ready');
+
+    // The admin restores her: active again, the stamp gone, her old bed NOT given back; both steps audited.
+    const back = ok(await w.p.call('put', `/inscriptions/${ana}`, { body: { status: 'pending' } }), 'restore');
+    assert.strictEqual(back.restored, true);
+    const after = w.p.one(`SELECT status, room_id, withdrawn_at FROM ${T('inscriptions')} WHERE id = ?`, ana);
+    assert.deepStrictEqual([after.status, after.room_id, after.withdrawn_at], ['pending', null, null]);
+    const log = w.p.q(`SELECT kind, actor, reason FROM ${T('inscription_withdrawals')} WHERE inscription_id = ? ORDER BY id`, ana) as any[];
+    assert.deepStrictEqual(log.map(x => [x.kind, x.reason]), [['withdraw', 'Se enfermó'], ['restore', null]]);
+    assert.strictEqual(log[0].actor, `portal:${norte}`);
+});
