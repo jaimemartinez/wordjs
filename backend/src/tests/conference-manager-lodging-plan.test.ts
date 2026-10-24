@@ -1485,3 +1485,21 @@ test('an answer once applied is today’s: thought again with the same options, 
     const again = await w.plan({ fresh: true });
     assert.deepStrictEqual([again.keeps_today, again.moved, again.variants.keep.today], [true, 0, true]);
 });
+
+test('2.36.6 the owner\'s hotel: 4 men and 1 woman of one location in rooms of 3, genders apart — 3+1 and 1, nobody spread 2+2', async () => {
+    const w = await world([['B1', 3], ['B2', 3], ['B10', 3]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte');
+    const men = [];
+    for (let i = 0; i < 4; i++) men.push(await w.person(`M${i}`, w.M, norte));
+    const woman = await w.person('F0', w.F, norte);
+    await w.run();
+    const menRooms = men.map(w.roomOf);
+    const counts = [...new Set(menRooms)].map(r => menRooms.filter(x => x === r).length).sort();
+    assert.deepStrictEqual(counts, [1, 3], 'the men fill one room of 3 before opening another');
+    // The woman gets the third room, alone (the hard gender rule; a room's «Hombres / Mujeres» is only its label).
+    assert.ok(w.roomOf(woman) != null && !menRooms.includes(w.roomOf(woman)));
+    assert.deepStrictEqual(Object.values(w.used()).sort(), [[1, 3], [1, 3], [3, 3]]);
+    // The run allots nothing: the free beds stay open to anyone.
+    for (const n of ['B1', 'B2', 'B10']) assert.strictEqual(w.ownerOf(w.room[n]), null, n);
+});
