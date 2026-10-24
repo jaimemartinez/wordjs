@@ -6,6 +6,29 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **conference-manager 2.36.11: «Plantillas de correo» and the welcome to a locality's coordinator.**
+  - **Plantillas de correo** (WordJS administrators) covers every e-mail the plugin sends: the consent link, the
+    one-time code, the copy of what was authorized, the badge, and the coordinator's welcome. Each can be
+    edited in Spanish, English and Portuguese:
+    - its subject, the text before and after the part the system draws, and the button's label;
+    - placeholders inserted with a tap, and a live preview at desktop or phone width;
+    - «Enviar prueba» to your own e-mail and «Restaurar original».
+  - **What cannot be edited**: the link (and its single-use token), the code and the record of the authorization
+    are drawn by the layout. No template text can drop them, change them or copy them elsewhere.
+  - **Texts are never HTML.** They are plain text with a small format (**bold**, «- » lists,
+    [text](https://…) links); anything typed as HTML shows as text. Each e-mail goes out as a responsive,
+    e-mail-safe HTML message with a plain-text version.
+  - **«Correo del encargado»** on each locality, with «Enviar bienvenida» / «Reenviar» and when it was last sent.
+    - The welcome explains the portal and links to it, and gives the administration's contact when
+      «Autorizaciones» has one.
+    - It **never** carries the access code: the coordinator asks the administration for it.
+    - It can be sent once a minute and five times an hour per locality, and every send is logged.
+  - **Fewer registered routes (204 → 183).** Sibling actions on the same resource now share one route
+    (for example, reject / return / validate on a fee payment), so the plugin stays well under the host's limit of
+    200 routes. Every URL and every permission check is unchanged.
+
 ### Fixed
 
 - **conference-manager 2.36.10: every use of the health answers follows the data authorization.** The person's

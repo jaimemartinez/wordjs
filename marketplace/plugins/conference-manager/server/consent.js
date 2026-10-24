@@ -57,6 +57,7 @@
 const crypto = require('crypto');
 const { waDigits } = require('./phone');
 const mails = require('./consent-mail');
+const mailTpl = require('./mail-templates');
 const { createPaper } = require('./consent-paper');
 
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
@@ -533,20 +534,28 @@ function createConsent(base) {
     }
 
     // ── mail ──
+    // 2.36.11: the message through «Plantillas de correo» (the stored edit of its language), else its default.
+    async function renderMail(id, lang, values, extras, fallback) {
+        if (D && D.mailTemplates) { try { return await D.mailTemplates.render(id, lang, values, extras); } catch (e) { console.warn('[conference-manager] mail template:', e && e.message); } }
+        return fallback();
+    }
     async function sendMail(msg) {
         try { await D.mail(msg); return true; }
         catch (e) { console.warn('[conference-manager] consent e-mail not sent:', e && e.message); return false; }
     }
     // The three e-mails, in the conference's e-mail language (server/consent-mail.js, 2.33.4).
     async function mailLink(conf, email, link, name, days) {
-        return sendMail({ to: email, ...mails.linkMail(await mailLangOf(conf.id), { conference: conf.name, name, link, days }) });
+        const lang = await mailLangOf(conf.id);
+        return sendMail({ to: email, ...await renderMail('consent.link', lang, { conference: conf.name, name, days }, { action: { url: link } }, () => mails.linkMail(lang, { conference: conf.name, name, link, days })) });
     }
     async function mailCode(conf, email, code) {
-        return sendMail({ to: email, ...mails.codeMail(await mailLangOf(conf.id), { conference: conf.name, code }) });
+        const lang = await mailLangOf(conf.id);
+        return sendMail({ to: email, ...await renderMail('consent.code', lang, { conference: conf.name, code }, { code }, () => mails.codeMail(lang, { conference: conf.name, code })) });
     }
     async function mailConfirmation(conf, email, ev) {
         const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
-        return sendMail({ to: email, ...mails.confirmationMail(await mailLangOf(conf.id), { conference: conf.name, ev, d }) });
+        const lang = (await mailLangOf(conf.id)) || 'es';
+        return sendMail({ to: email, ...await renderMail('consent.confirmation', lang, { conference: conf.name, contact: d.contact || mails.ORGANIZERS[mails.langOf(lang) || 'es'] }, { record: mailTpl.recordOf(lang, ev, d) }, () => mails.confirmationMail(lang, { conference: conf.name, ev, d })) });
     }
 
     // ── links ──

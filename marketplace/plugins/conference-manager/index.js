@@ -33,22 +33,79 @@ const { createPush } = require('./server/transport-push');
 const pack = require('./server/lodging-pack');
 // «Condiciones de salud» and «Turnos de comida» (2.32.0).
 const healthMod = require('./server/health');
+const mailTplMod = require('./server/mail-templates');
+
+/**
+ * Route groups (2.36.11): each group is ONE registered route, `method base` with a `:act` segment, that dispatches
+ * to the handler each member registered as if it had its own route — same URL, same options, same checks inside.
+ * A member whose options (auth, admin…) differ from its group's refuses to load: grouping never changes who may
+ * call an action. An unknown `:act` answers 404 like a missing route.
+ */
+const ROUTE_GROUPS = [
+    { method: 'post', base: '/public/me/:act', members: ['logout', 'start', 'ticket', 'transport', 'verify', 'view'] },
+    { method: 'post', base: '/public/me/push/:act', members: ['subscribe', 'unsubscribe'] },
+    { method: 'post', base: '/public/consent/:act', members: ['code', 'confirm', 'open'] },
+    { method: 'post', base: '/consent/:act', members: ['purge', 'revoke', 'send', 'share', 'paper'] },
+    { method: 'post', base: '/fee-payments/:id/:act', members: ['reject', 'return', 'validate'] },
+    { method: 'post', base: '/payments/:id/:act', members: ['reject', 'validate'] },
+    { method: 'post', base: '/meals/priority/:act', members: ['call', 'freeze'] },
+    { method: 'post', base: '/locations/:id/lodging/:act', members: ['reopen', 'return', 'validate'] },
+    { method: 'post', base: '/mail-templates/:id/:act', members: ['save', 'restore', 'preview', 'test'] },
+];
+function groupRoutes(host, groups) {
+    const memberOf = new Map();
+    for (const g of groups) for (const act of g.members) memberOf.set(`${g.method} ${g.base.replace(':act', act)}`, { g, act });
+    const registered = new Map();
+    const out = Object.create(host);
+    out.route = (...args) => {
+        const [method, path] = args;
+        const hit = memberOf.get(`${String(method).toLowerCase()} ${path}`);
+        if (!hit) return host.route(...args);
+        // route(method, path, handler) — a public route — or route(method, path, opts, handler).
+        const hasOpts = typeof args[2] !== 'function';
+        const opts = hasOpts ? args[2] : undefined;
+        const handler = hasOpts ? args[3] : args[2];
+        const key = hasOpts ? JSON.stringify(opts || {}) : '(none)';
+        let group = registered.get(hit.g);
+        if (!group) {
+            group = { key, handlers: new Map() };
+            registered.set(hit.g, group);
+            const handlers = group.handlers;
+            const dispatch = (req, res) => {
+                const h = handlers.get(String((req.params && req.params.act) || ''));
+                if (!h) return res.status(404).json({ error: 'Not found' });
+                return h(req, res);
+            };
+            if (hasOpts) host.route(method, hit.g.base, opts, dispatch);
+            else host.route(method, hit.g.base, dispatch);
+        } else if (group.key !== key) {
+            throw new Error(`[conference-manager] route ${method.toUpperCase()} ${path}: its options differ from its group ${hit.g.base}`);
+        }
+        group.handlers.set(hit.act, handler);
+        return undefined;
+    };
+    return out;
+}
 const { createMealPriority } = require('./server/meal-priority');
 // «Autorización de datos» (2.33.0): each person's consent, signed with a code sent to their e-mail.
-const { createConsent, emailFieldIn } = require('./server/consent');
+const { createConsent, emailFieldIn, maskEmail } = require('./server/consent');
 const { docFieldsOf: selfDocFieldsOf } = require('./server/selfpage');
 // Phone numbers with their country (2.33.2): E.164 on write, the conference's default country for national numbers.
 const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.10',
+    version: '2.36.11',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
 
 exports.init = async function (wordjs) {
-    const { db, http, adminMenu } = wordjs;
+    const { db, http: hostHttp, adminMenu } = wordjs;
+    // 2.36.11: the host lets a plugin register at most 200 routes (core/plugin-isolate.ts MAX_ROUTES). Sibling
+    // actions on the same resource share ONE route here — «POST /fee-payments/:id/:act» answers /reject, /return
+    // and /validate — so every URL stays exactly as it was while the count stays well under the cap.
+    const http = groupRoutes(hostHttp, ROUTE_GROUPS);
 
     console.log('Initializing Conference Manager Plugin (Multi-Event, sandboxed)...');
 
@@ -66,6 +123,8 @@ exports.init = async function (wordjs) {
         withdrawals: `${P}inscription_withdrawals`,
         // 2.36.10: «Historial» — who registered a person and how, and every edit (which fields, never the values).
         history: `${P}inscription_history`,
+        // 2.36.11: every welcome e-mail sent to a locality's coordinator (who, when, to whom, whether it went).
+        locationMails: `${P}location_mails`,
         inscriptions: `${P}inscriptions`,
         // Fee payments (2.18.0): a payment is one receipt (`payment_transfers`, the header) split into
         // parts — rows of `payments` linked by transfer_id. See server/fee-payments.js.
@@ -850,6 +909,8 @@ exports.init = async function (wordjs) {
     const push = createPush({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex });
     // «Condiciones de salud» and «Turnos de comida» (2.32.0): see server/health.js and server/meal-priority.js.
     const health = healthMod.createHealth({ db, T, P, createIndex, createUniqueIndex, addColumnIfMissing });
+    // «Plantillas de correo» (2.36.11): see server/mail-templates.js.
+    const mailTemplates = mailTplMod.createMailTemplates({ db, T, P, createUniqueIndex });
     const mealPriority = createMealPriority({ db, T, P, createIndex, createUniqueIndex });
     // «Autorización de datos» (2.33.0): see server/consent.js.
     const consent = createConsent({ db, T, P, createIndex, createUniqueIndex, addColumnIfMissing });
@@ -971,6 +1032,23 @@ exports.init = async function (wordjs) {
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
         ]);
         await createIndex(`${P}idx_history_ins`, T.history, 'inscription_id');
+        // 2.36.11: «Correo del encargado» of a locality, and the welcome e-mail sent to it (when, by whom), with its log.
+        await addColumnIfMissing(T.locations, 'responsible_email', 'TEXT');
+        await addColumnIfMissing(T.locations, 'welcome_sent_s', 'INT');
+        await addColumnIfMissing(T.locations, 'welcome_sent_by', 'TEXT');
+        await db.createTable(T.locationMails, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'location_id INT NOT NULL',
+            'kind VARCHAR(12) NOT NULL',
+            'email TEXT',
+            'actor VARCHAR(120)',
+            'at_s INT NOT NULL',
+            'ok INT NOT NULL',
+            'error TEXT',
+            `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
+        ]);
+        await createIndex(`${P}idx_location_mails_loc`, T.locationMails, 'location_id');
         // Every withdrawal and every restore (the audit); kept when the person is deleted (no foreign key to them).
         await db.createTable(T.withdrawals, [
             'id INT_PK',
@@ -1116,6 +1194,11 @@ exports.init = async function (wordjs) {
         await push.migrate();
     } catch (e) {
         console.warn('[conference-manager] bus notices migration failed — boarding notices are unavailable until it succeeds:', e.message);
+    }
+    try {
+        await mailTemplates.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] mail templates migration failed — the default e-mails are used:', e.message);
     }
     try {
         await health.migrate();
@@ -3367,9 +3450,52 @@ exports.init = async function (wordjs) {
     // `lodging_tz`: the admin's zone, stored on the conference with the dates. The 2.8.0 permission is an
     // own closing: `lodging_permission` true = until `lodging_permission_until` (none = no closing), false
     // = the general closing.
+    // 2.36.11: «Enviar bienvenida» / «Reenviar» — the welcome e-mail to the locality's coordinator («Correo del
+    // encargado»): what the portal is, the portal's address (the layout's button) and the administration's contact
+    // when «Autorizaciones» has one. NEVER the access code: no value of the message can hold it — the coordinator
+    // asks the administration for it. Once a minute and five times an hour per locality; every send is logged
+    // (location_mails) and the last one is shown on the locality (welcome_sent_s / welcome_sent_by).
+    const welcomeSends = new Map();
+    http.route('post', '/locations/:id/welcome', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'manage')) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const loc = id ? await db.get(`SELECT id, conference_id, name, responsible_email FROM ${T.locations} WHERE id = ?`, [id]) : null;
+            if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
+            const to = String(loc.responsible_email || '').trim();
+            if (!CONSENT_EMAIL_RE.test(to)) return res.status(409).json({ error: 'Escribe primero el correo del encargado.', code: 'no_email' });
+            const now = Date.now();
+            const recent = (welcomeSends.get(loc.id) || []).filter(t => now - t < 3600e3);
+            if ((recent.length && now - recent[recent.length - 1] < 60e3) || recent.length >= 5) {
+                return res.status(429).json({ error: 'Ya se envió hace poco. Espera un momento antes de reenviarlo.', code: 'rate' });
+            }
+            recent.push(now);
+            welcomeSends.set(loc.id, recent);
+            const conf = await db.get(`SELECT id, name, slug FROM ${T.conferences} WHERE id = ?`, [loc.conference_id]);
+            const base = (await siteLinkBase().catch(() => '')) || '';
+            const url = `${base}/portal/conference?slug=${encodeURIComponent(conf ? conf.slug : '')}`;
+            let contact = '';
+            try { contact = String((await consent.settingsOf(loc.conference_id)).contact_email || ''); } catch (e) { contact = ''; }
+            const lang = await consent.mailLangOf(loc.conference_id);
+            const msg = await mailTemplates.render('location.welcome', lang, { location: loc.name, conference: conf ? conf.name : '', admin_contact: contact }, { action: { url } });
+            const at = Math.floor(now / 1000);
+            const actor = actorOf(req);
+            let why = null;
+            try { await wordjs.mail({ to, ...msg }); } catch (e) { why = String(e && e.message || e).slice(0, 300); }
+            await db.run(`INSERT INTO ${T.locationMails} (conference_id, location_id, kind, email, actor, at_s, ok, error) VALUES (?, ?, 'welcome', ?, ?, ?, ?, ?)`,
+                [loc.conference_id, loc.id, to, actor ? String(actor).slice(0, 120) : null, at, why ? 0 : 1, why]);
+            if (why) {
+                const off = /permission|denied|not available|not granted|permiso/i.test(why);
+                return res.status(off ? 503 : 502).json({ error: off ? 'El correo del sitio no está disponible: revisa el plugin de correo y su permiso.' : 'No se pudo enviar el correo. Inténtalo de nuevo más tarde.', code: off ? 'mail_off' : 'mail_failed' });
+            }
+            await db.run(`UPDATE ${T.locations} SET welcome_sent_s = ?, welcome_sent_by = ? WHERE id = ?`, [at, actor ? String(actor).slice(0, 120) : null, loc.id]);
+            res.json({ success: true, sent: true, welcome_sent_at: new Date(at * 1000).toISOString(), email_masked: maskEmail(to) });
+        } catch (e) { sendError(res, e); }
+    });
+
     http.route('put', '/locations/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'locations', 'manage')) return;
-        const { name, responsible_name, responsible_phone, rotate_code, capacity, payment_methods, lodging_opens, lodging_permission, lodging_permission_until, lodging_tz } = req.body;
+        const { name, responsible_name, responsible_phone, responsible_email, rotate_code, capacity, payment_methods, lodging_opens, lodging_permission, lodging_permission_until, lodging_tz } = req.body;
         let { lodging_closes } = req.body;
         try {
             const loc = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [req.params.id]);
@@ -3386,6 +3512,12 @@ exports.init = async function (wordjs) {
             }
             if (responsible_name !== undefined) { sets.push('responsible_name = ?'); params.push(responsible_name || null); }
             if (responsible_phone !== undefined) { sets.push('responsible_phone = ?'); params.push(responsible_phone || null); }
+            // 2.36.11: «Correo del encargado» — where the welcome e-mail goes ('' clears it).
+            if (responsible_email !== undefined) {
+                const v = String(responsible_email == null ? '' : responsible_email).trim();
+                if (v && (v.length > 254 || !CONSENT_EMAIL_RE.test(v))) return res.status(400).json({ error: 'El correo del encargado no es válido.', field: 'responsible_email' });
+                sets.push('responsible_email = ?'); params.push(v || null);
+            }
             if (capacity !== undefined) {
                 const cap = parseCapacity(capacity);
                 const taken = await locationOccupancy(loc.id);
@@ -5885,7 +6017,11 @@ exports.init = async function (wordjs) {
         }
         return out;
     }
+    // «Plantillas de correo» (2.36.11): the admin routes, and the site's name for the footer of every e-mail.
+    const siteName = async () => { try { return wordjs.options && wordjs.options.get ? String(await wordjs.options.get('blogname', '') || '') : ''; } catch (e) { return ''; } };
+    mailTemplates.install({ http, sendError, httpError, actorOf, siteLinkBase, siteName, mail: (msg) => wordjs.mail(msg) });
     badges.install({
+        mailTemplates,
         http, allow, positiveInt, actorOf, resolvePortalLocation, personWithName, isFieldColumn, hasLevel,
         randomToken: (n) => wordjs.crypto.randomToken(n), qrText,
         mealGroupOf: (cid, id) => mealPriority.letterOf(cid, id),
@@ -5911,6 +6047,7 @@ exports.init = async function (wordjs) {
     push.install({ http, allow, positiveInt, sendError, actorOf, siteLinkBase, selfPage, selfMessages: selfPage.MSG });
     // «Autorización de datos» (2.33.0).
     consent.install({
+        mailTemplates,
         http, allow, positiveInt, sendError, httpError, actorOf, resolvePortalLocation, siteLinkBase, personWithName, isFieldColumn, health,
         docFieldsOf: (form) => selfDocFieldsOf(form, null, isFieldColumn),
         parseHealthAnswer: healthMod.parseAnswer,
@@ -8859,7 +8996,8 @@ exports.init = async function (wordjs) {
         // hides the note once the arrangement is submitted — this twin surface must not leak it.
         // The administration-adjustment stamp (2.17.0) too: `lodging_admin_changed_by` is an admin's login.
         const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until,
-            lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes, ...safe } = location;
+            lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes,
+            welcome_sent_s, welcome_sent_by, ...safe } = location;
         try {
             const withdraw = withdrawWindow(await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
             // 2.36.10: «Registrar nuevo» asks for the verbal authorization of the personal data while consent is on.
