@@ -220,3 +220,17 @@ body {
   ):focus:not([class*="focus:border-"], [aria-invalid="true"], [data-control-border="none"], [class^="border-transparent"], [class*=" border-transparent"], [class^="border-red-"], [class*=" border-red-"], [class^="border-rose-"], [class*=" border-rose-"], [class^="border-amber-"], [class*=" border-amber-"], [class^="border-green-"], [class*=" border-green-"], [class^="border-emerald-"], [class*=" border-emerald-"]) {
   border-color: #2563eb;
 }
+
+/*
+ * Phones: iOS Safari (and every iOS browser) zooms the whole page when a field whose text is under 16px
+ * gets focus. Core and plugin fields are 14px (`text-sm`) or the 13.33px browser default, so typing
+ * anywhere zoomed in. Below the md breakpoint every text field, select and textarea is at least 16px.
+ * Unlayered on purpose: it must beat Tailwind's layered `text-*` utilities and plugin classes alike.
+ * Fields that are deliberately larger (text-lg and up) keep their size. Page zoom is NOT locked
+ * (no maximum-scale): pinch zoom stays available.
+ */
+@media (max-width: 767.98px) {
+  :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="hidden"]), select, textarea):not(.text-lg, .text-xl, .text-2xl, .text-3xl, .text-4xl, .text-5xl, .text-6xl) {
+    font-size: 16px;
+  }
+}
