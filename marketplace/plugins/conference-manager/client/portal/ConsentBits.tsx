@@ -16,6 +16,8 @@ import { useToast } from "@/contexts/ToastContext";
 import { Badge, Button, Modal, Notice, labelCls } from "./ui";
 import { consentT } from "../lib/consentI18n";
 import { consentMessage, copyLangOf, copyText, rememberCopyLang, whatsappUrl } from "../lib/consentMessage";
+import { copyLater } from "../lib/clipboard";
+import { useCopy } from "../lib/CopyFallback";
 import { CopyLangPicker } from "../lib/CopyLangPicker";
 import { PaperConsent } from "../lib/PaperConsent";
 
@@ -71,15 +73,21 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
     };
     const shareMessage = async () => {
         setBusy(true); setMsg(null);
+        // 2.36.8: the copy starts IN the tap with the message still on its way (lib/clipboard copyLater) — a phone
+        // only lets a page copy during the tap, and the new link takes a round trip.
+        const pending = fetch("/api/v1/plugin/conference-manager/portal/consent/share", {
+            method: "POST", credentials: "include", headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ inscription_id: inscriptionId }),
+        }).then(async (res) => ({ ok: res.ok, body: await res.json().catch(() => ({})) }));
+        const copying = copyLater(pending.then(({ ok, body }) => {
+            if (!ok) throw new Error(body.error || "Error");
+            return consentMessage(copyLangOf(body.email_lang), body);
+        }));
         try {
-            const res = await fetch("/api/v1/plugin/conference-manager/portal/consent/share", {
-                method: "POST", credentials: "include", headers: authHeaders({ "Content-Type": "application/json" }),
-                body: JSON.stringify({ inscription_id: inscriptionId }),
-            });
-            const body = await res.json().catch(() => ({}));
-            if (!res.ok) { setMsg({ tone: "rose", text: body.error || "Error" }); return; }
+            const { ok, body } = await pending;
+            if (!ok) { setMsg({ tone: "rose", text: body.error || "Error" }); return; }
             const lang = copyLangOf(body.email_lang);
-            const copied = await copyText(consentMessage(lang, body));
+            const copied = await copying;
             if (copied) addToast(t("copy.done"), "success");
             setShare({ info: body, lang, phone: body.phone_wa || "", copied });
             onChanged && onChanged();
@@ -101,14 +109,16 @@ export function PortalConsentSection({ inscriptionId, consent, authHeaders, onCh
         } catch { setMsg({ tone: "rose", text: "Error de conexión" }); }
         finally { setBusy(false); }
     };
-    const copy = async (link: string) => {
-        try { await navigator.clipboard.writeText(link); setCopied(true); } catch { setCopied(false); }
-    };
+    // 2.36.8: the link of a mail that did not go — copied with the shared helper; a phone that does not let it
+    // gets the link in a field to copy by hand (it used to fail without a word).
+    const { copy: copyNow, copyUi } = useCopy({ onCopied: (m) => addToast(m, "success"), lang: "es" });
+    const copy = (link: string) => { setCopied(false); copyNow(link, { done: t("portal.copied") }).then((ok) => setCopied(ok)); };
     const status = consent.state === "granted" ? t("portal.state.granted.at", { when: dateOf(consent.granted_at) })
         : consent.state === "revoked" ? `${t("portal.state.revoked")} · ${dateOf(consent.revoked_at)}`
         : consent.no_email ? "" : consent.never_sent ? t("portal.never.sent") : consent.mail_failed ? t("portal.mail.failed") : consent.link_expired ? t("portal.link.expired") : "";
     return (
         <section className="space-y-3" aria-labelledby={`consent-${inscriptionId}`} data-sheet-section="autorizacion">
+            {copyUi}
             <h4 id={`consent-${inscriptionId}`} className={labelCls}>{t("portal.section")}</h4>
             <div className="rounded-2xl border border-gray-100 bg-gray-50/40 p-4 space-y-2">
                 <div className="flex flex-wrap items-center gap-2">

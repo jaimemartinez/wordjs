@@ -59,17 +59,5 @@ export const portalBadgeLink = async (headers: Headers, inscriptionId: number): 
 export const portalBadgeEmail = async (headers: Headers, inscriptionId: number): Promise<{ sent: boolean; email_masked: string }> =>
     post<{ sent: boolean; email_masked: string }>(headers, "/email", { inscription_id: inscriptionId });
 
-/** Copy text, with the execCommand fallback (an http LAN address has no Clipboard API). */
-export async function copyText(text: string): Promise<boolean> {
-    try {
-        if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
-    } catch { /* fall back */ }
-    try {
-        const ta = document.createElement("textarea");
-        ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-        document.body.appendChild(ta); ta.select();
-        const ok = document.execCommand("copy");
-        ta.remove();
-        return ok;
-    } catch { return false; }
-}
+/** Copy text (2.36.8: the plugin's one helper, lib/clipboard — iOS-proof fallback; false = show it by hand). */
+export { copyText } from "../lib/clipboard";

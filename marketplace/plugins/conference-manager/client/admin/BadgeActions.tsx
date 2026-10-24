@@ -13,8 +13,9 @@ import React, { useEffect, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { LAYER } from "../lib/overlay";
-import { badgesApi, linkUrl, copyText, nativeShare, openBadgeFileFrom, publicBase, waNumber, whatsappUrl } from "../lib/badges";
+import { badgesApi, linkUrl, nativeShare, openBadgeFileFrom, publicBase, waNumber, whatsappUrl } from "../lib/badges";
 import { Overlay } from "./Overlay";
+import { useCopy } from "../lib/CopyFallback";
 import { useTx } from "./MealScanner";
 import { BadgeSvg } from "./BadgeSvg";
 
@@ -42,6 +43,8 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
     const [images, setImages] = useState<Record<string, string> | null>(null);
     const [error, setError] = useState('');
     const [busy, setBusy] = useState('');
+    // 2.36.8: a copy the phone does not allow opens the link to copy by hand (lib/CopyFallback), never a toast.
+    const { copy: copyNow, copyUi } = useCopy({ onCopied: (m) => addToast(m, 'success') });
     useEffect(() => {
         let alive = true;
         setError('');
@@ -76,6 +79,8 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
     };
 
     return (
+        <>
+        {copyUi}
         <Overlay layer={LAYER.modal} onBackdrop={onClose} onEscape={onClose}>
             <div role="dialog" aria-modal="true" aria-labelledby="badge-actions-title" data-badge-actions={person.id}
                 className="bg-white rounded-[32px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden flex flex-col max-h-[92dvh]">
@@ -108,15 +113,14 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
                             <div className="grid grid-cols-2 gap-2">
                                 <a className={ghost} href={url} target="_blank" rel="noopener noreferrer" data-badge-act="open"><i className="fa-solid fa-arrow-up-right-from-square"></i>{tx('badges.act.open', 'Abrir')}</a>
                                 <button type="button" className={ghost} data-badge-act="copy" onClick={() => act('copy', async () => {
-                                    if (await copyText(url)) addToast(tx('badges.act.copied', 'Enlace copiado'), 'success');
-                                    else addToast(url, 'info');
+                                    await copyNow(url, { done: tx('badges.act.copied', 'Enlace copiado') });
                                 })}>
                                     <i className="fa-solid fa-copy"></i>{tx('badges.act.copy', 'Copiar enlace')}
                                 </button>
                                 <button type="button" className={ghost} data-badge-act="share" onClick={() => act('share', async () => {
                                     // The message and the link apart: a share target joins them (never the link twice).
                                     if (await nativeShare({ title: tx('badges.person.title', 'Escarapela'), text: intro, url })) return;
-                                    if (await copyText(message)) addToast(tx('badges.act.copied', 'Enlace copiado'), 'success');
+                                    await copyNow(message, { done: tx('badges.act.copied', 'Enlace copiado') });
                                 })}>
                                     <i className="fa-solid fa-share-nodes"></i>{tx('badges.act.share', 'Compartir')}
                                 </button>
@@ -157,5 +161,6 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
                 </div>
             </div>
         </Overlay>
+        </>
     );
 }

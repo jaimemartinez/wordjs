@@ -25,6 +25,7 @@ import { usePerms } from "./perms";
 import { Overlay } from "./Overlay";
 import { consentT } from "../lib/consentI18n";
 import { consentMessage, copyLangOf, copyText, rememberCopyLang, whatsappUrl } from "../lib/consentMessage";
+import { copyLater } from "../lib/clipboard";
 import { CopyLangPicker } from "../lib/CopyLangPicker";
 import { Select } from "../lib/Select";
 import { PaperConsent } from "../lib/PaperConsent";
@@ -120,10 +121,14 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
     const shareText = share ? consentMessage(share.lang, share.info) : '';
     const shareMessage = async (p: any) => {
         setBusyId(p.id);
+        // 2.36.8: the copy starts IN the tap with the message still on its way (lib/clipboard copyLater) — a phone
+        // only lets a page copy during the tap, and the new link takes a round trip.
+        const pending = apiPost<any>(`${BASE}/consent/share`, { inscription_id: p.id });
+        const copying = copyLater(pending.then((info) => consentMessage(copyLangOf(info.email_lang), info)));
         try {
-            const info = await apiPost<any>(`${BASE}/consent/share`, { inscription_id: p.id });
+            const info = await pending;
             const lang = copyLangOf(info.email_lang);
-            const copied = await copyText(consentMessage(lang, info));
+            const copied = await copying;
             if (copied) addToast(t("copy.done"), "success");
             setShare({ name: nameOf(p), info, lang, phone: info.phone_wa || "", copied });
             load();

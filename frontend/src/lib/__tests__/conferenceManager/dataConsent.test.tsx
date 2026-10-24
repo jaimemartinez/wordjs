@@ -103,12 +103,13 @@ describe('«Copiar mensaje» (2.33.2)', () => {
         expect(whatsappUrl('x', '123')).toBe('https://wa.me/?text=x');
     });
     it('copies with the Clipboard API, and says so when it cannot', async () => {
+        // 2.36.8: the plugin's one copy helper (lib/clipboard) — the browser is stood in by `{ nav, doc, win }`.
         const got: string[] = [];
-        expect(await copyText('hola', { clipboard: { writeText: async (t: string) => { got.push(t); } } })).toBe(true);
+        expect(await copyText('hola', { nav: { clipboard: { writeText: async (t: string) => { got.push(t); } } }, doc: null })).toBe(true);
         expect(got).toEqual(['hola']);
-        expect(await copyText('hola', {})).toBe(false);
-        expect(await copyText('hola', { clipboard: { writeText: async () => { throw new Error('denied'); } } })).toBe(false);
-        expect(await copyText('hola', null)).toBe(false);
+        expect(await copyText('hola', { nav: {}, doc: null })).toBe(false);
+        expect(await copyText('hola', { nav: { clipboard: { writeText: async () => { throw new Error('denied'); } } }, doc: null })).toBe(false);
+        expect(await copyText('hola', { nav: null, doc: null })).toBe(false);
     });
     it('both screens offer it next to the send action, through the share routes', () => {
         const admin = src('client/admin/ConsentAdmin.tsx'), portal = src('client/portal/ConsentBits.tsx');
@@ -540,5 +541,150 @@ describe('any PDF in the viewer (2.36.4): pdf.js, served by the plugin when a PD
         for (const f of ['client/lib/PageViewer.tsx', 'client/lib/PaperConsent.tsx', 'client/lib/pdfRender.ts']) expect(src(f), f).not.toMatch(/from ['"][^'"]*pdfjs/);
         expect(fs.existsSync(path.join(CMDIR, 'server/pdfjs.LICENSE.txt'))).toBe(true);
         expect(src('server/pdfjs.LICENSE.txt')).toContain('Apache License');
+    });
+});
+
+describe('2.36.8 «en móviles no me deja copiar el link»: one copy helper, with fallbacks that work on a phone', async () => {
+    const clip = await import('../../../../../marketplace/plugins/conference-manager/client/lib/clipboard');
+    const { CopyFallback, copyWords } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/CopyFallback');
+    const CM = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client');
+    // A document that behaves like iOS Safari: select() does nothing; only setSelectionRange selects a field's text,
+    // and execCommand('copy') copies what is selected (false when nothing is).
+    const fakeDoc = (opts: { iosSelect?: boolean; exec?: boolean | 'throw' } = {}) => {
+        const log: any = { copied: null as string | null, appended: 0, removed: 0, focusBack: 0, style: '' };
+        const prev = { focus: () => { log.focusBack++; } };
+        const doc: any = {
+            activeElement: prev,
+            body: { appendChild: (n: any) => { log.appended++; log.style = n.style.cssText; } },
+            createElement: () => {
+                const ta: any = {
+                    value: '', style: { cssText: '' }, attrs: {} as Record<string, string>, selectionStart: 0, selectionEnd: 0,
+                    setAttribute(k: string, v: string) { this.attrs[k] = v; },
+                    focus() { doc.activeElement = ta; },
+                    select() { if (!opts.iosSelect) { this.selectionStart = 0; this.selectionEnd = this.value.length; } },
+                    setSelectionRange(a: number, b: number) { this.selectionStart = a; this.selectionEnd = b; },
+                    remove() { log.removed++; },
+                };
+                log.ta = ta;
+                return ta;
+            },
+            execCommand: (cmd: string) => {
+                if (opts.exec === 'throw') throw new Error('nope');
+                if (opts.exec === false) return false;
+                const ta = log.ta;
+                if (cmd !== 'copy' || !ta || ta.selectionEnd <= ta.selectionStart) return false;
+                log.copied = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+                return true;
+            },
+        };
+        return { doc, log };
+    };
+
+    it('the Clipboard API is called at once (inside the tap), not after an await', async () => {
+        let called = 0;
+        const p = clip.copyText('x', { nav: { clipboard: { writeText: () => { called++; return Promise.resolve(); } } }, doc: null, win: { isSecureContext: true } });
+        expect(called).toBe(1); // synchronously, before the returned promise settles
+        expect(await p).toBe(true);
+    });
+    it('no Clipboard API (an http address): the textarea copy, selected the iOS way — setSelectionRange, not select()', async () => {
+        const { doc, log } = fakeDoc({ iosSelect: true });
+        const link = 'http://192.168.1.5/portal/conference?slug=asume';
+        expect(await clip.copyText(link, { nav: {}, doc, win: { isSecureContext: false } })).toBe(true);
+        expect(log.copied).toBe(link);
+        // read-only (no keyboard), 16px (Safari does not zoom), removed afterwards, the focus given back
+        expect(log.ta.attrs.readonly).toBe('');
+        expect(log.style).toContain('font-size:16px');
+        expect([log.appended, log.removed, log.focusBack]).toEqual([1, 1, 1]);
+    });
+    it('an insecure page with a Clipboard API object (some browsers expose one) does not use it', async () => {
+        let used = false;
+        const { doc, log } = fakeDoc();
+        expect(await clip.copyText('abc', { nav: { clipboard: { writeText: async () => { used = true; } } }, doc, win: { isSecureContext: false } })).toBe(true);
+        expect([used, log.copied]).toEqual([false, 'abc']);
+    });
+    it('the Clipboard API refuses (or throws at once): the textarea copy is tried before giving up', async () => {
+        const a = fakeDoc();
+        expect(await clip.copyText('r', { nav: { clipboard: { writeText: () => Promise.reject(new Error('NotAllowedError')) } }, doc: a.doc, win: { isSecureContext: true } })).toBe(true);
+        expect(a.log.copied).toBe('r');
+        const b = fakeDoc();
+        expect(await clip.copyText('t', { nav: { clipboard: { writeText: () => { throw new Error('sync'); } } }, doc: b.doc, win: { isSecureContext: true } })).toBe(true);
+        expect(b.log.copied).toBe('t');
+    });
+    it('false — never a «Copiado» — when nothing could be copied: execCommand refused or threw, no document, empty text', async () => {
+        const refused = fakeDoc({ exec: false });
+        expect(await clip.copyText('x', { nav: {}, doc: refused.doc })).toBe(false);
+        expect(refused.log.removed).toBe(1); // the hidden field never stays behind
+        const threw = fakeDoc({ exec: 'throw' });
+        expect(await clip.copyText('x', { nav: {}, doc: threw.doc })).toBe(false);
+        expect(threw.log.removed).toBe(1);
+        expect(await clip.copyText('x', { nav: {}, doc: null })).toBe(false);
+        expect(await clip.copyText('', { nav: { clipboard: { writeText: async () => undefined } }, doc: null })).toBe(false);
+    });
+    it('copyLater: a text still on its way is written IN the tap (ClipboardItem); without it, copied when it arrives', async () => {
+        let items: any[] | null = null;
+        class CI { constructor(public data: any) { } }
+        const env = { nav: { clipboard: { write: (x: any[]) => { items = x; return Promise.resolve(); } } }, doc: null, win: { isSecureContext: true, ClipboardItem: CI } };
+        const p = clip.copyLater(new Promise<string>((r) => setTimeout(() => r('later'), 5)), env);
+        expect(items).not.toBeNull(); // started before the text arrived
+        expect(await p).toBe(true);
+        const { doc, log } = fakeDoc({ iosSelect: true });
+        expect(await clip.copyLater(Promise.resolve('plain'), { nav: {}, doc, win: { isSecureContext: false } })).toBe(true);
+        expect(log.copied).toBe('plain');
+        expect(await clip.copyLater(Promise.reject(new Error('gone')), { nav: {}, doc: fakeDoc().doc })).toBe(false);
+    });
+    it('the share sheet: shared, closed by the person (nothing to fall back to), or not there (the caller copies)', async () => {
+        const seen: any[] = [];
+        expect(clip.canShare({ nav: { share: async () => undefined } })).toBe(true);
+        expect(clip.canShare({ nav: {} })).toBe(false);
+        expect(await clip.shareText({ url: 'u' }, { nav: { share: async (d: any) => { seen.push(d); } } })).toBe('shared');
+        expect(seen).toEqual([{ url: 'u' }]);
+        expect(await clip.shareText({ url: 'u' }, { nav: { share: async () => { throw Object.assign(new Error('x'), { name: 'AbortError' }); } } })).toBe('cancelled');
+        expect(await clip.shareText({ url: 'u' }, { nav: { share: async () => { throw new Error('NotAllowedError'); } } })).toBe('unsupported');
+        expect(await clip.shareText({ url: 'u' }, { nav: {} })).toBe('unsupported');
+    });
+    it('the hand-copy panel: the text in a read-only 16px field with «Mantén presionado», «Copiar de nuevo» and «Cerrar», in es/en/pt', () => {
+        const html = renderToStaticMarkup(React.createElement(CopyFallback, { text: 'https://x.org/portal/conference?slug=a', lang: 'es', onClose: () => undefined }));
+        expect(html).toContain('data-copy-fallback=""');
+        expect(html).toMatch(/<textarea[^>]*readOnly=""/);
+        expect(html).toContain('font-size:16px');
+        expect(html).toContain('https://x.org/portal/conference?slug=a');
+        expect(html).toContain('Copia el enlace');
+        expect(html).toContain('Mantén presionado el texto');
+        for (const w of ['Copiar de nuevo', 'Cerrar']) expect(html).toContain(w);
+        expect(renderToStaticMarkup(React.createElement(CopyFallback, { text: 'a code', title: 'Código', lang: 'es', onClose: () => undefined }))).toContain('Código');
+        for (const l of ['es', 'en', 'pt']) expect(Object.keys(copyWords(l)).sort()).toEqual(Object.keys(copyWords('es')).sort());
+        expect(copyWords('en').retry).toBe('Copy again');
+        expect(copyWords('pt').share).toBe('Compartilhar');
+    });
+    it('every copy button goes through the helper: no navigator.clipboard or execCommand anywhere else in the plugin', () => {
+        const files: string[] = [];
+        const walk = (d: string) => {
+            for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+                const f = path.join(d, e.name);
+                if (e.isDirectory()) { if (e.name !== 'vendor') walk(f); } else if (/\.(tsx?|js)$/.test(e.name)) files.push(f);
+            }
+        };
+        walk(CM);
+        for (const f of files) {
+            if (f.endsWith(`lib${path.sep}clipboard.ts`)) continue;
+            expect(fs.readFileSync(f, 'utf8'), f).not.toMatch(/navigator\.clipboard|execCommand\(/);
+        }
+        const read = (rel: string) => fs.readFileSync(path.join(CM, rel), 'utf8');
+        // The registration link: copied in the tap, a «Compartir» on phones, and no link in a toast any more.
+        const page = read('admin/page.tsx');
+        expect(page).toContain("copyNow(portalUrl(), { done: 'Enlace copiado al portapapeles' });");
+        expect(page).toContain('data-portal-link="share"');
+        expect(page).not.toContain("addToast(fullUrl, 'info')");
+        // The silent ones: the badge's share fallback, the portal's consent link, the «Mi inscripción» Safari link.
+        expect(read('admin/BadgeActions.tsx')).not.toContain("addToast(url, 'info')");
+        expect(read('portal/ConsentBits.tsx')).toContain('copyNow(link, { done: t("portal.copied") })');
+        expect(read('portal/yo/BusAlerts.tsx')).toContain('const copySelf = () => { copyNow(selfUrl); };');
+        expect(read('portal/PortalBadges.tsx')).not.toContain('"Enlace copiado." : url');
+        // «Copiar mensaje»: the copy starts in the tap with the message still on its way.
+        for (const f of ['admin/ConsentAdmin.tsx', 'portal/ConsentBits.tsx']) expect(read(f), f).toMatch(/const copying = copyLater\(pending\.then\(/);
+        // The old helpers are the one helper now.
+        expect(read('lib/badges.ts')).toContain("export { copyLater, copyText } from './clipboard';");
+        expect(read('portal/badges.ts')).toContain('export { copyText } from "../lib/clipboard";');
+        expect(read('lib/consentMessage.ts')).toContain("export { copyText } from './clipboard';");
     });
 });

@@ -36,6 +36,7 @@ import { TEMPLATES, fromLegacy, sampleData } from "../lib/badgeEditor";
 import { DateField } from "../lib/DateField";
 import { Select } from "../lib/Select";
 import { StickerPrint } from "./StickerPrint";
+import { useCopy } from "../lib/CopyFallback";
 
 const card = 'bg-white rounded-3xl border border-gray-100 shadow-sm p-5 sm:p-6 space-y-4';
 const label = 'block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1.5';
@@ -332,6 +333,8 @@ const fold = (s: any) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036
  * everyone's at once (the location chosen here, or all).
  */
 function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, onDesign }: any) {
+    // 2.36.8: a link the phone would not copy opens to copy by hand (lib/CopyFallback).
+    const { copyLater: copyLaterNow, copyUi } = useCopy({ onCopied: (m) => addToast(m, 'success') });
     const [people, setPeople] = useState<any[] | null>(null);
     const [fields, setFields] = useState<any[]>([]);
     const [locations, setLocations] = useState<any[]>([]);
@@ -410,8 +413,7 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
                 mergeLinks([l]);
                 return linkUrl(l, base);
             });
-            if (await copyLater(url)) addToast(tx('badges.act.copied', 'Enlace copiado'), 'success');
-            else addToast(await url, 'info');
+            await copyLaterNow(url, { done: tx('badges.act.copied', 'Enlace copiado') });
         } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
         finally { setBusyId(null); }
     };
@@ -428,6 +430,7 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
     const total = people ? people.length : 0;
     return (
         <div className="space-y-6" data-badges-people="">
+            {copyUi}
             {state && (
                 <p className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3" role="note" data-badges-state={state}>
                     {state === 'disabled'
