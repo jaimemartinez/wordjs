@@ -61,6 +61,8 @@ const MSG = {
     file: 'Archivo no encontrado.',
     fileBad: 'Sube una foto (JPG, PNG o WebP) o un PDF de la hoja firmada.',
     fileBig: 'El archivo es demasiado grande (máximo 2 MB). Toma la foto de nuevo o divide el PDF.',
+    // 2.36.7: an iPhone photo kept as HEIC (the page converts it when the browser can read it; this is the rest).
+    fileHeic: 'Esta foto está en formato HEIC (iPhone) y no se pudo convertir. Súbela desde el iPhone (la convierte a JPG) o, en el iPhone, Ajustes › Cámara › Formatos › «Más compatible».',
     tooMany: `Esta hoja ya tiene ${MAX_FILES} archivos.`,
     noFiles: 'Sube primero la foto o el PDF de la hoja firmada.',
     none: 'Marca al menos una persona que firmó.',
@@ -239,6 +241,7 @@ function createPaper(core) {
         const b = body || {};
         const url = typeof b.data_url === 'string' ? b.data_url.trim() : '';
         if (url.length > MAX_FILE_CHARS) throw httpError(413, MSG.fileBig);
+        if (/^data:image\/hei[cf][;,]/i.test(url)) throw httpError(400, MSG.fileHeic);
         const m = DATA_URL_RE.exec(url);
         if (!m) throw httpError(400, MSG.fileBad);
         const mime = m[1];

@@ -14,7 +14,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Select } from "./Select";
-import { prepareProof, formatBytes } from "./proofImage";
+import { prepareProof, formatBytes, isHeic, SHEET_PLAN } from "./proofImage";
 import { PageViewer } from "./PageViewer";
 
 /** GET with query parameters (the list, a sheet's page, a file), or POST { action, … }. */
@@ -210,12 +210,20 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         try {
             for (const file of list) {
                 let url = "";
-                if (file.type === "application/pdf") {
+                // 2.36.7: a photo (JPG, PNG, WebP — and an iPhone HEIC, converted here when this browser can read it) is
+                // reduced to about 2000 px at JPEG 0.85 within the sheet's cap; a PDF goes as it is. A type the system did
+                // not give (Windows) is read from the name.
+                const cap = (data?.limits?.max_file_chars || 3000000) - 1000;
+                if (file.type === "application/pdf" || (!file.type && /\.pdf$/i.test(file.name))) {
                     url = await readDataUrl(file);
-                    if (url.length > (data?.limits?.max_file_chars || 3000000)) { addToast(`${file.name}: ${t("paper.file.big")}`, "error"); continue; }
-                } else if (/^image\//.test(file.type)) {
-                    const r = await prepareProof(file);
-                    if (!r.ok) { addToast(`${file.name}: ${t(r.error === "not_image" ? "paper.file.bad" : "paper.file.unreadable")}`, "error"); continue; }
+                    if (!file.type) url = url.replace(/^data:[^;,]*/, "data:application/pdf");
+                    if (url.length > cap) { addToast(`${file.name}: ${t("paper.file.big")}`, "error"); continue; }
+                } else if (/^image\//.test(file.type) || isHeic(file)) {
+                    const r = await prepareProof(file, {}, cap, SHEET_PLAN);
+                    if (!r.ok) {
+                        const key = r.error === "heic" ? "paper.file.heic" : r.error === "not_image" ? "paper.file.bad" : r.error === "too_large" ? "paper.file.huge" : "paper.file.unreadable";
+                        addToast(`${file.name}: ${t(key)}`, "error"); continue;
+                    }
                     url = r.dataUrl;
                 } else { addToast(`${file.name}: ${t("paper.file.bad")}`, "error"); continue; }
                 try { await request("post", { action: "upload", sheet_id: s.id, data_url: url, name: file.name }); done++; }
@@ -381,7 +389,15 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
                                         {canManage && (
                                             <label className={`${btn} cursor-pointer ${busy === `up-${s.id}` ? "opacity-50 pointer-events-none" : ""}`} data-paper-upload={s.code}>
                                                 <i className="fa-solid fa-upload" aria-hidden="true"></i>{busy === `up-${s.id}` ? t("paper.uploading") : t("paper.upload")}
-                                                <input type="file" className="sr-only" accept="image/*,application/pdf" multiple onChange={(e) => { upload(s, e.currentTarget.files); e.currentTarget.value = ""; }} />
+                                                <input type="file" className="sr-only" accept="image/*,.heic,.heif,application/pdf" multiple onChange={(e) => { upload(s, e.currentTarget.files); e.currentTarget.value = ""; }} />
+                                            </label>
+                                        )}
+                                        {/* 2.36.7: on a phone, the camera straight away — a second button, so the picker above still offers
+                                            the gallery and files (`capture` on the only input would force the camera). */}
+                                        {canManage && (
+                                            <label className={`${btn} cursor-pointer sm:hidden ${busy === `up-${s.id}` ? "opacity-50 pointer-events-none" : ""}`} data-paper-camera={s.code}>
+                                                <i className="fa-solid fa-camera" aria-hidden="true"></i>{t("paper.camera")}
+                                                <input type="file" className="sr-only" accept="image/*" capture="environment" onChange={(e) => { upload(s, e.currentTarget.files); e.currentTarget.value = ""; }} />
                                             </label>
                                         )}
                                         {canManage && (

@@ -44,7 +44,8 @@ describe('prepareProof', () => {
         const decode = async () => { throw new Error('no decoder'); };
         const small = 'data:image/png;base64,iVBORw0KGgo=';
         expect(await prepareProof({ type: 'image/png', size: 100 }, { decode, readAsDataUrl: async () => small })).toMatchObject({ ok: true, compressed: false, dataUrl: small });
-        expect(await prepareProof({ type: 'image/heic', size: 100 }, { decode, readAsDataUrl: async () => 'data:image/heic;base64,AAAA' })).toEqual({ ok: false, error: 'unreadable' });
+        // 2.36.7: a HEIC this browser cannot decode says so (not the generic «unreadable»).
+        expect(await prepareProof({ type: 'image/heic', size: 100 }, { decode, readAsDataUrl: async () => 'data:image/heic;base64,AAAA' })).toEqual({ ok: false, error: 'heic' });
         expect(await prepareProof({ type: 'image/png', size: 100 }, { decode, readAsDataUrl: async () => 'data:image/png;base64,' + 'A'.repeat(PROOF_MAX_CHARS) })).toEqual({ ok: false, error: 'unreadable' });
         expect(PROOF_ERROR_TEXT.unreadable.fallback).toMatch(/captura de pantalla/);
     });
@@ -68,5 +69,50 @@ describe('prepareProof', () => {
         expect(lru.size).toBe(10);
         expect(lru.get('2')).toBeUndefined();
         expect(lru.get('1')).toBe('p1');
+    });
+});
+
+describe('2.36.7 the signed consent sheet takes photos: JPG / PNG / WebP / HEIC, several pages, bigger than a receipt', async () => {
+    const mod = await import('../../../../../marketplace/plugins/conference-manager/client/lib/proofImage');
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const canvas = () => {
+        const c: any = { width: 0, height: 0, getContext: () => ({ drawImage: () => undefined }), toDataURL: (_t: string, q: number) => `data:image/jpeg;base64,${'A'.repeat(Math.round(c.width * c.height * q / 1000))}` };
+        return c;
+    };
+    it('a sheet photo keeps more detail than a receipt: about 2000 px at 0.85 first, within the sheet\'s cap', async () => {
+        expect(mod.SHEET_PLAN[0]).toEqual({ side: 2000, quality: 0.85 });
+        const decode = async () => ({ width: 4032, height: 3024 });
+        const r = await mod.prepareProof({ type: 'image/jpeg', size: 4_000_000, name: 'hoja.jpg' }, { decode, canvas }, 3_000_000, mod.SHEET_PLAN);
+        expect(r).toMatchObject({ ok: true, compressed: true, width: 2000, height: 1500 });
+        // The receipt path is unchanged (1600 px first).
+        const receipt = await mod.prepareProof({ type: 'image/jpeg', size: 4_000_000 }, { decode, canvas });
+        expect(receipt).toMatchObject({ ok: true, width: 1600 });
+    });
+    it('HEIC: by its type, or by its name when the system gives none; decoded where the browser can (it leaves as JPEG), else a clear «heic»', async () => {
+        expect(mod.isHeic({ type: 'image/heic' })).toBe(true);
+        expect(mod.isHeic({ type: 'image/heif' })).toBe(true);
+        expect(mod.isHeic({ type: '', name: 'IMG_0012.HEIC' })).toBe(true);
+        expect(mod.isHeic({ type: 'image/jpeg', name: 'x.heic' })).toBe(false);
+        // Safari reads HEIC: the photo is drawn and sent as JPEG.
+        const ok = await mod.prepareProof({ type: '', size: 2_000_000, name: 'IMG_0012.HEIC' }, { decode: async () => ({ width: 3000, height: 4000 }), canvas }, 3_000_000, mod.SHEET_PLAN);
+        expect(ok.ok && ok.dataUrl.startsWith('data:image/jpeg;base64,')).toBe(true);
+        // A browser that cannot: «heic», never a silent failure.
+        const no = await mod.prepareProof({ type: 'image/heic', size: 2_000_000 }, { decode: async () => { throw new Error('no'); }, readAsDataUrl: async () => 'data:image/heic;base64,AAAA' }, 3_000_000, mod.SHEET_PLAN);
+        expect(no).toEqual({ ok: false, error: 'heic' });
+        expect(mod.PROOF_ERROR_TEXT.heic.fallback).toMatch(/HEIC/);
+    });
+    it('the upload: several files, photos or a PDF (by type or by name), the camera offered on a phone without taking the gallery away', () => {
+        const src = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/lib/PaperConsent.tsx'), 'utf8');
+        expect(src).toContain('accept="image/*,.heic,.heif,application/pdf" multiple');
+        expect(src).toContain('const r = await prepareProof(file, {}, cap, SHEET_PLAN);');
+        expect(src).toContain('r.error === "heic" ? "paper.file.heic"');
+        expect(src).toContain('(!file.type && /\\.pdf$/i.test(file.name))');
+        // The camera: a second input with `capture`, shown on phones; the first one never forces the camera.
+        expect(src).toContain('accept="image/*" capture="environment"');
+        expect((src.match(/capture=/g) || []).length).toBe(1);
+        expect(src).toContain('data-paper-camera={s.code}');
+        const t = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/lib/consentI18n.ts'), 'utf8');
+        for (const k of ['paper.camera', 'paper.file.heic', 'paper.file.huge']) expect((t.match(new RegExp(`'${k.replace(/\./g, '\\.')}':`, 'g')) || []).length, k).toBe(3);
     });
 });

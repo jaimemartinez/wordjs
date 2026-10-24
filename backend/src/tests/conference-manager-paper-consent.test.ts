@@ -368,3 +368,35 @@ test('the activation scan accepts the plugin (no computed call, every permission
     const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'manifest.json'), 'utf8'));
     assert.doesNotThrow(() => validatePluginPermissions('conference-manager', PLUGIN_DIR, manifest, { mode: 'grant' }));
 });
+
+test('2.36.7 «puede ser también imagen»: a signed sheet uploaded as photos (JPG, WebP) from the admin and the portal counts as evidence exactly like a PDF; a HEIC or a fake is refused with a clear message', async () => {
+    const w = await world();
+    const ana = await w.register(w.tNorte, 'Ana');
+    const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]), crypto.randomBytes(80)]);
+    const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x40, 0, 0, 0]), Buffer.from('WEBPVP8 '), crypto.randomBytes(64)]);
+    // The admin's path (Autorizaciones › Consentimiento en papel), a sheet of Norte, two pages as photos.
+    const sheet = ok(await w.p.call('post', '/consent/paper', { body: { action: 'create', conference_id: w.cid, location_id: w.norte } }), 'create').sheet;
+    const p1 = ok(await w.p.call('post', '/consent/paper', { body: { action: 'upload', sheet_id: sheet.id, data_url: dataUrl('image/jpeg', JPEG), name: 'pagina-1.jpg' } }), 'jpeg');
+    const p2 = ok(await w.p.call('post', '/consent/paper', { body: { action: 'upload', sheet_id: sheet.id, data_url: dataUrl('image/webp', WEBP), name: 'pagina-2.webp' } }), 'webp');
+    assert.deepStrictEqual([p1.mime, p1.sha256, p2.mime, p2.sha256], ['image/jpeg', sha256(JPEG), 'image/webp', sha256(WEBP)]);
+    // The coordinator's path takes a photo too.
+    const sheetN = ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'create', blank: 2 })).sheet;
+    ok(await w.portal('post', '/portal/consent/paper', w.tNorte, { action: 'upload', sheet_id: sheetN.id, data_url: dataUrl('image/jpeg', JPEG), name: 'foto.jpg' }), 'portal jpeg');
+
+    // A HEIC that reaches the server (a browser that could not convert it): refused, and the message says what to do.
+    const heic = await w.p.call('post', '/consent/paper', { body: { action: 'upload', sheet_id: sheet.id, data_url: 'data:image/heic;base64,AAAAGGZ0eXBoZWljAAAAAA==', name: 'IMG_1.HEIC' } });
+    assert.strictEqual(heic.status, 400);
+    assert.match(heic.body.error, /HEIC/);
+    // A file that only claims to be a photo: refused with the formats.
+    const fake = await w.p.call('post', '/consent/paper', { body: { action: 'upload', sheet_id: sheet.id, data_url: dataUrl('image/jpeg', PDF), name: 'x.jpg' } });
+    assert.deepStrictEqual([fake.status, /JPG, PNG o WebP/.test(fake.body.error)], [400, true]);
+
+    // Evidence: every uploaded page is in the audit with its SHA-256, and the person ticked from this sheet carries the
+    // photos' fingerprints in their «granted» record — as a PDF's would be.
+    const uploads = (w.p.q(`SELECT data FROM ${PREFIX}consent_events WHERE conference_id = ? AND kind = 'paper_uploaded'`, w.cid) as any[]).map(r => JSON.parse(r.data));
+    for (const h of [sha256(JPEG), sha256(WEBP)]) assert.ok(uploads.some(d => d.sha256 === h), h);
+    ok(await w.p.call('post', '/consent/paper', { body: { action: 'marks', sheet_id: sheet.id, marks: [{ inscription_id: ana, health: true, image: true }] } }), 'marks');
+    const granted = w.events(ana).filter(e => e.kind === 'granted').pop();
+    const text = String(granted && granted.data);
+    for (const h of [sha256(JPEG), sha256(WEBP)]) assert.ok(text.includes(h), `the granted record names ${h}`);
+});
