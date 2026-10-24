@@ -181,3 +181,36 @@ describe("Plugins › Marketplace fits a phone", () => {
         expect(src).toMatch(/containerClassName="flex-1 min-w-0"\s*className="font-mono"/);
     });
 });
+
+/**
+ * Typing on a phone zoomed the whole page: iOS zooms on focus when a field's text is under 16px, and
+ * core and plugin fields are 14px (`text-sm`). globals.css (loaded by every tree through RootDocument)
+ * lifts text fields, selects and textareas to 16px below md — unlayered, so it beats Tailwind's layered
+ * utilities and plugin classes — and never locks pinch zoom.
+ */
+describe("Phones: focusing a field never zooms the page", () => {
+    const css = fs.readFileSync(path.resolve(__dirname, "../../globals.css"), "utf8");
+    const rule = css.match(/@media \(max-width: 767\.98px\) \{\s*:where\(input:not\(([^)]*)\), select, textarea\):not\(([^)]*)\) \{\s*font-size: 16px;/);
+
+    it("text fields, selects and textareas are 16px below md, outside any @layer", () => {
+        expect(rule, "the 16px phone rule").not.toBeNull();
+        const before = css.slice(0, css.indexOf(rule![0]));
+        const depth = before.replace(/\/\*[\s\S]*?\*\//g, "").split("").reduce((d, ch) => d + (ch === "{" ? 1 : ch === "}" ? -1 : 0), 0);
+        expect(depth, "the @media block must be top-level, not nested in an @layer").toBe(0);
+        expect(rule![1]).toContain('[type="checkbox"]');
+        expect(rule![1]).toContain('[type="radio"]');
+    });
+
+    it("deliberately large fields keep their size", () => {
+        expect(rule![2]).toContain(".text-lg");
+        expect(rule![2]).toContain(".text-3xl");
+    });
+
+    it("pinch zoom is never locked", () => {
+        const layout = fs.readFileSync(path.resolve(__dirname, "../layout.tsx"), "utf8");
+        const root = fs.readFileSync(path.resolve(__dirname, "../../_root/RootDocument.tsx"), "utf8");
+        for (const src of [layout, root, css]) {
+            expect(src).not.toMatch(/maximum-scale\s*[:=]\s*["']?1|userScalable\s*:\s*false|user-scalable\s*=\s*no/);
+        }
+    });
+});

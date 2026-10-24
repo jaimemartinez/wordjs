@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Typing on a phone no longer zooms the page.** iOS zooms in whenever a field whose text is under 16px gets focus, and core and plugin fields were 14px. Below the md breakpoint every text field, select and textarea is now at least 16px (`app/globals.css`, unlayered so it also covers plugin fields); deliberately large fields keep their size, desktop is unchanged, and pinch zoom stays available.
+
 ## [2.11.3] - 2026-10-24
 
 ### Changed
