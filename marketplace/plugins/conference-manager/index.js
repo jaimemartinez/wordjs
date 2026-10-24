@@ -6900,21 +6900,55 @@ exports.init = async function (wordjs) {
                 };
                 const fitsBin = (b, it, inside) => compatible(b.room, peopleIn(inside).concat(it.people)) && !blocksCompanion(b.room, peopleIn(inside).concat(it.people));
                 const costBin = (b, it, inside) => softCost(b.room, peopleIn(inside).concat(it.people));
+                // Everyone already in the room is of another location than these people (2.36.6, option (a)).
+                const locKey = (p) => (p.location_id == null ? null : Number(p.location_id));
+                const foreignTo = (inRoom, people) => {
+                    if (!inRoom.length) return false;
+                    const mine = new Set(people.map(locKey));
+                    return !inRoom.some(o => mine.has(locKey(o)));
+                };
                 const baseClasses = splitAlts[kind] ? splitClassesOf(kind) : packClasses;
                 const classes = kind === 'pack-size' ? [...baseClasses].sort((a, b) => (Number(a.wild) - Number(b.wild)) || (b.size - a.size)) : baseClasses;
                 for (const cls of classes) {
                     let pending = cls.parts;
-                    const partial = R.filter(r => r.occupants.length > 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
-                    if (partial.length) {
-                        const res = pack.packInto(pending, partial, fitsBin, costBin);
-                        for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
-                        pending = res.left;
+                    // 2.36.6, the owner's option (a): a location's people first fill rooms that already hold their own
+                    // location (or nobody's), then empty rooms, and only then the free beds of a room another location's
+                    // people sleep in (same class — the gender — as always): a location stays together when it can.
+                    // Each location's parts are packed on their own (the largest location first), so the fewest-rooms
+                    // packing never mixes two locations to save a room; what is left of all of them comes last.
+                    const partialRooms = () => R.filter(r => r.occupants.length > 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
+                    const ownBin = (b, it, inside) => fitsBin(b, it, inside) && !foreignTo(b.room.occupants.concat(peopleIn(inside)), it.people);
+                    const byLocation = new Map();
+                    for (const it of pending) {
+                        const k = locKey(it.people[0] || {});
+                        if (!byLocation.has(k)) byLocation.set(k, []);
+                        byLocation.get(k).push(it);
                     }
+                    const groups = [...byLocation.values()].sort((a, b) => b.reduce((n, it) => n + it.people.length, 0) - a.reduce((n, it) => n + it.people.length, 0));
+                    let rest = [];
+                    for (let group of groups) {
+                        const partial = partialRooms();
+                        if (partial.length) {
+                            const res = pack.packInto(group, partial, ownBin, costBin);
+                            for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                            group = res.left;
+                        }
+                        if (group.length) {
+                            const empty = R.filter(r => r.occupants.length === 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
+                            const res = pack.packNew(group, empty, fitsBin, costBin);
+                            for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                            group = res.left;
+                        }
+                        rest = rest.concat(group);
+                    }
+                    pending = rest;
                     if (pending.length) {
-                        const empty = R.filter(r => r.occupants.length === 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
-                        const res = pack.packNew(pending, empty, fitsBin, costBin);
-                        for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
-                        pending = res.left;
+                        const partial = partialRooms();
+                        if (partial.length) {
+                            const res = pack.packInto(pending, partial, fitsBin, costBin);
+                            for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                            pending = res.left;
+                        }
                     }
                     // A probe («Sugerir reparto») leaves what did not fit whole for the plan to place — except a group
                     // bigger than every room (here and among the plan's free ones): no arrangement keeps it together, so
@@ -7007,17 +7041,19 @@ exports.init = async function (wordjs) {
             }
             return { kind, rooms: R, placements, assignedCount: placed, violations };
         };
-        // [hard broken, without a bed, rooms used, empty beds in them, preferences broken] — lower is better.
+        // [hard broken, without a bed, rooms mixing locations, rooms used, empty beds in them, preferences broken] — lower
+        // is better. 2.36.6 (option (a)): a location kept together counts before a room saved.
         const scoreOf = (st) => {
-            let hard = st.violations.filter(v => v.hard).length, soft = st.violations.filter(v => !v.hard).length, used = 0, empty = 0;
+            let hard = st.violations.filter(v => v.hard).length, soft = st.violations.filter(v => !v.hard).length, used = 0, empty = 0, mixed = 0;
             for (const room of st.rooms) {
                 if (!room.occupants.length) continue;
                 used++; empty += freeOf(room);
+                if (new Set(room.occupants.map(o => (o.location_id == null ? null : Number(o.location_id)))).size > 1) mixed++;
                 if (!mergedSeparateOk(room.occupants, [])) hard++;
                 for (const rule of companionUnmet(room.occupants)) { if (rule.hard) hard++; else soft++; }
                 for (const rule of softSeparate) if (distinctValues(judgedBy(rule, viewFor(rule, room.occupants), keepRules), rule.field).length > 1) soft++;
             }
-            return [hard, participants.length - st.assignedCount, used, empty, soft];
+            return [hard, participants.length - st.assignedCount, mixed, used, empty, soft];
         };
         const lexLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
         let chosen = null;
@@ -7394,7 +7430,16 @@ exports.init = async function (wordjs) {
     const sweepScore = (S) => {
         const frozen = new Set(S.locations.filter(isFrozen).map(l => Number(l.id)));
         const m = makeAuditor(S).measure(S, (p) => p.location_id == null || !frozen.has(Number(p.location_id)));
-        return [m.hard, m.unplaced, m.rooms, m.empty_beds, m.soft];
+        // 2.36.6 (option (a)): rooms holding people of more than one location — a location kept together counts
+        // before a room saved, as in each scope's own choice (runAssignmentScope's scoreOf).
+        const locsIn = new Map();
+        for (const p of S.people) {
+            if (p.room_id == null) continue;
+            if (!locsIn.has(p.room_id)) locsIn.set(p.room_id, new Set());
+            locsIn.get(p.room_id).add(p.location_id == null ? null : Number(p.location_id));
+        }
+        const mixed = [...locsIn.values()].filter(s => s.size > 1).length;
+        return [m.hard, m.unplaced, mixed, m.rooms, m.empty_beds, m.soft];
     };
     const sweepLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
     // What the automatic assignment (the admin's conference-wide run) would do on `snap` — on a copy; returns
@@ -7785,11 +7830,17 @@ exports.init = async function (wordjs) {
                 const spare = b.members.filter(m => m.spare).reduce((n, m) => n + m.size, 0);
                 const locs = [...byLoc.keys()].filter(k => k != null);
                 let after;
+                const spareFor = (lid) => b.members.filter(m => m.spare && m.g.id === lid).reduce((n, m) => n + m.size, 0);
+                // 2.36.6, the owner's option (a): a location holds only the beds its people use. A room of one location
+                // is WHOLE only when they fill it; otherwise it is shared — their beds, the rest pool beds that the next
+                // people of the room's class (its «Separar por» value, the gender — see «THE CLASS OF A SHARED ROOM»)
+                // may take, whatever their location. («asignó más camas que los inscritos de la localidad») With sharing
+                // off («no compartir habitaciones entre localidades», `share: false`) a location's rooms stay its own.
+                const full = locs.length === 1 && !byLoc.has(null) && (!share || byLoc.get(locs[0]) + spareFor(locs[0]) >= b.cap);
                 if (!locs.length) after = { kind: 'pool' };
-                else if (locs.length === 1 && !byLoc.has(null)) { after = { kind: 'whole', location_id: locs[0] }; setRoomWhole(cand, b.room.id, locs[0]); }
+                else if (full) { after = { kind: 'whole', location_id: locs[0] }; setRoomWhole(cand, b.room.id, locs[0]); }
                 else {
                     // Shared: each location its people's beds (its spare beds too); the rest are pool beds.
-                    const spareFor = (lid) => b.members.filter(m => m.spare && m.g.id === lid).reduce((n, m) => n + m.size, 0);
                     const shares = locs.map(lid => ({ location_id: lid, beds: byLoc.get(lid) + spareFor(lid) }));
                     after = { kind: 'shared', shares };
                     setRoomShares(cand, b.room.id, shares);

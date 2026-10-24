@@ -38,6 +38,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     sees only the sections it may open.
   - **Fixed: «Pagos de cuotas» re-rendered in a loop while loading** («Maximum update depth exceeded» in the
     console).
+  - **A locality holds only the beds its people use** (the owner: «asignó más camas que los inscritos de la
+    localidad»).
+    - **«Sugerir reparto»**: a room the plan gives to one locality is that locality's whole only when its people fill
+      it. Otherwise the locality holds the beds its people use, and the free beds go to people of other localities in
+      the same «Separar por» section (Hombres / Mujeres). With «no compartir habitaciones» the rooms stay exclusive.
+    - **The automatic assignment keeps a locality together**: each locality fills its own partly used rooms, then
+      empty rooms, and only then the free beds of another locality's room of the same section. A room mixing
+      localities now weighs more than one room saved.
+    - **Never mixed**: a different section, and rooms reserved by hand stay exclusive.
+    - **Lodging explorer**: a room with people of several localities shows each person's locality.
+    - **Coordinators' portal**: unchanged — only its own people, and «Compartida · tuyas N de M camas».
   - **Fixed: «Limpiar todas las asignaciones» frees the rooms too.** It used to take the people out but leave every
     room and bed reserved for the locality it had been given to.
     - **What is freed**: the rooms and beds that «Sugerir reparto» gave to localities go back to everyone, so the

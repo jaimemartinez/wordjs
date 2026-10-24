@@ -237,7 +237,9 @@ test('«Aplicar» writes only the plan the admin saw: anything changed meanwhile
     assert.strictEqual(stale.body.code, 'plan_changed');
     assert.strictEqual((p.q(`SELECT id FROM ${T('rooms')} WHERE location_id IS NOT NULL`) as any[]).length, 0, 'nothing written');
     ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, token: stale.body.plan.token } }), 'the new plan applies');
-    assert.strictEqual((p.q(`SELECT id FROM ${T('rooms')} WHERE location_id = ?`, norte) as any[]).length, 2);
+    // 2.36.6 (option (a)): the full room is Norte's; the half one gives Norte its one bed, the other is a pool bed.
+    assert.strictEqual((p.q(`SELECT id FROM ${T('rooms')} WHERE location_id = ?`, norte) as any[]).length, 1);
+    assert.deepStrictEqual((p.q(`SELECT location_id, beds FROM ${T('room_beds')}`) as any[]).map(b => [b.location_id, b.beds]), [[norte, 1]]);
     assert.strictEqual((await p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid } })).status, 400, 'a token is required');
 });
 
@@ -1557,4 +1559,72 @@ test('2.36.6 «Limpiar todas las asignaciones» frees the rooms the plan gave (a
     assert.strictEqual(log.length, 2);
     assert.deepStrictEqual([Number(log[0].manual_kept), Number(log[1].manual_released)], [1, 1]);
     assert.ok(log[0].actor);
+});
+
+// The coordinators' portal of a location, as the core calls a portal route (x-portal-token).
+async function portalOf(w: Awaited<ReturnType<typeof world>>, locationId: number) {
+    const code = w.p.one(`SELECT code FROM ${T('locations')} WHERE id = ?`, locationId).code;
+    const token = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: locationId, code } })).token as string;
+    return async (method: string, url: string, body?: any) => {
+        const r = w.p.routes.find((x: any) => x.method === method && x.path === url) as any;
+        const res: any = { statusCode: 200, _body: undefined, status(c: number) { this.statusCode = c; return this; }, json(x: any) { this._body = JSON.parse(JSON.stringify(x)); return this; }, cookie() { return this; }, clearCookie() { return this; }, setHeader() { return this; } };
+        await r.handler({ params: {}, query: {}, body: body || {}, headers: { 'x-portal-token': token }, cookies: {}, user: null }, res);
+        return { status: res.statusCode, body: res._body };
+    };
+}
+
+test('2.36.6 option (a): a location holds only the beds its people use — its leftover beds go to another location of the same gender, never another gender, never a room reserved by hand', async () => {
+    const w = await world([['A3', 3], ['B3', 3], ['D2', 2]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    // D2 reserved for Norte by hand (the admin's own allotment): exclusive.
+    ok(await w.p.call('put', `/rooms/${w.room.D2}`, { body: { location_id: norte } }), 'D2 by hand');
+    for (let i = 0; i < 4; i++) await w.person(`NM${i}`, w.M, norte);
+    const pl = await w.plan({ replan: false });
+    ok(await w.p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, token: pl.token } }), 'apply');
+    // Norte's four men: two of them in D2 (its own room by hand), two in a 3-bed room — that room is not Norte's whole:
+    // Norte holds the beds its men use, the free bed is a pool bed of the men's class.
+    const menRooms = (w.p.q(`SELECT room_id FROM ${T('inscriptions')} WHERE first_name LIKE 'NM%'`) as any[]).map(r => r.room_id);
+    const mixedRoom = [w.room.A3, w.room.B3].find(id => menRooms.includes(id)) as number;
+    assert.ok(mixedRoom);
+    const usedThere = menRooms.filter(r => r === mixedRoom).length;
+    assert.strictEqual(w.ownerOf(mixedRoom), null, 'not a whole room of Norte');
+    assert.deepStrictEqual(w.shares(mixedRoom).map((b: any) => [b.location_id, b.beds]), [[norte, usedThere]], 'Norte holds exactly the beds it uses');
+    const lock = JSON.parse(w.p.one(`SELECT share_lock FROM ${T('rooms')} WHERE id = ?`, mixedRoom).share_lock);
+    assert.deepStrictEqual(lock.map((x: any) => x.value), [w.M], 'the room keeps the men\'s class');
+
+    // Sur: men and a woman. The run fills the empty room first, then Norte's leftover men's beds — the woman never goes there.
+    const sm = [await w.person('SM0', w.M, sur), await w.person('SM1', w.M, sur), await w.person('SM2', w.M, sur), await w.person('SM3', w.M, sur)];
+    const sf = await w.person('SF0', w.F, sur);
+    await w.run();
+    const otherRoom = mixedRoom === w.room.A3 ? w.room.B3 : w.room.A3;
+    const surRooms = sm.map(w.roomOf);
+    assert.strictEqual(surRooms.filter(r => r === otherRoom).length, 3, 'the empty room first (a location kept together)');
+    assert.strictEqual(surRooms.filter(r => r === mixedRoom).length, 3 - usedThere, 'then the free beds of Norte\'s room, same gender');
+    assert.ok(!surRooms.includes(w.room.D2), 'never a room reserved by hand for Norte');
+    assert.strictEqual(w.roomOf(sf), null, 'a woman never takes a bed of the men\'s room (no bed left for her)');
+    assert.deepStrictEqual(w.gendersIn(mixedRoom), new Set([w.M]));
+    // Norte still holds only its occupied beds there.
+    assert.deepStrictEqual(w.shares(mixedRoom).map((b: any) => [b.location_id, b.beds]), [[norte, usedThere]]);
+
+    // Norte's portal: its own people, the room marked shared — Sur's names never reach it.
+    const portal = await portalOf(w, norte);
+    const view = ok(await portal('get', '/portal/lodging'), 'portal view');
+    const text = JSON.stringify(view);
+    for (const name of ['SM0', 'SM1', 'SM2', 'SM3', 'SF0']) assert.ok(!text.includes(name), name);
+    assert.ok(text.includes('NM0'));
+});
+
+test('2.36.6 option (a): with an empty room free, another location never goes into a location\'s half-used room', async () => {
+    const w = await world([['A3', 3], ['B3', 3], ['C3', 3]]);
+    await w.hardGender();
+    const norte = await w.loc('Norte'), sur = await w.loc('Sur');
+    for (let i = 0; i < 4; i++) await w.person(`NM${i}`, w.M, norte);
+    for (let i = 0; i < 2; i++) await w.person(`SM${i}`, w.M, sur);
+    await w.run();
+    // Each location in rooms of its own: 3 + 1 for Norte, 2 for Sur — no room mixes them, though one fewer room would.
+    for (const id of Object.values(w.room)) {
+        const locs = new Set((w.p.q(`SELECT location_id FROM ${T('inscriptions')} WHERE room_id = ?`, id) as any[]).map(r => r.location_id));
+        assert.ok(locs.size <= 1, `room ${id} mixes locations`);
+    }
 });
