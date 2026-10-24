@@ -8,6 +8,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **conference-manager 2.36.5: calling the meal groups, one after another.**
+  - **«Alimentación › Llamar grupos»**: the live screen of a meal service. For every group it shows how many people it
+    has for that service, how many were served, how many are still to come, and how many were let in before their
+    group was called. A big «Llamar grupo B» calls the next group in the service's order; any group can be called.
+    A called group stays called. «Deshacer» undoes a mistaken call after an in-app confirmation. The kitchen team
+    can call groups too (Entrega de comidas › gestionar).
+  - **The scanner follows the calls.** Once a group of a service has been called, a person whose group has not
+    is not served on a scan. A red warning says «Tu grupo aún no ha sido llamado», with their letter and the groups
+    called so far. «Dejar pasar igual», after its own confirmation, serves them as an exception, recorded with who
+    allowed it, when, the person and their group. Priority people get no bypass: priority only decides their group.
+    Before the first call of a service, the scanner serves everyone, as before.
+  - **The group is told**: a notification on the phones of that group's people (the boarding notices' Web Push, in
+    the phone's language: Spanish, English or Portuguese). «Mi inscripción» shows «Tu grupo ya puede pasar a comer»
+    on its own, refreshing while a meal is still to come. People without a bus can now turn the notices on in «Mis
+    comidas».
+  - **The audit**: every call, undo and exception is logged per service, and shown on the screen with the
+    exceptions' names.
 - **conference-manager 2.36.4: a friendlier price-rule builder.** In *Precios › Nueva regla*, the value of a condition
   now follows the field picked, from what this conference's data really has, instead of free text:
   - **Personas que escojo**: the roster, searched by name, document or locality and filtered by locality; tick one

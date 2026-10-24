@@ -969,7 +969,8 @@ describe('«Entrega»: «¿Entregar de todas formas?» shows its buttons on the 
         const ana = { id: 1, name: 'Ana Pérez', location: 'Bogotá', location_id: 2 };
         // Armed through the server render is not possible (a tap): the pieces it is made of.
         const card = fs.readFileSync(path.join(ADMIN, 'MealScanner.tsx'), 'utf8');
-        expect(card).toMatch(/const confirmText = canForce \? tx\('meals\.force\.confirm', '\{name\} no tiene derecho a \{service\}\. ¿Entregar de todas formas\? Quedará registrado como autorizado\.', \{ name: p\.name, service: svc \}\) : '';/);
+        // 2.36.5: the same armed question also answers «Dejar pasar igual» (a group not called yet) with its own sentence.
+        expect(card).toMatch(/const confirmText = !canForce \? '' : groupWait\s*\? tx\('meals\.group\.confirm', .*\s*: tx\('meals\.force\.confirm', '\{name\} no tiene derecho a \{service\}\. ¿Entregar de todas formas\? Quedará registrado como autorizado\.', \{ name: p\.name, service: svc \}\);/);
         expect(es('meals.force.confirm.ask', '')).toBe('¿Entregar de todas formas?');
         expect(es('meals.force.confirm.note', '')).toBe('Quedará registrado como autorizado.');
         // Not armed: «Entregar de todas formas» in the column under the title, as before.

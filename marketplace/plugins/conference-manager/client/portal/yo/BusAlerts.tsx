@@ -71,10 +71,131 @@ const noticeText = (n: BusNotice) => (n.kind === "boarding" ? "Empezó el embarq
 
 type PushState = "unsupported" | "ios-home" | "denied" | "off" | "on" | "busy";
 
-export function BusAlerts({ session, initial, pushKey, post, code }: { session: string; initial: Bus[]; pushKey: string | null; post: Post; code?: string }) {
-    const [buses, setBuses] = useState<Bus[]>(initial);
+/** The phone's language for the notices that have one (es / en / pt; Spanish otherwise). */
+const phoneLang = () => {
+    const l = typeof navigator !== "undefined" ? String(navigator.language || "").slice(0, 2).toLowerCase() : "";
+    return ["es", "en", "pt"].includes(l) ? l : "es";
+};
+const SWITCH_TEXT = {
+    bus: {
+        on: "Avisos del bus activados en este teléfono.",
+        intro: "Recibe un aviso en este teléfono cuando tu bus empiece a embarcar, cuando salga o si hay un mensaje, aunque tengas la página cerrada.",
+        button: "Activar avisos del bus",
+        done: "Listo: te avisaremos cuando tu bus empiece a embarcar.",
+        unsupported: "Este navegador no recibe avisos: mantén esta página abierta para ver el estado de tu bus.",
+    },
+    meal: {
+        on: "Avisos de comida activados en este teléfono.",
+        intro: "Recibe un aviso en este teléfono cuando llamen a tu grupo a comer, aunque tengas la página cerrada.",
+        button: "Activar avisos de comida",
+        done: "Listo: te avisaremos cuando llamen a tu grupo a comer.",
+        unsupported: "Este navegador no recibe avisos: mantén esta página abierta; aquí verás cuando llamen a tu grupo.",
+    },
+};
+
+/**
+ * The switch for the notices on this phone (Web Push): the bus notices (2.27.0) and, since 2.36.5, the meal call of
+ * the person's group — one subscription carries both. «Mi transporte» shows it for the bus; «Mis comidas» for the
+ * meals when the person has no bus.
+ */
+export function PushSwitch({ session, pushKey, post, code, what = "bus" }: { session: string; pushKey: string | null; post: Post; code?: string; what?: "bus" | "meal" }) {
+    const T = SWITCH_TEXT[what] || SWITCH_TEXT.bus;
     const [push, setPush] = useState<PushState>("busy");
     const [note, setNote] = useState("");
+    // Where the notices stand on this phone; a granted phone re-sends its subscription (the session may be new).
+    useEffect(() => {
+        let gone = false;
+        (async () => {
+            if (!pushKey) { setPush("unsupported"); return; }
+            if (!pushSupported()) { setPush(isIos() && !isStandalone() ? "ios-home" : "unsupported"); return; }
+            if (Notification.permission === "denied") { setPush("denied"); return; }
+            if (Notification.permission !== "granted") { setPush("off"); return; }
+            try {
+                const reg = await registration();
+                const sub = reg ? await reg.pushManager.getSubscription() : null;
+                if (sub) {
+                    const r = await post("push/subscribe", { session, subscription: sub.toJSON(), lang: phoneLang() });
+                    if (!gone) setPush(r.status === 200 ? "on" : "off");
+                } else if (!gone) setPush("off");
+            } catch { if (!gone) setPush("off"); }
+        })();
+        return () => { gone = true; };
+    }, [pushKey, post, session]);
+
+    // iPhone outside Safari: the page's own address (with the code) to open in Safari.
+    const selfUrl = code && typeof window !== "undefined" ? `${window.location.origin}/portal/conference/yo#c=${code}` : "";
+    const copySelf = async () => {
+        try { await navigator.clipboard.writeText(selfUrl); setNote("Enlace copiado: pégalo en Safari."); } catch { setNote(selfUrl); }
+    };
+    const enable = async () => {
+        if (!pushKey) return;
+        setPush("busy"); setNote("");
+        try {
+            const perm = await Notification.requestPermission();
+            if (perm !== "granted") { setPush(perm === "denied" ? "denied" : "off"); return; }
+            const reg = await registration();
+            if (!reg) { setPush("unsupported"); return; }
+            await navigator.serviceWorker.ready;
+            let sub = await reg.pushManager.getSubscription();
+            if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(pushKey) });
+            const r = await post("push/subscribe", { session, subscription: sub.toJSON(), lang: phoneLang() });
+            if (r.status === 200) { setPush("on"); setNote(T.done); }
+            else { setPush("off"); setNote(r.body.error || "No se pudieron activar los avisos."); }
+        } catch { setPush("off"); setNote("No se pudieron activar los avisos en este navegador."); }
+    };
+    const disable = async () => {
+        setPush("busy"); setNote("");
+        try {
+            const reg = await navigator.serviceWorker.getRegistration(SW_SCOPE);
+            const sub = reg ? await reg.pushManager.getSubscription() : null;
+            if (sub) {
+                await post("push/unsubscribe", { session, endpoint: sub.endpoint }).catch(() => undefined);
+                await sub.unsubscribe();
+            }
+        } catch { /* off anyway */ }
+        setPush("off");
+    };
+
+    return (
+        <div className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-3 space-y-2" data-push-state={push}>
+            {push === "on" ? (
+                <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-bold text-emerald-800"><i className="fa-solid fa-bell mr-1.5" aria-hidden="true"></i>{T.on}</p>
+                    <button type="button" onClick={disable} className="shrink-0 min-h-[36px] px-3 rounded-xl bg-white border-2 border-gray-200 text-gray-700 font-black text-[10px] uppercase tracking-widest">Desactivar</button>
+                </div>
+            ) : push === "off" || push === "busy" ? (
+                <>
+                    <p className="text-sm text-gray-700">{T.intro}</p>
+                    <button type="button" onClick={enable} disabled={push === "busy"} className="w-full min-h-[44px] rounded-2xl bg-gray-900 text-white font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-60" data-push-enable="">
+                        <i className={`fa-solid ${push === "busy" ? "fa-spinner animate-spin" : "fa-bell"}`} aria-hidden="true"></i>{T.button}
+                    </button>
+                </>
+            ) : push === "denied" ? (
+                <p className="text-sm text-gray-700"><i className="fa-solid fa-bell-slash mr-1.5 text-gray-400" aria-hidden="true"></i>Los avisos están bloqueados en este navegador. Para recibirlos, permite las notificaciones de este sitio en los ajustes del navegador.</p>
+            ) : push === "ios-home" ? (
+                <div className="space-y-2" data-push-ios="">
+                    <p className="text-sm text-gray-700"><i className="fa-solid fa-mobile-screen mr-1.5 text-gray-400" aria-hidden="true"></i>En iPhone los avisos llegan solo si agregas esta página a tu pantalla de inicio <span className="font-black">desde Safari</span> (otros navegadores, como Brave o Chrome, no siempre lo permiten):</p>
+                    <ol className="list-decimal pl-5 text-sm text-gray-700 space-y-0.5">
+                        <li>Copia el enlace y ábrelo en <span className="font-black">Safari</span>.</li>
+                        <li>Toca <span className="font-black">Compartir</span> › <span className="font-black">Agregar a inicio</span>.</li>
+                        <li>Abre «Mi inscripción» desde el ícono, escribe tu documento y toca «{T.button}».</li>
+                    </ol>
+                    {selfUrl && (
+                        <button type="button" onClick={copySelf} className="w-full min-h-[44px] rounded-2xl bg-white border-2 border-gray-200 text-gray-800 font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2" data-push-copy="">
+                            <i className="fa-solid fa-link" aria-hidden="true"></i>Copiar enlace para Safari
+                        </button>
+                    )}
+                </div>
+            ) : (
+                <p className="text-sm text-gray-600">{T.unsupported}</p>
+            )}
+            {note && <p className="text-xs font-bold text-gray-600" role="status">{note}</p>}
+        </div>
+    );
+}
+
+export function BusAlerts({ session, initial, pushKey, post, code }: { session: string; initial: Bus[]; pushKey: string | null; post: Post; code?: string }) {
+    const [buses, setBuses] = useState<Bus[]>(initial);
     const [fresh, setFresh] = useState<Set<number>>(new Set());
     const prev = useRef<Map<number, string>>(new Map(initial.map((b) => [b.id, b.status])));
 
@@ -111,59 +232,6 @@ export function BusAlerts({ session, initial, pushKey, post, code }: { session: 
         };
     }, [refresh]);
 
-    // Where the notices stand on this phone; a granted phone re-sends its subscription (the session may be new).
-    useEffect(() => {
-        let gone = false;
-        (async () => {
-            if (!pushKey) { setPush("unsupported"); return; }
-            if (!pushSupported()) { setPush(isIos() && !isStandalone() ? "ios-home" : "unsupported"); return; }
-            if (Notification.permission === "denied") { setPush("denied"); return; }
-            if (Notification.permission !== "granted") { setPush("off"); return; }
-            try {
-                const reg = await registration();
-                const sub = reg ? await reg.pushManager.getSubscription() : null;
-                if (sub) {
-                    const r = await post("push/subscribe", { session, subscription: sub.toJSON() });
-                    if (!gone) setPush(r.status === 200 ? "on" : "off");
-                } else if (!gone) setPush("off");
-            } catch { if (!gone) setPush("off"); }
-        })();
-        return () => { gone = true; };
-    }, [pushKey, post, session]);
-
-    // iPhone outside Safari: the page's own address (with the code) to open in Safari.
-    const selfUrl = code && typeof window !== "undefined" ? `${window.location.origin}/portal/conference/yo#c=${code}` : "";
-    const copySelf = async () => {
-        try { await navigator.clipboard.writeText(selfUrl); setNote("Enlace copiado: pégalo en Safari."); } catch { setNote(selfUrl); }
-    };
-    const enable = async () => {
-        if (!pushKey) return;
-        setPush("busy"); setNote("");
-        try {
-            const perm = await Notification.requestPermission();
-            if (perm !== "granted") { setPush(perm === "denied" ? "denied" : "off"); return; }
-            const reg = await registration();
-            if (!reg) { setPush("unsupported"); return; }
-            await navigator.serviceWorker.ready;
-            let sub = await reg.pushManager.getSubscription();
-            if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(pushKey) });
-            const r = await post("push/subscribe", { session, subscription: sub.toJSON() });
-            if (r.status === 200) { setPush("on"); setNote("Listo: te avisaremos cuando tu bus empiece a embarcar."); }
-            else { setPush("off"); setNote(r.body.error || "No se pudieron activar los avisos."); }
-        } catch { setPush("off"); setNote("No se pudieron activar los avisos en este navegador."); }
-    };
-    const disable = async () => {
-        setPush("busy"); setNote("");
-        try {
-            const reg = await navigator.serviceWorker.getRegistration(SW_SCOPE);
-            const sub = reg ? await reg.pushManager.getSubscription() : null;
-            if (sub) {
-                await post("push/unsubscribe", { session, endpoint: sub.endpoint }).catch(() => undefined);
-                await sub.unsubscribe();
-            }
-        } catch { /* off anyway */ }
-        setPush("off");
-    };
 
     if (!buses.length) return null;
     const section = "bg-white rounded-3xl border border-gray-100 shadow-sm p-5 sm:p-6 space-y-3";
@@ -212,40 +280,7 @@ export function BusAlerts({ session, initial, pushKey, post, code }: { session: 
                 })}
             </ul>
 
-            <div className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-3 space-y-2" data-push-state={push}>
-                {push === "on" ? (
-                    <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-bold text-emerald-800"><i className="fa-solid fa-bell mr-1.5" aria-hidden="true"></i>Avisos del bus activados en este teléfono.</p>
-                        <button type="button" onClick={disable} className="shrink-0 min-h-[36px] px-3 rounded-xl bg-white border-2 border-gray-200 text-gray-700 font-black text-[10px] uppercase tracking-widest">Desactivar</button>
-                    </div>
-                ) : push === "off" || push === "busy" ? (
-                    <>
-                        <p className="text-sm text-gray-700">Recibe un aviso en este teléfono cuando tu bus empiece a embarcar, cuando salga o si hay un mensaje, aunque tengas la página cerrada.</p>
-                        <button type="button" onClick={enable} disabled={push === "busy"} className="w-full min-h-[44px] rounded-2xl bg-gray-900 text-white font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-60" data-push-enable="">
-                            <i className={`fa-solid ${push === "busy" ? "fa-spinner animate-spin" : "fa-bell"}`} aria-hidden="true"></i>Activar avisos del bus
-                        </button>
-                    </>
-                ) : push === "denied" ? (
-                    <p className="text-sm text-gray-700"><i className="fa-solid fa-bell-slash mr-1.5 text-gray-400" aria-hidden="true"></i>Los avisos están bloqueados en este navegador. Para recibirlos, permite las notificaciones de este sitio en los ajustes del navegador.</p>
-                ) : push === "ios-home" ? (
-                    <div className="space-y-2" data-push-ios="">
-                        <p className="text-sm text-gray-700"><i className="fa-solid fa-mobile-screen mr-1.5 text-gray-400" aria-hidden="true"></i>En iPhone los avisos llegan solo si agregas esta página a tu pantalla de inicio <span className="font-black">desde Safari</span> (otros navegadores, como Brave o Chrome, no siempre lo permiten):</p>
-                        <ol className="list-decimal pl-5 text-sm text-gray-700 space-y-0.5">
-                            <li>Copia el enlace y ábrelo en <span className="font-black">Safari</span>.</li>
-                            <li>Toca <span className="font-black">Compartir</span> › <span className="font-black">Agregar a inicio</span>.</li>
-                            <li>Abre «Mi inscripción» desde el ícono, escribe tu documento y toca «Activar avisos del bus».</li>
-                        </ol>
-                        {selfUrl && (
-                            <button type="button" onClick={copySelf} className="w-full min-h-[44px] rounded-2xl bg-white border-2 border-gray-200 text-gray-800 font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2" data-push-copy="">
-                                <i className="fa-solid fa-link" aria-hidden="true"></i>Copiar enlace para Safari
-                            </button>
-                        )}
-                    </div>
-                ) : (
-                    <p className="text-sm text-gray-600">Este navegador no recibe avisos: mantén esta página abierta para ver el estado de tu bus.</p>
-                )}
-                {note && <p className="text-xs font-bold text-gray-600" role="status">{note}</p>}
-            </div>
+            <PushSwitch session={session} pushKey={pushKey} post={post} code={code} what="bus" />
         </section>
     );
 }

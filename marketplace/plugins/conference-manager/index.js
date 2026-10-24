@@ -42,7 +42,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.4',
+    version: '2.36.5',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -5138,6 +5138,8 @@ exports.init = async function (wordjs) {
     //   { result: 'already', ins, prior }        a delivery exists (whoever recorded it)
     //   { result: 'cancelled', ins }
     //   { result: 'ready' | 'not_entitled', ins, ent, viaCode }
+    //   { result: 'group_not_called', ins, ent, viaCode, gate } (2.36.5) entitled, but this service is calling the
+    //     groups and theirs has not been called: not served unless someone allows it (allow_group on /meals/deliver)
     async function decideMealScan(svc, body) {
         const hasCode = body.code !== undefined && body.code !== null;
         const hasId = body.inscription_id !== undefined && body.inscription_id !== null && body.inscription_id !== '';
@@ -5151,7 +5153,12 @@ exports.init = async function (wordjs) {
         if (prior) return { result: 'already', ins, prior };
         if (isCancelled(ins.status)) return { result: 'cancelled', ins };
         const ent = await entitlementOf(ins, svc.id);
-        return { result: ent.entitled ? 'ready' : 'not_entitled', ins, ent, viaCode: hasCode };
+        if (!ent.entitled) return { result: 'not_entitled', ins, ent, viaCode: hasCode };
+        // The owner's rule (2.36.5): once a group has been called on this service, the others wait — priority people
+        // too (priority only decides which group they are in).
+        const gate = await mealPriority.callGate(svc.conference_id, svc.id, ins.id);
+        if (gate) return { result: 'group_not_called', ins, ent, viaCode: hasCode, gate };
+        return { result: 'ready', ins, ent, viaCode: hasCode };
     }
     // The service as the card names it (day, meal, label, window).
     const scanServiceOf = (svc) => ({ id: svc.id, service_date: svc.service_date, meal: svc.meal, label: svc.label || null, start_time: svc.start_time || null, end_time: svc.end_time || null });
@@ -5167,6 +5174,7 @@ exports.init = async function (wordjs) {
         if (mealGroup) person.meal_group = mealGroup;
         if (d.result === 'already') return { ...base, person, ...deliveryFields(d.prior) };
         if (d.result === 'cancelled') return { ...base, person };
+        if (d.result === 'group_not_called') return { ...base, person, source: d.ent.source, group: d.gate.group, called_groups: d.gate.called };
         return { ...base, person, source: d.ent.source };
     }
     const SERVICE_GONE = 'Servicio de comida no encontrado.';
@@ -5190,7 +5198,7 @@ exports.init = async function (wordjs) {
             const answer = await scanAnswer(svc, d, perms);
             // A service deleted meanwhile takes its plan with it (after the service row): still there now =
             // the entitlement read above was intact.
-            if ((d.result === 'ready' || d.result === 'not_entitled') && !(await getService(svc.id))) return res.status(404).json({ error: SERVICE_GONE });
+            if ((d.result === 'ready' || d.result === 'not_entitled' || d.result === 'group_not_called') && !(await getService(svc.id))) return res.status(404).json({ error: SERVICE_GONE });
             res.json(answer);
         } catch (e) { sendError(res, e); }
     });
@@ -5223,9 +5231,15 @@ exports.init = async function (wordjs) {
             if (!svc) return res.status(404).json({ error: SERVICE_GONE });
             const d = await decideMealScan(svc, body);
             const answer = await scanAnswer(svc, d, perms);
-            if (d.result !== 'ready' && d.result !== 'not_entitled') return res.json(answer);
+            if (d.result !== 'ready' && d.result !== 'not_entitled' && d.result !== 'group_not_called') return res.json(answer);
             const ins = d.ins;
             let method = d.viaCode ? 'scan' : 'manual';
+            // 2.36.5: their group has not been called — served only when someone allows it («Dejar pasar igual»),
+            // and then logged as an exception (who, when, the person, their group).
+            if (d.result === 'group_not_called') {
+                if (body.allow_group !== true) return res.json(answer);
+                method = 'group_exception';
+            }
             if (d.result === 'not_entitled') {
                 if (body.force !== true) {
                     // A service deleted while this scan ran takes its plan rows with it (after the service
@@ -5258,6 +5272,7 @@ exports.init = async function (wordjs) {
                 return parentGone(gone);
             }
             const row = (await deliveryOf(svc.id, ins.id)) || { id: r && r.lastID, delivered_at: stamp, delivered_by: actor, method, note };
+            if (method === 'group_exception') await mealPriority.logException(Number(svc.conference_id), svc.id, ins.id, d.gate.group, actor);
             return verdict('delivered', { person, ...deliveryFields(row) });
         } catch (e) { sendError(res, e); }
     });
@@ -5860,6 +5875,8 @@ exports.init = async function (wordjs) {
     mealPriority.install({
         http, allow, allowAny, hasLevel, positiveInt, sendError, httpError, actorOf, runBatched, isFieldColumn,
         entitlementFrom, health, withPriorityLock,
+        // 2.36.5: a called group's phones (the boarding notices' Web Push).
+        pushToPeople: (ids, payloadFor) => push.pushToPeople(ids, payloadFor),
         // Names for the groups list: the meals section's own (name fallback included), live location.
         peopleByIds: async (cid, ids) => {
             const cols = await nameFallbackColumns(cid);

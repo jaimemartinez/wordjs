@@ -64,12 +64,14 @@ import { TAB_STRIP_CSS } from "../lib/phoneLayout";
 import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStripOverflow";
 import { usePerms, ReadOnlyNotice } from "./perms";
 import MealTurnsTab from "./MealTurnsTab";
+import MealCallsTab from "./MealCallsTab";
 import { DateField } from "../lib/DateField";
 import { Select } from "../lib/Select";
 
-type Tab = 'plan' | 'people' | 'turns' | 'delivery' | 'report';
+type Tab = 'plan' | 'people' | 'turns' | 'calls' | 'delivery' | 'report';
 // «Turnos» (2.32.0): the meal groups A–F and each service's call times (MealTurnsTab.tsx).
-const TABS: Tab[] = ['plan', 'people', 'turns', 'delivery', 'report'];
+// «Llamar grupos» (2.36.5): the live calling of a service's groups (MealCallsTab.tsx) — the delivery team too.
+const TABS: Tab[] = ['plan', 'people', 'turns', 'calls', 'delivery', 'report'];
 const TAB_KEY = 'conference-manager:meals.tab';
 
 const inputCls = 'w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm';
@@ -116,7 +118,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
     const canPlan = perms.can('meals');
     const canDeliver = perms.can('meals_delivery', 'manage');
     // The sub-tabs this role may open, in order; a saved tab it may not open falls back to the first.
-    const allowedTabs = TABS.filter((k) => (k === 'delivery' ? canDeliver : canPlan));
+    const allowedTabs = TABS.filter((k) => (k === 'delivery' ? canDeliver : k === 'calls' ? canPlan || canDeliver : canPlan));
     const [tab, setTabState] = useState<Tab>(() => {
         try { const v = localStorage.getItem(TAB_KEY) as Tab; return TABS.includes(v) ? v : 'plan'; } catch { return 'plan'; }
     });
@@ -181,6 +183,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
         plan: [tx('meals.tab.plan', 'Plan'), 'fa-table-cells'],
         people: [tx('meals.tab.people', 'Por persona'), 'fa-user'],
         turns: [tx('meals.tab.turns', 'Turnos'), 'fa-people-line'],
+        calls: [tx('meals.tab.calls', 'Llamar grupos'), 'fa-bullhorn'],
         delivery: [tx('meals.tab.delivery', 'Entrega'), 'fa-qrcode'],
         report: [tx('meals.tab.report', 'Reporte'), 'fa-clipboard-list'],
     };
@@ -223,11 +226,12 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
                     </button>
                 ))}
             </div>
-            {shownTab !== 'delivery' && <ReadOnlyNotice section="meals" alsoManage={shownTab === 'people' ? ['meals_delivery'] : []} />}
+            {shownTab !== 'delivery' && <ReadOnlyNotice section="meals" alsoManage={shownTab === 'people' || shownTab === 'calls' ? ['meals_delivery'] : []} />}
 
             {shownTab === 'plan' && canPlan && <PlanTab conferenceId={conferenceId} conference={conference} data={data} services={services} reload={reload} />}
             {shownTab === 'people' && canPlan && <PeopleTab conferenceId={conferenceId} data={data} services={services} reload={reload} />}
             {shownTab === 'turns' && canPlan && <MealTurnsTab conferenceId={conferenceId} />}
+            {shownTab === 'calls' && (canPlan || canDeliver) && <MealCallsTab conferenceId={conferenceId} services={services} serviceId={serviceId} setServiceId={chooseService} />}
             {shownTab === 'delivery' && canDeliver && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={openScanner} changed={deliveriesRev} />}
             {shownTab === 'report' && canPlan && <ReportTab services={services} serviceId={serviceId} setServiceId={chooseService} slug={slug} />}
 
@@ -1007,7 +1011,8 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     const force = (o: any) => {
         const p = o.verdict?.person;
         if (!p) return;
-        run({ inscription_id: p.id, force: true, note: tx('meals.force.note.kitchen', 'Autorizado en la entrega') });
+        if (o.result === 'group_not_called') run({ inscription_id: p.id, allow_group: true, note: tx('meals.group.note.kitchen', 'Dejado pasar antes de su grupo en la entrega') });
+        else run({ inscription_id: p.id, force: true, note: tx('meals.force.note.kitchen', 'Autorizado en la entrega') });
     };
     const undo = async (deliveryId: number) => {
         setUndoAsk(null);
@@ -1048,6 +1053,7 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                                 <ConfirmCard card={confirm.card} service={service} language={language} delivering={confirm.delivering} waiting={confirm.waiting} keyHints
                                     onDeliver={() => flow.deliver()}
                                     onAuthorize={() => flow.authorize(tx('meals.force.note.kitchen', 'Autorizado en la entrega'))}
+                                    onAllowGroup={() => flow.allowGroup(tx('meals.group.note.kitchen', 'Dejado pasar antes de su grupo en la entrega'))}
                                     onCancel={() => flow.cancel()}
                                     onClose={() => flow.close()} />
                             </div>
@@ -1057,7 +1063,7 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                                     // fold): the status, the meal, the name and «Deshacer» on screen at once.
                                     ? <div data-verdict-fit="" style={{ display: 'flex', flexDirection: 'column', maxHeight: `var(${REVEAL_FIT_VAR}, none)` }}>
                                         <VerdictCard outcome={outcome} service={service} busy={busy || confirm.delivering} language={language} armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
-                                            onForce={outcome.result === 'not_entitled' ? force : undefined} onUndo={undo} onDismiss={() => { setOutcome(null); flow.close(); focusInput(); }} />
+                                            onForce={outcome.result === 'not_entitled' || outcome.result === 'group_not_called' ? force : undefined} onUndo={undo} onDismiss={() => { setOutcome(null); flow.close(); focusInput(); }} />
                                     </div>
                                     : <div className="h-full rounded-3xl border-2 border-dashed border-gray-100 flex items-center justify-center text-sm font-bold text-gray-400 py-8"><i className="fa-solid fa-qrcode mr-2" aria-hidden="true"></i>{tx('meals.delivery.waiting', 'Esperando un código…')}</div>}
                         {/* The queue waits behind a delivery's result: say so, and how to go on. */}

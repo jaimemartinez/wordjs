@@ -5,6 +5,8 @@
  * (POST /meals/check, read-only) and opens a card with the meal and the person's configured data:
  *   - 'ready'         → «Entregar» (POST /meals/deliver with the SAME body) or «Cancelar»;
  *   - 'not_entitled'  → «Entregar sin derecho (autorizar)» (deliver with force:true) or «Cancelar»;
+ *   - 'group_not_called' (2.36.5) → «Tu grupo aún no ha sido llamado»: «Dejar pasar igual» (after its own in-card
+ *     confirmation; deliver with allow_group:true, logged as an exception) or «Cancelar»;
  *   - anything else   → information + «Cerrar».
  * «Cancelar» records NOTHING: the person stays pending, and the next scan of the same badge opens the card
  * again. Only the server's 'delivered' verdict ever reads «Entregado».
@@ -24,7 +26,7 @@
  */
 import { normalizeCode } from './meals';
 
-export type CheckResult = 'ready' | 'not_entitled' | 'already' | 'cancelled' | 'unknown' | 'other_conference';
+export type CheckResult = 'ready' | 'not_entitled' | 'group_not_called' | 'already' | 'cancelled' | 'unknown' | 'other_conference';
 /** A card's result: the server's verdict, or a client-side outcome of the check request. */
 export type CardResult = CheckResult | 'offline' | 'no_service' | 'error';
 export type ScanBody = { code?: string; inscription_id?: number };
@@ -33,7 +35,7 @@ export type DisplayField = { key: string; label: string; value: string | null; h
 export type AvailableField = { key: string; label: string; builtin: boolean; type?: string };
 
 /** A card that waits for a decision («Entregar» / «Cancelar»). Everything else only informs. */
-export const isDecision = (r: CardResult | null | undefined): boolean => r === 'ready' || r === 'not_entitled';
+export const isDecision = (r: CardResult | null | undefined): boolean => r === 'ready' || r === 'not_entitled' || r === 'group_not_called';
 
 // ── Per-device preference («Confirmar antes de entregar», default ON) ─────────────────────────────────
 export const CONFIRM_PREF_KEY = 'conference-manager:meals.confirm';
@@ -87,7 +89,7 @@ export function cardKeyAction(key: string, result: CardResult | 'held' | null | 
     if (key === 'Escape') return isDecision(result as CardResult) ? 'cancel' : 'close';
     if (key !== 'Enter') return null;
     if (String(inputText ?? '').trim()) return null;
-    if (result === 'not_entitled') return null;
+    if (result === 'not_entitled' || result === 'group_not_called') return null;
     if (ctx) {
         if (ctx.lastKeyAt != null && ctx.now - ctx.lastKeyAt < ENTER_BURST_MS) return null;
         if (ctx.shownAt != null && ctx.now - ctx.shownAt < ENTER_ARM_MS) return null;
@@ -138,7 +140,7 @@ export type ConfirmFlowOptions = {
     /** POST /meals/check — must resolve (never reject) to the card's result. */
     check: (serviceId: number, body: ScanBody) => Promise<CheckAnswer>;
     /** POST /meals/deliver — resolves to the delivery outcome (any shape; handed to onResult). */
-    deliver: (serviceId: number, body: ScanBody & { force?: boolean; note?: string }) => Promise<any>;
+    deliver: (serviceId: number, body: ScanBody & { force?: boolean; allow_group?: boolean; note?: string }) => Promise<any>;
     onChange?: (s: ConfirmState) => void;
     /** A check answered (sound, service sheet…). */
     onCheck?: (card: ConfirmCard) => void;
@@ -214,7 +216,7 @@ export function createConfirmFlow(opts: ConfirmFlowOptions) {
                 else next();     // an informative card never holds the line
             });
     };
-    const runDeliver = (extra: { force?: boolean; note?: string }) => {
+    const runDeliver = (extra: { force?: boolean; allow_group?: boolean; note?: string }) => {
         const c = card!;
         const my = gen;
         delivering = true;
@@ -282,6 +284,12 @@ export function createConfirmFlow(opts: ConfirmFlowOptions) {
         authorize(note?: string): boolean {
             if (disposed || busy() || !card || card.result !== 'not_entitled') return false;
             runDeliver({ force: true, ...(note ? { note } : {}) });
+            return true;
+        },
+        /** «Dejar pasar igual» (2.36.5) — only a 'group_not_called' card: served as an exception to the group calling. */
+        allowGroup(note?: string): boolean {
+            if (disposed || busy() || !card || card.result !== 'group_not_called') return false;
+            runDeliver({ allow_group: true, ...(note ? { note } : {}) });
             return true;
         },
         /** «Cancelar»: records NOTHING — the card closes, the person stays pending. */

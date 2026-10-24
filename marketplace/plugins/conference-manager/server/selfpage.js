@@ -219,12 +219,15 @@ function createSelfPage(base) {
             for (const m of meals.pending) {
                 const s = mg.services.find(x => x.date === m.date && x.meal === m.meal);
                 if (s && s.start) { m.turn_start = s.start; m.turn_end = s.end; }
+                // 2.36.5: their group has been called on this meal — «Tu grupo ya puede pasar a comer».
+                if (s && s.called_at) m.called_at = s.called_at;
             }
         }
         const badge = await D.badges.selfBadge(ins, conf, cfg);
         // 2.27.0: their buses, each with its boarding state and last notices, and the key to turn notices on.
         const transport = D.transportOf ? await D.transportOf(ins) : [];
-        const pushKey = transport.length && D.pushKey ? await D.pushKey() : null;
+        // 2.36.5: also with a meal group — a called group is told on the phone too.
+        const pushKey = (transport.length || mg) && D.pushKey ? await D.pushKey() : null;
         return {
             name: person.name || '',
             conference: conf.name,

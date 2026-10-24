@@ -110,7 +110,8 @@ export const mealLine = (tx, s, language?: string) =>
     s ? `${mealName(tx, s.meal)}${s.label ? ` — ${s.label}` : ''} · ${dayLabel(s.service_date, language)}` : '';
 /** How a delivery was recorded: «Escaneo» (a code), «Manual» (picked by name), «Sin derecho (autorizado)». */
 export const methodLabel = (tx, m) =>
-    m === 'scan' ? tx('meals.method.scan', 'Escaneo') : m === 'manual' ? tx('meals.method.manual', 'Manual') : m === 'override' ? tx('meals.method.override', 'Sin derecho (autorizado)') : (m || '');
+    m === 'scan' ? tx('meals.method.scan', 'Escaneo') : m === 'manual' ? tx('meals.method.manual', 'Manual') : m === 'override' ? tx('meals.method.override', 'Sin derecho (autorizado)')
+        : m === 'group_exception' ? tx('meals.method.group_exception', 'Antes de su grupo (excepción)') : (m || '');
 
 /**
  * «{served} de {entitled} entregados» (+ « · +{n} sin derecho»). `delivered` from the server also counts
@@ -130,7 +131,7 @@ export const isOffline = (e: any) => !e?.status || [502, 503, 504].includes(Numb
 
 // ── Delivery ─────────────────────────────────────────────────────────────────────────────────────────
 export type Outcome = {
-    result: 'delivered' | 'already' | 'not_entitled' | 'cancelled' | 'unknown' | 'other_conference' | 'offline' | 'no_service' | 'error';
+    result: 'delivered' | 'already' | 'not_entitled' | 'group_not_called' | 'cancelled' | 'unknown' | 'other_conference' | 'offline' | 'no_service' | 'error';
     verdict?: any;
     message?: string;
     /** What was scanned/typed (shown on «Código no encontrado»). */
@@ -144,7 +145,7 @@ export type Outcome = {
 
 let outcomeSeq = 0;
 export function useMealDelivery() {
-    return useCallback(async (body: { service_id: number; code?: string; inscription_id?: number; force?: boolean; note?: string }): Promise<Outcome> => {
+    return useCallback(async (body: { service_id: number; code?: string; inscription_id?: number; force?: boolean; allow_group?: boolean; note?: string }): Promise<Outcome> => {
         const base = { seq: ++outcomeSeq, at: Date.now(), serviceId: body.service_id, code: body.code ? normalizeCode(body.code) || String(body.code).trim() : undefined };
         try {
             const v = await conferenceApi.deliverMeal(body);
@@ -673,6 +674,7 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
         r === 'delivered' ? tx('meals.verdict.delivered', 'Entregado')
             : r === 'already' ? tx('meals.verdict.already', 'Ya recibió')
                 : r === 'not_entitled' ? tx('meals.verdict.not_entitled.short', 'Sin derecho')
+                    : r === 'group_not_called' ? tx('meals.verdict.group_not_called', 'Tu grupo aún no ha sido llamado')
                     : r === 'cancelled' ? tx('meals.verdict.cancelled', 'Inscripción cancelada')
                         : r === 'unknown' ? tx('meals.verdict.unknown', 'Código no encontrado')
                             : r === 'other_conference' ? tx('meals.verdict.other_conference', 'Ese código es de otra conferencia')
@@ -683,16 +685,21 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
     // short on both cards; 2.17.0 live round: «Entrega»'s «Sin derecho a Jue 08/10 · Almuerzo — …» took 8 lines,
     // 240 px, in the 144 px beside the icon at 320×460): the service the server answered for, else the selected one.
     const ms = v.service || service || null;
-    const what = (r === 'delivered' || r === 'already' || r === 'not_entitled') && ms ? mealLine(tx, ms, language) : '';
-    const icon = r === 'delivered' ? 'fa-circle-check' : r === 'not_entitled' ? 'fa-triangle-exclamation' : r === 'unknown' || r === 'other_conference' ? 'fa-circle-question' : r === 'offline' ? 'fa-wifi' : 'fa-circle-xmark';
+    const what = (r === 'delivered' || r === 'already' || r === 'not_entitled' || r === 'group_not_called') && ms ? mealLine(tx, ms, language) : '';
+    const icon = r === 'delivered' ? 'fa-circle-check' : r === 'not_entitled' ? 'fa-triangle-exclamation' : r === 'group_not_called' ? 'fa-hand' : r === 'unknown' || r === 'other_conference' ? 'fa-circle-question' : r === 'offline' ? 'fa-wifi' : 'fa-circle-xmark';
     const loc = p ? (p.location_id == null ? tx('meals.no.location', 'Sin localidad') : (p.location || '')) : '';
-    const canForce = r === 'not_entitled' && onForce && p;
+    // 2.36.5: their group has not been called — «Dejar pasar igual», after the same in-card confirmation.
+    const groupWait = r === 'group_not_called';
+    const canForce = (r === 'not_entitled' || groupWait) && onForce && p;
     const canUndo = r === 'delivered' && onUndo && v.delivery_id;
-    const confirmText = canForce ? tx('meals.force.confirm', '{name} no tiene derecho a {service}. ¿Entregar de todas formas? Quedará registrado como autorizado.', { name: p.name, service: svc }) : '';
+    const calledText = groupWait ? (Array.isArray(v.called_groups) && v.called_groups.length ? v.called_groups.join(', ') : '—') : '';
+    const confirmText = !canForce ? '' : groupWait
+        ? tx('meals.group.confirm', '{name} es del grupo {g}, que aún no ha sido llamado. ¿Dejar pasar igual? Quedará registrado como excepción.', { name: p.name, g: v.group || p.meal_group || '' })
+        : tx('meals.force.confirm', '{name} no tiene derecho a {service}. ¿Entregar de todas formas? Quedará registrado como autorizado.', { name: p.name, service: svc });
     const yes = (style?: React.CSSProperties, cls = 'px-4 py-3 rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase tracking-widest disabled:opacity-50') => (
         <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); setArmed(false); onForce(outcome); }}
             className={cls} style={style} data-force-confirm="">
-            <i className="fa-solid fa-check mr-1.5" aria-hidden="true"></i>{tx('meals.force.yes', 'Sí, entregar')}
+            <i className="fa-solid fa-check mr-1.5" aria-hidden="true"></i>{groupWait ? tx('meals.group.yes', 'Sí, dejar pasar') : tx('meals.force.yes', 'Sí, entregar')}
         </button>
     );
     const no = (style?: React.CSSProperties, cls = 'px-4 py-3 rounded-2xl bg-white/60 text-amber-950 font-black text-xs uppercase tracking-widest') => (
@@ -704,7 +711,7 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
     const forceBtn = (
         <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); if (tapOk()) setArmed(true); }}
             className="px-4 py-3 rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase tracking-widest disabled:opacity-50" style={VERDICT_FIT.target} data-force="">
-            <i className="fa-solid fa-hand mr-1.5" aria-hidden="true"></i>{tx('meals.force', 'Entregar de todas formas')}
+            <i className="fa-solid fa-hand mr-1.5" aria-hidden="true"></i>{groupWait ? tx('meals.group.allow', 'Dejar pasar igual') : tx('meals.force', 'Entregar de todas formas')}
         </button>
     );
     const undoBtn = (
@@ -738,9 +745,12 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
         </div>
         {mealOpen && meal.cap != null && <MoreCue attr="data-verdict-meal-more" atEnd={meal.atEnd} style={VERDICT_MORE_STYLE} />}
     </> : null);
-    const method = r === 'delivered' && v.method === 'override' && <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90" data-verdict-method="override">{tx('meals.method.override', 'Sin derecho (autorizado)')}</div>;
-    // 2.32.0: the person's meal group («Turnos de comida» on) — shown, never enforced.
-    const groupEl = p && p.meal_group ? <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90" data-verdict-group={p.meal_group}>{tx('meals.group', 'Grupo {g}', { g: p.meal_group })}</div> : null;
+    const method = r === 'delivered' && (v.method === 'override' || v.method === 'group_exception') && <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90" data-verdict-method={v.method}>{methodLabel(tx, v.method)}</div>;
+    // 2.32.0: the person's meal group («Turnos de comida» on). 2.36.5: while the service calls the groups, an uncalled
+    // one waits — the card says which groups have been called.
+    const groupEl = p && p.meal_group ? <div className="text-xs font-black uppercase tracking-widest mt-1 opacity-90" data-verdict-group={p.meal_group}>
+        {groupWait ? tx('meals.group.waiting', 'Grupo {g} · llamados: {called}', { g: p.meal_group, called: calledText }) : tx('meals.group', 'Grupo {g}', { g: p.meal_group })}
+    </div> : null;
     const F = large ? VERDICT_FIT : VERDICT_BOX;
     const body = (
         <div style={F.body} data-verdict-body="">
@@ -860,9 +870,10 @@ const CONFIRM_TONE = {
     not_entitled: { band: '#b45309', chip: '#fef3c7', text: '#92400e', icon: 'fa-triangle-exclamation' },
     bad: { band: '#be123c', chip: '#ffe4e6', text: '#9f1239', icon: 'fa-circle-xmark' },
     muted: { band: '#374151', chip: '#f3f4f6', text: '#1f2937', icon: 'fa-circle-question' },
+    group: { band: '#be123c', chip: '#ffe4e6', text: '#9f1239', icon: 'fa-hand' },
 };
 export const confirmTone = (r: string) =>
-    (r === 'ready' ? 'ready' : r === 'not_entitled' ? 'not_entitled' : r === 'already' || r === 'cancelled' || r === 'no_service' || r === 'error' ? 'bad' : 'muted');
+    (r === 'ready' ? 'ready' : r === 'not_entitled' ? 'not_entitled' : r === 'group_not_called' ? 'group' : r === 'already' || r === 'cancelled' || r === 'no_service' || r === 'error' ? 'bad' : 'muted');
 
 /**
  * The phone scanner's card: the meal under the day takes at most three lines (a 120-character label took ten
@@ -1037,7 +1048,10 @@ export function AuthorizeLabel({ text, shortText, delivering = false, short = fa
  * SCANNER_ROOT_STYLE). Its buttons never take the focus from «Entrega»'s scan input. `keyHints`: say what
  * Enter / Esc do (USB scanners).
  */
-export function ConfirmCard({ card, service, language, delivering = false, waiting = 0, large = false, keyHints = false, armMs = TAP_ARM_MS, onDeliver, onAuthorize, onCancel, onClose }: any) {
+export function ConfirmCard({ card, service, language, delivering = false, waiting = 0, large = false, keyHints = false, armMs = TAP_ARM_MS, onDeliver, onAuthorize, onAllowGroup, onCancel, onClose }: any) {
+    // 2.36.5: «Dejar pasar igual» asks once more, in the card (the shared dialog sits under the scanner's overlay).
+    const [askAllow, setAskAllow] = useState(false);
+    useEffect(() => { setAskAllow(false); }, [card?.seq]);
     const tx = useTx();
     const txn = makeTxn(tx);
     const L = displayLabelsOf(tx);
@@ -1069,6 +1083,7 @@ export function ConfirmCard({ card, service, language, delivering = false, waiti
     const status =
         r === 'ready' ? tx('meals.confirm.ready', 'Puede recibir esta comida')
             : r === 'not_entitled' ? tx('meals.confirm.not_entitled', 'Sin derecho a esta comida')
+                : r === 'group_not_called' ? tx('meals.verdict.group_not_called', 'Tu grupo aún no ha sido llamado')
                 : r === 'already' ? tx('meals.verdict.already', 'Ya recibió')
                     : r === 'cancelled' ? tx('meals.verdict.cancelled', 'Inscripción cancelada')
                         : r === 'unknown' ? tx('meals.verdict.unknown', 'Código no encontrado')
@@ -1076,7 +1091,9 @@ export function ConfirmCard({ card, service, language, delivering = false, waiti
                                 : r === 'offline' ? tx('meals.verdict.offline', 'Sin conexión — vuelve a escanear')
                                     : r === 'no_service' ? tx('meals.verdict.no_service', 'Servicio no encontrado: elige otro')
                                         : (card.message || tx('meals.verdict.error', 'No se pudo registrar'));
-    const why = r !== 'not_entitled' ? ''
+    const why = r === 'group_not_called'
+        ? tx('meals.group.why', 'Es del grupo {g}. Llamados hasta ahora: {called}.', { g: v.group || (p && p.meal_group) || '', called: Array.isArray(v.called_groups) && v.called_groups.length ? v.called_groups.join(', ') : '—' })
+        : r !== 'not_entitled' ? ''
         : v.source === 'exclude' ? tx('meals.confirm.not_entitled.exclude', 'Se la quitaron a esta persona') : tx('meals.confirm.not_entitled.none', 'No está en el plan de su localidad');
     const btn = (background: string, color: string, flex: string): React.CSSProperties => ({
         flex, minHeight: large ? 60 : 52, padding: '10px 14px', borderRadius: 16, border: 0, background, color, cursor: 'pointer',
@@ -1142,7 +1159,19 @@ export function ConfirmCard({ card, service, language, delivering = false, waiti
                     <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onDeliver)} data-confirm-deliver="" style={{ ...btn('#059669', '#fff', '2 1 0%'), ...(delivering ? BUTTON_SHRINKS : null) }}>
                         <i className="fa-solid fa-check" aria-hidden="true"></i>{delivering ? <span style={BUTTON_LABEL_FIT}>{tx('meals.confirm.delivering', 'Registrando…')}</span> : tx('meals.confirm.deliver', 'Entregar')}
                     </button>
-                </> : r === 'not_entitled' ? <>
+                </> : r === 'group_not_called' ? (askAllow ? <>
+                    <div data-confirm-allow-ask="" style={{ flexBasis: '100%', fontSize: 14, fontWeight: 800, color: tone.text }}>{tx('meals.group.confirm.short', '¿Dejar pasar igual? Quedará registrado como excepción.')}</div>
+                    <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={press(() => setAskAllow(false))} data-confirm-allow-no="" style={btn('#f3f4f6', '#111827', '1 1 0%')}>{tx('cancel', 'Cancelar')}</button>
+                    <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onAllowGroup)} data-confirm-allow-yes="" style={{ ...btn('#be123c', '#fff', '2 1 0%'), ...(delivering ? BUTTON_SHRINKS : null) }}>
+                        <i className="fa-solid fa-check" aria-hidden="true"></i>{delivering ? <span style={BUTTON_LABEL_FIT}>{tx('meals.confirm.delivering', 'Registrando…')}</span> : tx('meals.group.yes', 'Sí, dejar pasar')}
+                    </button>
+                </> : <>
+                    <button type="button" disabled={delivering || !onAllowGroup} onMouseDown={keepFocus} onClick={decide(() => setAskAllow(true))} data-confirm-allow=""
+                        style={{ ...btn('#fff', '#9f1239', '1 1 0%'), border: '2px solid #be123c', fontSize: large ? 15 : 14 }}>
+                        <i className="fa-solid fa-hand" aria-hidden="true"></i>{tx('meals.group.allow', 'Dejar pasar igual')}
+                    </button>
+                    {cancelBtn(true)}
+                </>) : r === 'not_entitled' ? <>
                     <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onAuthorize)} data-confirm-authorize="" data-long-label=""
                         style={{ ...btn('#fff', '#92400e', '1 1 0%'), border: '2px solid #b45309', fontSize: large ? 15 : 14, flexWrap: 'wrap', textAlign: 'center', ...(delivering ? BUTTON_SHRINKS : null) }} aria-label={authorize}>
                         <i className="fa-solid fa-hand" aria-hidden="true"></i>
@@ -1825,7 +1854,8 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     const force = async (o: Outcome) => {
         const p = o.verdict?.person;
         if (!p) return;
-        await submit({ inscription_id: p.id, force: true, note: tx('meals.force.note', 'Autorizado en el escáner') });
+        if (o.result === 'group_not_called') await submit({ inscription_id: p.id, allow_group: true, note: tx('meals.group.note', 'Dejado pasar antes de su grupo en el escáner') });
+        else await submit({ inscription_id: p.id, force: true, note: tx('meals.force.note', 'Autorizado en el escáner') });
     };
     // No gate reset: the badge is usually still in view, and the undone delivery must not come back at
     // once. The sliding gate lets it through only after it has been out of view for 3 s.
@@ -1993,6 +2023,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                                 ? <ConfirmCard card={confirm.card} service={service} language={language} large delivering={confirm.delivering}
                                     onDeliver={() => flow.deliver()}
                                     onAuthorize={() => flow.authorize(tx('meals.force.note', 'Autorizado en el escáner'))}
+                                    onAllowGroup={() => flow.allowGroup(tx('meals.group.note', 'Dejado pasar antes de su grupo en el escáner'))}
                                     onCancel={() => flow.cancel()}
                                     onClose={() => flow.close()} />
                                 : <CheckingCard />}
@@ -2008,7 +2039,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                         <div ref={cardBoxRef} style={{ pointerEvents: 'auto', minHeight: 0, maxHeight: '100%', display: 'flex', flexDirection: 'column' }}>
                             <VerdictCard outcome={outcome} service={service} large busy={busy} language={language}
                                 armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
-                                onForce={outcome.result === 'not_entitled' ? force : undefined}
+                                onForce={outcome.result === 'not_entitled' || outcome.result === 'group_not_called' ? force : undefined}
                                 onArmedChange={(a) => { armedRef.current = !!a; }}
                                 onUndo={undo}
                                 onDismiss={() => setOutcome(null)} />

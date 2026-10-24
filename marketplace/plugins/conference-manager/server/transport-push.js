@@ -143,6 +143,8 @@ function createPush(base) {
         await createUniqueIndex(`${P}uidx_push_subs_endpoint`, T.pushSubs, 'endpoint_hash');
         await createIndex(`${P}idx_push_subs_ins`, T.pushSubs, 'inscription_id');
         await createIndex(`${P}idx_push_subs_session`, T.pushSubs, 'session_id');
+        // 2.36.5: the phone's language (es / en / pt), so a meal call reaches it in that language.
+        await addColumnIfMissing(T.pushSubs, 'lang', 'VARCHAR(8)');
         await db.createTable(T.busNotices, [
             'id INT_PK',
             'bus_id INT NOT NULL',
@@ -272,6 +274,35 @@ function createPush(base) {
         return out;
     }
 
+    /**
+     * Push to the phones of these people (2.36.5: a meal group called). `payloadFor(lang)` builds the notice in each
+     * phone's language. → { subscribers, sent, failed, network }.
+     */
+    async function pushToPeople(ids, payloadFor) {
+        const out = { subscribers: 0, sent: 0, failed: 0, network: true };
+        const list = [...new Set((ids || []).map(Number).filter(Boolean))];
+        if (!list.length) return out;
+        if (!await ensureReady()) return out;
+        await db.run(`DELETE FROM ${T.pushSubs} WHERE session_id IN (SELECT id FROM ${T.selfSessions} WHERE expires_s < ? )`, [nowS()]);
+        const subs = [];
+        for (let i = 0; i < list.length; i += 500) {
+            const chunk = list.slice(i, i + 500);
+            subs.push(...await db.all(`SELECT * FROM ${T.pushSubs} WHERE inscription_id IN (${chunk.map(() => '?').join(', ')}) ORDER BY id`, chunk));
+        }
+        out.subscribers = subs.length;
+        if (!subs.length) return out;
+        const f = netFetch();
+        if (!f) { out.network = false; out.failed = subs.length; return out; }
+        const key = await siteKey();
+        const bodies = new Map();
+        const bodyOf = (lang) => { const l = ['es', 'en', 'pt'].includes(lang) ? lang : 'es'; if (!bodies.has(l)) bodies.set(l, JSON.stringify(payloadFor(l))); return bodies.get(l); };
+        for (let i = 0; i < subs.length; i += SEND_CONCURRENCY) {
+            const results = await Promise.all(subs.slice(i, i + SEND_CONCURRENCY).map(s => sendOne(f, s, bodyOf(s.lang), key).catch(() => 'failed')));
+            for (const r of results) { if (r === 'sent') out.sent++; else out.failed++; }
+        }
+        return out;
+    }
+
     const routeOf = (b) => [b.origin, b.destination].filter(Boolean).join(' → ');
     function payloadOf(kind, bus, text) {
         const route = routeOf(bus);
@@ -365,8 +396,10 @@ function createPush(base) {
                 const origin = req.headers && typeof req.headers.origin === 'string' ? req.headers.origin.slice(0, 200) : null;
                 const ins = s.st.ins;
                 await db.run(`DELETE FROM ${T.pushSubs} WHERE endpoint_hash = ?`, [hash]);
-                await db.run(`INSERT INTO ${T.pushSubs} (session_id, conference_id, inscription_id, endpoint, endpoint_hash, p256dh, auth, origin, created_s, fails) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-                    [s.session.id, ins.conference_id, ins.id, endpoint.href, hash, keys.p256dh, keys.auth, origin, nowS()]);
+                // 2.36.5: the phone's language (es / en / pt) for the notices that have one; anything else = Spanish.
+                const lang = ['es', 'en', 'pt'].includes(String((req.body || {}).lang || '').slice(0, 2).toLowerCase()) ? String(req.body.lang).slice(0, 2).toLowerCase() : null;
+                await db.run(`INSERT INTO ${T.pushSubs} (session_id, conference_id, inscription_id, endpoint, endpoint_hash, p256dh, auth, origin, created_s, fails, lang) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+                    [s.session.id, ins.conference_id, ins.id, endpoint.href, hash, keys.p256dh, keys.auth, origin, nowS(), lang]);
                 // A few phones per person at most: the oldest go.
                 const mine = await db.all(`SELECT id FROM ${T.pushSubs} WHERE inscription_id = ? ORDER BY created_s DESC, id DESC`, [ins.id]);
                 for (const old of mine.slice(MAX_SUBS_PER_PERSON)) await db.run(`DELETE FROM ${T.pushSubs} WHERE id = ?`, [old.id]);
@@ -402,7 +435,7 @@ function createPush(base) {
         await db.run(`DELETE FROM ${T.pushSubs} WHERE session_id = ?`, [sessionId]);
     }
 
-    return { migrate, ensureReady, install, transportOf, busState, busSummaries, dropSession, siteKey };
+    return { migrate, ensureReady, install, transportOf, busState, busSummaries, dropSession, siteKey, pushToPeople };
 }
 
 module.exports = { createPush, encryptPayload, vapidHeader, newVapidKey, pushEndpoint, pushKeys };

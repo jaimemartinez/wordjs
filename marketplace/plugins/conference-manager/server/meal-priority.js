@@ -19,6 +19,12 @@
  * from then on the stored letters are used (badges stay right) and a later registrant joins the smallest
  * group whose stored scores span theirs. «Recalcular» stores the cuts again; manual groups survive both.
  *
+ * CALLING (2.36.5). During a service the kitchen calls the groups one after another («Llamar grupo»); a called group
+ * stays called. Every call, undo and exception is a row of meal_calls (the audit). Once a service has called a group,
+ * the scanner does not serve someone whose group has not been called: it warns, and «Dejar pasar igual» serves them
+ * as an exception, logged with who allowed it. Priority people (2.32) have no bypass — priority only decides which
+ * group they are in. A call reaches the group's phones (Web Push, transport-push.js) and «Mi inscripción».
+ *
  * PRIVACY. The score is built from health answers (server/health.js), so only health:view sees a score or its
  * reason; meals:view sees letters, counts and times. Nothing here logs a person's data.
  *
@@ -214,6 +220,7 @@ function createMealPriority(base) {
     const { db, T, P, createUniqueIndex, createIndex } = base;
     T.mealPriority = `${P}meal_priority`;
     T.mealGroups = `${P}meal_groups`;
+    T.mealCalls = `${P}meal_calls`;
     let D = null;
 
     async function migrate() {
@@ -240,6 +247,21 @@ function createMealPriority(base) {
         ]);
         await createUniqueIndex(`${P}uidx_meal_groups_ins`, T.mealGroups, 'inscription_id');
         await createIndex(`${P}idx_meal_groups_conf`, T.mealGroups, 'conference_id');
+        // 2.36.5: the calls of each service, append-only — kind 'call' | 'undo' | 'exception' (a person served before
+        // their group was called, `inscription_id` set). The state of a service is read from it in order.
+        await db.createTable(T.mealCalls, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'service_id INT NOT NULL',
+            'grp VARCHAR(1) NOT NULL',
+            'kind VARCHAR(12) NOT NULL',
+            'inscription_id INT',
+            'actor TEXT',
+            'at_utc VARCHAR(19) NOT NULL',
+            'recipients INT DEFAULT 0',
+            'sent INT DEFAULT 0',
+        ]);
+        await createIndex(`${P}idx_meal_calls_service`, T.mealCalls, 'service_id');
     }
 
     const utcStamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -378,10 +400,12 @@ function createMealPriority(base) {
         if (!m.config.enabled) return null;
         const p = m.byId.get(Number(inscriptionId));
         if (!p || !p.group) return null;
-        const services = m.services.filter(s => (m.entitledBy.get(s.id) || new Set()).has(p.id)).map(s => {
+        const services = [];
+        for (const s of m.services.filter(x => (m.entitledBy.get(x.id) || new Set()).has(p.id))) {
             const slot = s.slots.find(x => x.group === p.group);
-            return { service_id: s.id, date: s.date, meal: s.meal, label: s.label, start: slot ? slot.start : null, end: slot ? slot.end : null };
-        });
+            const call = (await callsOf(s.id)).called.find(c => c.group === p.group);
+            services.push({ service_id: s.id, date: s.date, meal: s.meal, label: s.label, start: slot ? slot.start : null, end: slot ? slot.end : null, called_at: call ? call.at : null });
+        }
         return { group: p.group, services };
     }
     /** Letter of a person, or null (badges). */
@@ -390,6 +414,80 @@ function createMealPriority(base) {
         if (!m.config.enabled) return null;
         const p = m.byId.get(Number(inscriptionId));
         return p ? p.group || null : null;
+    }
+
+    // ── calling the groups (2.36.5) ──
+    /** A service's calls: the groups called now (in the order called) and the exceptions, from the log in order. */
+    async function callsOf(serviceId) {
+        const rows = await db.all(`SELECT id, grp, kind, inscription_id, actor, at_utc, recipients, sent FROM ${T.mealCalls} WHERE service_id = ? ORDER BY id ASC`, [serviceId]);
+        const called = new Map();
+        const exceptions = [];
+        for (const r of rows) {
+            if (r.kind === 'call') called.set(r.grp, { group: r.grp, at: r.at_utc, by: r.actor || null, recipients: Number(r.recipients) || 0, sent: Number(r.sent) || 0 });
+            else if (r.kind === 'undo') called.delete(r.grp);
+            else if (r.kind === 'exception') exceptions.push({ inscription_id: Number(r.inscription_id), group: r.grp, at: r.at_utc, by: r.actor || null });
+        }
+        const log = rows.map(r => ({ kind: r.kind, group: r.grp, at: r.at_utc, by: r.actor || null, inscription_id: r.inscription_id == null ? null : Number(r.inscription_id) }));
+        return { called: [...called.values()], exceptions, log };
+    }
+    /**
+     * The scan gate (the owner's rule): once this service has called a group, a person whose group has not been
+     * called is not served on a scan — { group, called } — until their group is called or someone allows it as an
+     * exception. null = they may pass (no calling on this service yet, «Turnos de comida» off, or no group).
+     */
+    async function callGate(cid, serviceId, inscriptionId) {
+        const m = await modelOf(cid);
+        if (!m.config.enabled) return null;
+        const p = m.byId.get(Number(inscriptionId));
+        if (!p || !p.group) return null;
+        const { called } = await callsOf(serviceId);
+        if (!called.length || called.some(c => c.group === p.group)) return null;
+        return { group: p.group, called: called.map(c => c.group) };
+    }
+    /** A person served before their group was called, and who allowed it (the audit). */
+    async function logException(cid, serviceId, inscriptionId, group, actor) {
+        await db.run(`INSERT INTO ${T.mealCalls} (conference_id, service_id, grp, kind, inscription_id, actor, at_utc) VALUES (?, ?, ?, 'exception', ?, ?, ?)`,
+            [cid, serviceId, group, inscriptionId, actor || null, utcStamp()]);
+    }
+    const MEAL_NAMES = {
+        es: { desayuno: 'el desayuno', almuerzo: 'el almuerzo', cena: 'la cena' },
+        en: { desayuno: 'breakfast', almuerzo: 'lunch', cena: 'dinner' },
+        pt: { desayuno: 'o café da manhã', almuerzo: 'o almoço', cena: 'o jantar' },
+    };
+    /** The call notice in a phone's language (es / en / pt; Spanish otherwise). */
+    function callNotice(lang, group, svc) {
+        const l = MEAL_NAMES[lang] ? lang : 'es';
+        const meal = svc.label || MEAL_NAMES[l][svc.meal] || svc.meal || '';
+        const text = {
+            es: { title: `Tu grupo ${group} ya puede pasar a comer`, body: `Es tu turno para ${meal}. Acércate con tu escarapela.` },
+            en: { title: `Your group ${group} can go eat now`, body: `It is your turn for ${meal}. Bring your badge.` },
+            pt: { title: `Seu grupo ${group} já pode comer`, body: `É a sua vez para ${meal}. Leve o seu crachá.` },
+        }[l];
+        return { kind: 'meal_call', tag: `cm-meal-${svc.id}-${group}`, ...text };
+    }
+    /** What the «Turnos de comida» screen shows for one service: per group, entitled, served, pending, exceptions. */
+    async function serviceState(cid, serviceId) {
+        const m = await buildModel(cid);
+        const svc = m.services.find(s => s.id === Number(serviceId));
+        if (!svc) return null;
+        const entitled = m.entitledBy.get(svc.id) || new Set();
+        const served = new Set((await db.all(`SELECT inscription_id FROM ${T.mealDeliveries} WHERE service_id = ?`, [svc.id])).map(r => Number(r.inscription_id)));
+        const calls = await callsOf(svc.id);
+        const groups = GROUPS.map(g => {
+            let n = 0, done = 0;
+            for (const id of entitled) { const p = m.byId.get(id); if (p && p.group === g) { n++; if (served.has(id)) done++; } }
+            const call = calls.called.find(c => c.group === g) || null;
+            return { group: g, entitled: n, served: done, pending: n - done, exceptions: calls.exceptions.filter(x => x.group === g).length, called_at: call ? call.at : null, called_by: call ? call.by : null };
+        });
+        const ids = [...new Set(calls.exceptions.map(x => x.inscription_id))];
+        const names = new Map(ids.length ? (await D.peopleByIds(cid, ids)).map(r => [Number(r.id), r.name]) : []);
+        return {
+            service: { id: svc.id, date: svc.date, meal: svc.meal, label: svc.label },
+            enabled: !!m.config.enabled, order: svc.order, slots: svc.slots, groups,
+            called: calls.called.map(c => c.group),
+            exceptions: calls.exceptions.map(x => ({ ...x, name: names.get(x.inscription_id) || `#${x.inscription_id}` })),
+            log: calls.log.map(x => ({ ...x, name: x.inscription_id ? (names.get(x.inscription_id) || `#${x.inscription_id}`) : null })),
+        };
     }
 
     function install(deps) {
@@ -423,7 +521,11 @@ function createMealPriority(base) {
                     }).sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || String(a.name).localeCompare(String(b.name), 'es'));
                 }
                 const { byId, entitledBy, ...summary } = m;
+                // 2.36.5: ?service_id → that service's calling state («Turnos de comida»).
+                const sid = positiveInt(req.query.service_id);
+                const calls = sid ? await serviceState(cid, sid) : undefined;
                 res.json({
+                    ...(calls !== undefined ? { calls } : {}),
                     ...summary,
                     config: seesHealth || hasLevel(perms, 'meals', 'manage') ? m.config : { ...m.config, weights: {} },
                     default_weights: DEFAULT_WEIGHTS, unknown_weight: UNKNOWN_WEIGHT, age_bands: AGE_BANDS,
@@ -478,6 +580,50 @@ function createMealPriority(base) {
             } catch (e) { sendError(res, e); }
         });
 
+        // POST /meals/priority/call { service_id, group, undo? } (2.36.5) — call a group to eat (it stays called), or
+        // undo a call made by mistake. meals:manage or the delivery team (meals_delivery:manage). A call is pushed to
+        // the group's phones; every call and undo is a row of the audit. → the service's state.
+        http.route('post', '/meals/priority/call', { auth: true }, async (req, res) => {
+            if (!await allowAny(req, res, [['meals', 'manage'], ['meals_delivery', 'manage']])) return;
+            const body = req.body || {};
+            const sid = positiveInt(body.service_id);
+            const g = body.group;
+            if (!sid) return res.status(400).json({ error: 'Missing service_id' });
+            if (!GROUPS.includes(g)) return res.status(400).json({ error: 'El grupo debe ser una letra de la A a la F.' });
+            try {
+                const svcRow = await db.get(`SELECT id, conference_id, service_date, meal, label FROM ${T.mealServices} WHERE id = ?`, [sid]);
+                if (!svcRow) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
+                const cid = Number(svcRow.conference_id);
+                const { config } = await settingsOf(cid);
+                if (!config.enabled) return res.status(409).json({ error: 'Activa «Turnos de comida» para llamar a los grupos.' });
+                const out = await D.withPriorityLock(async () => {
+                    const { called } = await callsOf(sid);
+                    const isCalled = called.some(c => c.group === g);
+                    if (body.undo === true) {
+                        if (!isCalled) return { status: 409, error: `El grupo ${g} no ha sido llamado.` };
+                        await db.run(`INSERT INTO ${T.mealCalls} (conference_id, service_id, grp, kind, actor, at_utc) VALUES (?, ?, ?, 'undo', ?, ?)`, [cid, sid, g, actorOf(req), utcStamp()]);
+                        return { status: 200 };
+                    }
+                    if (isCalled) return { status: 409, error: `El grupo ${g} ya fue llamado.` };
+                    const r = await db.run(`INSERT INTO ${T.mealCalls} (conference_id, service_id, grp, kind, actor, at_utc) VALUES (?, ?, ?, 'call', ?, ?)`, [cid, sid, g, actorOf(req), utcStamp()]);
+                    return { status: 200, callId: r && r.lastID };
+                });
+                if (out.status !== 200) return res.status(out.status).json({ error: out.error });
+                // The group's phones: the people of that group entitled to this service, not served yet.
+                let push = null;
+                if (out.callId && D.pushToPeople) {
+                    const m = await buildModel(cid);
+                    const served = new Set((await db.all(`SELECT inscription_id FROM ${T.mealDeliveries} WHERE service_id = ?`, [sid])).map(x => Number(x.inscription_id)));
+                    const ids = [...(m.entitledBy.get(sid) || new Set())].filter(id => !served.has(id) && (m.byId.get(id) || {}).group === g);
+                    const svc = { id: sid, meal: svcRow.meal, label: svcRow.label || null };
+                    try { push = await D.pushToPeople(ids, (lang) => callNotice(lang, g, svc)); } catch (e) { push = { subscribers: 0, sent: 0, failed: 0, network: false }; }
+                    await db.run(`UPDATE ${T.mealCalls} SET recipients = ?, sent = ? WHERE id = ?`, [push.subscribers || 0, push.sent || 0, out.callId]);
+                }
+                invalidate(cid);
+                res.json({ success: true, push, state: await serviceState(cid, sid) });
+            } catch (e) { sendError(res, e); }
+        });
+
         // PUT /meals/priority/people/:id { group: 'A'…'F' | null } — a coordinator's manual group (null = automatic).
         http.route('put', '/meals/priority/people/:id', { auth: true }, async (req, res) => {
             if (!await allow(req, res, 'meals', 'manage')) return;
@@ -507,7 +653,7 @@ function createMealPriority(base) {
         });
     }
 
-    return { migrate, install, modelOf, personGroup, letterOf, invalidate, GROUPS };
+    return { migrate, install, modelOf, personGroup, letterOf, invalidate, callGate, logException, callsOf, serviceState, callNotice, GROUPS };
 }
 
 module.exports = {
