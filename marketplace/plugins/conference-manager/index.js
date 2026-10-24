@@ -34,6 +34,58 @@ const pack = require('./server/lodging-pack');
 // «Condiciones de salud» and «Turnos de comida» (2.32.0).
 const healthMod = require('./server/health');
 const mailTplMod = require('./server/mail-templates');
+
+/**
+ * Route groups (2.36.11): each group is ONE registered route, `method base` with a `:act` segment, that dispatches
+ * to the handler each member registered as if it had its own route — same URL, same options, same checks inside.
+ * A member whose options (auth, admin…) differ from its group's refuses to load: grouping never changes who may
+ * call an action. An unknown `:act` answers 404 like a missing route.
+ */
+const ROUTE_GROUPS = [
+    { method: 'post', base: '/public/me/:act', members: ['logout', 'start', 'ticket', 'transport', 'verify', 'view'] },
+    { method: 'post', base: '/public/me/push/:act', members: ['subscribe', 'unsubscribe'] },
+    { method: 'post', base: '/public/consent/:act', members: ['code', 'confirm', 'open'] },
+    { method: 'post', base: '/consent/:act', members: ['purge', 'revoke', 'send', 'share', 'paper'] },
+    { method: 'post', base: '/fee-payments/:id/:act', members: ['reject', 'return', 'validate'] },
+    { method: 'post', base: '/payments/:id/:act', members: ['reject', 'validate'] },
+    { method: 'post', base: '/meals/priority/:act', members: ['call', 'freeze'] },
+    { method: 'post', base: '/locations/:id/lodging/:act', members: ['reopen', 'return', 'validate'] },
+    { method: 'post', base: '/mail-templates/:id/:act', members: ['save', 'restore', 'preview', 'test'] },
+];
+function groupRoutes(host, groups) {
+    const memberOf = new Map();
+    for (const g of groups) for (const act of g.members) memberOf.set(`${g.method} ${g.base.replace(':act', act)}`, { g, act });
+    const registered = new Map();
+    const out = Object.create(host);
+    out.route = (...args) => {
+        const [method, path] = args;
+        const hit = memberOf.get(`${String(method).toLowerCase()} ${path}`);
+        if (!hit) return host.route(...args);
+        // route(method, path, handler) — a public route — or route(method, path, opts, handler).
+        const hasOpts = typeof args[2] !== 'function';
+        const opts = hasOpts ? args[2] : undefined;
+        const handler = hasOpts ? args[3] : args[2];
+        const key = hasOpts ? JSON.stringify(opts || {}) : '(none)';
+        let group = registered.get(hit.g);
+        if (!group) {
+            group = { key, handlers: new Map() };
+            registered.set(hit.g, group);
+            const handlers = group.handlers;
+            const dispatch = (req, res) => {
+                const h = handlers.get(String((req.params && req.params.act) || ''));
+                if (!h) return res.status(404).json({ error: 'Not found' });
+                return h(req, res);
+            };
+            if (hasOpts) host.route(method, hit.g.base, opts, dispatch);
+            else host.route(method, hit.g.base, dispatch);
+        } else if (group.key !== key) {
+            throw new Error(`[conference-manager] route ${method.toUpperCase()} ${path}: its options differ from its group ${hit.g.base}`);
+        }
+        group.handlers.set(hit.act, handler);
+        return undefined;
+    };
+    return out;
+}
 const { createMealPriority } = require('./server/meal-priority');
 // «Autorización de datos» (2.33.0): each person's consent, signed with a code sent to their e-mail.
 const { createConsent, emailFieldIn, maskEmail } = require('./server/consent');
@@ -49,7 +101,11 @@ exports.metadata = {
 };
 
 exports.init = async function (wordjs) {
-    const { db, http, adminMenu } = wordjs;
+    const { db, http: hostHttp, adminMenu } = wordjs;
+    // 2.36.11: the host lets a plugin register at most 200 routes (core/plugin-isolate.ts MAX_ROUTES). Sibling
+    // actions on the same resource share ONE route here — «POST /fee-payments/:id/:act» answers /reject, /return
+    // and /validate — so every URL stays exactly as it was while the count stays well under the cap.
+    const http = groupRoutes(hostHttp, ROUTE_GROUPS);
 
     console.log('Initializing Conference Manager Plugin (Multi-Event, sandboxed)...');
 

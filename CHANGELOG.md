@@ -25,6 +25,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
       «Autorizaciones» has one.
     - It **never** carries the access code: the coordinator asks the administration for it.
     - It can be sent once a minute and five times an hour per locality, and every send is logged.
+  - **Fewer registered routes (204 → 183).** Sibling actions on the same resource now share one route
+    (for example, reject / return / validate on a fee payment), so the plugin stays well under the host's limit of
+    200 routes. Every URL and every permission check is unchanged.
 
 ### Fixed
 

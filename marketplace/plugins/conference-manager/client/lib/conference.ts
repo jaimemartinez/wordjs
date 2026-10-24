@@ -666,8 +666,8 @@ export const conferenceApi = {
     sendLocationWelcome: (id: number) => apiPost<{ sent: boolean; welcome_sent_at: string; email_masked: string }>(`/plugin/conference-manager/locations/${id}/welcome`, {}),
     /** 2.36.11: «Plantillas de correo» (WordJS administrators). */
     getMailTemplates: () => apiGet<{ langs: string[]; limits: Record<string, number>; templates: any[] }>(`/plugin/conference-manager/mail-templates`),
-    saveMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPut<{ success: boolean }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}`, data),
-    restoreMailTemplate: (id: string, lang: string) => apiDelete<{ success: boolean }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}?lang=${encodeURIComponent(lang)}`),
+    saveMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPost<{ success: boolean }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}/save`, data),
+    restoreMailTemplate: (id: string, lang: string) => apiPost<{ success: boolean }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}/restore`, { lang }),
     previewMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPost<{ subject: string; html: string; text: string }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}/preview`, data),
     testMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPost<{ sent: boolean; to_masked: string }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}/test`, data),
 

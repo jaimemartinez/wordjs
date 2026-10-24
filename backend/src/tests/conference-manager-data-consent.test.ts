@@ -1088,16 +1088,16 @@ test('2.36.11 «Plantillas de correo»: administrators edit, preview, test and r
     const link = list.templates.find((t: any) => t.id === 'consent.link');
     assert.ok(link.has_action && link.defaults.es.subject.includes('{conference}') && Object.keys(link.edits).length === 0);
     // Invalid edits are said by field.
-    const bad = await w.p.call('put', '/mail-templates/consent.link', { body: { lang: 'es', subject: '', body: 'x' } });
+    const bad = await w.p.call('post', '/mail-templates/consent.link/save', { body: { lang: 'es', subject: '', body: 'x' } });
     assert.deepStrictEqual([bad.status, bad.body.field], [400, 'subject']);
-    assert.strictEqual((await w.p.call('put', '/mail-templates/consent.link', { body: { lang: 'fr', subject: 's', body: 'b' } })).status, 400);
-    assert.strictEqual((await w.p.call('put', '/mail-templates/nope', { body: { lang: 'es', subject: 's', body: 'b' } })).status, 404);
+    assert.strictEqual((await w.p.call('post', '/mail-templates/consent.link/save', { body: { lang: 'fr', subject: 's', body: 'b' } })).status, 400);
+    assert.strictEqual((await w.p.call('post', '/mail-templates/nope/save', { body: { lang: 'es', subject: 's', body: 'b' } })).status, 404);
     // Preview: the draft with samples, never stored.
     const pv = ok(await w.p.call('post', '/mail-templates/consent.link/preview', { body: { lang: 'es', subject: 'Firma · {conference}', body: 'Hola **{name}**', after: '', action: 'Firmar ya' } }));
     assert.ok(pv.subject === 'Firma · Asume el Riesgo' && pv.html.includes('<strong>Ana</strong>') && pv.html.includes('>Firmar ya</a>'));
     assert.strictEqual(Object.keys(ok(await w.p.call('get', '/mail-templates')).templates.find((t: any) => t.id === 'consent.link').edits).length, 0);
     // Saved: the real link e-mail says it.
-    ok(await w.p.call('put', '/mail-templates/consent.link', { body: { lang: 'es', subject: 'Por favor firma · {conference}', body: 'Hola {name}, falta tu firma.', after: '', action: 'Firmar' } }));
+    ok(await w.p.call('post', '/mail-templates/consent.link/save', { body: { lang: 'es', subject: 'Por favor firma · {conference}', body: 'Hola {name}, falta tu firma.', after: '', action: 'Firmar' } }));
     const saved = ok(await w.p.call('get', '/mail-templates')).templates.find((t: any) => t.id === 'consent.link').edits.es;
     assert.deepStrictEqual([saved.subject, saved.updated_by], ['Por favor firma · {conference}', 'boss']);
     (await w.register({}));
@@ -1113,7 +1113,7 @@ test('2.36.11 «Plantillas de correo»: administrators edit, preview, test and r
     for (let i = 0; i < 4; i++) ok(await w.p.call('post', '/mail-templates/badge.link/test', { body: { lang: 'en', subject: 's', body: 'b' } }));
     assert.strictEqual((await w.p.call('post', '/mail-templates/badge.link/test', { body: { lang: 'en', subject: 's', body: 'b' } })).status, 429);
     // Restore: the default again.
-    ok(await w.p.call('delete', '/mail-templates/consent.link?lang=es'));
+    ok(await w.p.call('post', '/mail-templates/consent.link/restore', { body: { lang: 'es' } }));
     assert.strictEqual(Object.keys(ok(await w.p.call('get', '/mail-templates')).templates.find((t: any) => t.id === 'consent.link').edits).length, 0);
     (await w.register({ first_name: 'Luis', email: 'luis@example.org' }));
     assert.ok(w.p.mails[w.p.mails.length - 1].subject.startsWith('Autoriza el uso de tus datos'));
@@ -1163,4 +1163,18 @@ test('2.36.11 the welcome to a locality\'s coordinator: never the access code, t
     assert.deepStrictEqual([failed.status, failed.body.code], [503, 'mail_off'], 'the site has no mail: said so');
     assert.strictEqual(w3.p.one(`SELECT welcome_sent_s FROM ${PREFIX}locations WHERE id = ?`, w3.norte).welcome_sent_s, null);
     assert.strictEqual(w3.p.one(`SELECT ok FROM ${PREFIX}location_mails WHERE location_id = ?`, w3.norte).ok, 0);
+});
+
+test('2.36.11: sibling actions share one route — well under the host cap, same URLs, same checks', async () => {
+    const p = await bootPlugin();
+    assert.ok(p.routes.length <= 185, `registers ${p.routes.length} routes; keep headroom under plugin-isolate.ts MAX_ROUTES=200`);
+    const grouped = p.routes.filter(r => r.path.endsWith('/:act'));
+    assert.ok(grouped.length >= 9, 'the groups are registered as one route each');
+    // Each group keeps its members' options: a public group stays public, an admin group stays admin-only.
+    assert.strictEqual(grouped.find(r => r.path === '/public/consent/:act')!.opts.auth, undefined);
+    assert.deepStrictEqual([grouped.find(r => r.path === '/mail-templates/:id/:act')!.opts.auth, grouped.find(r => r.path === '/mail-templates/:id/:act')!.opts.admin], [true, true]);
+    assert.strictEqual((await p.call('post', '/mail-templates/consent.link/preview', { anonymous: true })).status, 401);
+    // An action no member registered answers 404, like a missing route.
+    assert.strictEqual((await p.call('post', '/mail-templates/consent.link/nope', { body: { lang: 'es' } })).status, 404);
+    assert.strictEqual((await p.call('post', '/public/me/nope', { anonymous: true, body: {} })).status, 404);
 });

@@ -390,8 +390,9 @@ function createMailTemplates(base) {
                 });
             } catch (e) { sendError(res, e); }
         });
-        // PUT /mail-templates/:id { lang, subject, body, after, action } → the edit of that language.
-        http.route('put', '/mail-templates/:id', { auth: true, admin: true }, async (req, res) => {
+        // POST /mail-templates/:id/save { lang, subject, body, after, action } → the edit of that language.
+        // (The four actions — save, restore, preview, test — share one route: index.js ROUTE_GROUPS.)
+        http.route('post', '/mail-templates/:id/save', { auth: true, admin: true }, async (req, res) => {
             const def = defOr404(req, res);
             if (!def) return;
             try {
@@ -408,12 +409,13 @@ function createMailTemplates(base) {
                 res.json({ success: true });
             } catch (e) { sendError(res, e); }
         });
-        // DELETE /mail-templates/:id?lang=xx → «Restaurar original» (the default again).
-        http.route('delete', '/mail-templates/:id', { auth: true, admin: true }, async (req, res) => {
+        // POST /mail-templates/:id/restore { lang } → «Restaurar original» (the default again).
+        http.route('post', '/mail-templates/:id/restore', { auth: true, admin: true }, async (req, res) => {
             const def = defOr404(req, res);
             if (!def) return;
             try {
-                const lang = LANGS.includes(String(req.query.lang)) ? String(req.query.lang) : null;
+                const raw = String((req.body && req.body.lang) || '');
+                const lang = LANGS.includes(raw) ? raw : null;
                 if (!lang) return res.status(400).json({ error: 'Idioma inválido (es, en o pt).', field: 'lang' });
                 await db.run(`DELETE FROM ${T.mailTemplates} WHERE template_id = ? AND lang = ?`, [def.id, lang]);
                 res.json({ success: true });
