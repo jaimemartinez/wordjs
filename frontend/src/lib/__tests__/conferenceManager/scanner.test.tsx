@@ -444,3 +444,27 @@ describe('boarding check: the verdict in words, and the screen', () => {
     });
 });
 
+
+describe("2.36.6 «en los select con search no se puede hacer scroll, sube y baja»: the list is scrolled by the user only", () => {
+    const src = fs.readFileSync(path.resolve(__dirname, "../../../../../marketplace/plugins/conference-manager/client/lib/Select.tsx"), "utf8");
+    const reveal = src.slice(src.indexOf("const reveal = useRef"), src.indexOf("const onKey"));
+    it("hovering a row only marks it: it never scrolls the list (the pointer passing over rows while scrolling)", () => {
+        expect(src).toContain("onMouseEnter={() => !it.disabled && setActive(i)}");
+        expect(src).not.toMatch(/onMouseEnter=\{[^}]*(move\(|scrollIntoView|reveal\.current)/);
+        // The scroll into view runs only when asked: opening (centred) or a keyboard move — and then once.
+        expect(reveal).toContain("const reveal = useRef<'center' | 'nearest' | null>('center');");
+        expect(reveal).toContain("if (!list.current || !block) return;");
+        expect(reveal).toMatch(/reveal\.current = null;\s+el\.scrollIntoView\(\{ block \}\);/);
+        expect(reveal).toContain("const move = (n: number) => { if (n < 0) return; reveal.current = 'nearest'; setActive(n); };");
+        // Every keyboard move goes through move(); nothing else asks for a reveal.
+        const keys = src.slice(src.indexOf("const onKey"), src.indexOf("if (!pos || typeof document"));
+        for (const k of ["ArrowDown", "ArrowUp", "Home", "End"]) expect(keys, k).toContain(`'${k}') { e.preventDefault(); move(`);
+        expect((src.match(/reveal\.current = '/g) || []).length).toBe(1);
+    });
+    it("a new search goes back to the top without scrolling to a stale row; the list keeps its scroll to itself", () => {
+        expect(reveal).toContain("if (q) { reveal.current = null; setActive(firstOn(shown)); if (list.current) list.current.scrollTop = 0; }");
+        expect(src).toContain('className="overflow-y-auto overscroll-contain py-1 flex-1 min-h-0 outline-none" data-select-list=""');
+        // A scroll inside the panel never re-places it.
+        expect(src).toContain("if (e && panel.current && e.target instanceof Node && panel.current.contains(e.target)) return; place();");
+    });
+});

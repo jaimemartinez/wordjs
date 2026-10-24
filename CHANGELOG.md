@@ -31,6 +31,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     - **Missing actions explained**: a short hint says when WhatsApp or Enviar is missing because there is no phone
       or e-mail.
     - **Scope**: the server only acts for the coordinator's own locality.
+  - **Fixed: searchable lists scroll again.** Wheel, trackpad and touch work. The list used to jump up and down:
+    every row the pointer passed over while scrolling was scrolled back into view. Now a row is brought into view
+    only when the list opens (the chosen one) or on a keyboard move. A new search starts at the top. The list keeps
+    its scroll to itself.
 
 ### Added
 

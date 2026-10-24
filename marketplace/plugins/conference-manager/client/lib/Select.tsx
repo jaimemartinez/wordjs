@@ -117,18 +117,28 @@ export function SelectPanel({ anchor, items, value, onPick, onClose, searchable,
         const t = setTimeout(() => { const f = panel.current && (panel.current.querySelector('input') || panel.current.querySelector('[role="listbox"]')); if (f) (f as HTMLElement).focus(); }, 0);
         return () => { clearTimeout(t); window.removeEventListener('resize', onMove); window.removeEventListener('scroll', onMove, true); document.removeEventListener('pointerdown', onDown, true); };
     }, []);
-    useEffect(() => { if (q) setActive(firstOn(shown)); }, [q]);
+    // 2.36.6 («en los select con search no se puede hacer scroll, sube y baja»): the active row is scrolled into view
+    // only when the panel opens (the chosen one, centred), on a keyboard move and on a new search — NEVER because the
+    // pointer passed over a row. Scrolling the list moves rows under the pointer; scrolling the hovered one back into
+    // view (and a parent's fresh `items` re-running this) made the list jump up and down.
+    const reveal = useRef<'center' | 'nearest' | null>('center');
+    // A new search puts its best match first: the list goes back to its top.
+    useEffect(() => { if (q) { reveal.current = null; setActive(firstOn(shown)); if (list.current) list.current.scrollTop = 0; } }, [q]);
     useEffect(() => {
-        if (!list.current) return;
+        const block = reveal.current;
+        if (!list.current || !block) return;
         const el = list.current.querySelector(`[data-index="${active}"]`) as HTMLElement | null;
-        if (el) el.scrollIntoView({ block: pos && !q ? 'center' : 'nearest' });
+        if (!el) return;
+        reveal.current = null;
+        el.scrollIntoView({ block });
     }, [active, shown, !!pos]);
+    const move = (n: number) => { if (n < 0) return; reveal.current = 'nearest'; setActive(n); };
 
     const onKey = (e: React.KeyboardEvent) => {
-        if (e.key === 'ArrowDown') { e.preventDefault(); const n = firstOn(shown, active + 1, 1); if (n >= 0) setActive(n); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); const n = firstOn(shown, active - 1, -1); if (n >= 0) setActive(n); }
-        else if (e.key === 'Home') { e.preventDefault(); setActive(firstOn(shown)); }
-        else if (e.key === 'End') { e.preventDefault(); setActive(firstOn(shown, shown.length - 1, -1)); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); move(firstOn(shown, active + 1, 1)); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); move(firstOn(shown, active - 1, -1)); }
+        else if (e.key === 'Home') { e.preventDefault(); move(firstOn(shown)); }
+        else if (e.key === 'End') { e.preventDefault(); move(firstOn(shown, shown.length - 1, -1)); }
         else if (e.key === 'Enter' || (e.key === ' ' && !searchable)) { e.preventDefault(); const it = shown[active]; if (it && !it.disabled) onPick(it.value); }
         else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (e.nativeEvent && e.nativeEvent.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation(); onClose(true); }
         else if (e.key === 'Tab') onClose(false);
