@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Admin › Auditoría fits a phone.** Below lg the log is cards, but the «Objetivo» cell never wrapped, so a long target (a URL, an email, an id) widened the page sideways. It wraps on phones now (no-wrap only in the desktop table), and a raw actor id can break anywhere (`app/admin/audit/page.tsx`).
+
 ### Changed
 
 - **conference-manager 2.36.7: the signed consent sheet can be uploaded as photos.** (The owner: «para subir la
