@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.3] - 2026-10-24
+
 ### Changed
 
 - **conference-manager 2.36.6: a simpler Participantes screen in the coordinators' portal.**
