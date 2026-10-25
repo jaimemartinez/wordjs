@@ -1064,7 +1064,7 @@ describe('conference-manager 2.36.15 — «Mi escarapela» without a connection'
         expect(m).toContain('<OfflineMark savedAt={saved} />');
         expect(m).toContain('{!online && <OfflineMark />}');
         expect(m).toContain('else { writeStored(null); clearOffline(); }');
-        expect(m).toMatch(/writeStored\(null\);\n\s+clearOffline\(\);\n\s+dropPushSubscription\(\);/);
+        expect(m).toMatch(/writeStored\(null\);\r?\n\s+clearOffline\(\);\r?\n\s+dropPushSubscription\(\);/);
         expect(m).toContain('window.addEventListener("online", on);');
         // Without «Recordar», one line says how to have it offline.
         expect(m).toContain('{(readStored() || { code: "" }).code !== view.code && (');
