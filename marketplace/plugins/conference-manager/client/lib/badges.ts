@@ -33,7 +33,8 @@ export type AvailableField = { key: string; label: string; builtin: boolean; typ
 // The display list (v1 layouts and 2.29.0's free-form designs): the renderer's own type.
 export type { DisplayItem, DisplayList } from '../admin/BadgeSvg';
 import type { DisplayList } from '../admin/BadgeSvg';
-export type BadgeLink = { inscription_id: number; token: string; created_at: string | null; view_count: number; last_viewed_at: string | null };
+/** `email_masked` (2.36.13): where «Enviar por correo» goes — '' when the person has no e-mail on file (the action is hidden). */
+export type BadgeLink = { inscription_id: number; token: string; created_at: string | null; view_count: number; last_viewed_at: string | null; email_masked?: string };
 /** Why the links show nothing right now: badges turned off, or past their expiry date (null = they work). */
 export type LinksState = 'disabled' | 'expired' | null;
 
@@ -51,6 +52,8 @@ export const badgesApi = {
     existingLinks: (conferenceId: number) => apiGet<{ links: BadgeLink[] }>(`${BASE}/badges/links?conference_id=${conferenceId}`),
     links: (conferenceId: number, scope: { inscription_ids?: number[]; location_id?: number; all?: boolean }) => apiPost<{ links: BadgeLink[]; state: LinksState; country_code: string }>(`${BASE}/badges/links`, { conference_id: conferenceId, ...scope }),
     rotate: (inscriptionId: number) => apiPost<{ link: BadgeLink | null }>(`${BASE}/badges/links/${inscriptionId}/rotate`, {}),
+    /** «Enviar por correo» (2.36.13): the badge e-mail of the portal's «Enviar» (same template, pause and audit). */
+    email: (inscriptionId: number) => apiPost<{ sent: boolean; email_masked: string }>(`${BASE}/badges/links/${inscriptionId}/email`, {}),
     revoke: (inscriptionId: number) => apiDelete<{ success: boolean }>(`${BASE}/badges/links/${inscriptionId}`),
     /** sheet 'sticker' (2.36.0): the printable stickers, one label per PDF page at the label's exact size. */
     ticket: (conferenceId: number, scope: { inscription_id?: number; inscription_ids?: number[]; location_id?: number; all?: boolean }, sheet: 'single' | 'letter' | 'sticker') =>

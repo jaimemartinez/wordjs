@@ -7,6 +7,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Added
+- **conference-manager 2.36.13: «Enviar por correo» wherever the admin shares a badge.** It is in a person's badge
+  actions (from «Escarapelas › Personas» and from the person sheet), and as «Correo» on each row of the person list.
+  - **Only with an e-mail on file**: without one, the action is hidden and the sheet explains why («no tiene correo
+    registrado»), as in the portal.
+  - **Confirm and result**: it asks first, in place, showing the masked address; the result shows as a toast.
+  - **Same e-mail as the portal's «Enviar»**: the editable «Plantillas de correo» template and the badge_mails
+    audit (which now records the admin who sent it).
+  - **One e-mail per person every 5 minutes**, whoever sends it (admin or portal).
+  - **Who can send**: whoever may share the badge («Escarapelas › ver» with the registrations).
+  - It shares the route of «Regenerar enlace», so the plugin registers no new route.
 - **conference-manager 2.36.12: «Editar encargado».** All of a locality's coordinator data can be changed after
   the locality is created.
   - **Where**: the card's «Editar encargado» opens a dialog (a bottom sheet on a phone) with three fields:

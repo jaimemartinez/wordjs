@@ -346,6 +346,8 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
     const [loc, setLoc] = useState('');
     const [limit, setLimit] = useState(PEOPLE_PAGE);
     const [open, setOpen] = useState<any>(null);
+    // 2.36.13: the person list's «Correo» opens the person's actions with «Enviar por correo» already asked.
+    const [askEmail, setAskEmail] = useState(false);
     const [busyId, setBusyId] = useState<number | null>(null);
     const [attempt, setAttempt] = useState(0);
     const configured = !!(cfg && cfg.configured);
@@ -476,7 +478,7 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
                                     <button type="button" className="min-w-0 text-left" style={{ flex: '1 1 14rem' }} onClick={() => setOpen(r)}
                                         title={tx('badges.people.view.title', 'Ver la escarapela de {name}').replace('{name}', name)}>
                                         <span className="block text-sm font-bold text-gray-900 truncate">{name}</span>
-                                        <span className="block text-[11px] text-gray-500 truncate">{place || tx('badges.people.noloc', 'Sin localidad')}{views ? ` · ${views}` : ''}</span>
+                                        <span className="block text-[11px] text-gray-500 truncate">{place || tx('badges.people.noloc', 'Sin localidad')}{views ? ` · ${views}` : ''}{link && !link.email_masked ? ` · ${tx('badges.people.noemail', 'Sin correo registrado')}` : ''}</span>
                                     </button>
                                     <div className="flex gap-1.5 max-w-full">
                                         <button type="button" className={rowBtn} onClick={() => setOpen(r)} data-badge-row="view"
@@ -487,6 +489,13 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
                                             aria-label={tx('badges.people.copy.title', 'Copiar el enlace de {name}').replace('{name}', name)}>
                                             <i className={`fa-solid ${busyId === Number(r.id) ? 'fa-spinner animate-spin' : 'fa-copy'}`} aria-hidden="true"></i>{tx('badges.people.copy', 'Copiar')}
                                         </button>
+                                        {/* 2.36.13: «Correo» opens the person's actions with «Enviar por correo» asked (masked address). */}
+                                        {link && link.email_masked && (
+                                            <button type="button" className={rowBtn} onClick={() => { setAskEmail(true); setOpen(r); }} data-badge-row="email"
+                                                aria-label={tx('badges.people.email.title', 'Enviar por correo la escarapela de {name}').replace('{name}', name)}>
+                                                <i className="fa-solid fa-envelope" aria-hidden="true"></i>{tx('badges.people.email', 'Correo')}
+                                            </button>
+                                        )}
                                         {link ? (
                                             <a className={rowBtn} href={whatsappUrl(phone, `${intro}: ${url}`, cc)} target="_blank" rel="noopener noreferrer" data-badge-row="whatsapp"
                                                 title={number ? `+${number}` : tx('badges.act.whatsapp.hint', 'No hay un teléfono válido en la inscripción: WhatsApp se abrirá para escoger el contacto.')}>
@@ -515,8 +524,8 @@ function PeopleView({ conferenceId, conference, cfg, canManage, tx, addToast, on
 
             {open && (
                 <BadgeActions person={open} name={personDisplayName(open, fields)} fields={fields} conferenceId={conferenceId}
-                    conferenceName={(conference && conference.name) || ''} canManage={canManage}
-                    onClose={() => { setOpen(null); refreshLinks(); }} />
+                    conferenceName={(conference && conference.name) || ''} canManage={canManage} askEmail={askEmail}
+                    onClose={() => { setOpen(null); setAskEmail(false); refreshLinks(); }} />
             )}
         </div>
     );

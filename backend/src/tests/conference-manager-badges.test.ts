@@ -1003,3 +1003,57 @@ test('2.36.6 «Escarapela» in the portal: WhatsApp only with a phone, «Enviar�
     assert.strictEqual(p.mails[1].subject, 'Your badge · Congreso Nacional de Jóvenes');
     assert.ok(p.mails[1].text.includes('Add to Home Screen'));
 });
+
+test('2.36.13 «Enviar por correo» from the admin: the portal\'s e-mail (template, 5-minute pause per person whoever sends, audit) — only with an e-mail on file, masked on the links; Escarapelas › ver with the inscriptions', async () => {
+    const w = await world();
+    const { p } = w;
+    ok(await p.call('post', '/publish', { body: { conference_id: w.cid, published: false } }));
+    ok(await p.call('post', '/fields', { body: { conference_id: w.cid, template: 'email' } }), 'email');
+    ok(await p.call('post', '/publish', { body: { conference_id: w.cid, published: true } }));
+    ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: {} } }));
+    const dani = ok(await p.call('post', '/inscriptions', { body: { conference_id: w.cid, first_name: 'Dani', last_name: 'Mora', location_id: w.norte, email: 'Dani@Example.org' } }), 'dani').id as number;
+    const email = (iid: number, user?: HarnessUser) => p.call('post', `/badges/links/${iid}/email`, { user, body: {} });
+
+    // The links say where it would go (masked), or '' — the action is hidden — and the list (GET) too.
+    assert.strictEqual((await linkFor(w, dani)).email_masked, 'd***@e***.org');
+    assert.strictEqual((await linkFor(w, w.ana)).email_masked, '');
+    const listed = ok(await p.call('get', `/badges/links?conference_id=${w.cid}`)).links;
+    assert.strictEqual(listed.find((l: any) => l.inscription_id === dani).email_masked, 'd***@e***.org');
+
+    // Who may: Escarapelas › ver with the inscriptions (as sharing the link); without the inscriptions, no.
+    assert.strictEqual((await email(dani, NOCODES)).status, 403);
+    assert.strictEqual(p.mails.length, 0);
+    const none = await email(w.ana, VIEWER);
+    assert.deepStrictEqual([none.status, none.body.code], [400, 'no_email']);
+    assert.strictEqual((await email(999999)).status, 404);
+
+    // Sent by the team member: the same e-mail as the portal's «Enviar» (badge.link), masked in the answer.
+    assert.deepStrictEqual(ok(await email(dani, VIEWER), 'send'), { sent: true, email_masked: 'd***@e***.org' });
+    assert.strictEqual(p.mails.length, 1);
+    assert.strictEqual(p.mails[0].to, 'dani@example.org');
+    assert.strictEqual(p.mails[0].subject, 'Tu escarapela · Congreso Nacional de Jóvenes');
+    assert.ok(p.mails[0].text.includes(`/portal/conference/yo#c=${w.codeOf(dani)}`), p.mails[0].text);
+
+    // One per person every 5 minutes, whoever sends: the coordinator's portal right after the admin is refused too.
+    const again = await email(dani);
+    assert.deepStrictEqual([again.status, again.body.code], [429, 'mail_wait']);
+    const fromPortal = await portal(p, 'post', '/portal/badges/email', await w.tokenOf(w.norte), { inscription_id: dani });
+    assert.deepStrictEqual([fromPortal.status, fromPortal.body.code], [429, 'mail_wait']);
+    assert.strictEqual(p.mails.length, 1);
+
+    // The audit names the admin; a failure is said and logged, never a silent «sent».
+    p.exec(`UPDATE ${T('badge_mails')} SET at_s = at_s - 301 WHERE inscription_id = ?`, dani);
+    p.setMailFail(true);
+    const off = await email(dani);
+    assert.deepStrictEqual([off.status, off.body.code], [503, 'mail_off']);
+    p.setMailFail(false);
+    const rows = p.q(`SELECT email, actor, ok FROM ${T('badge_mails')} WHERE inscription_id = ? ORDER BY id`, dani) as any[];
+    assert.deepStrictEqual(rows.map(r => [r.email, r.actor, Number(r.ok)]), [['dani@example.org', 'viewer', 1], ['dani@example.org', 'boss', 0]]);
+
+    // A cancelled registration has no badge to send.
+    p.exec(`UPDATE ${T('inscriptions')} SET status = 'cancelled' WHERE id = ?`, dani);
+    assert.strictEqual((await email(dani)).status, 404);
+    // «Regenerar enlace» shares the route and still needs Escarapelas › administrar.
+    assert.strictEqual((await p.call('post', `/badges/links/${w.ana}/rotate`, { user: VIEWER, body: {} })).status, 403);
+    assert.strictEqual((await p.call('post', `/badges/links/${w.ana}/nope`, { body: {} })).status, 404);
+});

@@ -30,7 +30,7 @@ export const phoneOfRow = (row: any, fields: any[]): string => {
     return v == null ? '' : String(v);
 };
 
-export function BadgeActions({ person, name, fields, conferenceId, conferenceName, canManage, onClose }: any) {
+export function BadgeActions({ person, name, fields, conferenceId, conferenceName, canManage, onClose, askEmail = false }: any) {
     const tx = useTx();
     const { addToast } = useToast();
     const { confirm } = useModal();
@@ -43,6 +43,9 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
     const [images, setImages] = useState<Record<string, string> | null>(null);
     const [error, setError] = useState('');
     const [busy, setBusy] = useState('');
+    // 2.36.13: «Enviar por correo» asks first, in place (the masked address), as the portal's «Enviar» does. The person
+    // list's «Correo» opens this sheet with the question already asked (`askEmail`).
+    const [asking, setAsking] = useState(!!askEmail);
     // 2.36.8: a copy the phone does not allow opens the link to copy by hand (lib/CopyFallback), never a toast.
     const { copy: copyNow, copyUi } = useCopy({ onCopied: (m) => addToast(m, 'success') });
     useEffect(() => {
@@ -124,6 +127,11 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
                                 })}>
                                     <i className="fa-solid fa-share-nodes"></i>{tx('badges.act.share', 'Compartir')}
                                 </button>
+                                {link.email_masked && (
+                                    <button type="button" className={ghost} data-badge-act="email" disabled={!!busy} aria-expanded={asking} onClick={() => setAsking((v) => !v)}>
+                                        <i className={`fa-solid ${busy === 'email' ? 'fa-spinner animate-spin' : 'fa-envelope'}`}></i>{tx('badges.act.email', 'Enviar por correo')}
+                                    </button>
+                                )}
                                 <a className={ghost} href={whatsappUrl(phone, message, cc)} target="_blank" rel="noopener noreferrer" data-badge-act="whatsapp"
                                     title={number ? `+${number}` : tx('badges.act.whatsapp.hint', 'No hay un teléfono válido en la inscripción: WhatsApp se abrirá para escoger el contacto.')}>
                                     <i className="fa-brands fa-whatsapp"></i>{number ? tx('badges.act.whatsapp', 'WhatsApp') : tx('badges.act.whatsapp.nophone', 'WhatsApp (sin número)')}
@@ -138,6 +146,24 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
                                     <i className={`fa-solid ${busy === 'sticker' ? 'fa-spinner animate-spin' : 'fa-note-sticky'}`}></i>{tx('badges.act.sticker', 'Sticker para imprimir')}
                                 </button>
                             </div>
+                            {asking && link.email_masked && (
+                                <div className="rounded-2xl border-2 border-blue-100 bg-blue-50/60 p-3 space-y-2" role="group" aria-label={tx('badges.act.email.confirm.label', 'Confirmar envío')} data-badge-email-confirm="">
+                                    <p className="text-xs font-bold text-blue-900">
+                                        {tx('badges.act.email.confirm', '¿Enviar la escarapela y cómo usarla a {email}?').split('{email}')[0]}
+                                        <span className="break-all">{link.email_masked}</span>
+                                        {tx('badges.act.email.confirm', '¿Enviar la escarapela y cómo usarla a {email}?').split('{email}')[1] || ''}
+                                    </p>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button type="button" className={`${btn} bg-blue-600 text-white hover:bg-blue-700`} disabled={!!busy} data-badge-act="email-send" onClick={() => act('email', async () => {
+                                            setAsking(false);
+                                            const r = await badgesApi.email(person.id);
+                                            addToast(tx('badges.act.email.sent', 'Escarapela enviada a {email}.').replace('{email}', r.email_masked || link.email_masked), 'success');
+                                        })}><i className="fa-solid fa-paper-plane"></i>{tx('badges.act.email.yes', 'Sí, enviar')}</button>
+                                        <button type="button" className={ghost} onClick={() => setAsking(false)}>{tx('cancel', 'Cancelar')}</button>
+                                    </div>
+                                </div>
+                            )}
+                            {!link.email_masked && <p className="text-[11px] text-gray-500" data-badge-missing="email">{tx('badges.act.email.none', 'Enviar por correo: no tiene correo registrado.')}</p>}
                             <p className="text-[10px] text-gray-400 break-all" data-badge-url="">{url}</p>
                             {link.view_count > 0 && <p className="text-[10px] font-bold text-gray-500">{(Number(link.view_count) === 1 ? tx('badges.person.views.one', 'Abierta 1 vez') : tx('badges.person.views', 'Abierta {n} veces')).replace('{n}', String(link.view_count))}</p>}
                             {canManage && (

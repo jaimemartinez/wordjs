@@ -906,3 +906,36 @@ describe('conference-manager 2.36.12 — «Editar encargado»: every piece of a 
         for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
     });
 });
+
+describe('conference-manager 2.36.13 — «Enviar por correo» wherever the admin shares a badge', () => {
+    const read = (rel: string) => src(`client/${rel}`);
+    it('the per-person badge actions (Escarapelas › Personas and the person sheet): only with an e-mail, asked in place with the masked address, a toast with the result', () => {
+        const a = read('admin/BadgeActions.tsx');
+        expect(a).toContain('{link.email_masked && (');
+        expect(a).toContain('data-badge-act="email"');
+        expect(a).toContain('data-badge-email-confirm=""');
+        expect(a).toContain('<span className="break-all">{link.email_masked}</span>');
+        expect(a).toContain('const r = await badgesApi.email(person.id);');
+        expect(a).toContain("addToast(tx('badges.act.email.sent', 'Escarapela enviada a {email}.')");
+        // Without an e-mail the action is hidden and the sheet says why (as the portal does).
+        expect(a).toContain("{!link.email_masked && <p className=\"text-[11px] text-gray-500\" data-badge-missing=\"email\">{tx('badges.act.email.none', 'Enviar por correo: no tiene correo registrado.')}</p>}");
+        expect(a).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
+        // Errors (429 mail_wait, 503 mail_off, …) are the server's words in a toast (act()).
+        expect(a).toContain("try { await fn(); } catch (e: any) { addToast(e?.message || 'Error', 'error'); }");
+    });
+    it('the person list: «Correo» only with an e-mail, opening the actions with the question asked; «Sin correo registrado» otherwise', () => {
+        const b = read('admin/BadgesPage.tsx');
+        expect(b).toContain('{link && link.email_masked && (');
+        expect(b).toContain('onClick={() => { setAskEmail(true); setOpen(r); }} data-badge-row="email"');
+        expect(b).toContain('askEmail={askEmail}');
+        expect(b).toContain("tx('badges.people.noemail', 'Sin correo registrado')");
+        // The person sheet uses the same actions.
+        expect(read('admin/page.tsx')).toContain('<BadgeActions person={badgeFor}');
+    });
+    it('one route for «Regenerar» and «Enviar por correo»; the API and the words', () => {
+        expect(read('lib/badges.ts')).toContain('email: (inscriptionId: number) => apiPost<{ sent: boolean; email_masked: string }>(`${BASE}/badges/links/${inscriptionId}/email`, {}),');
+        expect(src('index.js')).toContain("{ method: 'post', base: '/badges/links/:iid/:act', members: ['rotate', 'email'] },");
+        const keys = ['badges.act.email', 'badges.act.email.confirm', 'badges.act.email.yes', 'badges.act.email.sent', 'badges.act.email.none', 'badges.people.email', 'badges.people.email.title', 'badges.people.noemail'];
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});
