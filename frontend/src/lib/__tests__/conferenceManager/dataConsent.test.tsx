@@ -1001,3 +1001,76 @@ describe('conference-manager 2.36.14 — «Plantillas de correo» for a non-tech
         for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
     });
 });
+
+describe('conference-manager 2.36.15 — «Mi escarapela» without a connection', () => {
+    const read = (rel: string) => src(`client/${rel}`);
+    const mem = () => {
+        const m = new Map<string, string>();
+        return { getItem: (k: string) => (m.has(k) ? m.get(k)! : null), setItem: (k: string, v: string) => { m.set(k, v); }, removeItem: (k: string) => { m.delete(k); }, m };
+    };
+    const VIEW = {
+        name: 'Ana Pérez', conference: 'Asume el Riesgo', location: 'Norte', code: 'ABCDEFGH12',
+        answers: [{ label: 'Número de documento', value: '2000141' }], meals: { delivered: [], pending: [{ date: '2030-01-10', meal: 'cena' }] },
+        lodging: { hotel: 'Hotel', room: '101', address: 'Calle 1', lat: 1, lng: 2 }, transport: [{ id: 1 }], push_key: 'k',
+        badge: { badge: { layout: 'horizontal', items: [] }, plate: 'data:image/png;base64,AAA', images: { a: 'data:image/png;base64,BBB' } },
+        expires_on: '2030-01-20',
+    };
+    it('keeps only the badge part — never the answers, meals, hotel or bus — for that code, until the event ends', async () => {
+        const O = await import('../../../../../marketplace/plugins/conference-manager/client/portal/yo/offline');
+        const copy = O.offlineCopyOf(VIEW, VIEW.code, new Date('2030-01-09T12:00:00Z'));
+        expect(Object.keys(copy).sort()).toEqual(['badge', 'code', 'conference', 'expires_on', 'location', 'name', 'saved_at', 'v']);
+        expect(JSON.stringify(copy)).not.toContain('2000141');
+        expect(JSON.stringify(copy)).not.toContain('Hotel');
+        const s = mem();
+        expect(O.saveOffline(copy, s)).toBe(true);
+        expect(O.readOffline(VIEW.code, s, new Date('2030-01-15'))).toMatchObject({ name: 'Ana Pérez', badge: { plate: 'data:image/png;base64,AAA' } });
+        // Another person's code, or the event over: nothing.
+        expect(O.readOffline('ZZZZZZZZZZ', s, new Date('2030-01-15'))).toBe(null);
+        expect(O.readOffline(VIEW.code, s, new Date('2030-01-21'))).toBe(null);
+        // «Salir» forgets it.
+        O.clearOffline(s);
+        expect(O.readOffline(VIEW.code, s, new Date('2030-01-15'))).toBe(null);
+    });
+    it('a badge too big for the phone is kept without its photos; a phone that refuses keeps nothing', async () => {
+        const O = await import('../../../../../marketplace/plugins/conference-manager/client/portal/yo/offline');
+        const big = { ...VIEW, badge: { ...VIEW.badge, images: { photo: 'data:image/jpeg;base64,' + 'A'.repeat(1_600_000) } } };
+        const s = mem();
+        expect(O.saveOffline(O.offlineCopyOf(big, big.code), s)).toBe(true);
+        const kept = O.readOffline(big.code, s, new Date('2030-01-15'));
+        expect(kept && kept.badge && kept.badge.images).toBe(null);
+        expect(O.saveOffline(O.offlineCopyOf(VIEW, VIEW.code), { setItem: () => { throw new Error('QuotaExceededError'); } })).toBe(false);
+        // What counts as «no connection» (not «no access»).
+        expect([null, 0, 500, 502, 503].every((x) => O.isOfflineFailure(x as any))).toBe(true);
+        expect([200, 401, 403, 404, 410].some((x) => O.isOfflineFailure(x))).toBe(false);
+    });
+    it('the worker keeps the page and its files, never the person\'s data or the PDF tickets', () => {
+        const sw = read('portal/sw.js');
+        expect(sw).toContain("self.addEventListener('fetch', (event) => {");
+        expect(sw).toContain("if (url.pathname.startsWith('/api/')) return BUNDLE.test(url.pathname);");
+        expect(sw).toContain("return url.pathname !== '/portal/conference/file' && !url.pathname.endsWith('/sw.js');");
+        expect(sw).toContain("const hit = await cache.match(key, { ignoreSearch: page });");
+        // Network first: the live answer whenever there is one.
+        expect(sw.indexOf('const res = await fetch(req);')).toBeLessThan(sw.indexOf('const hit = await cache.match('));
+        const BUNDLE = /^\/api\/v1\/plugins\/[^/]+\/bundle(\/css)?$/;
+        expect(sw).toContain(`const BUNDLE = ${String(BUNDLE)};`);
+        for (const ok of ['/api/v1/plugins/conference/bundle', '/api/v1/plugins/conference/bundle/css']) expect(BUNDLE.test(ok), ok).toBe(true);
+        for (const no of ['/api/v1/plugin/conference-manager/public/me/view', '/api/v1/plugins/conference/bundle/x']) expect(BUNDLE.test(no), no).toBe(false);
+    });
+    it('the page: kept only with «Recordar», shown offline with the icon, forgotten on «Salir»; back online reloads', () => {
+        const m = read('portal/yo/MyRegistration.tsx');
+        expect(m).toContain('if (!stored || stored.code !== okView.code) return;');
+        expect(m).toContain('saveOffline(offlineCopyOf(okView, okView.code));');
+        expect(m).toContain('data-self-page="offline"');
+        expect(m).toContain('<OfflineMark savedAt={saved} />');
+        expect(m).toContain('{!online && <OfflineMark />}');
+        expect(m).toContain('else { writeStored(null); clearOffline(); }');
+        expect(m).toMatch(/writeStored\(null\);\r?\n\s+clearOffline\(\);\r?\n\s+dropPushSubscription\(\);/);
+        expect(m).toContain('window.addEventListener("online", on);');
+        // Without «Recordar», one line says how to have it offline.
+        expect(m).toContain('{(readStored() || { code: "" }).code !== view.code && (');
+        expect(m).toContain('Marca «Recordar en este teléfono» para verla sin conexión.');
+        // The kept view shows the badge and who it is — nothing else.
+        const offline = m.slice(m.indexOf('if (state.kind === "offline") {'), m.indexOf('if (state.kind === "error") {'));
+        for (const no of ['answers', 'meals', 'lodging', 'downloadPdf']) expect(offline, no).not.toContain(no);
+    });
+});

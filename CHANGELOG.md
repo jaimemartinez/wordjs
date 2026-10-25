@@ -6,6 +6,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.15: «Mi escarapela» works without a connection.** When the person chose «Recordar en
+  este teléfono», their badge (name, conference, locality, code and the badge itself) is kept on the phone, and the
+  page's service worker keeps the page so it opens with no connection.
+  - **Offline**: the kept badge shows with a small «Sin conexión» icon and when it was saved. The icon also appears
+    when the connection drops while the page is open.
+  - **Back online**: the live page loads again.
+  - **What is kept**: only the badge part — never the answers, meals, hotel or bus. «Salir» deletes it, and it
+    expires with the event.
+  - **What is never cached**: the plugin's API and the PDF tickets always go to the network.
+  - **Without «Recordar»**: one line under the badge says how to have it offline.
+
 ## [2.11.7] - 2026-10-24
 
 ### Added
