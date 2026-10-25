@@ -524,6 +524,62 @@ function createBadges(base) {
      * The links as the admin and the coordinators share them: each with `self`, the «Mi inscripción» address
      * (path) of that person, so what is opened, copied and sent is that page itself; null while the page is off.
      */
+    /**
+     * 2.36.13: each link with `email_masked` — where «Enviar por correo» would go («» = no e-mail on file: the action is
+     * hidden). Only for callers that see inscriptions (the links routes check it).
+     */
+    async function withEmail(cid, links) {
+        if (!links.length || !D.emailsOf) return links;
+        const rows = [];
+        const ids = links.map(l => l.inscription_id);
+        for (let i = 0; i < ids.length; i += 400) {
+            const chunk = ids.slice(i, i + 400);
+            rows.push(...await db.all(`SELECT * FROM ${T.inscriptions} WHERE id IN (${chunk.map(() => '?').join(', ')})`, chunk));
+        }
+        const emails = await D.emailsOf(cid, rows);
+        return links.map(l => ({ ...l, email_masked: emails.get(l.inscription_id) ? maskEmail(emails.get(l.inscription_id)) : '' }));
+    }
+
+    /**
+     * The badge e-mail to one person (2.36.6, the portal's «Enviar»; 2.36.13 also the admin's «Enviar por correo»): the
+     * person's badge link and how to use it, through «Plantillas de correo» (badge.link), in the conference's e-mail
+     * language. With an e-mail on file (400 no_email); one e-mail per person every MAIL_GAP_S whoever sends it (429
+     * mail_wait, with retry_in). Every attempt — sent or not — is a row of badge_mails with its actor (the audit). The
+     * site's mail missing or not granted is a 503 mail_off, a provider failure a 502 mail_failed: never a silent «sent».
+     * → { status, body }.
+     */
+    async function sendBadgeMail(ins, actor) {
+        const cid = Number(ins.conference_id);
+        const { email } = await D.contactOf(ins);
+        if (!email) return { status: 400, body: { error: MSG.no_email, code: 'no_email' } };
+        const now = Math.floor(Date.now() / 1000);
+        const last = await db.get(`SELECT MAX(at_s) AS at_s FROM ${T.badgeMails} WHERE inscription_id = ? AND ok = 1`, [ins.id]);
+        const wait = last && last.at_s != null ? Number(last.at_s) + MAIL_GAP_S - now : 0;
+        if (wait > 0) return { status: 429, body: { error: MSG.mail_wait(Math.ceil(wait / 60)), code: 'mail_wait', retry_in: wait } };
+        const [link] = await ensureLinks(cid, [Number(ins.id)], actor);
+        const base = await D.siteLinkBase();
+        if (!link || !base) return { status: 503, body: { error: MSG.mail_off, code: 'mail_off' } };
+        const url = link.self ? `${base}${link.self}` : `${base}/portal/conference/badge#t=${link.token}`;
+        const conf = await db.get(`SELECT id, name FROM ${T.conferences} WHERE id = ?`, [cid]);
+        const name = String((await D.personWithName(ins)).name || '').split(' ')[0] || '';
+        const log = (ok, error) => db.run(`INSERT INTO ${T.badgeMails} (conference_id, inscription_id, email, actor, at_s, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [cid, ins.id, email, actor ? String(actor).slice(0, 120) : null, now, ok ? 1 : 0, error ? String(error).slice(0, 300) : null]);
+        try {
+            // 2.36.11: through «Plantillas de correo» (the stored edit), else the default.
+            const lang = await D.mailLangOf(cid);
+            const vals = { conference: conf ? conf.name : '', name };
+            const msg = D.mailTemplates ? await D.mailTemplates.render('badge.link', lang, vals, { action: { url } }) : badgeMail(lang, { ...vals, link: url });
+            await D.mail({ to: email, ...msg });
+        } catch (e) {
+            const why = String(e && e.message || e);
+            await log(false, why);
+            const off = /permission|denied|not available|not granted|permiso/i.test(why);
+            return { status: off ? 503 : 502, body: { error: off ? MSG.mail_off : MSG.mail_failed, code: off ? 'mail_off' : 'mail_failed' } };
+        }
+        await log(true, null);
+        return { status: 200, body: { sent: true, email_masked: maskEmail(email) } };
+    }
+
     async function withSelf(cid, links) {
         if (!links.length) return links;
         const usable = await selfUsable(cid, await configOf(cid));
@@ -735,7 +791,7 @@ function createBadges(base) {
                 const rows = await db.all(
                     `SELECT l.inscription_id, l.token, l.rev, l.created_at, l.view_count, l.last_viewed_at FROM ${T.badgeLinks} l JOIN ${T.inscriptions} i ON i.id = l.inscription_id
                      WHERE l.conference_id = ?${lid ? ' AND i.location_id = ?' : ''} ORDER BY l.inscription_id`, lid ? [cid, lid] : [cid]);
-                res.json({ links: await withSelf(cid, rows.map(linkOut)) });
+                res.json({ links: await withEmail(cid, await withSelf(cid, rows.map(linkOut))) });
             } catch (e) { send(res, e); }
         });
         // POST /badges/links { conference_id, inscription_ids? | location_id? | all? } → create the missing ones.
@@ -751,7 +807,7 @@ function createBadges(base) {
                 const cfg = await configOf(cid);
                 const exp = expiresAtMs(cfg.policy);
                 const state = !cfg.policy.enabled ? 'disabled' : exp != null && Date.now() >= exp ? 'expired' : null;
-                res.json({ links: await ensureLinks(cid, ids, D.actorOf(req)), state, country_code: await whatsappCodeOf(cid, cfg) });
+                res.json({ links: await withEmail(cid, await ensureLinks(cid, ids, D.actorOf(req))), state, country_code: await whatsappCodeOf(cid, cfg) });
             } catch (e) { send(res, e); }
         });
         // POST /badges/links/:iid/rotate — a new token (the old link stops working). badges:manage.
@@ -768,7 +824,20 @@ function createBadges(base) {
                     return res.json({ link: made[0] || null });
                 }
                 const l = await db.get(`SELECT inscription_id, token, rev, created_at, view_count, last_viewed_at FROM ${T.badgeLinks} WHERE inscription_id = ?`, [iid]);
-                res.json({ link: l ? (await withSelf(Number(ins.conference_id), [linkOut(l)]))[0] : null });
+                res.json({ link: l ? (await withEmail(Number(ins.conference_id), await withSelf(Number(ins.conference_id), [linkOut(l)])))[0] : null });
+            } catch (e) { send(res, e); }
+        });
+        // POST /badges/links/:iid/email → { sent: true, email_masked } (2.36.13): «Enviar por correo» from the admin's badge
+        // actions — the same e-mail, template, per-person pause and audit as the portal's «Enviar» (sendBadgeMail), as
+        // whoever may share the badge (Escarapelas › ver, with the inscriptions). A cancelled registration has no badge.
+        http.route('post', '/badges/links/:iid/email', AUTH, async (req, res) => {
+            if (!await gate(req, res, 'view', true)) return;
+            try {
+                const iid = positiveInt(req.params.iid);
+                const ins = iid ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ? AND (status IS NULL OR status <> 'cancelled')`, [iid]) : null;
+                if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+                const r = await sendBadgeMail(ins, D.actorOf(req));
+                res.status(r.status).json(r.body);
             } catch (e) { send(res, e); }
         });
         // DELETE /badges/links/:iid — revoke. badges:manage.
@@ -858,35 +927,8 @@ function createBadges(base) {
                 const ids = await ownIds(location, req.body || {});
                 if (!ids.length || !positiveInt((req.body || {}).inscription_id)) return res.status(404).json({ error: 'Inscripción no encontrada.' });
                 const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [ids[0]]);
-                const { email } = await D.contactOf(ins);
-                if (!email) return res.status(400).json({ error: MSG.no_email, code: 'no_email' });
-                const now = Math.floor(Date.now() / 1000);
-                const last = await db.get(`SELECT MAX(at_s) AS at_s FROM ${T.badgeMails} WHERE inscription_id = ? AND ok = 1`, [ins.id]);
-                const wait = last && last.at_s != null ? Number(last.at_s) + MAIL_GAP_S - now : 0;
-                if (wait > 0) return res.status(429).json({ error: MSG.mail_wait(Math.ceil(wait / 60)), code: 'mail_wait', retry_in: wait });
-                const [link] = await ensureLinks(location.conference_id, ids, `portal:${location.id}`);
-                const base = await D.siteLinkBase();
-                if (!link || !base) return res.status(503).json({ error: MSG.mail_off, code: 'mail_off' });
-                const url = link.self ? `${base}${link.self}` : `${base}/portal/conference/badge#t=${link.token}`;
-                const conf = await confOf(location.conference_id);
-                const name = String((await D.personWithName(ins)).name || '').split(' ')[0] || '';
-                const actor = `portal:${location.id}`;
-                const log = (ok, error) => db.run(`INSERT INTO ${T.badgeMails} (conference_id, inscription_id, email, actor, at_s, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    [location.conference_id, ins.id, email, actor, now, ok ? 1 : 0, error ? String(error).slice(0, 300) : null]);
-                try {
-                    // 2.36.11: through «Plantillas de correo» (the stored edit), else the default.
-                    const lang = await D.mailLangOf(location.conference_id);
-                    const vals = { conference: conf ? conf.name : '', name };
-                    const msg = D.mailTemplates ? await D.mailTemplates.render('badge.link', lang, vals, { action: { url } }) : badgeMail(lang, { ...vals, link: url });
-                    await D.mail({ to: email, ...msg });
-                } catch (e) {
-                    const why = String(e && e.message || e);
-                    await log(false, why);
-                    const off = /permission|denied|not available|not granted|permiso/i.test(why);
-                    return res.status(off ? 503 : 502).json({ error: off ? MSG.mail_off : MSG.mail_failed, code: off ? 'mail_off' : 'mail_failed' });
-                }
-                await log(true, null);
-                res.json({ sent: true, email_masked: maskEmail(email) });
+                const r = await sendBadgeMail(ins, `portal:${location.id}`);
+                res.status(r.status).json(r.body);
             } catch (e) { send(res, e); }
         });
 

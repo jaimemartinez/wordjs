@@ -82,6 +82,8 @@ const ROUTE_GROUPS = [
     { method: 'post', base: '/meals/priority/:act', members: ['call', 'freeze'] },
     { method: 'post', base: '/locations/:id/lodging/:act', members: ['reopen', 'return', 'validate'] },
     { method: 'post', base: '/mail-templates/:id/:act', members: ['save', 'restore', 'preview', 'test'] },
+    // 2.36.13: «Enviar por correo» from the admin's badge actions shares the route of «Regenerar enlace».
+    { method: 'post', base: '/badges/links/:iid/:act', members: ['rotate', 'email'] },
 ];
 function groupRoutes(host, groups) {
     const memberOf = new Map();
@@ -126,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.12',
+    version: '2.36.13',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -6111,6 +6113,7 @@ exports.init = async function (wordjs) {
         // 2.36.6, «Escarapela» › «Enviar»: the person's e-mail and WhatsApp number as consent reads them, the e-mail
         // language, the site's address for the link and the site's mail (email:admin, as consent's e-mails).
         contactOf: (ins) => consent.contactOf(ins),
+        emailsOf: (cid, rows) => consent.emailsOf(cid, rows),
         mailLangOf: (cid) => consent.mailLangOf(cid),
         siteLinkBase: () => siteLinkBase(),
         mail: (msg) => wordjs.mail(msg),

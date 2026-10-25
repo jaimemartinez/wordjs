@@ -1278,6 +1278,14 @@ function createConsent(base) {
             const phone = await phoneOf(ins, form);
             return { email: await emailOf(ins, form), phone, phone_wa: waDigits(phone, conf && conf.phone_country) || '' };
         },
+        // 2.36.13: the e-mails of many people of one conference at once (the admin badge list: «Enviar por correo»
+        // shows only with one) — one read of the form. Map inscription id → e-mail ('' = none).
+        emailsOf: async (cid, rows) => {
+            const form = await formOf(cid);
+            const out = new Map();
+            for (const ins of rows) out.set(Number(ins.id), await emailOf(ins, form));
+            return out;
+        },
         mailLangOf,
         MSG, LIMITS,
     };
