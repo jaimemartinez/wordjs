@@ -364,7 +364,7 @@ export default function AuditPage() {
                                         ) : (
                                             <div className="flex flex-wrap justify-end lg:justify-start gap-x-4 gap-y-1 text-sm text-gray-700">
                                                 {summary.pairs.map((pair) => (
-                                                    <span key={pair.key} className="break-words">
+                                                    <span key={pair.key} className="min-w-0 max-w-full break-words">
                                                         <span className="text-xs font-bold text-gray-500">{pair.key}:</span> {pair.value}
                                                     </span>
                                                 ))}

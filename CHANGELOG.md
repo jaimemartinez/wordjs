@@ -25,6 +25,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Unchanged**: the texts are still plain text with the small format, typed HTML still shows as text, and the
     link, code and authorization record are still drawn by the system. Routes are unchanged.
 
+### Fixed
+
+- **Admin table cards fit a phone even when a summary holds a long URL.** After 2.11.6 the audit cards still scrolled sideways through the detail summary («source: https://…»): its pairs are `break-words` spans, and `overflow-wrap: break-word` does not shrink an element's minimum width. Inside a DataTable card `break-words` now breaks anywhere (`app/globals.css`), and the audit summary pills may shrink.
+
 ## [2.11.6] - 2026-10-24
 
 ### Fixed
