@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.7] - 2026-10-24
+
 ### Added
 - **conference-manager 2.36.14: «Plantillas de correo», redesigned for a coordinator who knows nothing about markup.**
   - **The list**: one card per e-mail, with its name, when it is sent, «Personalizado» (and in which languages) or
