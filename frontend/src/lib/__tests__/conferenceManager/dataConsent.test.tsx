@@ -114,7 +114,8 @@ describe('«Copiar mensaje» (2.33.2)', () => {
     it('both screens offer it next to the send action, through the share routes', () => {
         const admin = src('client/admin/ConsentAdmin.tsx'), portal = src('client/portal/ConsentBits.tsx');
         expect(admin).toContain('/consent/share');
-        expect(admin).toContain('data-consent-copy=');
+        // 2.36.16: the row's action lives in the people list (and the person's sheet).
+        expect(src('client/admin/ConsentPeopleList.tsx')).toContain('data-consent-copy=');
         expect(portal).toContain('/portal/consent/share');
         expect(portal).toContain('data-action="consent-copy"');
         for (const s of [admin, portal]) { expect(s).toContain('whatsappUrl('); expect(s).toContain('t("copy.done")'); }
@@ -343,7 +344,9 @@ describe('registering without an e-mail (2.35.0)', () => {
     it('«Sin correo» is said in each language, the resend button hides, and the toast says what to do', () => {
         for (const l of ['es', 'en', 'pt']) for (const k of ['noemail.badge', 'noemail.hint', 'portal.registered.noemail']) expect(consentT(l)(k)).not.toBe(k);
         expect(src('client/portal/ConsentBits.tsx')).toContain('!consent.no_email &&');
-        expect(src('client/admin/ConsentAdmin.tsx')).toContain('!noEmail.has(p.id)');
+        // 2.36.16: the list row and the person's sheet hide «Enviar solicitud» without an e-mail.
+        expect(src('client/admin/ConsentPeopleList.tsx')).toContain('{x.ask && !x.ne && (');
+        expect(src('client/admin/ConsentPersonSheet.tsx')).toContain('{ask && !noEmail && (');
         expect(src('client/portal/CoordinatorPortal.tsx')).toContain("ct('portal.registered.noemail')");
     });
 });
@@ -783,7 +786,9 @@ describe('2.36.10 staff registrations: the verbal authorization of the personal 
         expect(read('portal/CoordinatorPortal.tsx')).toContain('history={{ authHeaders: portalAuthHeaders }}');
     });
     it('the record: the admin list and the portal chip say a verbal authorization of the data is waiting for the written one', () => {
-        expect(read('admin/ConsentAdmin.tsx')).toContain('data-consent-verbal-general=""');
+        // 2.36.16: a verbal authorization of the data is the «Autorizado (verbal)» status, with who recorded it in the sheet.
+        expect(read('lib/consentStatus.ts')).toContain('if (st.verbal_general || st.verbal_health) return st.verbal_overdue ? \'overdue\' : \'verbal\';');
+        expect(read('admin/ConsentPersonSheet.tsx')).toContain('t("ux.verbal.by", { who: st.verbal_general_by, when: when(st.verbal_general_at) })');
         const chip = renderToStaticMarkup(<ConsentChip consent={{ state: 'pending', granted_at: null, revoked_at: null, email_masked: '', mail_failed: false, link_expired: false, verbal_general: true } as any} />);
         expect(chip).toContain('data-consent-verbal-general');
         expect(chip).toContain(consentT('es')('verbal.general.pending'));
@@ -1072,5 +1077,109 @@ describe('conference-manager 2.36.15 — «Mi escarapela» without a connection'
         // The kept view shows the badge and who it is — nothing else.
         const offline = m.slice(m.indexOf('if (state.kind === "offline") {'), m.indexOf('if (state.kind === "error") {'));
         for (const no of ['answers', 'meals', 'lodging', 'downloadPdf']) expect(offline, no).not.toContain(no);
+    });
+});
+
+describe('conference-manager 2.36.16 — «Autorizaciones» redesigned', () => {
+    const read = (rel: string) => src(`client/${rel}`);
+    const ST: Record<string, any> = {
+        1: { state: 'pending', verbal_general: true, verbal_overdue: false, email_masked: 'a***@e***.org' },
+        2: { state: 'pending', verbal_general: true, verbal_overdue: true, email_masked: 'b***@e***.org' },
+        3: { state: 'granted', method: 'otp', general: true, health: true, image: false, email_masked: 'c***@e***.org' },
+        4: { state: 'granted', method: 'paper', general: true, health: true, image: true, verbal_health: true },
+        5: { state: 'revoked', email_masked: 'd***@e***.org' },
+        7: { state: 'pending', email_masked: 'f***@e***.org', link_expired: true },
+    };
+    const PEOPLE = [
+        { id: 1, first_name: 'Ana', last_name: 'Pérez', location: 'Norte', location_id: 10, doc: '1045678901' },
+        { id: 2, first_name: 'Beto', last_name: 'Gómez', location: 'Norte', location_id: 10 },
+        { id: 3, first_name: 'Carla', last_name: 'Ríos', location: 'Sur', location_id: 20 },
+        { id: 4, first_name: 'Diego', last_name: 'Mora', location: 'Sur', location_id: 20 },
+        { id: 5, first_name: 'Elena', last_name: 'Vargas', location: 'Norte', location_id: 10 },
+        { id: 6, first_name: 'Félix', last_name: 'Núñez', location: 'Norte', location_id: 10 },
+        { id: 7, first_name: 'Gina', last_name: 'Ortiz', location: 'Norte', location_id: 10 },
+        { id: 8, first_name: 'Hugo', last_name: 'Paz', location: 'Norte', location_id: 10, status: 'cancelled' },
+    ];
+    it('one status per person, in the owner\'s words, with where the request stands', async () => {
+        const S = await import('../../../../../marketplace/plugins/conference-manager/client/lib/consentStatus');
+        expect(PEOPLE.slice(0, 7).map((p) => S.statusOf(ST[p.id]))).toEqual(['verbal', 'overdue', 'confirmed_code', 'confirmed_paper', 'revoked', 'none', 'none']);
+        expect(S.detailOf(undefined, false)).toBe('never_sent');
+        expect(S.detailOf(undefined, true)).toBe('no_email');
+        expect(S.detailOf(ST[7], false)).toBe('link_expired');
+        expect(S.detailOf({ state: 'pending', email_masked: 'x', mail_failed: true }, false)).toBe('mail_failed');
+        expect(S.detailOf(ST[1], false)).toBe('link_sent');
+        expect(S.detailOf(ST[4], false)).toBe('health_verbal');
+        expect(S.detailOf(ST[3], false)).toBe(null);
+        expect(S.canRequest('confirmed_code')).toBe(false);
+        expect(S.canRequest('revoked')).toBe(true);
+        // Every status has a color and an icon.
+        for (const k of S.STATUS_ORDER) expect(S.STATUS_LOOK[k].icon).toMatch(/^fa-/);
+    });
+    it('the summary counts filter; search finds a name, a document or a locality; cancelled people never count', async () => {
+        const S = await import('../../../../../marketplace/plugins/conference-manager/client/lib/consentStatus');
+        expect(S.countsOf(PEOPLE, ST)).toEqual({ all: 7, none: 2, verbal: 1, overdue: 1, confirmed_code: 1, confirmed_paper: 1, revoked: 1 });
+        const ids = (f: any) => S.filterPeople(PEOPLE, ST, f).map((p: any) => p.id);
+        expect(ids({ status: 'overdue' })).toEqual([2]);
+        expect(ids({ q: 'nunez' })).toEqual([6]);
+        expect(ids({ q: '1045678901' })).toEqual([1]);
+        expect(ids({ q: 'sur' })).toEqual([3, 4]);
+        expect(ids({ q: 'ana perez' })).toEqual([1]);
+        expect(ids({ location: '20' })).toEqual([3, 4]);
+        expect(ids({ status: 'none', location: '10' })).toEqual([6, 7]);
+        // Bulk: who can be e-mailed (not confirmed, an e-mail on file), and the one locality of a selection.
+        expect(S.sendable([1, 3, 4, 6, 7], ST, new Set([6]))).toEqual([1, 7]);
+        expect(S.oneLocation([1, 2, 6], PEOPLE)).toBe('10');
+        expect(S.oneLocation([1, 3], PEOPLE)).toBe(null);
+    });
+    it('the list: a table and cards (no sideways scroll), long values wrap anywhere, a checkbox per person, the main actions in reach', async () => {
+        const { ConsentPeopleList } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/ConsentPeopleList');
+        const t = consentT('es');
+        const long = { ...PEOPLE[0], location: 'Localidad con un nombre larguísimo de prueba' };
+        const st = { 1: { ...ST[1], email_masked: 'juan.sebastian.delatorre.rodriguez.coordinacion@correo-institucional-muy-largo.example.org' } };
+        const html = renderToStaticMarkup(<ConsentPeopleList rows={[long]} states={st} noEmail={new Set()} t={t} nameOf={(p: any) => `${p.first_name} ${p.last_name}`}
+            enabled canManage selectable selected={new Set([1])} onToggle={() => {}} onToggleAll={() => {}} onOpen={() => {}} onSend={() => {}} onCopy={() => {}} busyId={null} />);
+        expect(html).toContain('hidden lg:table');
+        expect(html).toContain('lg:hidden');
+        expect(html).toContain('overflow-wrap:anywhere');
+        expect(html).not.toContain('overflow-x-auto');
+        expect(html).toContain('data-consent-select="1"');
+        expect(html).toContain('checked=""');
+        expect(html).toContain('data-consent-status="verbal"');
+        expect(html).toContain('Autorizado (verbal)');
+        expect(html).toContain('data-consent-send="1"');
+        expect(html).toContain('data-consent-copy="1"');
+        expect(html).toContain('data-consent-view="1"');
+        // Without an e-mail: no «Enviar solicitud», the «Sin correo» badge, WhatsApp still there.
+        const none = renderToStaticMarkup(<ConsentPeopleList rows={[PEOPLE[5]]} states={{}} noEmail={new Set([6])} t={t} nameOf={(p: any) => p.first_name}
+            enabled canManage selectable={false} selected={new Set()} onToggle={() => {}} onToggleAll={() => {}} onOpen={() => {}} onSend={() => {}} onCopy={() => {}} busyId={null} />);
+        expect(none).not.toContain('data-consent-send=');
+        expect(none).toContain('data-consent-noemail');
+        expect(none).toContain('data-consent-copy="6"');
+        expect(none).not.toContain('data-consent-select=');
+    });
+    it('the screen: people first, then paper and settings; the summary filters; selection sends or prints; each person in a sheet with the timeline', () => {
+        const a = read('admin/ConsentAdmin.tsx');
+        expect(a.indexOf('data-consent-tab={k}')).toBeGreaterThan(0);
+        expect(a).toContain('["people", "fa-users", t("ux.tab.people")], ["paper", "fa-file-signature", t("ux.tab.paper")]');
+        expect(a).toContain('onClick={() => setStatusFilter(k)} data-consent-filter={k}');
+        expect(a).toContain('data-consent-bulk-send=""');
+        expect(a).toContain('data-consent-bulk-paper=""');
+        expect(a).toContain('onlyIds={paperOnly}');
+        expect(a).toContain('<ConsentPersonSheet p={openPerson}');
+        expect(a).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
+        const sheet = read('admin/ConsentPersonSheet.tsx');
+        expect(sheet).toContain('<HistoryList load={loadHistory} lang={lang} />');
+        expect(sheet).toContain('conferenceApi.getInscriptionHistory(p.id)');
+        expect(sheet).toContain('{st && isAdmin && (');
+        expect(sheet).toContain('{canManage && granted && (');
+        // The paper sheet for a selection rides on the existing «create» action.
+        expect(read('lib/PaperConsent.tsx')).toContain('...(onlyIds && onlyIds.length ? { inscription_ids: onlyIds } : {})');
+    });
+    it('the words in es/en/pt', () => {
+        const keys = ['ux.title', 'ux.intro', 'ux.tab.people', 'ux.tab.paper', 'ux.tab.settings', 'ux.status.none', 'ux.status.verbal', 'ux.status.overdue', 'ux.status.confirmed_code', 'ux.status.confirmed_paper', 'ux.status.revoked',
+            'ux.search', 'ux.bulk.send', 'ux.bulk.paper', 'ux.bulk.sent', 'ux.bulk.paper.one', 'ux.detail.link_sent', 'ux.detail.no_email', 'ux.act.view', 'ux.act.send', 'ux.act.copy', 'ux.act.revoke', 'ux.act.export',
+            'ux.explain.verbal', 'ux.explain.overdue', 'ux.overdue.hint', 'paper.only', 'paper.only.clear', 'ux.act.view.short', 'ux.act.resend.short'];
+        for (const l of ['es', 'en', 'pt']) for (const k of keys) expect(consentT(l)(k), `${l} ${k}`).not.toBe(k);
+        expect(consentT('es')('ux.bulk.sent', { ok: 3, total: 4 })).toBe('Solicitud enviada a 3 de 4.');
     });
 });

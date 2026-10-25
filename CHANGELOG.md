@@ -7,6 +7,26 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Added
+- **conference-manager 2.36.16: «Autorizaciones», redesigned.**
+  - **Three tabs:** «Personas» first, then «Hoja en papel» and «Configuración». The 20-field settings form no
+    longer sits on top of the list.
+  - **One status per person**, in plain words with a color and an icon: Sin autorización, Autorizado (verbal),
+    Vencido (past «Días para confirmar» without the written confirmation), Confirmado (código), Confirmado (papel)
+    and Retirado. A line under it says where the request stands: sent, never sent, the e-mail did not arrive, the
+    link expired, or no e-mail.
+  - **Summary that filters:** the count for each status is a button that filters the list.
+  - **Search and filter:** search by name, document or locality, and filter by locality.
+  - **No sideways scrolling:** a table from 1024 px and cards below it; long names, localities and e-mails wrap.
+  - **Main actions in every row:** «Ver», «Enviar solicitud» and «Copiar mensaje / WhatsApp».
+  - **Selection:** «Enviar solicitud» to everyone chosen who can be e-mailed, and «Hoja en papel» for the chosen
+    people of one locality. The sheet-create action accepts an optional `inscription_ids`; there is no new route.
+  - **Each person in a sheet:**
+    - the status explained;
+    - what they authorized (data, health, image);
+    - the actions that fit — send, copy, paper, withdraw, download the record (WordJS administrators);
+    - their timeline (verbal by whom, link sent, confirmed by code or on paper, withdrawn).
+  - **Unchanged:** permissions, the consent rules and the evidence. Texts are in es/en/pt, and all dialogs are
+    in-app.
 - **conference-manager 2.36.15: «Mi escarapela» works without a connection.** When the person chose «Recordar en
   este teléfono», their badge (name, conference, locality, code and the badge itself) is kept on the phone, and the
   page's service worker keeps the page so it opens with no connection.
