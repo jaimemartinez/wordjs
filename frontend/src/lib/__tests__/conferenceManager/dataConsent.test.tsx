@@ -800,14 +800,14 @@ describe('2.36.11 «Plantillas de correo» and «Correo del encargado» on the a
         expect(page).toContain("case 'emails': return p.isAdmin;");
         expect(page).toContain("{shown === 'emails' && <MailTemplatesPage />}");
         const m = read('admin/MailTemplatesPage.tsx');
-        expect(m).toContain('conferenceApi.previewMailTemplate(id, { lang, ...draft })');
+        expect(m).toContain('conferenceApi.previewMailTemplate(tpl.id, payload())');
         expect(m).toMatch(/<iframe[^>]*sandbox=""[^>]*srcDoc=\{preview \? preview\.html : ''\}/);
         expect(m).toContain("width: device === 'mobile' ? 375 : '100%'");
-        expect(m).toContain('const insert = (key: string) => {');
+        expect(m).toContain('const insert = (p) => {');
         expect(m).toContain("await confirm(tx('mail.restore.confirm'");
         expect(m).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
-        expect(m).toContain('conferenceApi.testMailTemplate(id, { lang, ...draft })');
-        expect(m).toContain('conferenceApi.restoreMailTemplate(id, lang)');
+        expect(m).toContain('conferenceApi.testMailTemplate(tpl.id, payload())');
+        expect(m).toContain('conferenceApi.restoreMailTemplate(tpl.id, lang)');
         // Errors in place: the required fields checked before anything is sent.
         expect(m).toContain("if (!draft.subject.trim()) e.subject = tx('mail.subject.missing', 'Escribe el asunto.');");
         // The API it calls.
@@ -936,6 +936,68 @@ describe('conference-manager 2.36.13 — «Enviar por correo» wherever the admi
         expect(read('lib/badges.ts')).toContain('email: (inscriptionId: number) => apiPost<{ sent: boolean; email_masked: string }>(`${BASE}/badges/links/${inscriptionId}/email`, {}),');
         expect(src('index.js')).toContain("{ method: 'post', base: '/badges/links/:iid/:act', members: ['rotate', 'email'] },");
         const keys = ['badges.act.email', 'badges.act.email.confirm', 'badges.act.email.yes', 'badges.act.email.sent', 'badges.act.email.none', 'badges.people.email', 'badges.people.email.title', 'badges.people.noemail'];
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});
+
+describe('conference-manager 2.36.14 — «Plantillas de correo» for a non-technical coordinator', () => {
+    const read = (rel: string) => src(`client/${rel}`);
+    const P: { key: string; label: Record<string, string>; sample?: Record<string, string>; subject_only?: boolean }[] = [
+        { key: 'name', label: { es: 'Nombre de la persona', en: 'Name of the person' }, sample: { es: 'Ana' } },
+        { key: 'conference', label: { es: 'Conferencia', en: 'Conference' }, sample: { es: 'Asume el Riesgo' } },
+        { key: 'code', label: { es: 'Código (solo en el asunto)' }, subject_only: true },
+    ];
+    it('the toolbar writes the small markup at the cursor: Negrita, Lista, Enlace', async () => {
+        const E = await import('../../../../../marketplace/plugins/conference-manager/client/lib/mailEditor');
+        // Negrita: around the selection; with none, a word selected to type over.
+        expect(E.applyBold('Hola mundo', 5, 10)).toEqual({ value: 'Hola **mundo**', start: 7, end: 12 });
+        expect(E.applyBold('Hola ', 5, 5, 'texto')).toEqual({ value: 'Hola **texto**', start: 7, end: 12 });
+        // Lista: the caret's line, or every line selected; a line that already is an item stays as it is.
+        expect(E.applyList('Uno\nDos', 5, 5).value).toBe('Uno\n- Dos');
+        expect(E.applyList('Uno\nDos\n- Tres', 0, 13).value).toBe('- Uno\n- Dos\n- Tres');
+        // Enlace: [texto](url) in place of the selection, the caret after it.
+        expect(E.applyLink('Mira aquí.', 5, 9, 'el programa', 'https://ejemplo.org/p')).toEqual({ value: 'Mira [el programa](https://ejemplo.org/p).', start: 41, end: 41 });
+        expect(E.applyLink('', 0, 0, '', 'https://ejemplo.org')).toMatchObject({ value: '[https://ejemplo.org](https://ejemplo.org)' });
+        // Only https:// and mailto: are links; the check names the bad ones.
+        expect(E.isSafeUrl('https://ejemplo.org')).toBe(true);
+        expect(E.isSafeUrl('mailto:datos@ejemplo.org')).toBe(true);
+        for (const bad of ['http://ejemplo.org', 'javascript:alert(1)', 'https://', 'ejemplo.org']) expect(E.isSafeUrl(bad), bad).toBe(false);
+        expect(E.badLinks('Ver [a](https://x.org) y [b](http://y.org)')).toEqual(['http://y.org']);
+    });
+    it('placeholders read as names and go back to their keys; chips insert at the cursor', async () => {
+        const E = await import('../../../../../marketplace/plugins/conference-manager/client/lib/mailEditor');
+        const stored = 'Hola {name}: bienvenida a {conference}. {otra cosa}';
+        const shown = E.toDisplay(stored, P, 'es');
+        expect(shown).toBe('Hola {Nombre de la persona}: bienvenida a {Conferencia}. {otra cosa}');
+        expect(E.fromDisplay(shown, P, 'es')).toBe(stored);
+        expect(E.fromDisplay(E.toDisplay(stored, P, 'en'), P, 'en')).toBe(stored);
+        // A chip: the readable token where the cursor is (replacing a selection), the caret right after.
+        const token = E.chipToken(P[0], 'es');
+        expect(token).toBe('{Nombre de la persona}');
+        expect(E.insertAt('Hola :', 5, 5, token)).toEqual({ value: 'Hola {Nombre de la persona}:', start: 27, end: 27 });
+        expect(E.insertAt('Hola XX:', 5, 7, token).value).toBe('Hola {Nombre de la persona}:');
+        // Unsaved changes and the last edit of a card.
+        expect(E.isDirty({ subject: 'a', body: 'b', after: '', action: '' }, { subject: 'a', body: 'b', after: '', action: '' })).toBe(false);
+        expect(E.isDirty({ subject: 'a', body: 'c', after: '', action: '' }, { subject: 'a', body: 'b', after: '', action: '' })).toBe(true);
+        expect(E.lastEdited({ es: { updated_at: '2026-10-01T00:00:00Z' }, en: { updated_at: '2026-10-20T00:00:00Z' } })).toBe('2026-10-20T00:00:00Z');
+        expect(E.lastEdited({})).toBe(null);
+    });
+    it('the page: cards with when/state/last edit; side-by-side live preview; toolbar, chips, language tabs; sticky footer; unsaved guard; in-app dialogs', () => {
+        const m = read('admin/MailTemplatesPage.tsx');
+        for (const s of ['data-mail-cards=""', 'data-mail-when=""', 'data-mail-edited=""', 'data-mail-edit={t.id}',
+            'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]', 'data-mail-pane-switch=""', 'role="toolbar"', 'data-mail-format="bold"', 'data-mail-format="list"', 'data-mail-format="link"',
+            'data-mail-placeholder={p.key}', "tx('mail.chip.example', 'Ejemplo: {value}')", 'role="tablist"', 'data-mail-lang-custom={l}', 'data-mail-footer=""', 'data-mail-dirty=',
+            "window.addEventListener('beforeunload', on);", "await confirm(tx('mail.leave.confirm'", "tx('mail.link.bad'"]) expect(m, s).toContain(s);
+        // Placeholders go back to their keys before anything reaches the server.
+        expect(m).toContain('subject: fromDisplay(draft.subject, tpl.placeholders, ui), body: fromDisplay(draft.body, tpl.placeholders, ui)');
+        expect(m).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
+        expect(m).not.toMatch(/\srequired[\s=>]/);
+        expect(m).not.toContain('**negrita**, una línea');
+    });
+    it('the words in es/en/pt', () => {
+        const keys = ['mail.templates.intro', 'mail.when.consent.link', 'mail.when.consent.code', 'mail.when.consent.confirmation', 'mail.when.badge.link', 'mail.when.location.welcome',
+            'mail.edited.at', 'mail.back', 'mail.leave', 'mail.leave.confirm', 'mail.format.bold', 'mail.format.list', 'mail.format.link', 'mail.link.text', 'mail.link.url', 'mail.link.add', 'mail.link.bad',
+            'mail.chips', 'mail.chips.hint', 'mail.chip.example', 'mail.preview.live', 'mail.pane.edit', 'mail.unsaved', 'mail.saved.state', 'mail.test.short', 'mail.restore.short'];
         for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
     });
 });

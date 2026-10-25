@@ -6,6 +6,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.14: «Plantillas de correo», redesigned for a coordinator who knows nothing about markup.**
+  - **The list**: one card per e-mail, with its name, when it is sent, «Personalizado» (and in which languages) or
+    «Original», the date of the last edit, and «Editar».
+  - **The editor**: the form sits beside a live preview, rendered by the server as you type, with a desktop/phone
+    switch. On a phone the form and the preview take turns under a sticky «Editar / Vista previa» switch. Each
+    field has a plain label, a one-line hint and an example.
+  - **Formatting without markup**: a toolbar (Negrita, Lista, Enlace) inserts the formatting at the cursor. A link
+    is entered as its visible text plus an address, and the address must start with https:// (or mailto:).
+  - **Data placeholders by name**: they read as names («{Nombre de la persona}») and are inserted from chips that
+    show an example value. They are still stored as before.
+  - **Languages and saving**: languages are tabs, with a dot on the ones that are customised. A sticky footer holds
+    «Guardar», «Enviar prueba a mi correo» and «Restaurar original» (with an in-app confirm), and says when there
+    are unsaved changes. Leaving with unsaved changes asks first.
+  - **Checks in place**: an empty subject, an empty text, and a link without https:// are flagged under their
+    field.
+  - **Unchanged**: the texts are still plain text with the small format, typed HTML still shows as text, and the
+    link, code and authorization record are still drawn by the system. Routes are unchanged.
+
 ## [2.11.6] - 2026-10-24
 
 ### Fixed
