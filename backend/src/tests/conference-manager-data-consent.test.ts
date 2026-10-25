@@ -1178,3 +1178,78 @@ test('2.36.11: sibling actions share one route — well under the host cap, same
     assert.strictEqual((await p.call('post', '/mail-templates/consent.link/nope', { body: { lang: 'es' } })).status, 404);
     assert.strictEqual((await p.call('post', '/public/me/nope', { anonymous: true, body: {} })).status, 404);
 });
+
+// ── 2.36.12 «Editar encargado» ───────────────────────────────────────────────────────────────────────────────
+test('2.36.12 every piece of the coordinator data is editable: name, phone (E.164 with the default country), e-mail; checked by field; «encargado editado» logged (which fields, never the values)', async () => {
+    const w = await world({ enable: false });
+    const row = () => w.p.one(`SELECT responsible_name, responsible_phone, responsible_email FROM ${PREFIX}locations WHERE id = ?`, w.norte);
+    const logRows = () => w.p.q(`SELECT kind, actor, fields FROM ${PREFIX}location_log WHERE location_id = ? ORDER BY id`, w.norte) as any[];
+    // All three at once; a national number takes the conference's default country (CO).
+    const r = ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_name: '  Ana   María ', responsible_phone: '300 123 4567', responsible_email: 'ana@example.org' } }));
+    assert.deepStrictEqual([r.responsible_name, r.responsible_phone, r.responsible_email], ['Ana María', '+573001234567', 'ana@example.org'], 'what was stored comes back');
+    assert.deepStrictEqual([r.coordinator_entry.actor, r.coordinator_entry.fields], ['boss', ['name', 'phone', 'email']], 'the stored log entry comes back');
+    assert.deepStrictEqual(row(), { responsible_name: 'Ana María', responsible_phone: '+573001234567', responsible_email: 'ana@example.org' });
+    assert.deepStrictEqual(logRows(), [{ kind: 'coordinator', actor: 'boss', fields: '["name","phone","email"]' }]);
+    assert.ok(!JSON.stringify(logRows()).includes('3001234567') && !JSON.stringify(logRows()).includes('ana@example.org'), 'never the values');
+    // An E.164 number from the selector keeps its country; only what changed is logged.
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_phone: '+52 55 1234 5678' } }));
+    assert.strictEqual(row().responsible_phone, '+525512345678');
+    assert.deepStrictEqual(logRows().map(x => x.fields), ['["name","phone","email"]', '["phone"]']);
+    // The same values again: nothing logged.
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_name: 'Ana María', responsible_phone: '+525512345678' } }));
+    assert.strictEqual(logRows().length, 2);
+    // Errors name their field and change nothing.
+    for (const [body, field] of [[{ responsible_phone: '+12' }, 'responsible_phone'], [{ responsible_phone: 'llamar a Ana' }, 'responsible_phone'],
+        [{ responsible_email: 'no-es-correo' }, 'responsible_email'], [{ responsible_name: 'x'.repeat(121) }, 'responsible_name']] as const) {
+        const bad = await w.p.call('put', `/locations/${w.norte}`, { body });
+        assert.deepStrictEqual([bad.status, bad.body.field], [400, field], JSON.stringify(body));
+    }
+    assert.strictEqual(row().responsible_phone, '+525512345678');
+    assert.strictEqual(logRows().length, 2);
+    // Clearing is a change.
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_phone: '' } }));
+    assert.strictEqual(row().responsible_phone, null);
+    // An old phone typed before E.164 is left alone while another field changes.
+    w.p.exec(`UPDATE ${PREFIX}locations SET responsible_phone = '300 123 / 310 456' WHERE id = ${w.norte}`);
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_name: 'Ana' } }));
+    assert.strictEqual(row().responsible_phone, '300 123 / 310 456');
+    // The list shows the change log (newest first) to who manages the localities.
+    const loc = ok(await w.p.call('get', `/locations?conference_id=${w.cid}`)).locations.find((x: any) => x.id === w.norte);
+    assert.deepStrictEqual(loc.coordinator_log.map((e: any) => e.fields), [['name'], ['phone'], ['phone'], ['name', 'phone', 'email']]);
+    assert.ok(loc.coordinator_log.every((e: any) => e.actor === 'boss' && Number.isInteger(e.at_s)));
+    // Creating a locality follows the same rules.
+    const created = ok(await w.p.call('post', '/locations', { body: { conference_id: w.cid, name: 'Sur', capacity: 10, responsible_name: 'Luis', responsible_phone: '3109876543', responsible_email: 'luis@example.org' } }));
+    assert.deepStrictEqual(w.p.one(`SELECT responsible_name, responsible_phone, responsible_email FROM ${PREFIX}locations WHERE id = ?`, created.id),
+        { responsible_name: 'Luis', responsible_phone: '+573109876543', responsible_email: 'luis@example.org' });
+    const badCreate = await w.p.call('post', '/locations', { body: { conference_id: w.cid, name: 'Este', capacity: 10, responsible_phone: '12' } });
+    assert.deepStrictEqual([badCreate.status, badCreate.body.field], [400, 'responsible_phone']);
+    assert.strictEqual(w.p.q(`SELECT id FROM ${PREFIX}locations WHERE name = 'Este'`).length, 0);
+});
+
+test('2.36.12 a new «Correo del encargado» after a welcome: the welcome went to the old address (welcome_sent_to), never to the portal', async () => {
+    const w = await world({ enable: false });
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_email: 'viejo@example.org' } }));
+    const sent = ok(await w.p.call('post', `/locations/${w.norte}/welcome`));
+    assert.strictEqual(sent.welcome_sent_to, 'viejo@example.org');
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { responsible_email: 'nuevo@example.org' } }));
+    const loc = ok(await w.p.call('get', `/locations?conference_id=${w.cid}`)).locations.find((x: any) => x.id === w.norte);
+    assert.deepStrictEqual([loc.responsible_email, loc.welcome_sent_to, !!loc.welcome_sent_s], ['nuevo@example.org', 'viejo@example.org', true]);
+    const me = ok(await portal(w.p, 'get', '/portal/me', w.ptoken));
+    assert.ok(!('welcome_sent_to' in me));
+    // A row stamped before the column takes the address from the send log on the next migration.
+    w.p.exec(`UPDATE ${PREFIX}locations SET welcome_sent_to = NULL WHERE id = ${w.norte}`);
+    await w.p.reboot();
+    assert.strictEqual(w.p.one(`SELECT welcome_sent_to FROM ${PREFIX}locations WHERE id = ?`, w.norte).welcome_sent_to, 'viejo@example.org');
+});
+
+test('2.36.12 a team member without «Localidades» sees no coordinator contact, welcome stamps or change log', async () => {
+    const recep = { id: 71, role: 'conference_manager_team', extra: { pluginCapabilities: ['conference_manager_access'] }, userLogin: 'recepcion', userEmail: 'recepcion@example.test' } as any;
+    const p = await bootPlugin({ users: [recep] });
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Asume el Riesgo', slug: `dc-team-${++seq}`, date_start: '2030-01-10', date_end: '2030-01-12' } })).id as number;
+    const norte = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 5, responsible_name: 'Ana', responsible_phone: '3001234567', responsible_email: 'ana@example.org' } })).id;
+    ok(await p.call('put', `/locations/${norte}`, { body: { responsible_name: 'Ana María' } }));
+    ok(await p.call('post', '/staff/members', { body: { user_id: recep.id, role_id: ok(await p.call('post', '/staff/roles', { body: { name: 'Insc', permissions: { inscriptions: 'view' } } })).id } }));
+    const loc = ok(await p.call('get', `/locations?conference_id=${cid}`, { user: recep })).locations.find((x: any) => x.id === norte);
+    assert.deepStrictEqual([loc.responsible_name, loc.responsible_phone, loc.responsible_email, loc.welcome_sent_to, loc.coordinator_log], [null, null, null, null, undefined]);
+    assert.strictEqual((await p.call('put', `/locations/${norte}`, { user: recep, body: { responsible_name: 'X' } })).status, 403);
+});

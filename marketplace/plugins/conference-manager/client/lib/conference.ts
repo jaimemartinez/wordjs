@@ -228,6 +228,13 @@ export interface Location {
     code: string;
     responsible_name: string;
     responsible_phone: string;
+    /** «Correo del encargado» (2.36.11) and the welcome e-mail: when, by whom, to which address (2.36.12). */
+    responsible_email?: string | null;
+    welcome_sent_s?: number | null;
+    welcome_sent_by?: string | null;
+    welcome_sent_to?: string | null;
+    /** «Encargado editado» (2.36.12): the last edits of the coordinator data — who, when, which fields. */
+    coordinator_log?: { actor: string | null; at_s: number; fields: ('name' | 'phone' | 'email')[] }[];
     /** Maximum registrants; null on a location created before 2.3.0 whose limit was never set (= no limit). */
     capacity: number | null;
     /** Seats taken right now (every non-cancelled inscription of the location). */
@@ -657,13 +664,13 @@ export const conferenceApi = {
 
     // Locations
     getLocations: (conferenceId: number) => apiGet<{ locations: Location[], conference: Conference }>(`/plugin/conference-manager/locations?conference_id=${conferenceId}`),
-    createLocation: (conferenceId: number, data: { name: string, responsible_name: string, responsible_phone: string, capacity: number | string, payment_methods?: string[] }) =>
+    createLocation: (conferenceId: number, data: { name: string, responsible_name: string, responsible_phone: string, responsible_email?: string, capacity: number | string, payment_methods?: string[] }) =>
         apiPost('/plugin/conference-manager/locations', { ...data, conference_id: conferenceId }),
-    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean, capacity?: number | string, payment_methods?: string[], lodging_opens?: string | null, lodging_closes?: string | null, lodging_tz?: string | null }) =>
+    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, responsible_email?: string, rotate_code?: boolean, capacity?: number | string, payment_methods?: string[], lodging_opens?: string | null, lodging_closes?: string | null, lodging_tz?: string | null }) =>
         apiPut(`/plugin/conference-manager/locations/${id}`, data),
     deleteLocation: (id: number) => apiDelete(`/plugin/conference-manager/locations/${id}`),
     /** 2.36.11: the welcome e-mail to the locality's coordinator («Correo del encargado») — never the access code. */
-    sendLocationWelcome: (id: number) => apiPost<{ sent: boolean; welcome_sent_at: string; email_masked: string }>(`/plugin/conference-manager/locations/${id}/welcome`, {}),
+    sendLocationWelcome: (id: number) => apiPost<{ sent: boolean; welcome_sent_at: string; welcome_sent_to?: string; email_masked: string }>(`/plugin/conference-manager/locations/${id}/welcome`, {}),
     /** 2.36.11: «Plantillas de correo» (WordJS administrators). */
     getMailTemplates: () => apiGet<{ langs: string[]; limits: Record<string, number>; templates: any[] }>(`/plugin/conference-manager/mail-templates`),
     saveMailTemplate: (id: string, data: { lang: string; subject: string; body: string; after: string; action: string }) => apiPost<{ success: boolean }>(`/plugin/conference-manager/mail-templates/${encodeURIComponent(id)}/save`, data),

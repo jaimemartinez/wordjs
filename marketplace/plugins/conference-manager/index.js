@@ -41,6 +41,37 @@ const mailTplMod = require('./server/mail-templates');
  * A member whose options (auth, admin…) differ from its group's refuses to load: grouping never changes who may
  * call an action. An unknown `:act` answers 404 like a missing route.
  */
+/** A locality's coordinator data (2.36.12): column → the name the audit («encargado editado») records. */
+const COORDINATOR_FIELDS = [['responsible_name', 'name'], ['responsible_phone', 'phone'], ['responsible_email', 'email']];
+const COORDINATOR_EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]{2,}$/;
+/**
+ * The coordinator fields present in `body`, checked and cleaned: the name (one line, 120 characters at most), the
+ * phone in E.164 (the conference's «Indicativo por defecto» for a national number — the same rule as every phone
+ * field) and the e-mail. `values` holds only what was sent ('' = cleared); `error` is a 400 body naming the field.
+ */
+function coordinatorInput(body, conf) {
+    const values = {};
+    const b = body || {};
+    if (b.responsible_name !== undefined) {
+        const v = String(b.responsible_name == null ? '' : b.responsible_name).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+        if (v.length > 120) return { error: { error: 'El nombre del encargado es demasiado largo (120 caracteres como máximo).', field: 'responsible_name' } };
+        values.responsible_name = v;
+    }
+    if (b.responsible_phone !== undefined) {
+        const raw = String(b.responsible_phone == null ? '' : b.responsible_phone).trim();
+        const country = conf && phoneMod.isCountry(conf.phone_country) ? String(conf.phone_country).toUpperCase() : phoneMod.DEFAULT_COUNTRY;
+        const e164 = raw ? phoneMod.toE164(raw, country) : '';
+        if (raw && !e164) return { error: { error: 'El teléfono del encargado no es válido: escoge el país y escribe el número.', field: 'responsible_phone' } };
+        values.responsible_phone = e164;
+    }
+    if (b.responsible_email !== undefined) {
+        const v = String(b.responsible_email == null ? '' : b.responsible_email).trim();
+        if (v && (v.length > 254 || !COORDINATOR_EMAIL_RE.test(v))) return { error: { error: 'El correo del encargado no es válido.', field: 'responsible_email' } };
+        values.responsible_email = v;
+    }
+    return { values };
+}
+
 const ROUTE_GROUPS = [
     { method: 'post', base: '/public/me/:act', members: ['logout', 'start', 'ticket', 'transport', 'verify', 'view'] },
     { method: 'post', base: '/public/me/push/:act', members: ['subscribe', 'unsubscribe'] },
@@ -95,7 +126,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.11',
+    version: '2.36.12',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -125,6 +156,8 @@ exports.init = async function (wordjs) {
         history: `${P}inscription_history`,
         // 2.36.11: every welcome e-mail sent to a locality's coordinator (who, when, to whom, whether it went).
         locationMails: `${P}location_mails`,
+        // 2.36.12: «Encargado editado» — who changed a locality's coordinator data and when (which fields, never the values).
+        locationLog: `${P}location_log`,
         inscriptions: `${P}inscriptions`,
         // Fee payments (2.18.0): a payment is one receipt (`payment_transfers`, the header) split into
         // parts — rows of `payments` linked by transfer_id. See server/fee-payments.js.
@@ -1049,6 +1082,21 @@ exports.init = async function (wordjs) {
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
         ]);
         await createIndex(`${P}idx_location_mails_loc`, T.locationMails, 'location_id');
+        // 2.36.12: the address the last welcome went to — a changed «Correo del encargado» shows «No enviado al nuevo
+        // correo». Rows stamped before the column take it from the send log.
+        await addColumnIfMissing(T.locations, 'welcome_sent_to', 'TEXT');
+        await db.run(`UPDATE ${T.locations} SET welcome_sent_to = (SELECT m.email FROM ${T.locationMails} m WHERE m.location_id = ${T.locations}.id AND m.kind = 'welcome' AND m.ok = 1 ORDER BY m.at_s DESC, m.id DESC LIMIT 1) WHERE welcome_sent_s IS NOT NULL AND welcome_sent_to IS NULL`);
+        await db.createTable(T.locationLog, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'location_id INT NOT NULL',
+            'kind VARCHAR(16) NOT NULL',
+            'actor VARCHAR(120)',
+            'at_s INT NOT NULL',
+            'fields TEXT',
+            `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
+        ]);
+        await createIndex(`${P}idx_location_log_loc`, T.locationLog, 'location_id');
         // Every withdrawal and every restore (the audit); kept when the person is deleted (no foreign key to them).
         await db.createTable(T.withdrawals, [
             'id INT_PK',
@@ -3398,7 +3446,24 @@ exports.init = async function (wordjs) {
                 if (!showCodes) l.code = null;
                 // Every team member gets the locations as context (names, capacity, lodging state); the
                 // coordinator's contact and the admin's review notes are the Localidades section's business.
-                if (!hasLevel(perms, 'locations', 'view')) { l.responsible_name = null; l.responsible_phone = null; l.lodging_note = null; l.lodging_reviewed_by = null; }
+                if (!hasLevel(perms, 'locations', 'view')) {
+                    l.responsible_name = null; l.responsible_phone = null; l.lodging_note = null; l.lodging_reviewed_by = null;
+                    l.responsible_email = null; l.welcome_sent_s = null; l.welcome_sent_by = null; l.welcome_sent_to = null;
+                }
+            }
+            // 2.36.12: «Encargado editado» — the last edits of each locality's coordinator data (who, when, which fields).
+            if (hasLevel(perms, 'locations', 'view') && locations.length) {
+                const rows = await db.all(`SELECT location_id, actor, at_s, fields FROM ${T.locationLog} WHERE conference_id = ? AND kind = 'coordinator' ORDER BY at_s DESC, id DESC`, [conference_id]);
+                const byLoc = new Map();
+                for (const r of rows) {
+                    const list = byLoc.get(Number(r.location_id)) || [];
+                    if (list.length >= 10) continue;
+                    let fields = [];
+                    try { fields = JSON.parse(r.fields || '[]'); } catch (e) { fields = []; }
+                    list.push({ actor: r.actor || null, at_s: Number(r.at_s), fields: Array.isArray(fields) ? fields : [] });
+                    byLoc.set(Number(r.location_id), list);
+                }
+                for (const l of locations) l.coordinator_log = byLoc.get(Number(l.id)) || [];
             }
             if (conf) {
                 // The general dates as typed, and their window (no location's own dates).
@@ -3416,7 +3481,7 @@ exports.init = async function (wordjs) {
     // Location names are unique per conference (case-insensitive) so the display label is unambiguous.
     http.route('post', '/locations', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'locations', 'manage')) return;
-        const { conference_id, name, responsible_name, responsible_phone, capacity, payment_methods } = req.body;
+        const { conference_id, name, capacity, payment_methods } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const cleanName = String(name || '').trim();
         if (!cleanName) return res.status(400).json({ error: 'El nombre de la localidad es obligatorio.' });
@@ -3427,14 +3492,16 @@ exports.init = async function (wordjs) {
             const cap = parseCapacity(capacity);
             // Forms of payment: chosen at creation (default both), editable later through PUT.
             const methods = payment_methods === undefined ? PAYMENT_METHODS.slice() : parsePaymentMethods(payment_methods);
-            const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [conference_id]);
+            const conf = await db.get(`SELECT id, phone_country FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
+            const coord = coordinatorInput(req.body, conf);
+            if (coord.error) return res.status(400).json(coord.error);
             const dup = await db.get(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND LOWER(name) = LOWER(?)`, [conference_id, cleanName]);
             if (dup) return res.status(409).json({ error: 'Ya existe una localidad con ese nombre en esta conferencia.' });
             const code = await genAccessCode();
             const result = await db.run(
-                `INSERT INTO ${T.locations} (conference_id, name, code, responsible_name, responsible_phone, capacity, payment_methods) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [conference_id, cleanName, code, responsible_name || null, responsible_phone || null, cap, JSON.stringify(methods)]
+                `INSERT INTO ${T.locations} (conference_id, name, code, responsible_name, responsible_phone, responsible_email, capacity, payment_methods) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [conference_id, cleanName, code, coord.values.responsible_name || null, coord.values.responsible_phone || null, coord.values.responsible_email || null, cap, JSON.stringify(methods)]
             );
             res.json({ success: true, id: result.lastID, code, payment_methods: methods });
         } catch (e) { sendError(res, e); }
@@ -3488,8 +3555,8 @@ exports.init = async function (wordjs) {
                 const off = /permission|denied|not available|not granted|permiso/i.test(why);
                 return res.status(off ? 503 : 502).json({ error: off ? 'El correo del sitio no está disponible: revisa el plugin de correo y su permiso.' : 'No se pudo enviar el correo. Inténtalo de nuevo más tarde.', code: off ? 'mail_off' : 'mail_failed' });
             }
-            await db.run(`UPDATE ${T.locations} SET welcome_sent_s = ?, welcome_sent_by = ? WHERE id = ?`, [at, actor ? String(actor).slice(0, 120) : null, loc.id]);
-            res.json({ success: true, sent: true, welcome_sent_at: new Date(at * 1000).toISOString(), email_masked: maskEmail(to) });
+            await db.run(`UPDATE ${T.locations} SET welcome_sent_s = ?, welcome_sent_by = ?, welcome_sent_to = ? WHERE id = ?`, [at, actor ? String(actor).slice(0, 120) : null, to, loc.id]);
+            res.json({ success: true, sent: true, welcome_sent_at: new Date(at * 1000).toISOString(), welcome_sent_to: to, email_masked: maskEmail(to) });
         } catch (e) { sendError(res, e); }
     });
 
@@ -3510,13 +3577,19 @@ exports.init = async function (wordjs) {
                 sets.push('name = ?'); params.push(v);
                 if (v !== loc.name) newName = v;
             }
-            if (responsible_name !== undefined) { sets.push('responsible_name = ?'); params.push(responsible_name || null); }
-            if (responsible_phone !== undefined) { sets.push('responsible_phone = ?'); params.push(responsible_phone || null); }
-            // 2.36.11: «Correo del encargado» — where the welcome e-mail goes ('' clears it).
-            if (responsible_email !== undefined) {
-                const v = String(responsible_email == null ? '' : responsible_email).trim();
-                if (v && (v.length > 254 || !CONSENT_EMAIL_RE.test(v))) return res.status(400).json({ error: 'El correo del encargado no es válido.', field: 'responsible_email' });
-                sets.push('responsible_email = ?'); params.push(v || null);
+            // The coordinator's data (2.36.12: all of it editable — «Editar encargado»): name, phone (E.164 with the
+            // conference's default country) and «Correo del encargado» (where the welcome goes); '' clears a field.
+            // A change is logged as «encargado editado» (who, when, which fields — never the values).
+            const conf = await db.get(`SELECT phone_country FROM ${T.conferences} WHERE id = ?`, [loc.conference_id]);
+            const coord = coordinatorInput({ responsible_name, responsible_phone, responsible_email }, conf);
+            if (coord.error) return res.status(400).json(coord.error);
+            const changedCoord = [];
+            for (const [key, field] of COORDINATOR_FIELDS) {
+                if (!(key in coord.values)) continue;
+                const next = coord.values[key] || null;
+                sets.push(`${key} = ?`); params.push(next);
+                const before = loc[key] == null || loc[key] === '' ? null : String(loc[key]);
+                if (before !== next) changedCoord.push(field);
             }
             if (capacity !== undefined) {
                 const cap = parseCapacity(capacity);
@@ -3552,8 +3625,18 @@ exports.init = async function (wordjs) {
                 await db.run(`UPDATE ${T.locations} SET ${sets.join(', ')} WHERE id = ?`, params);
             }
             if (newName !== null) await db.run(`UPDATE ${T.inscriptions} SET location = ? WHERE location_id = ?`, [newName, loc.id]);
+            let coordEntry = null;
+            if (changedCoord.length) {
+                const actor = actorOf(req);
+                coordEntry = { actor: actor ? String(actor).slice(0, 120) : null, at_s: Math.floor(Date.now() / 1000), fields: changedCoord };
+                await db.run(`INSERT INTO ${T.locationLog} (conference_id, location_id, kind, actor, at_s, fields) VALUES (?, ?, 'coordinator', ?, ?, ?)`,
+                    [loc.conference_id, loc.id, coordEntry.actor, coordEntry.at_s, JSON.stringify(changedCoord)]);
+            }
             if (tz && lodging_tz !== undefined) await db.run(`UPDATE ${T.conferences} SET lodging_tz = ? WHERE id = ?`, [tz, loc.conference_id]);
-            res.json({ success: true, code: newCode || loc.code });
+            const out = { success: true, code: newCode || loc.code };
+            // What was stored (the phone as E.164), so the card shows exactly that.
+            if (Object.keys(coord.values).length) Object.assign(out, coord.values, { coordinator_changed: changedCoord, coordinator_entry: coordEntry });
+            res.json(out);
         } catch (e) { sendError(res, e); }
     });
 
@@ -8997,7 +9080,7 @@ exports.init = async function (wordjs) {
         // The administration-adjustment stamp (2.17.0) too: `lodging_admin_changed_by` is an admin's login.
         const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until,
             lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes,
-            welcome_sent_s, welcome_sent_by, ...safe } = location;
+            welcome_sent_s, welcome_sent_by, welcome_sent_to, ...safe } = location;
         try {
             const withdraw = withdrawWindow(await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
             // 2.36.10: «Registrar nuevo» asks for the verbal authorization of the personal data while consent is on.

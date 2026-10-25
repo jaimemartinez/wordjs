@@ -77,6 +77,8 @@ import { money as feeMoney } from "./FeeBits";
 import LodgingPlan from "./LodgingPlan";
 import { Select } from "../lib/Select";
 import { CoordinatorMail } from "./CoordinatorMail";
+import { CoordinatorSheet } from "./CoordinatorSheet";
+import { coordinatorPatch } from "../lib/coordinator";
 import MailTemplatesPage from "./MailTemplatesPage";
 import { useCopy } from "../lib/CopyFallback";
 
@@ -4988,7 +4990,9 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
     const [conference, setConference] = useState<Conference | null>(null);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', capacity: '', payment_methods: [...PAYMENT_METHODS] as string[] });
+    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', responsible_email: '', capacity: '', payment_methods: [...PAYMENT_METHODS] as string[] });
+    // 2.36.12: «Editar encargado» — the locality whose coordinator data is being edited.
+    const [coordEdit, setCoordEdit] = useState<Location | null>(null);
     const [savingMethods, setSavingMethods] = useState<number | null>(null);
     // The general lodging dates (2.21.0): the two inputs mirror the conference's opening / closing until saved.
     const [datesInput, setDatesInput] = useState({ opens: '', closes: '' });
@@ -5048,13 +5052,15 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
     const confirm = (message: string, label = 'Confirmar', danger = false) =>
         new Promise<boolean>(resolve => setConfirmState({ message, label, danger, resolve }));
 
-    const canCreate = !!newLocation.name.trim() && /^\d+$/.test(newLocation.capacity.trim()) && Number(newLocation.capacity) > 0;
+    // The coordinator's data at creation follows the same rules as «Editar encargado» (phone in E.164, a valid e-mail).
+    const createCoordErrors = coordinatorPatch({}, { name: newLocation.responsible_name, phone: newLocation.responsible_phone, email: newLocation.responsible_email }, conference?.phone_country, tx).errors;
+    const canCreate = !!newLocation.name.trim() && /^\d+$/.test(newLocation.capacity.trim()) && Number(newLocation.capacity) > 0 && !Object.keys(createCoordErrors).length;
     const handleCreate = async () => {
         if (!canCreate) return;
         try {
             await conferenceApi.createLocation(conferenceId, { ...newLocation, capacity: Number(newLocation.capacity) });
             setShowModal(false);
-            setNewLocation({ name: '', responsible_name: '', responsible_phone: '', capacity: '', payment_methods: [...PAYMENT_METHODS] });
+            setNewLocation({ name: '', responsible_name: '', responsible_phone: '', responsible_email: '', capacity: '', payment_methods: [...PAYMENT_METHODS] });
             loadLocations();
             addToast(t('location.created'), 'success');
         } catch (error: any) {
@@ -5797,14 +5803,21 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                 </div>
                                             );
                                         })()}
-                                        <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
+                                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
                                             <div className="w-8 h-8 shrink-0 rounded-lg bg-blue-50 text-blue-400 flex items-center justify-center text-sm">
                                                 <i className="fa-solid fa-user-tie"></i>
                                             </div>
-                                            <div className="min-w-0">
+                                            <div className="min-w-[8rem] flex-1">
                                                 <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('responsible') || 'Responsable'}</div>
-                                                <div className="text-xs font-black text-gray-700 break-words">{loc.responsible_name || 'Sin asignar'}</div>
+                                                <div className="text-xs font-black text-gray-700 break-words">{loc.responsible_name || tx('loc.coord.unassigned', 'Sin asignar')}</div>
                                             </div>
+                                            {/* 2.36.12: every piece of the coordinator's data is editable after creation. */}
+                                            {canManage && (
+                                                <button type="button" onClick={() => setCoordEdit(loc)} data-coordinator-edit={loc.id}
+                                                    className="shrink-0 ml-auto min-h-[36px] px-3 rounded-lg text-xs font-bold text-blue-600 hover:bg-blue-50 inline-flex items-center gap-1.5">
+                                                    <i className="fa-solid fa-pen" aria-hidden="true"></i>{tx('loc.coord.edit', 'Editar encargado')}
+                                                </button>
+                                            )}
                                         </div>
                                         <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
                                             <div className="w-8 h-8 shrink-0 rounded-lg bg-indigo-50 text-indigo-400 flex items-center justify-center text-sm">
@@ -5812,11 +5825,11 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                             </div>
                                             <div className="min-w-0">
                                                 <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('phone') || 'Teléfono'}</div>
-                                                <div className="text-xs font-black text-gray-700">{loc.responsible_phone || 'N/A'}</div>
+                                                <div className="text-xs font-black text-gray-700 break-all" data-coordinator-phone="">{loc.responsible_phone || tx('loc.coord.nophone', 'Sin teléfono')}</div>
                                             </div>
                                         </div>
                                         {/* 2.36.11: «Correo del encargado» and the welcome e-mail (never the access code). */}
-                                        <CoordinatorMail loc={loc} canManage={canManage} tx={tx} addToast={addToast}
+                                        <CoordinatorMail loc={loc} canManage={canManage} tx={tx} addToast={addToast} onEdit={() => setCoordEdit(loc)}
                                             onChanged={(next: any) => setLocations((ls) => ls.map((l) => (l.id === next.id ? { ...l, ...next } : l)))} />
                                     </div>
                                 </div>
@@ -5824,6 +5837,12 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                         ))}
                     </div>
                 </div>
+            )}
+
+            {coordEdit && (
+                <CoordinatorSheet loc={coordEdit} defaultCountry={conference?.phone_country} lang={language} tx={tx} addToast={addToast}
+                    onClose={() => setCoordEdit(null)}
+                    onSaved={(next: any) => setLocations((ls) => ls.map((l) => (l.id === next.id ? { ...l, ...next } : l)))} />
             )}
 
             {/* Lodging review modal — fed by GET /locations/:id/lodging; the admin validates / returns / reopens. */}
@@ -6166,14 +6185,25 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                             </div>
 
                             <div className="space-y-1.5">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('responsible.phone')}</label>
-                                <input
-                                    type="text"
-                                    value={newLocation.responsible_phone}
-                                    onChange={e => setNewLocation({ ...newLocation, responsible_phone: e.target.value })}
+                                <label htmlFor="cm-new-loc-phone" className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('responsible.phone')}</label>
+                                <PhoneInput id="cm-new-loc-phone" value={newLocation.responsible_phone} onChange={(v) => setNewLocation({ ...newLocation, responsible_phone: v })}
+                                    defaultCountry={conference?.phone_country} lang={language} label={t('responsible.phone')} dataField="responsible_phone"
+                                    invalid={!!createCoordErrors.phone} describedBy={createCoordErrors.phone ? 'cm-new-loc-phone-error' : undefined}
+                                    selectClassName="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium"
+                                    inputClassName="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium" />
+                                {createCoordErrors.phone && <p id="cm-new-loc-phone-error" className="text-xs font-semibold text-rose-600 ml-1">{createCoordErrors.phone}</p>}
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label htmlFor="cm-new-loc-email" className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{tx('loc.mail', 'Correo del encargado')}</label>
+                                <input id="cm-new-loc-email" type="email" inputMode="email" autoComplete="off"
+                                    value={newLocation.responsible_email}
+                                    onChange={e => setNewLocation({ ...newLocation, responsible_email: e.target.value })}
+                                    aria-invalid={createCoordErrors.email ? true : undefined} aria-describedby={createCoordErrors.email ? 'cm-new-loc-email-error' : undefined}
                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium"
-                                    placeholder="Ej. +1 555-123-4567"
+                                    placeholder="encargado@ejemplo.org"
                                 />
+                                {createCoordErrors.email && <p id="cm-new-loc-email-error" className="text-xs font-semibold text-rose-600 ml-1">{createCoordErrors.email}</p>}
                             </div>
 
                             <div className="bg-blue-50/50 p-4 rounded-2xl flex items-start gap-4 border border-blue-50">
