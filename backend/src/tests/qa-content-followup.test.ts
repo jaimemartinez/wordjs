@@ -499,3 +499,18 @@ test('the automatic excerpt keeps a space between blocks (FALLOS 142)', () => {
     assert.strictEqual(generateExcerpt('Intro<p>Body</p>'), 'Intro Body');
     assert.strictEqual(generateExcerpt('<p>a &lt;/p&gt; b</p><script>x</script>'), 'a &lt;/p&gt; b');
 });
+
+test('Admin › Auditoría sets how long the audit log is kept, and only to a window the screen offers', async () => {
+    for (const ok of ['90', '180', '365', '730', '0']) {
+        assert.strictEqual((await putSettings({ audit_retention_days: ok })).status, 200, `${ok} is offered`);
+        assert.strictEqual(String(await require('../core/options').getOption('audit_retention_days')), ok);
+    }
+    for (const bad of ['30', '-1', 'forever', '365.5', '']) {
+        assert.strictEqual((await putSettings({ audit_retention_days: bad })).status, 400, `${JSON.stringify(bad)} is refused`);
+    }
+    const all = await request(app).get(`${B}/settings/all`).set(bearer('admin'));
+    assert.strictEqual(String(all.body.audit_retention_days), '0', 'the admin payload carries it back to the screen');
+    const pub = await request(app).get(`${B}/settings`);
+    assert.strictEqual(pub.body.audit_retention_days, undefined, 'never in the public settings');
+    await putSettings({ audit_retention_days: '365' });
+});

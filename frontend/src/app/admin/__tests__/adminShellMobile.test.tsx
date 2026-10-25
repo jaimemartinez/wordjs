@@ -236,3 +236,34 @@ describe("Admin › Auditoría fits a phone", () => {
         expect(src).toMatch(/"text-gray-500 font-mono break-all"/);
     });
 });
+
+/**
+ * Cards never outgrow the screen: below `stackBelow` a DataTable row is a card in a grid. The grid had no
+ * explicit column, so its implicit track sized to the longest unbreakable word in any card — a long URL
+ * in an audit entry made every card ~490px at a 375px viewport and the table scrolled sideways inside its
+ * card. The grid now has one minmax(0,1fr) column, a card may shrink (min-w-0), and card cells wrap
+ * anywhere. The audit action chip, which kept its own `break-words`, wraps anywhere too.
+ */
+describe("DataTable cards fit a phone even with a long URL", () => {
+    const dt = fs.readFileSync(path.resolve(__dirname, "../../../components/ui/DataTable.tsx"), "utf8");
+    const audit = fs.readFileSync(path.resolve(__dirname, "../audit/page.tsx"), "utf8");
+
+    it("the card grid has an explicit shrinkable column and cards may shrink", () => {
+        expect(dt).toMatch(/tbody: "in-data-\[dt=cards\]:grid in-data-\[dt=cards\]:grid-cols-1 /);
+        expect(dt).toMatch(/tr: "in-data-\[dt=cards\]:flex in-data-\[dt=cards\]:min-w-0 /);
+    });
+
+    it("card cells break a long word anywhere (desktop table unchanged)", () => {
+        expect(dt).toContain('<div className="min-w-0 break-words in-data-[dt=cards]:wrap-anywhere">{c.cell(row)}</div>');
+    });
+
+    it("the audit action chip can wrap inside its card", () => {
+        expect(audit).toMatch(/inline-block max-w-full text-\[11px\][^"`]*wrap-anywhere/);
+        expect(audit).not.toMatch(/inline-block text-\[11px\] font-black uppercase tracking-wider px-2 py-1 rounded-md break-words/);
+    });
+
+    it("Auditoría offers the retention windows the backend accepts", () => {
+        for (const v of ['"90"', '"180"', '"365"', '"730"', '"0"']) expect(audit).toContain(`value: ${v}`);
+        expect(audit).toContain("settingsApi.update({ audit_retention_days: value })");
+    });
+});

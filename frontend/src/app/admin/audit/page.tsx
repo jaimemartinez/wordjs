@@ -15,11 +15,12 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { auditApi, usersApi, AuditEntry } from "@/lib/api";
+import { auditApi, settingsApi, usersApi, AuditEntry } from "@/lib/api";
+import { useToast } from "@/contexts/ToastContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState, DataTable, Pagination } from "@/components/ui";
+import { PageHeader, Card, EmptyState, DataTable, Pagination, Select } from "@/components/ui";
 import {
     AuditTone,
     auditActionKey,
@@ -53,7 +54,15 @@ registerTranslations({
         "audit.forbiddenTitle": "Acceso restringido",
         "audit.forbiddenDescription": "El registro de auditoría es exclusivo de administradores.",
         "audit.range": "{from}–{to} de {total}",
-        "audit.appendOnly": "El registro no se puede editar ni borrar: se escribe solo, y solo se añade.",
+        "audit.appendOnly": "El registro no se puede editar: se escribe solo y solo se añade. Los eventos más antiguos que el periodo elegido se borran automáticamente una vez al día.",
+        "audit.retention.label": "Conservar registros",
+        "audit.retention.d90": "90 días",
+        "audit.retention.d180": "6 meses",
+        "audit.retention.d365": "1 año",
+        "audit.retention.d730": "2 años",
+        "audit.retention.forever": "Para siempre",
+        "audit.retention.saved": "Periodo de conservación guardado",
+        "audit.retention.failed": "No se pudo guardar el periodo de conservación",
         "audit.action.user.create": "Usuario creado",
         "audit.action.user.role_change": "Rol cambiado",
         "audit.action.user.delete": "Usuario eliminado",
@@ -82,7 +91,15 @@ registerTranslations({
         "audit.forbiddenTitle": "Access restricted",
         "audit.forbiddenDescription": "The audit trail is administrators-only.",
         "audit.range": "{from}–{to} of {total}",
-        "audit.appendOnly": "The log cannot be edited or deleted: it writes itself, and only ever appends.",
+        "audit.appendOnly": "The log cannot be edited: it writes itself and only ever appends. Events older than the chosen period are deleted automatically once a day.",
+        "audit.retention.label": "Keep events for",
+        "audit.retention.d90": "90 days",
+        "audit.retention.d180": "6 months",
+        "audit.retention.d365": "1 year",
+        "audit.retention.d730": "2 years",
+        "audit.retention.forever": "Forever",
+        "audit.retention.saved": "Retention period saved",
+        "audit.retention.failed": "Could not save the retention period",
         "audit.action.user.create": "User created",
         "audit.action.user.role_change": "Role changed",
         "audit.action.user.delete": "User deleted",
@@ -111,7 +128,15 @@ registerTranslations({
         "audit.forbiddenTitle": "Acesso restrito",
         "audit.forbiddenDescription": "O registro de auditoria é exclusivo de administradores.",
         "audit.range": "{from}–{to} de {total}",
-        "audit.appendOnly": "O registro não pode ser editado nem excluído: ele se escreve sozinho e apenas adiciona.",
+        "audit.appendOnly": "O registro não pode ser editado: ele se escreve sozinho e apenas adiciona. Eventos mais antigos que o período escolhido são excluídos automaticamente uma vez por dia.",
+        "audit.retention.label": "Manter registros por",
+        "audit.retention.d90": "90 dias",
+        "audit.retention.d180": "6 meses",
+        "audit.retention.d365": "1 ano",
+        "audit.retention.d730": "2 anos",
+        "audit.retention.forever": "Para sempre",
+        "audit.retention.saved": "Período de retenção salvo",
+        "audit.retention.failed": "Não foi possível salvar o período de retenção",
         "audit.action.user.create": "Usuário criado",
         "audit.action.user.role_change": "Função alterada",
         "audit.action.user.delete": "Usuário excluído",
@@ -144,6 +169,10 @@ export default function AuditPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [expandedId, setExpandedId] = useState<number | null>(null);
+    const { addToast } = useToast();
+    // core/audit prunes rows older than `audit_retention_days` once a day (default 365; 0 = for ever).
+    const [retention, setRetention] = useState<string | null>(null);
+    const [savingRetention, setSavingRetention] = useState(false);
     const [actorNames, setActorNames] = useState<Map<number, string>>(new Map());
 
     // El MISMO gate que el backend (middleware/permissions.isAdmin mira el rol, no una capability):
@@ -182,7 +211,25 @@ export default function AuditPage() {
     useEffect(() => {
         if (forbidden) return;
         loadActors();
+        settingsApi.getAll()
+            .then((all) => setRetention(String(all?.audit_retention_days ?? "365")))
+            .catch(() => setRetention("365"));
     }, [forbidden]);
+
+    const saveRetention = async (value: string) => {
+        const previous = retention;
+        setRetention(value);
+        setSavingRetention(true);
+        try {
+            await settingsApi.update({ audit_retention_days: value });
+            addToast(t("audit.retention.saved"), "success");
+        } catch {
+            setRetention(previous);
+            addToast(t("audit.retention.failed"), "error");
+        } finally {
+            setSavingRetention(false);
+        }
+    };
 
     useEffect(() => {
         if (forbidden) return;
@@ -216,6 +263,24 @@ export default function AuditPage() {
                 <i className="fa-solid fa-lock text-gray-300"></i>
                 {t("audit.appendOnly")}
             </p>
+
+            {retention !== null && (
+                <div className="mb-6 max-w-xs">
+                    <Select
+                        label={t("audit.retention.label")}
+                        value={retention}
+                        onChange={saveRetention}
+                        disabled={savingRetention}
+                        options={[
+                            { value: "90", label: t("audit.retention.d90") },
+                            { value: "180", label: t("audit.retention.d180") },
+                            { value: "365", label: t("audit.retention.d365") },
+                            { value: "730", label: t("audit.retention.d730") },
+                            { value: "0", label: t("audit.retention.forever") },
+                        ]}
+                    />
+                </div>
+            )}
 
             <Card variant="default" padding="none">
                 {loading ? (
@@ -272,7 +337,7 @@ export default function AuditPage() {
                                         const actionKey = auditActionKey(entry.action);
                                         // Known action → translated label; unknown → the raw identifier AS TEXT.
                                         return (
-                                            <span className={`inline-block text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-md break-words ${TONE_CLASS[auditTone(entry.action)]}`}>
+                                            <span className={`inline-block max-w-full text-[11px] font-black uppercase tracking-wider px-2 py-1 rounded-md wrap-anywhere ${TONE_CLASS[auditTone(entry.action)]}`}>
                                                 {actionKey ? t(actionKey) : entry.action}
                                             </span>
                                         );

@@ -105,8 +105,8 @@ export interface DataTableProps<T, K extends React.Key = React.Key> {
 const S = {
     table: "in-data-[dt=cards]:block",
     thead: "in-data-[dt=cards]:sr-only",
-    tbody: "in-data-[dt=cards]:grid in-data-[dt=cards]:gap-3 in-data-[dt=cards]:p-3 in-data-[dt=cards]:divide-y-0 in-data-[dt=cards]:@2xl:grid-cols-2",
-    tr: "in-data-[dt=cards]:flex in-data-[dt=cards]:flex-wrap in-data-[dt=cards]:items-start in-data-[dt=cards]:content-start in-data-[dt=cards]:rounded-2xl in-data-[dt=cards]:border in-data-[dt=cards]:border-gray-100 in-data-[dt=cards]:p-4 in-data-[dt=cards]:shadow-sm",
+    tbody: "in-data-[dt=cards]:grid in-data-[dt=cards]:grid-cols-1 in-data-[dt=cards]:gap-3 in-data-[dt=cards]:p-3 in-data-[dt=cards]:divide-y-0 in-data-[dt=cards]:@2xl:grid-cols-2",
+    tr: "in-data-[dt=cards]:flex in-data-[dt=cards]:min-w-0 in-data-[dt=cards]:flex-wrap in-data-[dt=cards]:items-start in-data-[dt=cards]:content-start in-data-[dt=cards]:rounded-2xl in-data-[dt=cards]:border in-data-[dt=cards]:border-gray-100 in-data-[dt=cards]:p-4 in-data-[dt=cards]:shadow-sm",
     td: "in-data-[dt=cards]:flex in-data-[dt=cards]:basis-full in-data-[dt=cards]:items-start in-data-[dt=cards]:justify-between in-data-[dt=cards]:gap-4 in-data-[dt=cards]:px-0 in-data-[dt=cards]:py-1.5 in-data-[dt=cards]:text-right",
     label: "hidden in-data-[dt=cards]:inline",
     primary: "in-data-[dt=cards]:order-first in-data-[dt=cards]:block in-data-[dt=cards]:min-w-0 in-data-[dt=cards]:px-0 in-data-[dt=cards]:pt-0 in-data-[dt=cards]:pb-2 in-data-[dt=cards]:text-left",
@@ -336,7 +336,7 @@ export function DataTable<T, K extends React.Key = React.Key>({
                                                 {labelOf(c)}
                                             </span>
                                         )}
-                                        <div className="min-w-0 break-words">{c.cell(row)}</div>
+                                        <div className="min-w-0 break-words in-data-[dt=cards]:wrap-anywhere">{c.cell(row)}</div>
                                     </td>
                                 ))}
                                 {actions && (
