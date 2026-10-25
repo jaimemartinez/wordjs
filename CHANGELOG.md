@@ -6,6 +6,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Admin tables no longer scroll sideways inside their card on a phone.** Below the breakpoint a DataTable row is a card in a grid with no explicit column, so the track grew to the longest unbreakable word in any card: one long URL in an audit entry made every card wider than the screen. The card grid now has one shrinkable column, cards may shrink, and card cells wrap anywhere (`components/ui/DataTable.tsx`); the audit action chip wraps too.
+
+### Added
+
+- **Admin › Auditoría: choose how long the audit log is kept.** A «Conservar registros» select (90 days, 6 months, 1 year, 2 years, forever) sets `audit_retention_days`, which the daily prune already honoured (default 1 year). The setting is admin-only and validated to those values.
+
 ### Added
 - **mail-server 3.3.0: «Enviados del sistema».** *Email Center → Server* has a new tab, after *Queue*, with the mail
   the site sent on its own (account, comment and template e-mails, notifications, other plugins' mail), which until

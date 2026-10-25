@@ -98,6 +98,7 @@ const ALL_SETTINGS = [
     'large_size_w',
     'large_size_h',
     'backup_schedule', // Backup Scheduler Frequency
+    'audit_retention_days', // core/audit prune window (Admin › Auditoría); 0 keeps the log for ever
     'backup_time',     // Backup Time of Day (HH:mm)
     'backup_day',      // Backup Day (0-6)
     'upload_max_size_mb', // Settings → Media: the largest upload, in MB (core/upload-limit; '' = configured default)
@@ -398,6 +399,8 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     require_name_email: (v: any) => booleanishSetting(v) === null ? 'require_name_email must be a boolean ("1" or "0").' : null,
     default_comment_status: (v: any) => (v === 'open' || v === 'closed') ? null : 'default_comment_status must be "open" or "closed".',
     comment_max_links: (v: any) => integerSettingProblem('comment_max_links', v, 0, 100),
+    // Admin › Auditoría offers exactly these windows; anything else would be a value no screen can show.
+    audit_retention_days: (v: any) => ['0', '90', '180', '365', '730'].includes(typeof v === 'number' ? String(v) : (typeof v === 'string' ? v.trim() : '')) ? null : 'audit_retention_days must be 0, 90, 180, 365 or 730.',
     posts_per_rss: (v: any) => integerSettingProblem('posts_per_rss', v, 1, 100),
     date_format: (v: any) => (v === '' || DATE_FORMATS.includes(v)) ? null : 'date_format must be one of: ' + DATE_FORMATS.join(', ') + '.',
     time_format: (v: any) => (v === '' || TIME_FORMATS.includes(v)) ? null : 'time_format must be one of: ' + TIME_FORMATS.join(', ') + '.',
