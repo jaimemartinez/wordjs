@@ -6,7 +6,9 @@
  * read composes the ownership predicate). Everything here is either admin-only (the routes are
  * registered `admin: true`) or an aggregate that returns no message content (usage of ONE user, read
  * by that user). The few row listings below (queue, recent activity) carry headers only — never a
- * body — and are only reachable by administrators.
+ * body — and are only reachable by administrators. The one exception is the system Sent log (mail the
+ * SITE sent, owned by no mailbox): its detail row carries the stored body, read by administrators only
+ * and sanitized by the route before it leaves.
  *
  * Every table is prefixed wjp_mail_server_ and every index NAME carries the prefix too: the host SQL
  * guard rejects a CREATE INDEX whose name does not, and _createIndex swallowing that error is how the
@@ -18,6 +20,32 @@ const T_EMAILS = 'wjp_mail_server_received_emails';
 const T_ATTACH = 'wjp_mail_server_email_attachments';
 const T_ALIASES = 'wjp_mail_server_aliases';
 const T_MAILBOXES = 'wjp_mail_server_mailboxes';
+// The system Sent log: every message the SITE sends (no mailbox owns it: core and plugin mail through
+// wordjs.mail / the provider), kept for the retention the administrator picks. Bodies can hold personal
+// data, so the table is only ever read through the admin-only routes and purged on schedule.
+const T_SYSTEM_SENT = 'wjp_mail_server_system_sent';
+
+// Retention choices (days). 0 = keep nothing.
+const SYSTEM_SENT_RETENTION_CHOICES = [0, 7, 30, 90, 180];
+const SYSTEM_SENT_RETENTION_DEFAULT = 30;
+const SYSTEM_SENT_STATUSES = ['queued', 'delivered', 'retry', 'failed'];
+// Per-body cap: a stored copy is for reading, not a mail archive; the size column keeps the real size.
+const SYSTEM_SENT_BODY_MAX = 512 * 1024;
+
+/** The stored retention option as one of the allowed day counts. */
+function normalizeRetentionDays(v) {
+    if (v === undefined || v === null || String(v).trim() === '') return SYSTEM_SENT_RETENTION_DEFAULT;
+    const n = parseInt(String(v), 10);
+    return SYSTEM_SENT_RETENTION_CHOICES.includes(n) ? n : SYSTEM_SENT_RETENTION_DEFAULT;
+}
+
+/** The delivery state of a queue row, in the system log's words. */
+function systemStatusOf(deliveryStatus, paced) {
+    if (deliveryStatus === 'sent') return 'delivered';
+    if (deliveryStatus === 'failed') return 'failed';
+    if (deliveryStatus === 'retry') return Number(paced) === 1 ? 'queued' : 'retry';
+    return 'queued';
+}
 
 const LOCAL_PART_RE = /^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/;
 const MAX_DESTINATIONS = 50;
@@ -67,8 +95,28 @@ module.exports = function createAdminStore(db) {
                 'quota_mb INT DEFAULT -1',
                 'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP'
             ]);
+            await db.createTable(T_SYSTEM_SENT, [
+                'id INT_PK',
+                // The queue row (received_emails) this message is tracked by, 0 when there is none.
+                'email_id INT DEFAULT 0',
+                'message_id TEXT',
+                'created_at DATETIME',
+                'from_address TEXT',
+                'from_name TEXT',
+                'to_address TEXT',
+                'subject TEXT',
+                // Who handed the message over: 'core', 'notifications' or 'mail-server'.
+                'source TEXT',
+                'status TEXT',
+                'last_error TEXT',
+                'size INT DEFAULT 0',
+                'body_html TEXT',
+                'body_text TEXT'
+            ]);
             await this._index('wjp_mail_server_idx_alias_local', T_ALIASES, 'local_part');
             await this._index('wjp_mail_server_idx_mbx_user', T_MAILBOXES, 'user_id');
+            await this._index('wjp_mail_server_idx_syssent_created', T_SYSTEM_SENT, 'created_at');
+            await this._index('wjp_mail_server_idx_syssent_email', T_SYSTEM_SENT, 'email_id');
         },
 
         async _index(name, table, cols) {
@@ -332,6 +380,121 @@ module.exports = function createAdminStore(db) {
                     last_error = ?
                 WHERE id = ? AND delivery_status = 'retry'`,
                 [String(note || 'Cancelled by an administrator').slice(0, 1000), parseInt(id, 10) || 0]);
+            // The system log follows the queue row (a no-op when this message is not logged).
+            await this.syncSystemSent(id, 'failed', note || 'Cancelled by an administrator');
+        },
+
+        // --- System Sent log -------------------------------------------------------------------
+
+        /**
+         * Record one message the site sent. Returns the new row id (0 when nothing was stored). The
+         * caller decides WHETHER to record (retention on, no owner); this only stores what it is given.
+         */
+        async recordSystemSent(m) {
+            const html = m.html == null ? '' : String(m.html);
+            const text = m.text == null ? '' : String(m.text);
+            const size = Buffer.byteLength(html, 'utf8') + Buffer.byteLength(text, 'utf8');
+            const status = SYSTEM_SENT_STATUSES.includes(m.status) ? m.status : 'queued';
+            const r = await db.run(`
+                INSERT INTO ${T_SYSTEM_SENT}
+                    (email_id, message_id, created_at, from_address, from_name, to_address, subject, source, status, last_error, size, body_html, body_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+                parseInt(m.emailId, 10) || 0,
+                String(m.messageId || '').slice(0, 300),
+                sqlDate(m.at instanceof Date ? m.at : new Date()),
+                String(m.from || '').slice(0, 320),
+                String(m.fromName || '').slice(0, 200),
+                (Array.isArray(m.to) ? m.to.join(', ') : String(m.to || '')).slice(0, 20000),
+                String(m.subject || '').slice(0, 1000),
+                String(m.source || 'core').slice(0, 100),
+                status,
+                null,
+                size,
+                html.slice(0, SYSTEM_SENT_BODY_MAX),
+                text.slice(0, SYSTEM_SENT_BODY_MAX)
+            ]);
+            return r && r.lastID ? Number(r.lastID) : 0;
+        },
+
+        /** Follow the delivery state of the queue row `emailId` (a no-op for mail that is not logged). */
+        async syncSystemSent(emailId, deliveryStatus, lastError, paced) {
+            const id = parseInt(emailId, 10) || 0;
+            if (!(id > 0)) return;
+            const status = systemStatusOf(deliveryStatus, paced);
+            await db.run(`UPDATE ${T_SYSTEM_SENT} SET status = ?, last_error = ? WHERE email_id = ?`,
+                [status, status === 'delivered' || !lastError ? null : String(lastError).slice(0, 1000), id]);
+        },
+
+        /** Set the state of one log row directly (a message that has no queue row to follow). */
+        async setSystemSentStatus(logId, status, lastError) {
+            const id = parseInt(logId, 10) || 0;
+            if (!(id > 0) || !SYSTEM_SENT_STATUSES.includes(status)) return;
+            await db.run(`UPDATE ${T_SYSTEM_SENT} SET status = ?, last_error = ? WHERE id = ?`,
+                [status, lastError ? String(lastError).slice(0, 1000) : null, id]);
+        },
+
+        /**
+         * One page of the log, newest first, headers only. Filters: q (recipient or subject, any case),
+         * status, source, from / to (YYYY-MM-DD, inclusive, UTC days).
+         */
+        async listSystemSent(f = {}) {
+            const where = [];
+            const params = [];
+            const q = String(f.q || '').trim().toLowerCase().slice(0, 200);
+            if (q) {
+                // LIKE wildcards in the search are dropped rather than matched as patterns: there is no
+                // ESCAPE spelling every driver shares (and the plugin SQL guard refuses a backslash).
+                const needle = `%${q.replace(/[%_]/g, '')}%`;
+                where.push('(LOWER(to_address) LIKE ? OR LOWER(subject) LIKE ?)');
+                params.push(needle, needle);
+            }
+            if (SYSTEM_SENT_STATUSES.includes(f.status)) { where.push('status = ?'); params.push(f.status); }
+            const source = String(f.source || '').trim().slice(0, 100);
+            if (source) { where.push('source = ?'); params.push(source); }
+            const day = (v) => {
+                const s = String(v || '');
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+                const t = Date.parse(`${s}T00:00:00Z`);
+                return Number.isFinite(t) ? new Date(t) : null;
+            };
+            const from = day(f.from);
+            const to = day(f.to);
+            if (from) { where.push('created_at >= ?'); params.push(sqlDate(from)); }
+            if (to) { where.push('created_at < ?'); params.push(sqlDate(new Date(to.getTime() + 86400000))); }
+            const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+            const perPage = Math.min(Math.max(parseInt(f.perPage, 10) || 25, 1), 100);
+            const page = Math.min(Math.max(parseInt(f.page, 10) || 1, 1), 100000);
+            const [rows, count, sources] = await Promise.all([
+                db.all(`
+                    SELECT id, email_id, message_id, created_at, from_address, from_name, to_address, subject,
+                           source, status, last_error, size
+                    FROM ${T_SYSTEM_SENT} ${w}
+                    ORDER BY id DESC
+                    LIMIT ? OFFSET ?`, [...params, perPage, (page - 1) * perPage]),
+                db.get(`SELECT COUNT(*) AS n FROM ${T_SYSTEM_SENT} ${w}`, params),
+                db.all(`SELECT DISTINCT source FROM ${T_SYSTEM_SENT} ORDER BY source ASC LIMIT 100`),
+            ]);
+            return {
+                items: rows,
+                total: count ? Number(count.n) || 0 : 0,
+                page,
+                perPage,
+                sources: (sources || []).map(r => r.source).filter(Boolean),
+            };
+        },
+
+        /** One log row with its stored bodies (the route sanitizes the HTML before it leaves). */
+        async getSystemSent(id) {
+            return await db.get(`SELECT * FROM ${T_SYSTEM_SENT} WHERE id = ?`, [parseInt(id, 10) || 0]);
+        },
+
+        /** Delete what is older than `days` (0 = everything). Returns how many rows went. */
+        async purgeSystemSent(days) {
+            const d = parseInt(days, 10) || 0;
+            const r = d > 0
+                ? await db.run(`DELETE FROM ${T_SYSTEM_SENT} WHERE created_at < ?`, [sqlDate(new Date(Date.now() - d * 86400000))])
+                : await db.run(`DELETE FROM ${T_SYSTEM_SENT}`);
+            return r && r.changes ? Number(r.changes) : 0;
         },
     };
     return store;
@@ -339,3 +502,7 @@ module.exports = function createAdminStore(db) {
 
 module.exports.normalizeLocalPart = normalizeLocalPart;
 module.exports.normalizeDestinations = normalizeDestinations;
+module.exports.normalizeRetentionDays = normalizeRetentionDays;
+module.exports.SYSTEM_SENT_RETENTION_CHOICES = SYSTEM_SENT_RETENTION_CHOICES;
+module.exports.SYSTEM_SENT_RETENTION_DEFAULT = SYSTEM_SENT_RETENTION_DEFAULT;
+module.exports.SYSTEM_SENT_STATUSES = SYSTEM_SENT_STATUSES;

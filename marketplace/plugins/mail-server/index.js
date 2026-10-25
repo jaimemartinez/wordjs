@@ -77,7 +77,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.2.3',
+    version: '3.3.0',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -2128,6 +2128,32 @@ async function sendRateLimit() {
 }
 function forgetSendRateLimit() { _sendRateCache = { at: 0, value: 0 }; }
 
+// === SYSTEM SENT LOG ===============================================================================
+// Mail the SITE sends — no mailbox owns it: the core's and other plugins' mail through the provider,
+// the email notification transport — is recorded in wjp_mail_server_system_sent (lib/mail-admin-store)
+// so an administrator can see it after it left the queue. A user's own mail is never recorded: it has
+// its Sent folder. Kept for `mail_system_sent_retention` days (7/30/90/180, 0 = keep nothing; default
+// 30) and purged on the queue's sweep. Bodies are stored for the admin's preview and NEVER logged.
+const SYSTEM_SENT_RETENTION_OPTION = 'mail_system_sent_retention';
+// Who handed a message over. A Symbol, so it is set only by this file's own wrappers and never by a
+// field a caller put on the message (the provider's messages arrive as plain data over the bridge).
+const SYSTEM_SOURCE = Symbol('mail-server:system-source');
+let _retentionCache = { at: 0, value: null };
+async function systemSentRetentionDays() {
+    if (_retentionCache.value !== null && Date.now() - _retentionCache.at < 30 * 1000) return _retentionCache.value;
+    const value = createAdminStore.normalizeRetentionDays(await getOption(SYSTEM_SENT_RETENTION_OPTION, String(createAdminStore.SYSTEM_SENT_RETENTION_DEFAULT)));
+    _retentionCache = { at: Date.now(), value };
+    return value;
+}
+function forgetSystemSentRetention() { _retentionCache = { at: 0, value: null }; }
+let _lastSystemSentPurge = 0; // last retention sweep of the system Sent log (at most hourly)
+
+/** Mark a message as handed over by `source` (see SYSTEM_SOURCE). Returns the same object. */
+function fromSource(msg, source) {
+    if (msg && typeof msg === 'object') msg[SYSTEM_SOURCE] = source;
+    return msg;
+}
+
 /**
  * The rate gate in front of external delivery. Answers null when the message may go out now, or the
  * moment (ms) it is held until. `data.paceClaimed`: the queue already claimed its slot (in order).
@@ -2687,6 +2713,31 @@ async function sendMail(data) {
         throw e; // If we can't save the sent record, we probably shouldn't send? Or warn?
     }
 
+    // 1b. The system Sent log (see SYSTEM SENT LOG): a NEW message of the SITE — no mailbox identity and
+    // no owning account. A retry, a scheduled draft or a forward is not a new message; a user's own mail
+    // has its Sent folder. The status follows the queue row from here on (onDeliveryState).
+    let systemLogId = 0;
+    if (!identity && senderUserId === 0 && !isRetry && !draftId && !data.noSentCopy && Admin) {
+        try {
+            if (await systemSentRetentionDays() > 0) {
+                systemLogId = await Admin.recordSystemSent({
+                    emailId: sentRecordId,
+                    messageId: outboundMessageId,
+                    from: fromEmail.toLowerCase(),
+                    fromName,
+                    to: distinctRecipients,
+                    subject: data.subject,
+                    source: data[SYSTEM_SOURCE] || 'core',
+                    html: data.html,
+                    text: data.text,
+                });
+            }
+        } catch (e) {
+            // Never in the way of the delivery, and never the message itself in the log.
+            console.error('[MailServer] Could not record the system message:', e && e.message);
+        }
+    }
+
     // 2. Deliver to Internal Users (Inbox Copy). mailDomain came from the parallel wave above.
     console.log(`[MailServer] Processing internal delivery for domain: ${mailDomain}`);
 
@@ -2963,6 +3014,11 @@ async function sendMail(data) {
     // Update the retry queue state on the Sent record (Feature: retry temporary failures).
     // Only meaningful when we actually attempted external delivery and have a record to track.
     await updateRetryState(sentRecordId, data, externalRecipients, failed);
+    // A logged system message with no queue row to follow: its outcome is final here.
+    if (systemLogId && !sentRecordId) {
+        await Admin.setSystemSentStatus(systemLogId, failed.length === 0 ? 'delivered' : 'failed',
+            failed.length ? failed.map(f => `${f.recipient}: ${f.error}`).join('; ') : null).catch(() => null);
+    }
 
     // Surface delivery outcome so callers (the /send, /test endpoints) report accurately instead of
     // silently "succeeding". The Sent record + local inbox copies are already persisted above.
@@ -3546,10 +3602,15 @@ exports.init = async function (bridge) {
                 // and refuses to destroy on the second — but only if we let the failure reach it.
                 throw new Error(`mail identity lookup failed for an address: ${e && e.message}`);
             }
-        }
+        },
         // NO fallbackOwnerId, deliberately: a row nobody claims — or that several accounts are party
         // to — stays at user_id = 0, where the store's exact-filtered path already serves it to all of
         // them. See _resolveLegacyOwner in lib/email-store.js.
+
+        // The system Sent log follows every delivery-state write of a queue row (see SYSTEM SENT LOG).
+        onDeliveryState: async (id, status, lastError, paced) => {
+            if (Admin) await Admin.syncSystemSent(id, status, lastError, paced);
+        }
     });
 
     // getOption/updateOption transparently route secret/security-critical keys to the plugin's own
@@ -3796,6 +3857,18 @@ exports.init = async function (bridge) {
             }
         } catch (e) {
             console.error('[MailServer] Spam purge error:', e);
+        }
+
+        // The system Sent log's retention (see SYSTEM SENT LOG), at most hourly.
+        try {
+            const now = Date.now();
+            if (now - _lastSystemSentPurge > 60 * 60 * 1000) {
+                _lastSystemSentPurge = now;
+                const purged = await Admin.purgeSystemSent(await systemSentRetentionDays());
+                if (purged > 0) console.log(`[MailServer] Purged ${purged} system message(s) past their retention.`);
+            }
+        } catch (e) {
+            console.error('[MailServer] System Sent purge error:', e && e.message);
         }
         // 15s tick (was 60s): the queue drives UNDO SEND (a message sits in the outbox for
         // ~10s before dispatch), so a 60s tick would stretch "sending…" to over a minute. All the
@@ -4514,7 +4587,8 @@ exports.init = async function (bridge) {
             mail_security_dmarc_enabled: '1',
             mail_undo_send_seconds: '10',
             mail_blocked_senders: '', mail_allowed_senders: '', mail_quota_default_mb: '0', mail_forwarding_allowed: '1',
-            [SEND_RATE_OPTION]: '0'
+            [SEND_RATE_OPTION]: '0',
+            [SYSTEM_SENT_RETENTION_OPTION]: String(createAdminStore.SYSTEM_SENT_RETENTION_DEFAULT)
         });
         const mailDomainNow = await getMailDomain().catch(() => '');
         res.json({
@@ -4568,7 +4642,9 @@ exports.init = async function (bridge) {
             mail_blocked_senders: o.mail_blocked_senders,
             mail_allowed_senders: o.mail_allowed_senders,
             mail_quota_default_mb: o.mail_quota_default_mb,
-            mail_forwarding_allowed: o.mail_forwarding_allowed
+            mail_forwarding_allowed: o.mail_forwarding_allowed,
+            // Days the system Sent log keeps a message (0 = it keeps nothing).
+            [SYSTEM_SENT_RETENTION_OPTION]: String(createAdminStore.normalizeRetentionDays(o[SYSTEM_SENT_RETENTION_OPTION]))
             // NOTE: the DKIM private key is never returned (secret).
         });
     });
@@ -4623,6 +4699,28 @@ exports.init = async function (bridge) {
         if (req.body.mail_forwarding_allowed !== undefined) req.body.mail_forwarding_allowed = req.body.mail_forwarding_allowed === '0' || req.body.mail_forwarding_allowed === false ? '0' : '1';
         if (req.body[SEND_RATE_OPTION] !== undefined) req.body[SEND_RATE_OPTION] = String(parsePerMinute(req.body[SEND_RATE_OPTION]));
 
+        // The system Sent log's retention: one of the offered choices, nothing else. A SHORTER period
+        // (or "keep nothing") deletes what it no longer covers right away — the screen asks first.
+        let systemSentPurged = null;
+        if (req.body[SYSTEM_SENT_RETENTION_OPTION] !== undefined) {
+            const days = parseInt(String(req.body[SYSTEM_SENT_RETENTION_OPTION]), 10);
+            if (!createAdminStore.SYSTEM_SENT_RETENTION_CHOICES.includes(days)) {
+                return res.status(400).json({ code: 'mail_retention_invalid', error: `Retention must be one of ${createAdminStore.SYSTEM_SENT_RETENTION_CHOICES.join(', ')} days.` });
+            }
+            const before = await systemSentRetentionDays();
+            await updateOption(SYSTEM_SENT_RETENTION_OPTION, String(days));
+            forgetSystemSentRetention();
+            if (days === 0 || before === 0 || days < before) {
+                try { systemSentPurged = await Admin.purgeSystemSent(days); }
+                catch (e) { return res.status(500).json({ error: 'The retention was saved, but the older messages could not be deleted yet; the hourly sweep will retry.' }); }
+            }
+        }
+        // Saving only the retention (the system Sent screen) touches nothing the listeners depend on.
+        const sentKeys = Object.keys(req.body || {});
+        if (sentKeys.length > 0 && sentKeys.every(k => k === SYSTEM_SENT_RETENTION_OPTION)) {
+            return res.json({ success: true, message: 'Server settings updated', systemSentPurged });
+        }
+
         for (const f of fields) {
             if (req.body[f] === undefined) continue;
             // Don't wipe the stored relay password when the field is left blank on a normal save — the UI
@@ -4638,7 +4736,7 @@ exports.init = async function (bridge) {
         forgetSendRateLimit();
         await initSMTPServer();
         await initTransporter();
-        res.json({ success: true, message: 'Server settings updated' });
+        res.json({ success: true, message: 'Server settings updated', systemSentPurged });
     });
 
     // POST /api/v1/plugin/mail-server/test  — send a real test message (pass {to} to test EXTERNAL delivery)
@@ -5352,6 +5450,58 @@ exports.init = async function (bridge) {
         }
     });
 
+    // === SYSTEM SENT LOG (administrators only) ===================================================
+    // The host enforces `admin: true`; the handlers check the role again, because these rows carry
+    // message bodies (personal data) and a mis-declared route must not be what stands between them
+    // and any logged-in account.
+    const denyNotAdmin = (req, res) => {
+        if (req.user && req.user.role === 'administrator') return false;
+        res.status(403).json({ error: 'Forbidden', code: 'mail_admin_only' });
+        return true;
+    };
+
+    // GET /admin/system-sent — one page of the log, headers only. ?q= (recipient / subject), status,
+    // source, from, to (YYYY-MM-DD), page, perPage.
+    route('get', '/admin/system-sent', { auth: true, admin: true }, async (req, res) => {
+        if (denyNotAdmin(req, res)) return;
+        try {
+            const q = req.query || {};
+            const [page, retentionDays] = await Promise.all([
+                Admin.listSystemSent({ q: q.q, status: q.status, source: q.source, from: q.from, to: q.to, page: q.page, perPage: q.perPage }),
+                systemSentRetentionDays(),
+            ]);
+            res.json({ ...page, retentionDays, retentionChoices: createAdminStore.SYSTEM_SENT_RETENTION_CHOICES });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to load the system Sent log' });
+        }
+    });
+
+    // GET /admin/system-sent/:id — one message: headers, the HTML (sanitized here, again, whatever was
+    // stored), the plain text, and its queue row when it is still waiting there.
+    route('get', '/admin/system-sent/:id', { auth: true, admin: true }, async (req, res) => {
+        if (denyNotAdmin(req, res)) return;
+        try {
+            const row = await Admin.getSystemSent(req.params.id);
+            if (!row) return res.status(404).json({ error: 'Message not found' });
+            let queue = null;
+            if (Number(row.email_id) > 0) {
+                const item = await Admin.getQueueItem(row.email_id);
+                if (item && (item.delivery_status === 'retry' || item.delivery_status === 'failed')) {
+                    queue = { id: item.id, status: item.delivery_status };
+                }
+            }
+            const { body_html: html, body_text: text, ...headers } = row;
+            res.json({
+                ...headers,
+                html: sanitizeEmailHtml(String(html || '')),
+                text: String(text || ''),
+                queue,
+            });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to load the message' });
+        }
+    });
+
     // Register Admin Menu
     wordjs.adminMenu.add({
         href: '/admin/plugin/emails',
@@ -5368,7 +5518,8 @@ exports.init = async function (bridge) {
     });
 
     // Expose sendMail utility for other plugins (host installs a shim for wordjs.mail / global.wordjs_send_mail).
-    wordjs.provideMail(sendMail);
+    // The host does not say WHICH caller handed a message over, so the system Sent log names it 'core'.
+    wordjs.provideMail((msg) => sendMail(fromSource(msg, 'core')));
 
     // Register as a Notification Transport
     wordjs.notify.registerTransport('email', async (notification) => {
@@ -5380,12 +5531,12 @@ exports.init = async function (bridge) {
 
         if (targetEmail) {
             try {
-                await sendMail({
+                await sendMail(fromSource({
                     to: targetEmail,
                     subject: notification.title,
                     text: notification.message,
                     html: `<p>${notification.message}</p>`
-                });
+                }, 'notifications'));
             } catch (e) {
                 console.error('❌ Mail Server Transport Failed:', e.message);
             }
