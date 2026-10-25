@@ -222,7 +222,16 @@ function createPaper(core) {
         const conf = await core.conferenceOf(cid);
         const { texts } = await core.textsOf(cid, conf);
         const policy = await core.policySnapshot(cid, s);
-        const people = (await peopleOf(cid, scope.location.id)).filter(p => p.state !== 'granted');
+        // 2.36.16: `inscription_ids` — a sheet for the people chosen in the list (of this locality, not yet confirmed);
+        // without it, everyone of the locality still to confirm, as before.
+        let only = null;
+        if (b.inscription_ids !== undefined) {
+            if (!Array.isArray(b.inscription_ids) || b.inscription_ids.length > 500) throw httpError(400, 'Lista de personas inválida.');
+            only = new Set(b.inscription_ids.map(Number).filter(n => Number.isInteger(n) && n > 0));
+            if (!only.size) throw httpError(400, 'Escoge al menos una persona para la hoja.');
+        }
+        const people = (await peopleOf(cid, scope.location.id)).filter(p => p.state !== 'granted' && (!only || only.has(Number(p.id))));
+        if (only && !people.length) throw httpError(400, 'Ninguna de las personas escogidas es de esta localidad o falta por confirmar.');
         const roster = people.map((p, i) => ({ row: i + 1, id: p.id, name: p.name }));
         const text = sheetText({ lang, conference: conf ? conf.name : '', location: scope.location.name, policy: { url: s.policy_url, version: s.policy_version, sha256: policy.sha256 },
             responsible: s.responsible, contact: s.contact_email, texts });

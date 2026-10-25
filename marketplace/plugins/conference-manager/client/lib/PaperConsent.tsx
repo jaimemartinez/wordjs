@@ -156,9 +156,11 @@ export function SheetView({ t, sheet, rows, people, setRow, renderDetail }: { t:
     );
 }
 
-export function PaperConsent({ t, request, Dialog, addToast, canManage, locationPicker, dateLang = "es" }: {
+export function PaperConsent({ t, request, Dialog, addToast, canManage, locationPicker, dateLang = "es", onlyIds, onClearOnly }: {
     t: (k: string, v?: any) => string; request: Req; Dialog: React.ComponentType<DialogProps>; addToast: (m: string, tone?: string) => void;
     canManage: boolean; locationPicker?: React.ReactNode; dateLang?: string;
+    /** 2.36.16: a sheet for these people only (chosen in the admin's list), until `onClearOnly`. */
+    onlyIds?: number[] | null; onClearOnly?: () => void;
 }) {
     const [data, setData] = useState<any>(null);
     const [err, setErr] = useState<string | null>(null);
@@ -185,7 +187,7 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
         if (n !== undefined && !(Number.isInteger(n) && n >= 0 && n <= (data?.limits?.max_blank || 40))) { setErr(t("paper.blank.bad", { max: data?.limits?.max_blank || 40 })); return; }
         setBusy("create"); setErr(null);
         try {
-            const r = await request("post", { action: "create", blank: n, lang: sheetLang || data?.lang, paper });
+            const r = await request("post", { action: "create", blank: n, lang: sheetLang || data?.lang, paper, ...(onlyIds && onlyIds.length ? { inscription_ids: onlyIds } : {}) });
             // The new sheet, ready: its PDF is saved or opened from the dialog (a tap of its own, so a phone allows it).
             addToast(t("paper.downloaded", { code: r.sheet.code }), "success");
             setView({ kind: "printed", code: r.sheet.code, sheet: r.sheet });
@@ -343,6 +345,12 @@ export function PaperConsent({ t, request, Dialog, addToast, canManage, location
             <div>
                 <h2 className="text-lg font-bold text-gray-900"><i className="fa-solid fa-file-signature mr-2 text-gray-400" aria-hidden="true"></i>{t("paper.title")}</h2>
                 <p className="text-xs text-gray-500 mt-1">{t("paper.hint")}</p>
+                {onlyIds && onlyIds.length > 0 && (
+                    <p className="mt-2 flex flex-wrap items-center gap-2 text-sm font-semibold text-blue-900 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2" data-paper-only={onlyIds.length}>
+                        <i className="fa-solid fa-user-check" aria-hidden="true"></i>{t("paper.only", { n: onlyIds.length })}
+                        {onClearOnly && <button type="button" onClick={onClearOnly} className="ml-auto text-xs font-bold underline">{t("paper.only.clear")}</button>}
+                    </p>
+                )}
             </div>
             {locationPicker}
             {err && <p className="text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2" role="alert">{err}</p>}

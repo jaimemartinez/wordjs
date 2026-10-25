@@ -403,3 +403,25 @@ test('2.36.7 «puede ser también imagen»: a signed sheet uploaded as photos (J
     const text = String(granted && granted.data);
     for (const h of [sha256(JPEG), sha256(WEBP)]) assert.ok(text.includes(h), `the granted record names ${h}`);
 });
+
+test('2.36.16 a sheet for the people chosen in «Autorizaciones»: only those of the locality still to confirm; a bad or empty choice is refused', async () => {
+    const w = await world();
+    const ana = await w.register(w.tNorte, 'Ana');
+    const beto = await w.register(w.tNorte, 'Beto');
+    await w.register(w.tNorte, 'Dora');
+    const carla = await w.register(w.tSur, 'Carla');
+    const create = (body: any) => w.p.call('post', '/consent/paper', { body: { conference_id: w.cid, location_id: w.norte, action: 'create', ...body } });
+    // Ana and Beto chosen (Carla is from Sur: left out): a sheet with those two only.
+    const made = ok(await create({ inscription_ids: [ana, beto, carla] }));
+    assert.strictEqual(made.sheet.rows, 2);
+    assert.ok(made.html.includes('Ana Pérez') && made.html.includes('Beto Pérez') && !made.html.includes('Dora') && !made.html.includes('Carla'));
+    const roster = JSON.parse(w.p.one(`SELECT roster FROM ${PREFIX}consent_sheets WHERE id = ?`, made.sheet.id).roster);
+    assert.deepStrictEqual(roster.map((r: any) => r.id), [ana, beto]);
+    // Without the list: the whole locality, as before.
+    assert.strictEqual(ok(await create({})).sheet.rows, 3);
+    // Refused: not a list, an empty one, or nobody of this locality.
+    for (const bad of [{ inscription_ids: 'x' }, { inscription_ids: [] }, { inscription_ids: [carla] }]) {
+        const r = await create(bad);
+        assert.strictEqual(r.status, 400, JSON.stringify(bad));
+    }
+});
