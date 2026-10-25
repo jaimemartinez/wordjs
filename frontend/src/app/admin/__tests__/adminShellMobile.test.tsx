@@ -267,3 +267,26 @@ describe("DataTable cards fit a phone even with a long URL", () => {
         expect(audit).toContain("settingsApi.update({ audit_retention_days: value })");
     });
 });
+
+/**
+ * The owner's iPhone after 2.11.6: the audit cards still scrolled sideways, this time through the detail
+ * summary («source: https://github.com/…»). Each pair is a `break-words` span, and overflow-wrap:
+ * break-word does not shrink min-content, so one URL pill widened the card. Inside a card, `break-words`
+ * now means `anywhere` (globals.css, unlayered), and the audit summary pills may shrink.
+ */
+describe("A long URL in a card summary never widens the card", () => {
+    const css = fs.readFileSync(path.resolve(__dirname, "../../globals.css"), "utf8");
+    const audit = fs.readFileSync(path.resolve(__dirname, "../audit/page.tsx"), "utf8");
+
+    it("inside DataTable cards, break-words breaks anywhere, outside any @layer", () => {
+        const rule = css.match(/\[data-dt="cards"\] \.break-words \{\s*overflow-wrap: anywhere;\s*\}/);
+        expect(rule, "the card break-words rule").not.toBeNull();
+        const before = css.slice(0, css.indexOf(rule![0])).replace(/\/\*[\s\S]*?\*\//g, "");
+        const depth = before.split("").reduce((d, ch) => d + (ch === "{" ? 1 : ch === "}" ? -1 : 0), 0);
+        expect(depth).toBe(0);
+    });
+
+    it("the audit detail summary pills may shrink", () => {
+        expect(audit).toContain('<span key={pair.key} className="min-w-0 max-w-full break-words">');
+    });
+});

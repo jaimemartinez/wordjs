@@ -234,3 +234,13 @@ body {
     font-size: 16px;
   }
 }
+
+/*
+ * DataTable cards (components/ui/DataTable.tsx, `data-dt="cards"`): `break-words` (overflow-wrap:
+ * break-word) still lets a long URL set an element's min-content width, so a summary pill holding one
+ * pushed its card — and the table — wider than a phone. Inside a card a long word breaks anywhere.
+ * Unlayered on purpose: it must override the layered `break-words` utility on any descendant.
+ */
+[data-dt="cards"] .break-words {
+  overflow-wrap: anywhere;
+}
