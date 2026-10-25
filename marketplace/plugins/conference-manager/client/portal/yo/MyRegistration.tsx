@@ -414,6 +414,10 @@ export default function MyRegistrationPage() {
                             <i className={`fa-solid ${busy ? "fa-spinner animate-spin" : "fa-file-pdf"}`} aria-hidden="true"></i>Descargar PDF
                         </button>
                         {note && <p className="text-center text-xs font-bold text-gray-600" role="status">{note}</p>}
+                        {/* 2.36.15: kept for offline only with «Recordar» — say how, once, when it is off. */}
+                        {(readStored() || { code: "" }).code !== view.code && (
+                            <p className="text-center text-[11px] text-gray-500" data-self-offline-hint="">Marca «Recordar en este teléfono» para verla sin conexión.</p>
+                        )}
                     </section>
                 )}
 

@@ -18,6 +18,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **What is kept**: only the badge part — never the answers, meals, hotel or bus. «Salir» deletes it, and it
     expires with the event.
   - **What is never cached**: the plugin's API and the PDF tickets always go to the network.
+  - **Without «Recordar»**: one line under the badge says how to have it offline.
 - **conference-manager 2.36.14: «Plantillas de correo», redesigned for a coordinator who knows nothing about markup.**
   - **The list**: one card per e-mail, with its name, when it is sent, «Personalizado» (and in which languages) or
     «Original», the date of the last edit, and «Editar».

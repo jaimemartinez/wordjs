@@ -1066,6 +1066,9 @@ describe('conference-manager 2.36.15 — «Mi escarapela» without a connection'
         expect(m).toContain('else { writeStored(null); clearOffline(); }');
         expect(m).toMatch(/writeStored\(null\);\n\s+clearOffline\(\);\n\s+dropPushSubscription\(\);/);
         expect(m).toContain('window.addEventListener("online", on);');
+        // Without «Recordar», one line says how to have it offline.
+        expect(m).toContain('{(readStored() || { code: "" }).code !== view.code && (');
+        expect(m).toContain('Marca «Recordar en este teléfono» para verla sin conexión.');
         // The kept view shows the badge and who it is — nothing else.
         const offline = m.slice(m.indexOf('if (state.kind === "offline") {'), m.indexOf('if (state.kind === "error") {'));
         for (const no of ['answers', 'meals', 'lodging', 'downloadPdf']) expect(offline, no).not.toContain(no);
