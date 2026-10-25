@@ -8,6 +8,10 @@
  * own registration — badge, answers, meals delivered (and when) and to come, hotel, room and a map —
  * and a session token this phone keeps (localStorage) so the document is not asked again here, until it expires
  * or they leave. Nothing personal is rendered on the server; the layout marks the page noindex / no-referrer.
+ *
+ * 2.36.15: «Mi escarapela» without a connection — when the person keeps the page on this phone («Recordar»), the
+ * badge part is kept too (yo/offline.ts) and the page's worker keeps the page; offline, the kept badge shows with
+ * a small offline icon, and the live page comes back with the connection.
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { csrfHeaders } from "@/lib/csrf";
@@ -15,6 +19,7 @@ import { BadgeCard, type DisplayList } from "../badge/BadgeCard";
 import { OsmMap } from "./OsmMap";
 import { BusAlerts, PushSwitch, dropPushSubscription, type Bus } from "./BusAlerts";
 import { Select } from "../../lib/Select";
+import { clearOffline, isOfflineFailure, offlineCopyOf, readOffline, registerOfflineWorker, saveOffline, type OfflineCopy } from "./offline";
 
 type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null; turn_start?: string; turn_end?: string };
 type View = {
@@ -34,6 +39,7 @@ type State =
     | { kind: "loading" }
     | { kind: "form"; form: Form; error: string }
     | { kind: "ok"; view: View; session: string }
+    | { kind: "offline"; copy: OfflineCopy }
     | { kind: "error"; code: string; message: string };
 
 const API = "/api/v1/plugin/conference-manager/public/me";
@@ -85,6 +91,20 @@ const whenLabel = (iso: string | null | undefined) => {
 };
 const mealName = (m: Meal) => m.label || MEAL_NAMES[m.meal] || m.meal;
 
+/** «Sin conexión»: a wifi with a slash (Font Awesome free has none), and the words for a screen reader. */
+export function OfflineMark({ savedAt }: { savedAt?: string | null }) {
+    return (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-900 text-white px-2.5 py-1 text-[11px] font-black" role="status" title={savedAt ? `Sin conexión · guardada ${savedAt}` : "Sin conexión"} data-self-offline="">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M2 8.8a15 15 0 0 1 4.2-2.6M10.7 5.1A15 15 0 0 1 22 8.8M5 12.5a10 10 0 0 1 5.2-2.8M16.9 10.3a10 10 0 0 1 2.1 2.2M8.5 16.1a5 5 0 0 1 7 0" />
+                <circle cx="12" cy="19.5" r="0.6" fill="currentColor" />
+                <path d="M3 3l18 18" />
+            </svg>
+            <span>Sin conexión</span>
+        </span>
+    );
+}
+
 export default function MyRegistrationPage() {
     const [state, setState] = useState<State>({ kind: "loading" });
     // 2.36.6: the buses as «Mi transporte» last heard them (it polls), for the alert strip at the top.
@@ -111,6 +131,23 @@ export default function MyRegistrationPage() {
         document.addEventListener("visibilitychange", again);
         return () => { alive = false; clearInterval(t); if (sw) sw.removeEventListener("message", onMessage); document.removeEventListener("visibilitychange", again); };
     }, [waiting]);
+    // 2.36.15: the connection as the phone reports it (the offline icon), and the kept badge kept up to date.
+    const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine !== false));
+    useEffect(() => {
+        const on = () => setOnline(true), off = () => setOnline(false);
+        window.addEventListener("online", on);
+        window.addEventListener("offline", off);
+        return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+    }, []);
+    const okView = state.kind === "ok" ? state.view : null;
+    useEffect(() => {
+        if (!okView) return;
+        const stored = readStored();
+        // Only on a phone the person keeps it on («Recordar en este teléfono»).
+        if (!stored || stored.code !== okView.code) return;
+        saveOffline(offlineCopyOf(okView, okView.code));
+        registerOfflineWorker();
+    }, [okView]);
     const [busy, setBusy] = useState(false);
     const [docType, setDocType] = useState("");
     const [docNumber, setDocNumber] = useState("");
@@ -137,16 +174,32 @@ export default function MyRegistrationPage() {
         const stored = readStored();
         // This phone already confirmed a document: reopen it — unless the QR just scanned is someone else's.
         if (stored && (!fromHash || fromHash === stored.code)) {
+            // 2.36.15: no connection (or the server out of reach) → the badge kept on this phone, if there is one.
+            const kept = () => {
+                const copy = readOffline(stored.code);
+                setState(copy ? { kind: "offline", copy } : { kind: "error", code: "network", message: "" });
+            };
+            if (typeof navigator !== "undefined" && navigator.onLine === false) { kept(); return; }
             try {
                 const r = await post("view", { session: stored.session });
                 if (r.status === 200 && r.body.view) { setState({ kind: "ok", view: r.body.view, session: stored.session }); return; }
-                if (r.status === 401) writeStored(null);
-                else if (r.status >= 500) { setState({ kind: "error", code: "network", message: "" }); return; }
-                else { writeStored(null); setState({ kind: "error", code: r.body.code || "unavailable", message: r.body.error || "" }); return; }
-            } catch { setState({ kind: "error", code: "network", message: "" }); return; }
+                if (r.status === 401) { writeStored(null); clearOffline(); }
+                else if (isOfflineFailure(r.status)) { kept(); return; }
+                else { writeStored(null); clearOffline(); setState({ kind: "error", code: r.body.code || "unavailable", message: r.body.error || "" }); return; }
+            } catch { kept(); return; }
         }
         await startWith(fromHash || "", !!fromHash);
     }, [startWith]);
+
+    // Back online while showing the kept badge: the live page again (on the browser's «online», never in a loop
+    // while the server is out of reach).
+    const showingKept = state.kind === "offline";
+    useEffect(() => {
+        if (!showingKept) return undefined;
+        const on = () => boot();
+        window.addEventListener("online", on);
+        return () => window.removeEventListener("online", on);
+    }, [showingKept, boot]);
 
     useEffect(() => {
         boot();
@@ -171,7 +224,7 @@ export default function MyRegistrationPage() {
         try {
             const r = await post("verify", { code, doc_type: docType, doc_number: docNumber });
             if (r.status === 200 && r.body.session) {
-                if (remember) writeStored({ session: r.body.session, code }); else writeStored(null);
+                if (remember) writeStored({ session: r.body.session, code }); else { writeStored(null); clearOffline(); }
                 setDocNumber("");
                 setState({ kind: "ok", view: r.body.view, session: r.body.session });
             } else if (r.status === 401 || r.status === 429) setState({ ...state, error: r.body.error || "Los datos no coinciden." });
@@ -185,6 +238,7 @@ export default function MyRegistrationPage() {
         if (state.kind !== "ok") return;
         const session = state.session;
         writeStored(null);
+        clearOffline();
         dropPushSubscription();
         post("logout", { session }).catch(() => { /* gone on this phone anyway */ });
         setDocType(""); setDocNumber(""); setNote("");
@@ -205,6 +259,32 @@ export default function MyRegistrationPage() {
         return (
             <main className="min-h-dvh bg-gray-50 flex items-center justify-center p-6" data-self-page="loading">
                 <div className="text-gray-400 text-xs font-black uppercase tracking-widest"><i className="fa-solid fa-spinner animate-spin mr-2" aria-hidden="true"></i>Cargando…</div>
+            </main>
+        );
+    }
+    if (state.kind === "offline") {
+        const { copy } = state;
+        const saved = whenLabel(copy.saved_at);
+        const b = copy.badge as any;
+        return (
+            <main className="min-h-dvh bg-gray-100 px-4 py-6 sm:py-10" data-self-page="offline">
+                <div className="mx-auto w-full max-w-md space-y-4">
+                    <header className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="text-[11px] font-black uppercase tracking-widest text-gray-500">{copy.conference}</p>
+                            <h1 className="text-2xl font-black text-gray-900 leading-tight" style={{ overflowWrap: "anywhere" }}>{copy.name}</h1>
+                            {copy.location && <p className="text-sm text-gray-600"><i className="fa-solid fa-location-dot mr-1 text-gray-400" aria-hidden="true"></i>{copy.location}</p>}
+                        </div>
+                        <OfflineMark savedAt={saved} />
+                    </header>
+                    <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 sm:p-6 space-y-3" data-self-badge="kept">
+                        <h2 className="text-[11px] font-black uppercase tracking-widest text-gray-500 flex items-center gap-2"><i className="fa-solid fa-id-badge" aria-hidden="true"></i>Mi escarapela</h2>
+                        <div className={`mx-auto ${b.badge && b.badge.layout === "vertical" ? "max-w-[260px]" : ""} rounded-[14px] overflow-hidden shadow-lg ring-1 ring-black/5 bg-white`}>
+                            <BadgeCard badge={b.badge} plate={b.plate} images={b.images || null} title={`Escarapela de ${copy.name}`} />
+                        </div>
+                        {saved && <p className="text-center text-[11px] text-gray-500" data-self-offline-saved="">Guardada en este teléfono · {saved}</p>}
+                    </section>
+                </div>
             </main>
         );
     }
@@ -288,7 +368,10 @@ export default function MyRegistrationPage() {
                         <h1 className="text-2xl font-black text-gray-900 leading-tight" style={{ overflowWrap: "anywhere" }}>{view.name}</h1>
                         {view.location && <p className="text-sm text-gray-600"><i className="fa-solid fa-location-dot mr-1 text-gray-400" aria-hidden="true"></i>{view.location}</p>}
                     </div>
-                    <button type="button" onClick={leave} className="shrink-0 min-h-[40px] px-3 rounded-xl bg-white border-2 border-gray-200 text-gray-700 font-black text-[10px] uppercase tracking-widest" data-self-leave="">Salir</button>
+                    <div className="shrink-0 flex flex-col items-end gap-2">
+                        <button type="button" onClick={leave} className="min-h-[40px] px-3 rounded-xl bg-white border-2 border-gray-200 text-gray-700 font-black text-[10px] uppercase tracking-widest" data-self-leave="">Salir</button>
+                        {!online && <OfflineMark />}
+                    </div>
                 </header>
 
                 {/* 2.36.6: what is happening NOW, at the top — a compact strip, each line leading to its section. */}
