@@ -814,10 +814,10 @@ describe('2.36.11 «Plantillas de correo» and «Correo del encargado» on the a
         const api = read('lib/conference.ts');
         for (const s of ['getMailTemplates:', 'saveMailTemplate:', 'restoreMailTemplate:', 'previewMailTemplate:', 'testMailTemplate:', 'sendLocationWelcome:']) expect(api, s).toContain(s);
     });
-    it('«Correo del encargado» on each locality: edited in place, «Enviar bienvenida» / «Reenviar», when it was sent, and that it never carries the code', async () => {
+    it('«Correo del encargado» on each locality: «Agregar» (2.36.12: opens «Editar encargado»), «Enviar bienvenida» / «Reenviar», when it was sent, and that it never carries the code', async () => {
         const { CoordinatorMail } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/CoordinatorMail');
         const tx = (_k: string, d: string) => d;
-        const none = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: null }} canManage tx={tx} />);
+        const none = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: null }} canManage tx={tx} onEdit={() => {}} />);
         expect(none).toContain('Sin correo');
         expect(none).toContain('data-coordinator-mail-edit');
         expect(none).not.toContain('data-welcome-send');
@@ -828,14 +828,81 @@ describe('2.36.11 «Plantillas de correo» and «Correo del encargado» on the a
         const sent = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: 'enc@example.org', welcome_sent_s: 1900000000 }} canManage tx={tx} />);
         expect(sent).toContain('Reenviar bienvenida');
         expect(sent).toContain('data-welcome-status="sent"');
-        const view = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: 'enc@example.org' }} canManage={false} tx={tx} />);
+        const view = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: null }} canManage={false} tx={tx} onEdit={() => {}} />);
         expect(view).not.toContain('data-welcome-send');
         expect(view).not.toContain('data-coordinator-mail-edit');
-        expect(read('admin/page.tsx')).toContain('<CoordinatorMail loc={loc} canManage={canManage} tx={tx} addToast={addToast}');
+        expect(read('admin/page.tsx')).toContain('<CoordinatorMail loc={loc} canManage={canManage} tx={tx} addToast={addToast} onEdit={() => setCoordEdit(loc)}');
         expect(read('admin/CoordinatorMail.tsx')).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
     });
     it('the admin words of both screens in es/en/pt', () => {
         const keys = ['mail.templates', 'mail.restore', 'mail.test', 'mail.preview', 'mail.markup', 'mail.before', 'mail.after', 'loc.mail', 'loc.welcome.send', 'loc.welcome.resend', 'loc.welcome.nocode'];
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});
+
+describe('conference-manager 2.36.12 — «Editar encargado»: every piece of a locality\'s coordinator data editable', () => {
+    const read = (rel: string) => src(`client/${rel}`);
+    it('sends only what changed, checks the phone (E.164 with the default country), the e-mail and the name length', async () => {
+        const { coordinatorPatch, draftOf } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/coordinator');
+        const loc = { responsible_name: 'Ana', responsible_phone: '300 123 4567 / 310 000', responsible_email: 'ana@example.org' };
+        // Nothing changed: nothing sent — an old phone typed before E.164 is not re-checked while left alone.
+        expect(coordinatorPatch(loc, draftOf(loc), 'CO')).toEqual({ patch: {}, errors: {}, changed: [] });
+        // Only the name.
+        expect(coordinatorPatch(loc, { ...draftOf(loc), name: '  Ana   María ' }, 'CO').patch).toEqual({ responsible_name: 'Ana María' });
+        // The phone from the selector (E.164) is valid; a typed bad one is said under the field.
+        const ok = coordinatorPatch(loc, { ...draftOf(loc), phone: phone.joinPhone('CO', '3001234567') }, 'CO');
+        expect(ok).toMatchObject({ patch: { responsible_phone: '+573001234567' }, errors: {}, changed: ['phone'] });
+        expect(coordinatorPatch(loc, { ...draftOf(loc), phone: '+12' }, 'CO').errors.phone).toBeTruthy();
+        expect(coordinatorPatch(loc, { ...draftOf(loc), email: 'no-at-sign' }, 'CO').errors.email).toBeTruthy();
+        expect(coordinatorPatch(loc, { ...draftOf(loc), name: 'x'.repeat(121) }, 'CO').errors.name).toBeTruthy();
+        // Clearing a field is a change ('').
+        expect(coordinatorPatch(loc, { ...draftOf(loc), email: '' }, 'CO')).toMatchObject({ patch: { responsible_email: '' }, errors: {}, changed: ['email'] });
+    });
+    it('the welcome state: «No enviado al nuevo correo» when the last one went to another address', async () => {
+        const { welcomeState } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/coordinator');
+        expect(welcomeState({ responsible_email: null })).toBe('none');
+        expect(welcomeState({ responsible_email: 'a@example.org' })).toBe('never');
+        expect(welcomeState({ responsible_email: 'a@example.org', welcome_sent_s: 1, welcome_sent_to: 'A@example.org' })).toBe('sent');
+        expect(welcomeState({ responsible_email: 'b@example.org', welcome_sent_s: 1, welcome_sent_to: 'a@example.org' })).toBe('stale');
+        const { CoordinatorMail } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/CoordinatorMail');
+        const tx = (_k: string, d: string) => d;
+        const stale = renderToStaticMarkup(<CoordinatorMail loc={{ id: 1, responsible_email: 'b@example.org', welcome_sent_s: 1900000000, welcome_sent_to: 'a@example.org' }} canManage tx={tx} />);
+        expect(stale).toContain('data-welcome-status="stale"');
+        expect(stale).toContain('No enviado al nuevo correo');
+        expect(stale).toContain('Enviar bienvenida');
+        expect(stale).not.toContain('Reenviar bienvenida');
+    });
+    it('the sheet: name, the shared phone selector and the e-mail; errors under each field; the change log; no native dialogs', async () => {
+        const { CoordinatorSheet } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/CoordinatorSheet');
+        const tx = (_k: string, d: string) => d;
+        const loc = { id: 7, name: 'Norte', responsible_name: 'Ana', responsible_phone: '+573001234567', responsible_email: 'ana@example.org', welcome_sent_s: 1900000000, welcome_sent_to: 'ana@example.org',
+            coordinator_log: [{ actor: 'boss', at_s: 1900000000, fields: ['name', 'phone'] }] };
+        const html = renderToStaticMarkup(<CoordinatorSheet loc={loc} defaultCountry="CO" lang="es" tx={tx} onClose={() => {}} />);
+        expect(html).toContain('role="dialog"');
+        expect(html).toContain('Editar encargado');
+        expect(html).toContain('data-coord-field="name"');
+        expect(html).toContain('data-phone-input="responsible_phone"');
+        expect(html).toContain('value="3001234567"');
+        expect(html).toContain('data-coord-field="email"');
+        expect(html).toContain('Cambios del encargado');
+        expect(html).toContain('Encargado editado');
+        expect(html).toContain('Nombre, Teléfono');
+        expect(html).toContain('boss');
+        expect(html).not.toMatch(/\srequired[\s=>]/);
+        const sheet = read('admin/CoordinatorSheet.tsx');
+        expect(sheet).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
+        expect(sheet).toContain('conferenceApi.updateLocation(loc.id, check.patch as any)');
+        expect(sheet).toContain('<Overlay layer={LAYER.modal}');
+        // Wired on the card (who may manage the localities) and in the create form (same phone selector + e-mail).
+        const page = read('admin/page.tsx');
+        expect(page).toContain('onClick={() => setCoordEdit(loc)} data-coordinator-edit={loc.id}');
+        expect(page).toContain('<CoordinatorSheet loc={coordEdit} defaultCountry={conference?.phone_country}');
+        expect(page).toContain('<PhoneInput id="cm-new-loc-phone"');
+        expect(page).toContain('id="cm-new-loc-email"');
+    });
+    it('the words in es/en/pt', () => {
+        const keys = ['loc.coord.title', 'loc.coord.edit', 'loc.coord.name', 'loc.coord.phone', 'loc.coord.phone.invalid', 'loc.coord.saved', 'loc.coord.saved.stale',
+            'loc.coord.email.welcome', 'loc.coord.log', 'loc.coord.log.entry', 'loc.welcome.stale', 'loc.welcome.stale.at', 'loc.coord.nophone', 'loc.coord.unassigned', 'loc.coord.name.long'];
         for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
     });
 });

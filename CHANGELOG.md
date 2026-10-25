@@ -7,6 +7,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Added
+- **conference-manager 2.36.12: «Editar encargado».** All of a locality's coordinator data can be changed after
+  the locality is created.
+  - **Where**: the card's «Editar encargado» opens a dialog (a bottom sheet on a phone) with three fields:
+    - the name;
+    - the phone, using the same country + number selector as every phone field, stored in E.164 with the
+      conference's default country;
+    - «Correo del encargado».
+  - **Saving and checks**:
+    - Only what changed is sent. An old phone typed before E.164 is left as it is unless it is edited.
+    - Each error is shown under its field, and the server checks the same rules.
+    - Creating a locality applies the same rules, and its form now also asks for the coordinator's e-mail.
+  - **Audit**: every change is logged as «Encargado editado», with who, when and which fields (never the values),
+    and shown under «Cambios del encargado».
+  - **New e-mail after a welcome**: the card says «No enviado al nuevo correo» and offers «Enviar bienvenida». The
+    address each welcome went to is now stored; earlier sends take it from the send log.
+  - Team members without «Localidades» no longer receive the coordinator's e-mail, the welcome stamps or the change
+    log in the locality list, just as they already did not receive the name and phone.
 
 - **conference-manager 2.36.11: «Plantillas de correo» and the welcome to a locality's coordinator.**
   - **Plantillas de correo** (WordJS administrators) covers every e-mail the plugin sends: the consent link, the
