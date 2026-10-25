@@ -7,6 +7,22 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Added
+- **mail-server 3.3.0: «Enviados del sistema».** *Email Center → Server* has a new tab, after *Queue*, with the mail
+  the site sent on its own (account, comment and template e-mails, notifications, other plugins' mail), which until
+  now could not be seen once it was delivered. A user's own mail is not recorded: it has its Sent folder.
+  - **The list** shows the date, recipient, subject, source and a status chip (queued, delivered, retrying, failed)
+    that follows the delivery. It has a search by recipient or subject, filters by status, source and dates (the
+    admin's calendar), and pages.
+  - **A message** opens with its headers, the HTML in a frame that can run nothing (sanitized again on the server)
+    with remote images off until asked for, and a «Texto» tab. A failed or retrying message offers «Reintentar» and
+    a link to the queue while it is still there.
+  - **«Conservar historial de envíos del sistema»**: 7, 30 (the default), 90 or 180 days, or «No guardar», which
+    stores nothing. Older messages are deleted every hour; a shorter period deletes them at once, after asking. The
+    setting says the copies can hold personal data.
+  - **Administrators only**, and bodies are never written to the logs. Two routes are added (48 of the host's 200).
+  - The server console's new strings are also in Portuguese; its other strings stay in Spanish for a Portuguese
+    admin, as before.
+  - The date filters use the admin's calendar, so the plugin now requires WordJS 2.10.0 or later.
 - **conference-manager 2.36.13: «Enviar por correo» wherever the admin shares a badge.** It is in a person's badge
   actions (from «Escarapelas › Personas» and from the person sheet), and as «Correo» on each row of the person list.
   - **Only with an e-mail on file**: without one, the action is hidden and the sheet explains why («no tiene correo

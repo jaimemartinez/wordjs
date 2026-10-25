@@ -382,6 +382,15 @@ module.exports = function createEmailStore(db, hooks = {}) {
     // There is deliberately no second "catch-all owner" hook: see _resolveLegacyOwner.
     const resolveUserIdByAddress = typeof hooks.resolveUserIdByAddress === 'function' ? hooks.resolveUserIdByAddress : null;
 
+    // Told after every delivery-state write of an outbound row (markSent / markRetry / markFailed /
+    // markPaced), so the system Sent log follows the queue. Best effort: a failure there never fails
+    // the delivery state machine.
+    const onDeliveryState = typeof hooks.onDeliveryState === 'function' ? hooks.onDeliveryState : null;
+    const deliveryState = async (id, status, lastError, paced) => {
+        if (!onDeliveryState) return;
+        try { await onDeliveryState(id, status, lastError, paced); } catch (e) { /* best effort */ }
+    };
+
     const Email = {
         // Expose the storage dir so index.js resolves attachment paths from a single source of truth.
         UPLOAD_DIR,
@@ -2496,11 +2505,13 @@ module.exports = function createEmailStore(db, hooks = {}) {
          * delivery failure: the attempt count is left as it is and the row is marked `paced`.
          */
         async markPaced(id, nextAttemptAt, note) {
-            return await db.run(`
+            const r = await db.run(`
                 UPDATE ${T_EMAILS}
                 SET delivery_status = 'retry', paced = 1, next_attempt_at = ?, last_error = ?
                 WHERE id = ?
             `, [nextAttemptAt, note ? String(note).slice(0, 1000) : null, id]);
+            await deliveryState(id, 'retry', null, 1);
+            return r;
         },
 
         /** How many messages wait for the sending rate (the order rule: new mail queues behind them). */
@@ -2513,27 +2524,33 @@ module.exports = function createEmailStore(db, hooks = {}) {
         },
 
         async markRetry(id, attempts, nextAttemptAt, lastError) {
-            return await db.run(`
+            const r = await db.run(`
                 UPDATE ${T_EMAILS}
                 SET delivery_status = 'retry', paced = 0, delivery_attempts = ?, next_attempt_at = ?, last_error = ?
                 WHERE id = ?
             `, [attempts, nextAttemptAt, lastError ? String(lastError).slice(0, 1000) : null, id]);
+            await deliveryState(id, 'retry', lastError, 0);
+            return r;
         },
 
         async markFailed(id, attempts, lastError) {
-            return await db.run(`
+            const r = await db.run(`
                 UPDATE ${T_EMAILS}
                 SET delivery_status = 'failed', paced = 0, delivery_attempts = ?, next_attempt_at = NULL, last_error = ?
                 WHERE id = ?
             `, [attempts, lastError ? String(lastError).slice(0, 1000) : null, id]);
+            await deliveryState(id, 'failed', lastError, 0);
+            return r;
         },
 
         async markSent(id) {
-            return await db.run(`
+            const r = await db.run(`
                 UPDATE ${T_EMAILS}
                 SET delivery_status = 'sent', paced = 0, next_attempt_at = NULL, last_error = NULL
                 WHERE id = ?
             `, [id]);
+            await deliveryState(id, 'sent', null, 0);
+            return r;
         },
 
         async getAttachments(emailId) {

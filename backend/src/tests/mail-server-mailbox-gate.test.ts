@@ -259,7 +259,9 @@ const ADMIN_CONFIG_ROUTES = [
     // Server administration: overview, mailboxes + quotas, aliases, outbound queue.
     'get /admin/overview', 'get /admin/mailboxes', 'put /admin/mailboxes/:userId',
     'get /admin/aliases', 'post /admin/aliases', 'put /admin/aliases/:id', 'delete /admin/aliases/:id',
-    'get /admin/queue', 'post /admin/queue/:id/retry', 'delete /admin/queue/:id'
+    'get /admin/queue', 'post /admin/queue/:id/retry', 'delete /admin/queue/:id',
+    // The system Sent log (3.3.0): the site's own mail, read by administrators only.
+    'get /admin/system-sent', 'get /admin/system-sent/:id'
 ];
 
 // Routes that are neither mailbox use nor configuration. Each entry must carry the REASON.

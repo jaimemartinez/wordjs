@@ -1,7 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend tsc.
 "use client";
 
-// The webmail and the server console follow the admin's language (the host I18nProvider, 'es' | 'en').
+// The webmail and the server console follow the admin's language (the host I18nProvider, 'es' | 'en' | 'pt').
 // Strings live here, in one table per language; a key missing in a language falls back to English and
 // then to the key itself, so a new string can never render as `undefined`.
 import { useOptionalI18n } from "@/contexts/I18nContext";
@@ -442,6 +442,58 @@ const en = {
     'srv.pol.seconds': '{n} seconds',
     'srv.saved': 'Settings saved',
     'srv.saveChanges': 'Save changes',
+    // System Sent log (Server › System sent)
+    'srv.systemSent': 'System sent',
+    'srv.sys.hint': 'Mail the site sent on its own: account, comment and template emails, notifications and other plugins’ mail. A user’s own mail is not here; it is in their Sent folder.',
+    'srv.sys.retention': 'Keep the system sending history',
+    'srv.sys.retentionHint': 'These copies include the message body, which can contain personal data (names, addresses, links). Keep them only as long as you need them; older ones are deleted automatically.',
+    'srv.sys.keepDays': '{n} days',
+    'srv.sys.keepNone': 'Don’t keep',
+    'srv.sys.shortenConfirm': 'Keep only the last {n} days? Older system messages are deleted now, and this cannot be undone.',
+    'srv.sys.noneConfirm': 'Stop keeping system messages? Every stored one is deleted now, and this cannot be undone.',
+    'srv.sys.shortenAction': 'Delete and save',
+    'srv.sys.savedPurged': 'Saved. {n} older message(s) deleted.',
+    'srv.sys.search': 'Search by recipient or subject',
+    'srv.sys.fStatus': 'Status',
+    'srv.sys.fSource': 'Source',
+    'srv.sys.fFrom': 'From date',
+    'srv.sys.fTo': 'To date',
+    'srv.sys.allStatuses': 'All statuses',
+    'srv.sys.allSources': 'All sources',
+    'srv.sys.clear': 'Clear filters',
+    'srv.sys.st.queued': 'Queued',
+    'srv.sys.st.delivered': 'Delivered',
+    'srv.sys.st.retry': 'Retrying',
+    'srv.sys.st.failed': 'Failed',
+    'srv.sys.src.core': 'Site',
+    'srv.sys.src.notifications': 'Notifications',
+    'srv.sys.src.mail-server': 'Mail server',
+    'srv.sys.empty': 'No system mail yet.',
+    'srv.sys.noMatch': 'No message matches these filters.',
+    'srv.sys.off': 'The history is off.',
+    'srv.sys.offHint': 'Choose how long to keep it above to start recording the mail the site sends.',
+    'srv.sys.count': '{n} message(s)',
+    'srv.sys.page': 'Page {page} of {pages}',
+    'srv.sys.prev': 'Previous page',
+    'srv.sys.next': 'Next page',
+    'srv.sys.detail': 'System message',
+    'srv.sys.noSubject': '(no subject)',
+    'srv.sys.h.date': 'Date',
+    'srv.sys.h.from': 'From',
+    'srv.sys.h.to': 'To',
+    'srv.sys.h.subject': 'Subject',
+    'srv.sys.h.messageId': 'Message-ID',
+    'srv.sys.tabHtml': 'HTML',
+    'srv.sys.tabText': 'Text',
+    'srv.sys.noHtml': 'This message has no HTML version.',
+    'srv.sys.noText': 'This message has no plain-text version.',
+    'srv.sys.showImages': 'Show {n} remote image(s)',
+    'srv.sys.hideImages': 'Hide remote images',
+    'srv.sys.openQueue': 'Open the queue',
+    'srv.sys.retry': 'Retry',
+    'srv.sys.notInQueue': 'This message is no longer in the queue.',
+    'err.mail_retention_invalid': 'Choose one of the offered retention periods.',
+    'err.mail_admin_only': 'Only an administrator can see this.',
     'err.mail_forwarding_local': 'Forward to an address outside this server — local addresses already receive here.',
     'err.mail_forwarding_disabled': 'The administrator has disabled forwarding outside this server.',
     'err.mail_alias_exists': 'An alias with that name already exists.',
@@ -966,6 +1018,58 @@ const es = {
     'srv.pol.undoOff': 'Desactivado — enviar al instante',
     'srv.pol.seconds': '{n} segundos',
     'srv.saved': 'Ajustes guardados',
+    // Enviados del sistema (Servidor › Enviados del sistema)
+    'srv.systemSent': 'Enviados del sistema',
+    'srv.sys.hint': 'El correo que el sitio envía por su cuenta: correos de cuenta, de comentarios y de plantillas, notificaciones y correo de otros plugins. El correo propio de un usuario no está aquí: está en su carpeta Enviados.',
+    'srv.sys.retention': 'Conservar historial de envíos del sistema',
+    'srv.sys.retentionHint': 'Estas copias incluyen el cuerpo del mensaje, que puede contener datos personales (nombres, direcciones, enlaces). Consérvalas solo el tiempo que las necesites; las más antiguas se borran solas.',
+    'srv.sys.keepDays': '{n} días',
+    'srv.sys.keepNone': 'No guardar',
+    'srv.sys.shortenConfirm': '¿Conservar solo los últimos {n} días? Los mensajes del sistema más antiguos se borran ahora y no se pueden recuperar.',
+    'srv.sys.noneConfirm': '¿Dejar de guardar los mensajes del sistema? Se borran ahora todos los guardados y no se pueden recuperar.',
+    'srv.sys.shortenAction': 'Borrar y guardar',
+    'srv.sys.savedPurged': 'Guardado. Se borraron {n} mensaje(s) antiguos.',
+    'srv.sys.search': 'Buscar por destinatario o asunto',
+    'srv.sys.fStatus': 'Estado',
+    'srv.sys.fSource': 'Origen',
+    'srv.sys.fFrom': 'Desde',
+    'srv.sys.fTo': 'Hasta',
+    'srv.sys.allStatuses': 'Todos los estados',
+    'srv.sys.allSources': 'Todos los orígenes',
+    'srv.sys.clear': 'Quitar filtros',
+    'srv.sys.st.queued': 'En cola',
+    'srv.sys.st.delivered': 'Entregado',
+    'srv.sys.st.retry': 'Reintentando',
+    'srv.sys.st.failed': 'Fallido',
+    'srv.sys.src.core': 'Sitio',
+    'srv.sys.src.notifications': 'Notificaciones',
+    'srv.sys.src.mail-server': 'Servidor de correo',
+    'srv.sys.empty': 'Todavía no hay correo del sistema.',
+    'srv.sys.noMatch': 'Ningún mensaje coincide con estos filtros.',
+    'srv.sys.off': 'El historial está desactivado.',
+    'srv.sys.offHint': 'Elige arriba cuánto tiempo conservarlo para empezar a registrar el correo que envía el sitio.',
+    'srv.sys.count': '{n} mensaje(s)',
+    'srv.sys.page': 'Página {page} de {pages}',
+    'srv.sys.prev': 'Página anterior',
+    'srv.sys.next': 'Página siguiente',
+    'srv.sys.detail': 'Mensaje del sistema',
+    'srv.sys.noSubject': '(sin asunto)',
+    'srv.sys.h.date': 'Fecha',
+    'srv.sys.h.from': 'De',
+    'srv.sys.h.to': 'Para',
+    'srv.sys.h.subject': 'Asunto',
+    'srv.sys.h.messageId': 'Message-ID',
+    'srv.sys.tabHtml': 'HTML',
+    'srv.sys.tabText': 'Texto',
+    'srv.sys.noHtml': 'Este mensaje no tiene versión HTML.',
+    'srv.sys.noText': 'Este mensaje no tiene versión de texto.',
+    'srv.sys.showImages': 'Mostrar {n} imagen(es) remotas',
+    'srv.sys.hideImages': 'Ocultar imágenes remotas',
+    'srv.sys.openQueue': 'Abrir la cola',
+    'srv.sys.retry': 'Reintentar',
+    'srv.sys.notInQueue': 'Este mensaje ya no está en la cola.',
+    'err.mail_retention_invalid': 'Elige uno de los periodos de conservación ofrecidos.',
+    'err.mail_admin_only': 'Solo un administrador puede ver esto.',
     'srv.saveChanges': 'Guardar cambios',
     'err.mail_forwarding_local': 'Reenvía a una dirección de fuera de este servidor: las direcciones locales ya reciben aquí.',
     'err.mail_forwarding_disabled': 'El administrador ha desactivado el reenvío fuera de este servidor.',
@@ -1067,11 +1171,69 @@ const es = {
     'srv.testx.fail': 'La entrega falló: revisa rDNS/SPF/DKIM/DMARC y que el puerto 25 de salida (o el relé configurado) esté accesible.',
 };
 
-const TABLES = { en, es };
+// Portuguese: only the strings translated so far. Every other key falls back to Spanish (what a
+// Portuguese admin saw before this table existed), then English.
+const pt = {
+    'srv.systemSent': 'Enviados do sistema',
+    'srv.sys.hint': 'O e-mail que o site envia por conta própria: e-mails de conta, de comentários e de modelos, notificações e e-mails de outros plugins. O e-mail próprio de um usuário não está aqui: está na pasta Enviados dele.',
+    'srv.sys.retention': 'Manter histórico de envios do sistema',
+    'srv.sys.retentionHint': 'Estas cópias incluem o corpo da mensagem, que pode conter dados pessoais (nomes, endereços, links). Mantenha-as só pelo tempo necessário; as mais antigas são apagadas automaticamente.',
+    'srv.sys.keepDays': '{n} dias',
+    'srv.sys.keepNone': 'Não guardar',
+    'srv.sys.shortenConfirm': 'Manter só os últimos {n} dias? As mensagens do sistema mais antigas são apagadas agora e não podem ser recuperadas.',
+    'srv.sys.noneConfirm': 'Deixar de guardar as mensagens do sistema? Todas as guardadas são apagadas agora e não podem ser recuperadas.',
+    'srv.sys.shortenAction': 'Apagar e salvar',
+    'srv.sys.savedPurged': 'Salvo. {n} mensagem(ns) antiga(s) apagada(s).',
+    'srv.sys.search': 'Buscar por destinatário ou assunto',
+    'srv.sys.fStatus': 'Status',
+    'srv.sys.fSource': 'Origem',
+    'srv.sys.fFrom': 'De (data)',
+    'srv.sys.fTo': 'Até (data)',
+    'srv.sys.allStatuses': 'Todos os status',
+    'srv.sys.allSources': 'Todas as origens',
+    'srv.sys.clear': 'Limpar filtros',
+    'srv.sys.st.queued': 'Na fila',
+    'srv.sys.st.delivered': 'Entregue',
+    'srv.sys.st.retry': 'Tentando de novo',
+    'srv.sys.st.failed': 'Falhou',
+    'srv.sys.src.core': 'Site',
+    'srv.sys.src.notifications': 'Notificações',
+    'srv.sys.src.mail-server': 'Servidor de e-mail',
+    'srv.sys.empty': 'Ainda não há e-mails do sistema.',
+    'srv.sys.noMatch': 'Nenhuma mensagem corresponde a estes filtros.',
+    'srv.sys.off': 'O histórico está desativado.',
+    'srv.sys.offHint': 'Escolha acima por quanto tempo mantê-lo para começar a registrar o e-mail que o site envia.',
+    'srv.sys.count': '{n} mensagem(ns)',
+    'srv.sys.page': 'Página {page} de {pages}',
+    'srv.sys.prev': 'Página anterior',
+    'srv.sys.next': 'Próxima página',
+    'srv.sys.detail': 'Mensagem do sistema',
+    'srv.sys.noSubject': '(sem assunto)',
+    'srv.sys.h.date': 'Data',
+    'srv.sys.h.from': 'De',
+    'srv.sys.h.to': 'Para',
+    'srv.sys.h.subject': 'Assunto',
+    'srv.sys.h.messageId': 'Message-ID',
+    'srv.sys.tabHtml': 'HTML',
+    'srv.sys.tabText': 'Texto',
+    'srv.sys.noHtml': 'Esta mensagem não tem versão HTML.',
+    'srv.sys.noText': 'Esta mensagem não tem versão em texto.',
+    'srv.sys.showImages': 'Mostrar {n} imagem(ns) remota(s)',
+    'srv.sys.hideImages': 'Ocultar imagens remotas',
+    'srv.sys.openQueue': 'Abrir a fila',
+    'srv.sys.retry': 'Tentar de novo',
+    'srv.sys.notInQueue': 'Esta mensagem não está mais na fila.',
+    'err.mail_retention_invalid': 'Escolha um dos períodos de retenção oferecidos.',
+    'err.mail_admin_only': 'Só um administrador pode ver isto.',
+};
+
+const TABLES = { en, es, pt };
+// Where a key a language lacks is looked up next (pt is partial: see above).
+const FALLBACK = { pt: es };
 
 export function translate(lang, key, vars) {
     const table = TABLES[lang] || en;
-    let s = table[key] ?? en[key] ?? key;
+    let s = table[key] ?? (FALLBACK[lang] && FALLBACK[lang][key]) ?? en[key] ?? key;
     if (vars) for (const k of Object.keys(vars)) s = s.split(`{${k}}`).join(String(vars[k]));
     return s;
 }
@@ -1098,7 +1260,7 @@ export function useT() {
     const ctx = useOptionalI18n ? useOptionalI18n() : null;
     let lang = ctx?.language;
     if (!lang && typeof document !== 'undefined') lang = (document.documentElement.lang || '').slice(0, 2);
-    if (lang !== 'en' && lang !== 'es') lang = 'es';
+    if (lang !== 'en' && lang !== 'es' && lang !== 'pt') lang = 'es';
     const t = (key, vars) => translate(lang, key, vars);
-    return { t, lang, locale: lang === 'es' ? 'es-ES' : 'en-US' };
+    return { t, lang, locale: lang === 'es' ? 'es-ES' : lang === 'pt' ? 'pt-BR' : 'en-US' };
 }

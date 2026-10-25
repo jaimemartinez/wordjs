@@ -9,12 +9,14 @@ import {
     cx, Button, IconBtn, Field, Toggle, Card, Pill, EmptyState, Spinner, Sheet, Avatar, Menu, MenuItem,
     inputCls, formatBytes, listDate, fullDate, relativeTime
 } from "./ui";
+import SystemSent from "./SystemSent";
 
 const TABS = [
     ['overview', 'fa-solid fa-chart-line'],
     ['mailboxes', 'fa-solid fa-users'],
     ['aliases', 'fa-solid fa-at'],
     ['queue', 'fa-solid fa-paper-plane'],
+    ['systemSent', 'fa-solid fa-envelope-circle-check'],
     ['policies', 'fa-solid fa-shield-halved'],
     ['config', 'fa-solid fa-server'],
     ['dns', 'fa-solid fa-globe'],
@@ -1087,6 +1089,7 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
                     {tab === 'mailboxes' && <Mailboxes t={t} locale={locale} toast={toast} />}
                     {tab === 'aliases' && <Aliases t={t} toast={toast} confirm={confirm} />}
                     {tab === 'queue' && <Queue t={t} locale={locale} toast={toast} confirm={confirm} />}
+                    {tab === 'systemSent' && <SystemSent t={t} locale={locale} toast={toast} confirm={confirm} goQueue={() => setTab('queue')} />}
                     {needsSettings && !settings && <div className="py-20 text-center"><Spinner className="text-2xl" /></div>}
                     {tab === 'policies' && settings && <Policies t={t} settings={settings} set={set} />}
                     {tab === 'config' && settings && <Config t={t} settings={settings} set={set} setSettings={setSettings} dnsInfo={dnsInfo} onGenerateDkim={generateDkim} generatingDkim={generatingDkim} confirm={confirm} reloadSettings={() => { loadSettings(); loadOverview(); }} />}
