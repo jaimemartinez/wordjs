@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.6] - 2026-10-24
+
 ### Fixed
 
 - **Admin tables no longer scroll sideways inside their card on a phone.** Below the breakpoint a DataTable row is a card in a grid with no explicit column, so the track grew to the longest unbreakable word in any card: one long URL in an audit entry made every card wider than the screen. The card grid now has one shrinkable column, cards may shrink, and card cells wrap anywhere (`components/ui/DataTable.tsx`); the audit action chip wraps too.
