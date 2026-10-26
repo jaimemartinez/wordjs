@@ -299,7 +299,11 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                     existing = await User.findByEmail(user.email);
                 }
 
-                if (existing && (!updateExisting || (typeof protectedUser === 'function' && protectedUser(existing.id)))) {
+                // Never rewritten by an import: a network administrator (protectedUser, from the route) and,
+                // on any site, a network administrator's handoff account — the handoff alone manages it
+                // (core/network-handoff).
+                if (existing && (!updateExisting || (typeof protectedUser === 'function' && protectedUser(existing.id))
+                    || require('./network-handoff').isHandoffAccount(existing))) {
                     idMap.users[user.id] = existing.id;
                     results.users.skipped++;
                 } else if (existing && updateExisting) {

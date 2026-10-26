@@ -239,10 +239,12 @@ describe('the trash through the posts router', () => {
         await trashPost(adminToken, id);
         assert.strictEqual(await metaOf(id, '_wp_trash_meta_status'), 'publish');
 
+        // Restore clears DELETE's bar, judged by the status the post had before the trash: a published
+        // post takes delete_published_posts, which a contributor does not hold, so it stays in the trash.
+        // (The publish downgrade on restore is covered in content-authz-scoping.test.ts.)
         const res = await as(contributorToken)(request(app).post(`/api/v1/posts/${id}/restore`)).send({});
-        assert.strictEqual(res.status, 200);
-        assert.strictEqual(res.body.status, 'pending', 'restoring must not publish for a user who cannot publish');
-        assert.strictEqual(await statusOf(id), 'pending', 'and never went live on the way there');
+        assert.strictEqual(res.status, 403);
+        assert.strictEqual(await statusOf(id), 'trash', 'and never went live on the way there');
     });
 
     it("SECURITY: an author cannot restore another author's trashed post", async () => {
