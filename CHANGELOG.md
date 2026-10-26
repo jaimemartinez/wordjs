@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.8] - 2026-10-26
+
 ### Added
 - **conference-manager 2.36.20: «Cierre de inscripciones».**
   - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the

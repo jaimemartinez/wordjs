@@ -14,14 +14,14 @@ emit a reference that cannot pull.
 
 ```bash
 # 1. Build and push the image.
-docker build -t <registry>/wordjs:2.11.7 .
-docker push <registry>/wordjs:2.11.7
+docker build -t <registry>/wordjs:2.11.8 .
+docker push <registry>/wordjs:2.11.8
 
 # 2. Install.
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
   --set image.repository=<registry>/wordjs \
-  --set image.tag=2.11.7 \
+  --set image.tag=2.11.8 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 
@@ -89,8 +89,8 @@ update button. Build and push the new
 release's image, then point the release at it:
 
 ```bash
-docker build -t <registry>/wordjs:2.11.7 . && docker push <registry>/wordjs:2.11.7
-helm upgrade wordjs deploy/helm/wordjs --namespace wordjs --reuse-values --set image.tag=2.11.7
+docker build -t <registry>/wordjs:2.11.8 . && docker push <registry>/wordjs:2.11.8
+helm upgrade wordjs deploy/helm/wordjs --namespace wordjs --reuse-values --set image.tag=2.11.8
 ```
 
 The two volumes are kept, and database schema migrations run when the new pod starts. Take a backup
