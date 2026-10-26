@@ -6,6 +6,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **mail-server 3.3.1: a slow destination no longer restarts the mail server.** WordJS gives an isolated plugin
+  30 seconds to answer, and stops it when it takes longer. Delivering straight to a mail server that does not
+  answer can take minutes, so «Retry now» answered «Isolated plugin error» and the mail server was restarted
+  in the middle of the delivery. A site message cut off that way (an account e-mail, a plugin's mail, a
+  notification) stayed «queued» in *System sent*, did not appear in the queue and was never retried.
+  - **«Retry now»** (in *Queue*, *System sent* and a message in *Sent*) answers within 10 seconds. A delivery
+    still running then goes on in the background, the message shows as retrying, and its status updates by
+    itself. A second click while it runs starts nothing. If that delivery never reports back, the queue
+    retries the message 15 minutes later.
+  - **Sending from the mailbox** with the undo window off, **the delivery test** and **site mail** answer within
+    20 seconds. Site mail is reported as accepted and is delivered in the background. The test says the
+    recipient's server has not answered yet, and its result appears on the test message in *Sent*.
+  - **Site messages stuck as «queued»**, whose first delivery was cut off between 15 minutes and 3 days ago, go
+    back to the queue by themselves.
+  - **The queue lists only what is still waiting to go out:** scheduled sends and retries. A permanent failure
+    stays in *System sent* (status «Failed») and on its message in *Sent*, and it is retried from there. The
+    queue figure on the overview and the tab counter count only scheduled sends and retries.
+
 ## [2.11.10] - 2026-10-26
 
 ### Security
