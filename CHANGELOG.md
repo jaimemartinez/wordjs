@@ -6,6 +6,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.21: rename a locality.** The pencil next to its name on the «Localidades» card edits it in
+  place (Enter saves, Escape cancels). An empty name, or one another locality of the conference already has, is
+  refused with the reason; the new name also reaches that locality's registrations.
+
 ## [2.11.9] - 2026-10-26
 
 ### Security
