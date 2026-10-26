@@ -1330,6 +1330,11 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *                         type: boolean
  *                       strategy:
  *                         type: string
+ *                       origins:
+ *                         type: array
+ *                         description: The https origins the script loads code from (e.g. an analytics provider); the public pages' Content-Security-Policy allows exactly these.
+ *                         items:
+ *                           type: string
  *                 styles:
  *                   type: array
  *                   items:

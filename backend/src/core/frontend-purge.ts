@@ -532,11 +532,13 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
  * the caller can degrade to TTL instead of throwing. Exported for tests.
  */
 function gatewayPurgeOptions(cfg: any, target: { host: string; port: number }, byteLength: number): any {
-    // Same builder as the direct leg (clusterTlsOptions) — no CN allowlist here on purpose: this leg
-    // dials the gateway by the very host its certificate is issued for, so Node's default hostname
-    // verification is the stronger check.
+    // Same builder as the direct leg (clusterTlsOptions). Hostname verification stays — this leg dials
+    // the gateway by the very host its certificate is issued for — and the certificate must ALSO name
+    // the gateway: every cluster certificate carries the loopback SANs, so the hostname alone would
+    // accept another node answering on the gateway's internal port.
     const tls = clusterTlsOptions(cfg);
     if (!tls) return null;
+    tls.checkServerIdentity = require('./cert-manager').checkGatewayIdentity;
     return {
         protocol: 'https:',
         method: 'POST',

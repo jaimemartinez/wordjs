@@ -642,11 +642,11 @@ describe('#21 — POST /analytics/track has its own per-IP bucket', () => {
 });
 
 describe("the backend's own Content-Security-Policy", () => {
-    it("grants script-src 'self' and 'unsafe-inline', and never 'unsafe-eval'", async () => {
+    it("grants script-src 'self' alone: no 'unsafe-inline', never 'unsafe-eval'", async () => {
         // Another mount-order property of index.ts, and the reason this file boots the real app: the
         // helmet header is written before any router, so no suite that builds its own express() can
-        // see it. The backend serves exactly ONE HTML page (Swagger UI at `${API}/docs`, whose
-        // bootstrap is an inline <script>) — 'unsafe-inline' is for that and nothing else, and the
+        // see it. The backend serves exactly ONE HTML page (Swagger UI at `${API}/docs`), whose scripts
+        // are all files — asserted below on the HTML swagger-ui-express generates — and the
         // "some CMS themes/plugins" that once justified 'unsafe-eval' do not exist: a theme ships no
         // JavaScript, and a plugin's admin bundle is executed by the frontend under ITS header.
         const res = await request(app).get(API);
@@ -662,8 +662,13 @@ describe("the backend's own Content-Security-Policy", () => {
         const sources = String(directive).split(/\s+/).slice(1);
 
         assert.ok(sources.includes("'self'"), `script-src must keep 'self': ${directive}`);
-        assert.ok(sources.includes("'unsafe-inline'"),
-            `script-src must keep 'unsafe-inline' for the swagger-ui bootstrap: ${directive}`);
+        assert.ok(!sources.includes("'unsafe-inline'"), `no inline script is needed: ${directive}`);
+        // The reason it may go: the Swagger page swagger-ui-express builds has no inline <script>.
+        const html = require('swagger-ui-express').generateHTML({ openapi: '3.0.0', info: { title: 't', version: '1' }, paths: {} },
+            { customCss: 'body{}', customSiteTitle: 't', swaggerOptions: { requestInterceptor: (r: any) => r } });
+        const scripts = String(html).match(/<script\b[^>]*>/gi) || [];
+        assert.ok(scripts.length >= 2, html);
+        for (const tag of scripts) assert.match(tag, /\bsrc=/, `an inline <script> on the Swagger page: ${tag}`);
         assert.ok(!sources.includes("'unsafe-eval'"),
             `nothing this origin serves builds code from a string: ${directive}`);
     });

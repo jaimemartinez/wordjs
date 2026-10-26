@@ -261,6 +261,24 @@ describe('the monolith before install, and with a backend that publishes no poli
         }
     });
 
+    it('a multisite routing header from a client never reaches Next, on a static asset path too', async () => {
+        // Next's internal multisite rewrite reads x-wordjs-site-route; only the frontend's own proxy function
+        // may set it, and that function does not run on /_next/ assets or /favicon.ico.
+        const seen = [];
+        const handle = (req, res) => { seen.push([req.headers['x-wordjs-site-route'], req.headers['x-wordjs-site-host']]); res.end('next'); };
+        const server = http.createServer(monolith.createDispatch({ backendApp: (req, res) => res.end('backend'), handle, proto: 'http', edge: null }));
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        try {
+            for (const p of ['/_next/static/chunks/app.js', '/favicon.ico', '/about']) {
+                const r = await harness.request({ port: server.address().port, path: p, headers: { host: 'localhost', 'x-wordjs-site-route': 'two.example.org', 'x-wordjs-site-host': 'two.example.org' } });
+                assert.strictEqual(r.body, 'next', p);
+            }
+            assert.deepStrictEqual(seen, [[undefined, undefined], [undefined, undefined], [undefined, undefined]]);
+        } finally {
+            await new Promise((done) => server.close(() => done()));
+        }
+    });
+
     it('createMonolithEdge returns null without app.hostPolicy, and the dispatcher then answers as before', async () => {
         const backendApp = (req, res) => res.end('backend');
         assert.strictEqual(monolith.createMonolithEdge({ backendApp, isInstalled: () => true }), null);

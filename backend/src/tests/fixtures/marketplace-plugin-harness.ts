@@ -63,6 +63,8 @@ export interface BootedPlugin {
     prefix: string;
     mails: MailMessage[];
     options: Map<string, any>;
+    /** Every wordjs.assets.enqueueScript/enqueueStyle call, in order ({ kind, ...spec }). */
+    enqueued: any[];
     /** When set, every wordjs.mail() call throws this error (models "no provider configured"). */
     setMailFailure(err: Error | null): void;
     /** What wordjs.mail() resolves to (the provider's verdict, e.g. mail-server's { delivered, failed }). */
@@ -197,12 +199,14 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
     let mailFailure: Error | null = null;
     let mailResult: ((msg: MailMessage) => any) | null = null;
     const options = new Map<string, any>();
+    const enqueued: any[] = [];
     const wordjs: any = {
         db,
         http,
         adminMenu: { add() { /* sidebar is irrelevant here */ } },
         shortcodes: { add() { /* shortcode rendering is not under test here */ } },
-        assets: { enqueueScript() { /* front-end assets are irrelevant here */ }, enqueueStyle() { /* idem */ } },
+        // Recorded, not served: a test may read what a plugin enqueued (e.g. the script origins it declares).
+        assets: { enqueueScript(spec: any) { enqueued.push({ kind: 'script', ...spec }); }, enqueueStyle(spec: any) { enqueued.push({ kind: 'style', ...spec }); } },
         notify: async () => ({}),
         mail: async (msg: MailMessage) => {
             if (mailFailure) throw mailFailure;
@@ -298,7 +302,7 @@ export async function bootPlugin(slug: string, bootOpts: BootOptions = {}): Prom
     }
 
     return {
-        sdb, prefix, mails, options,
+        sdb, prefix, mails, options, enqueued,
         setMailFailure(err) { mailFailure = err; },
         setMailResult(fn) { mailResult = fn; },
         setStatementHook(hook) { statementHook = hook; },

@@ -159,7 +159,8 @@ function relay(res: Response, r: { status: number; body: any }) {
  *       connection to `targetPort` on the registered backend node, with a PROXY protocol v1 line first
  *       unless `proxyProtocol` is false — so a service on the backend machine (the mail server's SMTP
  *       listener in separate mode) is reachable at the cluster's public address. The gateway refuses its
- *       own ports. The answer says, per forward, whether it listens or why not.
+ *       own ports, and reaches mail ports only (25, 110, 143, 465, 587, 993, 995, 2525, 4190, or the port
+ *       this node's inbound SMTP listener holds). The answer says, per forward, whether it listens or why not.
  *     tags: [System]
  *     security:
  *       - bearerAuth: []
@@ -184,13 +185,16 @@ function relay(res: Response, r: { status: number; body: any }) {
  *                       type: boolean
  *               currentPassword:
  *                 type: string
+ *               mfaCode:
+ *                 type: string
+ *                 description: A current two-factor code. Required only when the account has two-factor authentication.
  *     responses:
  *       200:
  *         description: "{ forwards: [{ port, targetPort, proxyProtocol, listening, error }] }"
  *       400:
- *         description: An invalid list (cluster_invalid_forward)
+ *         description: An invalid list, or a target port that is not a mail port (cluster_invalid_forward)
  *       403:
- *         description: Not an administrator, a wrong password, or a session started at another address
+ *         description: Not an administrator, a wrong password, no code from an account with two-factor authentication, or a session started at another address
  *       409:
  *         description: A monolith (cluster_monolith)
  * /system/cluster/tokens/revoke:
@@ -272,12 +276,24 @@ router.put('/forwards', accountAuthorityOnly, asyncHandler(async (req: Request, 
     if (deploymentMode() === 'monolith') return res.status(409).json({ code: 'cluster_monolith', error: 'This install runs as one process (the monolith); its own port is the public one.' });
     const b = req.body || {};
     if (await requireSudoPassword(req, res, b.currentPassword)) return;
+    // Opening a port on the cluster's public address is as consequential as admitting a node: the same
+    // step-up (the two-factor code of an account that has one).
+    const reauth = await require('./network').requireStepUp(req, res);
+    if (!reauth) return;
     if (!Array.isArray(b.forwards)) return res.status(400).json({ code: 'cluster_invalid_forward', error: 'forwards must be a list' });
+    // proxyProtocol is a real boolean or absent (on): a string such as "false" is not a way to say off.
+    if (b.forwards.some((f: any) => f && f.proxyProtocol !== undefined && typeof f.proxyProtocol !== 'boolean')) {
+        return res.status(400).json({ code: 'cluster_invalid_forward', error: 'proxyProtocol must be true or false' });
+    }
     const forwards = b.forwards.slice(0, 20).map((f: any) => ({ port: f && f.port, targetPort: f && f.targetPort, proxyProtocol: !(f && f.proxyProtocol === false) }));
-    const r = await gateway('POST', '/tcp-forwards', { forwards });
+    // The gateway forwards to mail ports only; the one non-standard port it accepts is the one THIS
+    // node's inbound SMTP listener actually holds (an operator behind a port map), named here.
+    const smtp = require('../core/inbound-smtp').getStatus();
+    const mailPorts = smtp && Number.isInteger(smtp.boundPort) ? [smtp.boundPort] : [];
+    const r = await gateway('POST', '/tcp-forwards', { forwards, mailPorts });
     if (r.status === 200) {
         await recordAudit(req.user && req.user.id, 'cluster.forwards.set', 'cluster', '',
-            { forwards: (r.body.forwards || []).map((f: any) => ({ port: f.port, targetPort: f.targetPort, proxyProtocol: f.proxyProtocol })) });
+            { forwards: (r.body.forwards || []).map((f: any) => ({ port: f.port, targetPort: f.targetPort, proxyProtocol: f.proxyProtocol })), reauth });
     }
     return relay(res, r);
 }));

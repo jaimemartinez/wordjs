@@ -68,10 +68,23 @@ describe('the real gateway: a TCP port forwarded to the backend node', () => {
         assert.strictEqual(JSON.parse(own.body).code, 'cluster_invalid_forward');
     });
 
+    it('reaches mail ports only: the backend API port, or any port the backend did not declare, is refused', async () => {
+        const port = await harness.freePort();
+        for (const targetPort of [up.port, tcp.address().port, 5432, 6379]) {
+            const r = await internal(gw, ca, backendId, 'POST', '/tcp-forwards', { forwards: [{ port, targetPort }] });
+            assert.strictEqual(r.status, 400, `${targetPort}: ${r.body}`);
+            assert.match(JSON.parse(r.body).error, /not a mail port/);
+        }
+        // Declaring the API port as a "mail port" is not something a list of forwards can do by itself.
+        const sneaky = await internal(gw, ca, backendId, 'POST', '/tcp-forwards', { forwards: [{ port, targetPort: up.port, mailPorts: [up.port] }] });
+        assert.strictEqual(sneaky.status, 400, sneaky.body);
+    });
+
     it('listens, pipes to the backend node with the client address first, and is kept and listed', async () => {
         const port = await harness.freePort();
         const targetPort = tcp.address().port;
-        const r = await internal(gw, ca, backendId, 'POST', '/tcp-forwards', { forwards: [{ port, targetPort }] });
+        // The backend declares the port its inbound SMTP listener holds (here: the test's TCP server).
+        const r = await internal(gw, ca, backendId, 'POST', '/tcp-forwards', { forwards: [{ port, targetPort }], mailPorts: [targetPort] });
         assert.strictEqual(r.status, 200, r.body);
         assert.deepStrictEqual(JSON.parse(r.body).forwards.map((f) => [f.port, f.targetPort, f.listening, f.proxyProtocol]), [[port, targetPort, true, true]]);
 
@@ -86,6 +99,7 @@ describe('the real gateway: a TCP port forwarded to the backend node', () => {
 
         const saved = JSON.parse(fs.readFileSync(path.join(gw.dir, 'gateway-config.json'), 'utf8'));
         assert.deepStrictEqual(saved.tcpForwards, [{ port, targetPort, proxyProtocol: true }]);
+        assert.deepStrictEqual(saved.tcpForwardMailPorts, [targetPort], 'the declared port is kept for the next boot');
         assert.ok(saved.gatewaySecret, 'the rest of the file is kept');
         const cluster = JSON.parse((await internal(gw, ca, backendId, 'GET', '/cluster')).body);
         assert.deepStrictEqual(cluster.forwards.map((f) => f.port), [port]);
