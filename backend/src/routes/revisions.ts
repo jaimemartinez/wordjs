@@ -20,6 +20,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // re-deriving it from the family, because "restore" IS an edit of the parent post.
 const {
     capsFor, capsForType, canEditPostRecord, canDeletePostRecord, isRestExposedPostType,
+    canManagePostRecord, isTrashedPostRecord, withPreTrashStatus,
 } = require('../core/post-capabilities');
 // The history of an ATTACHMENT follows the attachment rule (core/attachment-visibility): hidden from who may
 // not read the entry it hangs off, and restored or purged only by who may edit that entry.
@@ -80,7 +81,9 @@ function revisionIdOrNull(raw: unknown): number | null {
  * unpublish their OWN editor-published post via restore, and a role with edit but not delete caps could
  * purge history via delete — the same edit-vs-publish/type privilege separation posts.ts already enforces.
  */
-async function authorizeForPost(req: Request, postId: number | null | undefined, { action = 'read' } = {}) {
+type RevisionAuthError = { code: string; status: number; message?: string };
+
+async function authorizeForPost(req: Request, postId: number | null | undefined, { action = 'read' } = {}): Promise<{ error: RevisionAuthError; post?: undefined } | { error?: undefined; post: any }> {
     if (postId == null) {
         return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
@@ -103,10 +106,12 @@ async function authorizeForPost(req: Request, postId: number | null | undefined,
     } else if (!(await attachmentReadable(req.user, post))) {
         return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
-    // Fall back to capsFor('post') for a post whose registered type was since removed (capsForType null).
-    const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
-    const isOwner = post.authorId === req.user.id;
     if (action === 'edit') {
+        // A trashed entry is read-only until it is restored (routes/posts.ts refuseTrashedEdit): restoring
+        // one of its revisions would rewrite it in the trash, where the published bar does not apply.
+        if (isTrashedPostRecord(post)) {
+            return { error: { code: 'rest_post_trashed', status: 409, message: 'This entry is in the trash. Restore it before editing it.' } };
+        }
         // Restore rewrites the parent's live body: it is THE post edit, so it asks the one function
         // that defines it instead of re-deriving type + ownership + published from the family here.
         // Two spellings of one policy is how presence.ts ended up authorizing on the global capability.
@@ -116,12 +121,14 @@ async function authorizeForPost(req: Request, postId: number | null | undefined,
     } else if (action === 'delete') {
         // Delete purges history — the DELETE family, which `canEditPostRecord` deliberately does not
         // cover (a role may edit without being allowed to destroy). Mirrors DELETE /posts/:id.
-        if (!canDeletePostRecord(req.user, post)) {
+        // A trashed entry is judged by the status it had before the trash, as DELETE /posts/:id does.
+        if (!canDeletePostRecord(req.user, await withPreTrashStatus(post))) {
             return { error: { code: 'rest_forbidden', status: 403 } };
         }
-    } else if (!isOwner && !req.user.can(caps.editOthers)) {
-        // Read/compare: the owner may always view their own revisions; a non-owner needs the
-        // type-appropriate edit_others_<type>s (was hardcoded edit_others_posts — now type-aware).
+    } else if (!canManagePostRecord(req.user, post)) {
+        // Read/compare: the history is for the people who work on the entry — its author while they
+        // still hold the type's edit capability, or whoever holds edit_others_<type>s. Authorship alone
+        // is not enough: an author whose role no longer edits this type keeps no access to its drafts.
         return { error: { code: 'rest_forbidden', status: 403 } };
     }
     return { post };
@@ -176,6 +183,7 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req: Request, res:
     if (auth.error) {
         return res.status(auth.error.status).json({
             code: auth.error.code,
+            ...(auth.error.message ? { message: auth.error.message } : {}),
             data: { status: auth.error.status }
         });
     }
@@ -226,6 +234,7 @@ router.get('/:id', authenticate, asyncHandler(async (req: Request, res: Response
     if (auth.error) {
         return res.status(auth.error.status).json({
             code: auth.error.code,
+            ...(auth.error.message ? { message: auth.error.message } : {}),
             data: { status: auth.error.status }
         });
     }
@@ -266,6 +275,7 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req: Request, res:
     if (auth.error) {
         return res.status(auth.error.status).json({
             code: auth.error.code,
+            ...(auth.error.message ? { message: auth.error.message } : {}),
             data: { status: auth.error.status }
         });
     }
@@ -348,6 +358,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req: Request, res: Respo
     if (auth.error) {
         return res.status(auth.error.status).json({
             code: auth.error.code,
+            ...(auth.error.message ? { message: auth.error.message } : {}),
             data: { status: auth.error.status }
         });
     }
@@ -399,6 +410,7 @@ router.get('/compare/:id1/:id2', authenticate, asyncHandler(async (req: Request,
         if (auth.error) {
             return res.status(auth.error.status).json({
                 code: auth.error.code,
+                ...(auth.error.message ? { message: auth.error.message } : {}),
                 data: { status: auth.error.status }
             });
         }

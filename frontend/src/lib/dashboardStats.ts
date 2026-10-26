@@ -18,6 +18,8 @@ export type DashboardStatKey = "posts" | "pages" | "comments" | "users";
 
 export interface DashboardViewer {
     role?: string;
+    /** Multisite only (absent on a single site): the viewer's place in the network. */
+    network?: { mainSite: boolean; networkAdmin: boolean };
 }
 
 export interface DashboardSections {
@@ -47,7 +49,8 @@ export function dashboardSections(viewer: DashboardViewer | null | undefined, ca
         stats,
         recentComments: moderates,
         activityChart: administrator,
-        systemHealth: administrator,
+        // In a network GET /health/details is the main site's, for network administrators only.
+        systemHealth: administrator && (!viewer?.network || (viewer.network.mainSite && viewer.network.networkAdmin)),
     };
 }
 

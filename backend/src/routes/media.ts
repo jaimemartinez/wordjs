@@ -19,7 +19,9 @@ const privateMedia = require('../core/private-media');
 const { recordAudit } = require('../core/audit');
 const {
     canViewAttachment, filterVisibleMediaItems, resolveAttachmentParent, attachmentWriteRefusal,
+    canReadRecordThroughRest,
 } = require('../core/attachment-visibility');
+const { canManagePostRecord } = require('../core/post-capabilities');
 
 /**
  * Did the caller ask for a PRIVATE upload / item? Accepted spelling: `visibility=private` (query string
@@ -128,7 +130,7 @@ const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler, UploadRejectedError } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
-const { requireScalarQuery, requireRouteId } = require('../core/query-params');
+const { requireScalarQuery, requireRouteId, bodyId } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
 
 // THE ROUTE-ID CONTRACT — see core/query-params. `:id` is an attachment's post id, parsed with a bare
@@ -549,12 +551,12 @@ router.post('/folders/move', authenticate, can('upload_files'), asyncHandler(asy
         return res.status(400).json({ code: 'rest_media_folder_invalid', message: 'No such folder.', data: { status: 400 } });
     }
     const ids = Array.isArray(b.ids) ? b.ids : null;
-    if (!ids || !ids.length || ids.length > 500 || !ids.every((v: unknown) => /^[1-9][0-9]{0,9}$/.test(String(v)))) {
+    if (!ids || !ids.length || ids.length > 500 || !ids.every((v: unknown) => bodyId(v) !== null)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'ids is a list of 1 to 500 media ids.', data: { status: 400, params: ['ids'] } });
     }
     const moved: number[] = [];
     const refused: Array<{ id: number; code: string }> = [];
-    for (const id of [...new Set(ids.map(Number))] as number[]) {
+    for (const id of [...new Set(ids.map((v: unknown) => bodyId(v)))] as number[]) {
         const refusal = await mediaMoveRefusal(req, id);
         if (refusal) { refused.push({ id, code: refusal }); continue; }
         await mediaFolders().setFolder(id, folder);
@@ -1355,7 +1357,8 @@ router.post('/:id/restore-original', authenticate, can('upload_files'), asyncHan
  *     summary: Entries that use this media item as their featured image
  *     description: >-
  *       Asked before a delete, so the admin can say what the item is still used by. Deleting it removes
- *       those featured-image references. Titles of entries the caller cannot edit are not listed, only counted.
+ *       those featured-image references. Only entries the caller may read are counted, and only those they
+ *       work on (author with the type's edit capability, or edit_others for the type) are listed by title.
  *     tags: [Media]
  *     parameters:
  *       - in: path
@@ -1371,24 +1374,33 @@ router.post('/:id/restore-original', authenticate, can('upload_files'), asyncHan
  *       403:
  *         description: Missing upload_files
  *       404:
- *         description: No such media item (rest_post_invalid_id)
+ *         description: No such media item, or one this caller may not see (rest_post_invalid_id)
  */
 router.get('/:id/usage', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
     const mediaId = Number(req.params.id);
-    const media = await Media.findById(mediaId);
-    if (!media) return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid media ID.', data: { status: 404 } });
+    // The item itself takes GET /media/:id's rule (canViewAttachment, parent entry included): a hidden
+    // item answers the same 404 as a missing one.
+    const row = await Post.findById(mediaId);
+    const media = row && row.postType === 'attachment' ? await Media.findById(mediaId) : null;
+    if (!media || !canViewAttachment(req.user, row, await resolveAttachmentParent(row))) {
+        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid media ID.', data: { status: 404 } });
+    }
+    // Each entry is judged on its own record: COUNTED when the caller may read it (canReadRecordThroughRest),
+    // LISTED by title when they also work on it (canManagePostRecord — its type's family and ownership).
+    // A draft or private entry of someone else is neither, so this does not reveal that it exists.
     const ids = await Media.featuredUsers(mediaId);
     const entries: Array<{ id: number; title: string; type: string }> = [];
-    for (const id of ids.slice(0, 20)) {
+    let featuredIn = 0;
+    for (const id of ids) {
         const post = await Post.findById(id);
-        if (!post) continue;
-        const own = Number(post.authorId) === Number(req.user.id);
-        if (own ? req.user.can('edit_posts') : req.user.can('edit_others_posts')) {
+        if (!post || !(await canReadRecordThroughRest(req.user, post))) continue;
+        featuredIn++;
+        if (entries.length < 20 && canManagePostRecord(req.user, post)) {
             entries.push({ id, title: String(post.postTitle || ''), type: String(post.postType || 'post') });
         }
     }
     res.set('Cache-Control', 'no-store');
-    res.json({ featuredIn: ids.length, entries });
+    res.json({ featuredIn, entries });
 }));
 
 router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {

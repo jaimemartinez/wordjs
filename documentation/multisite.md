@@ -51,8 +51,8 @@ site's own administrators manage that site only and never learn that other sites
 
 On the main site, what reaches the whole network is for network administrators only: installing,
 updating, packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the
-database migration tool, the site's addresses, certificates, the hooks registry and the Redis
-object-cache switch. An administrator of the main site who is not listed still runs the main site itself
+database migration tool, the site's addresses, certificates, the hooks registry, the detailed health
+reports (`/health/details`, `/health/site`) and the Redis object-cache switch. An administrator of the main site who is not listed still runs the main site itself
 (its content, users, plugin activations and grants, settings) and gets `403 rest_forbidden_network` for
 the rest. A network administrator's account (email, password, role, two-factor reset, AI agent
 connections, deletion) is changed only by a network administrator or by its owner. Deleting an account
@@ -277,8 +277,8 @@ handoff account and used by every later handoff of yours into that site. It has 
 and an address under the reserved `.invalid` domain, and it cannot be used any other way:
 
 - it cannot sign in with a password (the sign-in answers as for a wrong password);
-- the site's administrators cannot edit it or reset its second factor (`403 rest_network_handoff_account`),
-  and can cut its sessions or delete it — your next handoff creates it again;
+- the site's administrators cannot edit it, reset its second factor or delete it
+  (`403 rest_network_handoff_account`), and a site import never rewrites it; they can cut its sessions;
 - a handoff session cannot create API tokens or AI agent connections, enrol a second factor or change its
   own profile (`403 rest_network_handoff_session`): nothing it creates outlives the 30 minutes;
 - the site's two-factor policy does not apply to it (you signed in on the main site, under the main site's

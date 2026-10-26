@@ -137,9 +137,11 @@ before(async () => {
     await require('../core/post-types').initPostTypes();
 
     // Register a custom role that can EDIT comments but not MODERATE them (no default role grants
-    // edit_comments) — the only way to prove the moderation boundary on PUT /comments/:id.
+    // edit_comments) — the only way to prove the moderation boundary on PUT /comments/:id. It also works
+    // on the entries the comments sit on (edit_others / edit_published posts): a comment is edited through
+    // the edit gate of its entry (core/comment-scope), as WordPress maps edit_comment onto edit_post.
     await roles.loadRoles();
-    await roles.setRole('comment_editor', { name: 'Comment Editor', capabilities: ['read', 'access_admin_panel', 'edit_comments'] });
+    await roles.setRole('comment_editor', { name: 'Comment Editor', capabilities: ['read', 'access_admin_panel', 'edit_comments', 'edit_posts', 'edit_others_posts', 'edit_published_posts'] });
     // A NON-admin persona that holds promote_users + edit_users — the ONLY persona for whom the self-role
     // guard is the sole barrier to self-promotion (a subscriber is also blocked by lacking promote_users,
     // which would let the self-promotion test pass even if the self-guard were deleted).
