@@ -320,7 +320,12 @@ async function checkAuditLog(): Promise<HealthCheck[]> {
     const r = await chain.verifyAuditChain({ maxMs: 5000 });
     const out: HealthCheck[] = [];
     if (!r.ok && r.firstBreak) {
-        out.push(check('security.auditChain', 'security', 'fail', 'broken', 'Audit log integrity', `The audit log's hash chain breaks at entry ${r.firstBreak.seq} (${r.firstBreak.reason}): entries were changed or removed outside WordJS. Compare with the external copy.`, { seq: r.firstBreak.seq ?? '', reason: r.firstBreak.reason }, FIX.audit));
+        const why: Record<string, string> = {
+            altered: 'its content was changed', gap: 'the entry before it is missing',
+            link: 'it does not link to the entry before it', start: 'the oldest entries do not match what retention removed',
+        };
+        const reason = r.firstBreak.reason;
+        out.push(check('security.auditChain', 'security', 'fail', `broken.${reason}`, 'Audit log integrity', `The audit log's hash chain breaks at entry ${r.firstBreak.seq}: ${why[reason]}. Entries were changed or removed outside WordJS; compare with the external copy.`, { seq: r.firstBreak.seq ?? '' }, FIX.audit));
     } else if (!r.complete) {
         out.push(check('security.auditChain', 'security', 'info', 'partial', 'Audit log integrity', `The first ${r.checked} entries of the audit log match their hash chain; the rest were not checked in time. Admin → Audit checks all of them.`, { count: r.checked }, FIX.audit));
     } else {

@@ -188,6 +188,7 @@ describe('Audit log hash chain', () => {
         assert.deepStrictEqual(v.body.firstBreak, { seq: Number(row.chain_seq), id: row.id, reason: 'altered' });
         const c = (await get('/health/site')).body.checks.find((x: any) => x.id === 'security.auditChain');
         assert.strictEqual(c.status, 'fail');
+        assert.strictEqual(c.messageKey, 'siteHealth.check.security.auditChain.broken.altered');
         assert.strictEqual(c.fix.href, '/admin/audit');
         await db().run('UPDATE audit_log SET detail = ? WHERE id = ?', [row.detail, row.id]);
         assert.strictEqual((await get('/audit/verify')).body.ok, true, 'put back, it verifies again');
