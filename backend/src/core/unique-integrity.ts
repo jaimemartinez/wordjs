@@ -281,10 +281,14 @@ async function resolveDuplicate(ruleId: RuleId, key: string, keepId: number, q: 
             const after = await q.get('SELECT post_name FROM posts WHERE id = ?', [row.id]);
             changes.push({ id: row.id, field: 'post_name', from: String(row.post_name), to: String((after && after.post_name) || to) });
         } else {
+            // Term.update is the one writer of terms.slug (it bounds it); asked for the slug the term already
+            // has, it gives the next free one, because the other rows of the group hold this one.
             const Term = require('../models/Term');
-            const to = await Term.generateUniqueSlug(String(row.slug), row.id);
-            await q.run('UPDATE terms SET slug = ? WHERE term_id = ?', [to, row.id]);
-            changes.push({ id: row.id, field: 'slug', from: String(row.slug), to });
+            const tt = await q.get('SELECT taxonomy FROM term_taxonomy WHERE term_id = ? ORDER BY term_taxonomy_id ASC LIMIT 1', [row.id]);
+            if (!tt) throw Object.assign(new Error(`Term ${row.id} has no taxonomy; edit it in the database.`), { status: 409, code: 'rest_term_orphan' });
+            await Term.update(row.id, String(tt.taxonomy), { slug: String(row.slug) });
+            const after = await q.get('SELECT slug FROM terms WHERE term_id = ?', [row.id]);
+            changes.push({ id: row.id, field: 'slug', from: String(row.slug), to: String((after && after.slug) || '') });
         }
     }
     return changes;

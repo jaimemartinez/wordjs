@@ -88,7 +88,10 @@ before(async () => {
             const r = await db().run("INSERT INTO posts (author_id, post_title, post_content, post_excerpt, post_status, post_name, post_type, post_date, post_date_gmt, post_modified, post_modified_gmt, guid) VALUES (1, 'About', '', '', ?, 'about', 'page', '2026-10-21 10:00:00', '2026-10-21 10:00:00', '2026-10-21 10:00:00', '2026-10-21 10:00:00', '')", [status]);
             ids[`page_${status}`] = Number(r.lastID);
         }
-        for (const n of [1, 2]) ids[`term${n}`] = Number((await db().run("INSERT INTO terms (name, slug) VALUES ('News', 'news')")).lastID);
+        for (const n of [1, 2]) {
+            ids[`term${n}`] = Number((await db().run("INSERT INTO terms (name, slug) VALUES ('News', 'news')")).lastID);
+            await db().run("INSERT INTO term_taxonomy (term_id, taxonomy, description, parent, count) VALUES (?, 'category', '', 0, 0)", [ids[`term${n}`]]);
+        }
     });
     require('../core/plugins-ready').markPluginsReady();
     server = http.createServer(app);

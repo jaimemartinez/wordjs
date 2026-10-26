@@ -64,7 +64,7 @@ const MAX_UNTYPED_BOUNDARY_FILES = 0;
  * rather than un-migrated (44); the 2.6.0 route files graphql.ts, media-storage.ts, agents.ts, mcp.ts, ai.ts and
  * network.ts were born fully typed, and so was email-templates.ts (57). Every file that remains is still counted.
  */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 57;
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 58;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *
