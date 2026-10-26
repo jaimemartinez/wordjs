@@ -130,7 +130,7 @@ async function claimChallenge(userId: number, challenge: { jti?: string; exp?: n
     for (let attempt = 0; attempt < 8; attempt++) {
         const rows = await User.getMetaValues(userId, META.usedChallenges);
         const raw = rows.length ? String(rows[0]) : null;
-        let parsed: Record<string, unknown> = {};
+        let parsed: Record<string, unknown>;
         try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = {}; }
         const used: Record<string, number> = Object.create(null);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {

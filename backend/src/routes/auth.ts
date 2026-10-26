@@ -1407,24 +1407,22 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
     let actorId: any = null;
     let scope: 'session' | 'all' | null = null;
     try {
-        let token = bearerToken(req);
         // sessionCookie(), not req.cookies directly: cookie-parser JSON-decodes any `j:`-prefixed value,
-        // so the raw bag can hand back an Array/Object and verifyToken would throw on it.
-        if (!token) token = sessionCookie(req);
-        if (token) {
-            const decoded = verifyToken(token);
-            // Only a LIVE session ends its user's sessions — the same test authenticate applies. A token
-            // that is already dead (minted on an address the site no longer answers, issued before an
-            // earlier logout or password change, or not a session token at all) revokes nothing: whoever
-            // holds a dead cookie — the next holder of a retired alias, say — could otherwise sign its owner
-            // out everywhere, as often as they liked, while the JWT lived.
-            if (decoded && decoded.userId && !decoded.purpose && sessionAddressStillAccepted(decoded)) {
-                const user = await User.findById(decoded.userId);
-                const revocation = require('../core/session-revocation');
-                if (user && !revocation.isSessionRevoked(user, decoded)) {
-                    scope = await revocation.revokeSession(decoded.userId, decoded);
-                    actorId = decoded.userId;
-                }
+        // so the raw bag can hand back an Array/Object and verifyToken would throw on it. No credential at
+        // all verifies as nothing (verifyToken throws), which lands in the catch below like a dead one.
+        const token = bearerToken(req) || sessionCookie(req) || '';
+        const decoded = verifyToken(token);
+        // Only a LIVE session ends its user's sessions — the same test authenticate applies. A token
+        // that is already dead (minted on an address the site no longer answers, issued before an
+        // earlier logout or password change, or not a session token at all) revokes nothing: whoever
+        // holds a dead cookie — the next holder of a retired alias, say — could otherwise sign its owner
+        // out everywhere, as often as they liked, while the JWT lived.
+        if (decoded && decoded.userId && !decoded.purpose && sessionAddressStillAccepted(decoded)) {
+            const user = await User.findById(decoded.userId);
+            const revocation = require('../core/session-revocation');
+            if (user && !revocation.isSessionRevoked(user, decoded)) {
+                scope = await revocation.revokeSession(decoded.userId, decoded);
+                actorId = decoded.userId;
             }
         }
     } catch { /* invalid/expired token — nothing to revoke */ }
