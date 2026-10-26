@@ -56,6 +56,28 @@ function loadSanitizeHtml(): any {
 // and it is DERIVED from the very same module so the two can no longer drift apart.
 export const ALLOWED_IFRAME_HOSTS: readonly string[] = EMBED_IFRAME_HOSTS;
 const IFRAME_SANDBOX = HTML_SANITIZATION.iframeSandbox;
+// An embed's permissions are the site's, never the author's (the backend writes the same value).
+const IFRAME_ALLOW = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
+
+// THE NAMED-PROPERTY CHANNEL (DOM clobbering). An author's `id`/`name` becomes a property of
+// `window`/`document`/a form — `id="__next_f"` alone breaks hydration — so every id is namespaced under
+// `user-content-` (what DOMPurify's SANITIZE_NAMED_PROPS does on the client path, and what the backend
+// already stores), and `name` is kept only on the form controls that need it. A link to `#intro` still
+// reaches `user-content-intro`: UserContentAnchors resolves the prefixed target.
+export const USER_CONTENT_PREFIX = 'user-content-';
+const NAMED_FORM_CONTROLS = new Set(['input', 'select', 'textarea', 'button']);
+function namespaceNamedProps(tagName: string, attribs: Record<string, string>): void {
+    if (typeof attribs.id === 'string') {
+        const id = attribs.id.trim();
+        if (!id) delete attribs.id;
+        else attribs.id = id.startsWith(USER_CONTENT_PREFIX) ? id : USER_CONTENT_PREFIX + id;
+    }
+    if (typeof attribs.name === 'string') {
+        const name = attribs.name.trim();
+        if (!name || !NAMED_FORM_CONTROLS.has(tagName.toLowerCase())) delete attribs.name;
+        else attribs.name = name.startsWith(USER_CONTENT_PREFIX) ? name : USER_CONTENT_PREFIX + name;
+    }
+}
 
 export function isAllowedIframeSrc(src: string | null | undefined): boolean {
     if (!src) return false;
@@ -210,7 +232,9 @@ const SANITIZE_OPTIONS = {
     ADD_ATTR: ['allow', 'allowfullscreen', 'frameborder', 'scrolling'],
     // Forbid potentially dangerous elements
     FORBID_TAGS: [...HTML_SANITIZATION.forbiddenTags],
-    FORBID_ATTR: [...HTML_SANITIZATION.forbiddenAttributes]
+    FORBID_ATTR: [...HTML_SANITIZATION.forbiddenAttributes],
+    // id/name namespaced under `user-content-` (see THE NAMED-PROPERTY CHANNEL).
+    SANITIZE_NAMED_PROPS: true,
 };
 
 // Server-side (SSR) equivalent for sanitize-html (pure JS — DOMPurify needs a DOM). Mirrors the
@@ -250,12 +274,14 @@ const SERVER_SANITIZE_OPTIONS = {
                 if (kept) attribs.class = kept;
                 else delete attribs.class;
             }
+            namespaceNamedProps(tagName, attribs);
             return { tagName, attribs };
         },
-        // Force a sandbox on every surviving (allowlisted) iframe — defense in depth.
+        // Every surviving (allowlisted) iframe gets the site's sandbox and permission list, replacing
+        // whatever the author wrote — an author-chosen sandbox or `allow` could widen what the embed may do.
         iframe: (tagName: string, attribs: Record<string, string>) => ({
             tagName,
-            attribs: { ...attribs, sandbox: attribs.sandbox || IFRAME_SANDBOX }
+            attribs: { ...attribs, sandbox: IFRAME_SANDBOX, allow: IFRAME_ALLOW }
         }),
         // Any link opening a new tab gets rel="noopener noreferrer" (reverse-tabnabbing protection).
         a: (tagName: string, attribs: Record<string, string>) => {
@@ -281,7 +307,14 @@ function ensureDomPurifyHooks(): void {
                 if (node.parentNode) node.parentNode.removeChild(node);
                 return;
             }
-            node.setAttribute('sandbox', node.getAttribute('sandbox') || IFRAME_SANDBOX);
+            node.setAttribute('sandbox', IFRAME_SANDBOX);
+            node.setAttribute('allow', IFRAME_ALLOW);
+        }
+    });
+    // `name` only on form controls (SANITIZE_NAMED_PROPS then namespaces the ones that stay).
+    DOMPurify.addHook('uponSanitizeAttribute', (node: any, data: any) => {
+        if (data.attrName === 'name' && !NAMED_FORM_CONTROLS.has(String(node.nodeName || '').toLowerCase())) {
+            data.keepAttr = false;
         }
     });
     DOMPurify.addHook('afterSanitizeAttributes', (node: any) => {

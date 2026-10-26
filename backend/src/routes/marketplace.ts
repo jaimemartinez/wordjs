@@ -178,6 +178,9 @@ function isOfficialSource(url: string, isLocal: boolean): boolean {
 }
 
 const FETCH_TIMEOUT_MS = 15000;
+// FETCH_TIMEOUT_MS is an IDLE timer (no byte for that long). This bounds the whole download, redirects
+// included, so a server that trickles bytes cannot hold an install or a catalog read open indefinitely.
+const FETCH_DEADLINE_MS = 2 * 60 * 1000;
 const MAX_REDIRECTS = 5;
 
 /**
@@ -209,7 +212,8 @@ function assertSaneRemote(url: string): { devLoopback: boolean } {
  * legitimately redirects to the asset host, still works. Uses the native http/https client (not global
  * fetch, whose undici socket layer is invisible to the egress guard).
  */
-async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Buffer> {
+async function fetchRemote(url: string, maxBytes: number, _hops = 0, deadline = Date.now() + FETCH_DEADLINE_MS): Promise<Buffer> {
+    if (Date.now() >= deadline) throw new Error('La descarga superó el tiempo máximo permitido.');
     const { devLoopback } = assertSaneRemote(url);
     const u = new URL(url);
     if (!devLoopback) await egress.assertUrlAllowed(u.href); // throws on an internal/blocked target
@@ -232,7 +236,7 @@ async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Bu
                 if (_hops >= MAX_REDIRECTS) return reject(new Error('Demasiadas redirecciones.'));
                 let next: string;
                 try { next = new URL(res.headers.location, u).href; } catch { return reject(new Error('Redirección inválida.')); }
-                resolve(fetchRemote(next, maxBytes, _hops + 1));
+                resolve(fetchRemote(next, maxBytes, _hops + 1, deadline));
                 return;
             }
             if (status < 200 || status >= 300) { res.destroy(); return reject(new Error(`HTTP ${status} al descargar ${u.pathname}`)); }
@@ -248,6 +252,14 @@ async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Bu
         });
         req.on('error', reject);
         req.on('timeout', () => req.destroy(new Error('Tiempo de espera de descarga agotado.')));
+        const overall = setTimeout(() => {
+            const err = new Error('La descarga superó el tiempo máximo permitido.');
+            reject(err);
+            req.destroy(err);
+        }, Math.max(0, deadline - Date.now()));
+        overall.unref?.();
+        req.on('error', () => clearTimeout(overall));
+        req.on('response', (res: IncomingMessage) => res.on('close', () => clearTimeout(overall)));
         req.end();
     });
 }
@@ -1324,3 +1336,5 @@ module.exports = router;
 // booting a database to reach it.
 module.exports.isOfficialSource = isOfficialSource;
 module.exports.isNewerVersion = isNewerVersion;
+
+module.exports._fetchRemote = fetchRemote; // tests: the download bounds, driven directly

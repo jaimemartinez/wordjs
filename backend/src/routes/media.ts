@@ -245,6 +245,8 @@ const UPLOAD_OPTIONS = {
         files: 10,          // Max 10 files per request
         fields: 50,         // Max 50 non-file fields
         parts: 100,         // Max total parts (fields + files)
+        fieldSize: 256 * 1024, // alt text, caption, description
+        fieldNameSize: 100,
         headerPairs: 2000   // Limit header pairs to prevent header bomb
     }
 };

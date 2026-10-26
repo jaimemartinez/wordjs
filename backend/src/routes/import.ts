@@ -21,6 +21,7 @@ const { authenticate, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler, UploadRejectedError } = require('../middleware/errorHandler');
 const { analyzeWxr, importWxr } = require('../core/wxr-import');
+const { privateSourceAllowed } = require('../core/wxr-media');
 
 /**
  * @swagger
@@ -36,7 +37,10 @@ const upload = multer({
         fileSize: 100 * 1024 * 1024, // 100MB — WXR exports of large sites can be sizeable
         files: 1,
         fields: 10,
+        fieldSize: 16 * 1024,
+        fieldNameSize: 100,
         parts: 15,
+        headerPairs: 200,
     },
     fileFilter: (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
         const name = (file.originalname || '').toLowerCase();
@@ -112,7 +116,8 @@ router.post('/wordpress/analyze', authenticate, isAdmin, upload.single('file'), 
     }
     try {
         const analysis = analyzeWxr(xml);
-        return res.json({ success: true, analysis });
+        // Tells the screen whether to offer the private-source option on this site at all.
+        return res.json({ success: true, analysis, privateSourceAllowed: privateSourceAllowed() });
     } catch (e: any) {
         return res.status(400).json({ code: 'invalid_wxr', message: e.message });
     }
@@ -128,6 +133,9 @@ router.post('/wordpress/analyze', authenticate, isAdmin, upload.single('file'), 
  * its loopback exception additionally requires a non-production nodeEnv.
  */
 const MEDIA_MODES: ReadonlySet<string> = new Set(['download', 'link', 'skip']);
+
+/** The form options POST /wordpress reads; each must arrive as exactly one text value. */
+const IMPORT_FIELDS = ['defaultAuthorId', 'media', 'importAttachments', 'importComments', 'allowHttp', 'allowPrivateSource'] as const;
 
 /**
  * POST /api/v1/import/wordpress
@@ -188,7 +196,9 @@ const MEDIA_MODES: ReadonlySet<string> = new Set(['download', 'link', 'skip']);
  *                 description: >
  *                   Allow downloads from the export's own site when it is on a private network (a WordPress on
  *                   the LAN, an intranet, a staging host). Only that host; loopback, link-local and cloud
- *                   metadata addresses stay refused.
+ *                   metadata addresses stay refused, and only files whose content signature confirms their type
+ *                   are stored. Accepted on the primary site, or anywhere with WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1;
+ *                   elsewhere the request is refused with 403 private_source_not_allowed.
  *               importAttachments:
  *                 type: string
  *                 enum: ["0", "1"]
@@ -206,14 +216,15 @@ const MEDIA_MODES: ReadonlySet<string> = new Set(['download', 'link', 'skip']);
  *                 summary:
  *                   type: object
  *       400:
- *         description: No file (no_file), the upload could not be read (read_failed), or it is not a valid WXR document (invalid_wxr)
+ *         description: No file (no_file), the upload could not be read (read_failed), an option sent more than once (rest_invalid_param), or it is not a valid WXR document (invalid_wxr)
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
  *         description: >-
  *           Not an administrator, rest_token_management_forbidden (an API token), or
  *           rest_account_bound_session (a session started at an address other than the main one): the
- *           import creates accounts for the authors it cannot match.
+ *           import creates accounts for the authors it cannot match. Also private_source_not_allowed when
+ *           allowPrivateSource is set on a site that may not use it.
  */
 // Refused BEFORE the upload is read, so a refused request leaves no temporary file behind.
 router.post('/wordpress', authenticate, isAdmin, accountAuthorityOnly, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
@@ -225,6 +236,23 @@ router.post('/wordpress', authenticate, isAdmin, accountAuthorityOnly, upload.si
         xml = readAndCleanup(req.file.path);
     } catch (e: any) {
         return res.status(400).json({ code: 'read_failed', message: e.message });
+    }
+    // Every option is ONE text field. A field sent twice arrives as an array, and an array never equals
+    // '0' — so an opt-out such as importAttachments=0 or importComments=0 would silently not apply. A
+    // repeated (or non-text) option is refused instead of being resolved one way or the other.
+    for (const field of IMPORT_FIELDS) {
+        const value = req.body?.[field];
+        if (value !== undefined && typeof value !== 'string') {
+            return res.status(400).json({ code: 'rest_invalid_param', message: `The "${field}" option must be sent once, as a single value.` });
+        }
+    }
+    // A secondary site's administrator cannot point the server at the network's private hosts (core
+    // enforces the same rule; refusing here gives a clear answer instead of a per-file failure).
+    if (req.body?.allowPrivateSource === '1' && !privateSourceAllowed()) {
+        return res.status(403).json({
+            code: 'private_source_not_allowed',
+            message: 'Downloads from a private network address are only allowed on the primary site (or with WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1).',
+        });
     }
 
     // Default author = the importing admin unless a valid id is supplied.
