@@ -79,6 +79,7 @@ import { Select } from "../lib/Select";
 import { CoordinatorMail } from "./CoordinatorMail";
 import { CoordinatorSheet } from "./CoordinatorSheet";
 import { coordinatorPatch } from "../lib/coordinator";
+import { LOCATION_FILTERS, filterLocations, locationCounts, type LocationFilter } from "../lib/locationFilter";
 import MailTemplatesPage from "./MailTemplatesPage";
 import { useCopy } from "../lib/CopyFallback";
 
@@ -4993,6 +4994,11 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
     const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', responsible_email: '', capacity: '', payment_methods: [...PAYMENT_METHODS] as string[] });
     // 2.36.12: «Editar encargado» — the locality whose coordinator data is being edited.
     const [coordEdit, setCoordEdit] = useState<Location | null>(null);
+    // 2.36.19: «que la parte de localidades tenga filtro» — a search and one quick filter with its count.
+    const [locQuery, setLocQuery] = useState('');
+    const [locFilter, setLocFilter] = useState<LocationFilter>('all');
+    const shownLocations = useMemo(() => filterLocations(locations, locQuery, locFilter), [locations, locQuery, locFilter]);
+    const locCounts = useMemo(() => locationCounts(locations), [locations]);
     const [savingMethods, setSavingMethods] = useState<number | null>(null);
     // The general lodging dates (2.21.0): the two inputs mirror the conference's opening / closing until saved.
     const [datesInput, setDatesInput] = useState({ opens: '', closes: '' });
@@ -5497,10 +5503,37 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                 </div>
             ) : (
                 <div className="flex-1">
+                    {/* 2.36.19: search by the locality or its coordinator, and one quick filter at a time (with its count). */}
+                    <div className="mb-6 space-y-3" data-locations-filters="">
+                        <div className="relative">
+                            <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm" aria-hidden="true"></i>
+                            <input type="search" value={locQuery} onChange={(e) => setLocQuery(e.target.value)} data-locations-search=""
+                                placeholder={tx('loc.filter.search', 'Buscar por localidad o encargado (nombre, teléfono, correo)')} aria-label={tx('loc.filter.search', 'Buscar por localidad o encargado (nombre, teléfono, correo)')}
+                                className="w-full min-h-[48px] border-2 border-gray-100 rounded-2xl pl-11 pr-4 py-3 bg-white focus:border-blue-500 outline-none text-base text-gray-900" />
+                        </div>
+                        <div className="flex flex-wrap gap-2" role="group" aria-label={tx('loc.filter.title', 'Filtrar localidades')}>
+                            {LOCATION_FILTERS.filter((f) => f === 'all' || locCounts[f] > 0 || locFilter === f).map((f) => (
+                                <button key={f} type="button" aria-pressed={locFilter === f} onClick={() => setLocFilter(f)} data-locations-filter={f}
+                                    className={`min-h-[40px] px-3 rounded-xl border-2 text-xs font-bold inline-flex items-center gap-2 ${locFilter === f ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-100 bg-white text-gray-700 hover:border-blue-300'}`}>
+                                    {tx(`loc.filter.${f}`, f)}
+                                    <span className={`tabular-nums rounded-md px-1.5 ${locFilter === f ? 'bg-white/20' : 'bg-gray-100'}`}>{locCounts[f]}</span>
+                                </button>
+                            ))}
+                        </div>
+                        {(locQuery.trim() || locFilter !== 'all') && (
+                            <p className="text-xs text-gray-500" role="status" data-locations-shown={shownLocations.length}>
+                                {tx('loc.filter.shown', '{n} de {total} localidades', { n: shownLocations.length, total: locations.length })}
+                                <button type="button" className="ml-2 font-bold text-blue-600 underline" onClick={() => { setLocQuery(''); setLocFilter('all'); }}>{tx('loc.filter.clear', 'Quitar filtros')}</button>
+                            </p>
+                        )}
+                    </div>
+                    {shownLocations.length === 0 && (
+                        <p className="py-10 text-center text-sm text-gray-500 bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl" data-locations-empty="">{tx('loc.filter.none', 'Ninguna localidad coincide con la búsqueda o el filtro.')}</p>
+                    )}
                     {/* Same as the conference list: columns from the available width, so a card never drops
                         under ~20rem and its chips (formas de pago, hospedaje, fechas) stay inside it. */}
                     <div className="grid gap-6" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 20rem), 1fr))' }}>
-                        {locations.map(loc => (
+                        {shownLocations.map(loc => (
                             <div key={loc.id} className="group bg-white p-8 rounded-[32px] border-2 border-gray-50 shadow-sm hover:border-blue-500 hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 relative overflow-hidden">
                                 <div aria-hidden="true" className={DECO_LAYER_CLASS} data-cm-deco="">
                                     <div className="absolute -right-10 -bottom-10 w-32 h-32 bg-blue-600 opacity-[0.03] rounded-full group-hover:scale-150 transition-transform duration-700"></div>

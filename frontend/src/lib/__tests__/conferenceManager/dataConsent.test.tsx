@@ -1206,3 +1206,39 @@ describe('conference-manager 2.36.17 — «Autorizaciones» shows its list on a 
         expect(src('client/admin/ConsentAdmin.tsx')).toContain('<div className="flex flex-wrap gap-2" role="group" aria-label={t("ux.summary")} data-consent-summary="">');
     });
 });
+
+describe('conference-manager 2.36.19 — «Localidades» filters', () => {
+    const L = [
+        { id: 1, name: 'Norte', responsible_name: 'Carlos Rodríguez', responsible_phone: '+573001234567', responsible_email: 'carlos@example.org', welcome_sent_s: 1, welcome_sent_to: 'carlos@example.org', lodging_status: 'submitted', capacity: 10, inscribed: 10 },
+        { id: 2, name: 'Sur', responsible_name: '', responsible_phone: '', responsible_email: '', lodging_status: 'draft', capacity: null, inscribed: 4 },
+        { id: 3, name: 'Chocó', responsible_name: 'Lorleyvis Arriaga', responsible_phone: '3109876543', responsible_email: 'lor@example.org', welcome_sent_s: null, lodging_status: 'validated', capacity: 50, inscribed: 12 },
+        { id: 4, name: 'Clemencia', responsible_name: 'Ana', responsible_email: 'nueva@example.org', welcome_sent_s: 1, welcome_sent_to: 'vieja@example.org', lodging_status: 'draft', capacity: 0, inscribed: 3 },
+    ];
+    it('search by the locality or its coordinator (accents, words, phone digits), and one quick filter with its count', async () => {
+        const F = await import('../../../../../marketplace/plugins/conference-manager/client/lib/locationFilter');
+        const ids = (q: string, f: any = 'all') => F.filterLocations(L, q, f).map((l: any) => l.id);
+        expect(ids('choco')).toEqual([3]);
+        expect(ids('rodriguez')).toEqual([1]);
+        expect(ids('lor@example')).toEqual([3]);
+        expect(ids('9876543')).toEqual([3]);
+        expect(ids('carlos norte')).toEqual([1]);
+        expect(ids('', 'lodging_submitted')).toEqual([1]);
+        expect(ids('', 'lodging_validated')).toEqual([3]);
+        expect(ids('', 'no_coordinator')).toEqual([2]);
+        expect(ids('', 'no_email')).toEqual([2]);
+        expect(ids('', 'welcome_pending')).toEqual([3, 4]);
+        expect(ids('', 'full')).toEqual([1]);
+        expect(F.locationCounts(L)).toEqual({ all: 4, lodging_submitted: 1, lodging_validated: 1, no_coordinator: 1, no_email: 1, welcome_pending: 2, full: 1 });
+    });
+    it('the screen: the search, the chips (only those with something, plus the chosen one), «n de total», and no breakpoint class deciding what shows', () => {
+        const page = src('client/admin/page.tsx');
+        expect(page).toContain('data-locations-search=""');
+        expect(page).toContain("LOCATION_FILTERS.filter((f) => f === 'all' || locCounts[f] > 0 || locFilter === f)");
+        expect(page).toContain('{shownLocations.map(loc => (');
+        expect(page).toContain('data-locations-empty=""');
+        const block = page.slice(page.indexOf('data-locations-filters=""'), page.indexOf('{shownLocations.map(loc => ('));
+        expect(block).not.toMatch(/\b(sm|md|lg|xl):(hidden|block|flex|grid|inline)\b/);
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of ['loc.filter.search', 'loc.filter.all', 'loc.filter.lodging_submitted', 'loc.filter.welcome_pending', 'loc.filter.full', 'loc.filter.shown', 'loc.filter.none', 'loc.filter.clear'])
+            expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});
