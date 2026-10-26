@@ -8,15 +8,38 @@
  * selection), the person (opens their sheet), the status chip with where the request stands, what they authorized,
  * the e-mail, and the main actions: «Ver detalle», «Enviar solicitud», «Copiar mensaje / WhatsApp». The rest
  * (paper, withdraw, record) lives in the person's sheet.
+ *
+ * 2.36.17: which of the two is drawn is decided HERE (the screen's width, `useWide`), not by `hidden lg:table` /
+ * `lg:hidden`. A plugin's compiled classes sit one sub-layer below the host's (backend/scripts/plugin-stylesheet.js):
+ * on a host built before this version, the plugin-only `lg:table` lost to the host's `hidden`, the host's own
+ * `lg:hidden` hid the cards, and a computer showed no list at all.
  */
-import React from "react";
+import React, { useEffect, useState } from "react";
+
+/** From 1024 px (the host's `lg`): the table; below it, the cards. Follows the window as it is resized. */
+export const WIDE_QUERY = "(min-width: 1024px)";
+export function useWide(): boolean {
+    const [wide, setWide] = useState(() => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(WIDE_QUERY).matches : false));
+    useEffect(() => {
+        if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+        let mq: any = null;
+        try { mq = window.matchMedia(WIDE_QUERY); } catch { return undefined; }
+        const on = () => setWide(!!mq.matches);
+        on();
+        try { mq.addEventListener("change", on); } catch { try { mq.addListener(on); } catch { /* old browser */ } }
+        return () => { try { mq.removeEventListener("change", on); } catch { try { mq.removeListener(on); } catch { /* ignore */ } } };
+    }, []);
+    return wide;
+}
 import { canRequest, detailOf, statusOf } from "../lib/consentStatus";
 import { ConsentStatusChip } from "./ConsentStatusChip";
 
 const wrap = { overflowWrap: "anywhere" as const };
 const small = "min-h-[40px] px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-50";
 
-export function ConsentPeopleList({ rows, states, noEmail, t, nameOf, enabled, canManage, selectable, selected, onToggle, onToggleAll, onOpen, onSend, onCopy, busyId }: any) {
+export function ConsentPeopleList({ rows, states, noEmail, t, nameOf, enabled, canManage, selectable, selected, onToggle, onToggleAll, onOpen, onSend, onCopy, busyId, wide: wideProp }: any) {
+    const wideNow = useWide();
+    const wide = typeof wideProp === "boolean" ? wideProp : wideNow;
     const allOn = rows.length > 0 && rows.every((p) => selected.has(Number(p.id)));
     const info = (p: any) => {
         const st = states[p.id];
@@ -60,7 +83,8 @@ export function ConsentPeopleList({ rows, states, noEmail, t, nameOf, enabled, c
     return (
         <div data-consent-list="">
             {/* From 1024 px: a table. */}
-            <table className="hidden lg:table w-full text-sm text-left table-fixed border border-gray-100 rounded-xl overflow-hidden">
+            {wide ? (
+            <table className="w-full text-sm text-left table-fixed border border-gray-100 rounded-xl overflow-hidden" data-consent-layout="table">
                 <caption className="sr-only">{t("ux.tab.people")}</caption>
                 <thead className="bg-gray-50 text-[11px] font-black uppercase tracking-widest text-gray-500">
                     <tr>
@@ -100,8 +124,9 @@ export function ConsentPeopleList({ rows, states, noEmail, t, nameOf, enabled, c
                     })}
                 </tbody>
             </table>
-            {/* Below 1024 px: cards. */}
-            <div className="lg:hidden space-y-3">
+            ) : (
+            /* Below 1024 px: cards. */
+            <div className="space-y-3" data-consent-layout="cards">
                 {selectable && rows.length > 0 && (
                     <label className="flex items-center gap-3 px-1 text-sm font-semibold text-gray-700">
                         <input type="checkbox" className="w-5 h-5 accent-blue-600" checked={allOn} onChange={onToggleAll} data-consent-select-all-cards="" />{t("ux.select.all")}
@@ -131,6 +156,7 @@ export function ConsentPeopleList({ rows, states, noEmail, t, nameOf, enabled, c
                     })}
                 </ul>
             </div>
+            )}
         </div>
     );
 }
