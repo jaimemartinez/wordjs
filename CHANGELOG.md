@@ -6,6 +6,90 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.10] - 2026-10-26
+
+### Security
+- **Untrusted input, downloads and the updater, hardened.**
+  - **URLs in shortcodes.** `escUrl` percent-encodes quotes, angle brackets and backticks in every scheme, and the
+    `[embed]`, `[button]`, `[audio]` and `[video]` shortcodes escape each URL for its attribute. Media sources accept
+    `http(s)` only.
+  - **SVG uploads and imports.** URL attributes (`href`, `xlink:href`) are scheme-checked explicitly, `style` keeps
+    presentation properties with plain values or a same-document `url(#id)`, `<image>` no longer accepts `data:`
+    URLs, and camelCase SVG elements (`linearGradient`, `clipPath`, filters) are kept instead of being dropped.
+  - **WordPress import, private source.** "Allow downloads from this site's private address" is offered and honoured
+    on the primary site only (or anywhere with `WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1`; elsewhere `403
+    private_source_not_allowed`). Loopback is refused in every numeric spelling, and from a private source only files
+    whose content signature confirms their type are stored.
+  - **Download deadlines.** WordPress-import attachments (`deadlineMs`, default 5 minutes) and marketplace downloads
+    (2 minutes) now have an absolute time limit besides the idle timeout; the update check closes its socket at 10 s.
+  - **Inbound SMTP (`smtp:inbound`).** The host listener reserves every in-progress message from one in-flight byte
+    budget and answers `452` when it is spent; one client address may hold a limited number of connections (`421`
+    beyond it). New listen options: `maxInflightBytes`, `maxClientsPerIp`.
+  - **Admin → Updates.** The panel runs the upgrade CLI shipped inside the installed release with the server's own
+    Node binary and no shell, instead of fetching `create-wordjs@latest`, and refuses a release that publishes no
+    checksum (`409 update_unverified_release`, shown on the screen). The supervisor's rollback does the same.
+  - **`create-wordjs`.** A release without a checksum is refused unless `--allow-unverified` is passed. The release
+    workflow signs the checksum file (`wordjs-<tag>.zip.sha256.sig`, Ed25519) when its signing key is configured, and
+    the CLI verifies a published signature against the public keys embedded in the package.
+  - **Site import.** Custom tables are limited to the `wjp_<slug>_` tables of plugins and themes installed on the
+    site; the export carries plugin and theme tables only.
+  - **Egress guard.** `198.18.0.0/15` and the local-use NAT64 prefix `64:ff9b:1::/48` are treated as internal.
+  - **Removed** the unused JSON-LD and meta-tag builders from `core/seo-helper` (the frontend renders structured
+    data with its own escaping).
+  - **Author ids and names.** Every `id` in post, comment and block HTML is namespaced as `user-content-<id>` (stored
+    by the backend, applied again by both frontend sanitizer paths), and `name` survives only on form controls, so
+    author markup cannot shadow properties the page relies on. In-page links to the plain fragment (`#intro`) still
+    land on the prefixed target.
+  - **Embeds.** Every embedded `<iframe>` gets the site's own `sandbox` and `allow` values, replacing the author's.
+  - **WordPress import.** Entities in text nodes are decoded (titles and attachment URLs come out as WordPress showed
+    them); a file with a `<!DOCTYPE` is refused; a form option sent more than once is refused with `400
+    rest_invalid_param`.
+  - **Multipart limits.** Every upload route (site import, fonts, WordPress import, plugins, themes, media, GraphQL)
+    bounds field count, field and field-name size, parts and header pairs.
+  - **Inbound SMTP.** No reverse-DNS lookup per connection (`clientHostname` is the address literal), a 5-second
+    shutdown grace and a cap on unauthenticated commands.
+
+### Added
+- **conference-manager 2.36.21: rename a locality.** The pencil next to its name on the «Localidades» card edits it in
+  place (Enter saves, Escape cancels). An empty name, or one another locality of the conference already has, is
+  refused with the reason; the new name also reaches that locality's registrations.
+
+## [2.11.9] - 2026-10-26
+
+### Security
+- **Content authorization follows the record it touches.**
+  - **A trashed entry is read-only until it is restored.** Editing it in place (content, meta, language,
+    translations, a revision restore, live collaboration) answers 409 `rest_post_trashed`, and the post and page
+    editors show a «Restore» screen instead of the editor. Deleting a trashed entry for good, or restoring it, is
+    judged by the status it had before the trash. GraphQL's `restoreContent` now goes through
+    `POST /posts/:id/restore`, like the admin, and applies a requested `status` afterwards with an ordinary update.
+  - **Comment moderation is scoped to the entry.** Holding `moderate_comments` / `edit_comments` lets a role
+    moderate the comments of the entries it may edit. The moderation list and its totals, the single-comment read
+    and every moderation action follow that rule, and a comment edit by a role without `moderate_comments` no
+    longer returns the commenter's e-mail and IP.
+  - **`GET /media/:id/usage`** follows the item's read rule and counts only the entries the caller may read.
+  - **Revision history** is read by the people who work on the entry: its author while they still hold the
+    type's edit capability, or whoever edits others' entries of that type.
+  - **`/types`** shows the definition of a type whose entries are not public only to callers who may edit them.
+- **Request bodies are checked before they are used.**
+  - **Ids in a body** (a comment's post and parent, a form's page, a post's parent and menu order, media
+    folders and the media moved into them, a category's or menu item's parent) must be ids an id column can hold;
+    anything else is a 400/404 instead of a database error. The models' lookups by id answer "not found" for such
+    a value.
+  - **`POST /roles`** takes a text name and a list of at most 500 capability names; the capabilities list
+    ignores a malformed role stored earlier.
+  - **`PUT /comments/:id`** normalizes the author and email like a new comment, and answers 400 for an unknown
+    status.
+  - **`PUT /menus/items/:itemId`** writes only a menu item's own fields, each checked, and a menu location must
+    be a name.
+  - **A webhook's `active`** must be `true` or `false`, and a new taxonomy's `public`, `showInRest` and
+    `showInMenu` are always stored as booleans.
+- **Multisite.** `/health/details` and `/health/site` on the main site take a network administrator. A network
+  administrator's handoff account on a site can no longer be deleted by the site's administrators or rewritten by a
+  site import; the network manages it.
+
+## [2.11.8] - 2026-10-26
+
 ### Added
 - **conference-manager 2.36.20: «Cierre de inscripciones».**
   - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the
@@ -64,6 +148,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     derived key. Two-factor backup codes are stored salted and slow-hashed; codes created before keep working.
 
 ### Fixed
+- **GraphQL, streams and health probes: tighter resource bounds.**
+  - **Query limits.** A scalar leaf now costs 0.1 in the cost limit, multiplied by the page it sits on like any
+    other field. An operation may select at most 1000 fields once its fragments are expanded
+    (`WORDJS_GRAPHQL_MAX_FIELDS`) and one selection set at most 50 aliased fields (`WORDJS_GRAPHQL_MAX_ALIASES`).
+    A result larger than 16 MiB (`WORDJS_GRAPHQL_MAX_RESPONSE_BYTES`) is answered with a
+    `GRAPHQL_RESPONSE_TOO_LARGE` error; it is measured before it is serialized.
+  - **Rate limiting.** Each REST read a GraphQL query makes after the first now counts against the API rate
+    limiter, so a query costs the budget what the REST calls behind it would.
+  - **Uploads.** A multipart GraphQL request passes `POST /media`'s authentication and `upload_files` check before
+    its body is read. Each file is held to the site's upload limit from Settings → Media, the files of one request
+    together to that same limit, and every file after the first counts once more against the upload limiter.
+  - **Subscriptions.** The per-caller stream cap holds when many streams open at once, a stream abandoned while it
+    is being set up gives its slot back, and a caller without a signed-in user is counted by address (an IPv6 client
+    by its /64). The reads a stream makes while opening (`ids:`, a `Last-Event-ID` resume) count against the API
+    limiter; an anonymous resume replays at most 50 events.
+  - **Hook inspector.** `GET /api/v1/hooks/stream` takes an administrator's interactive session only (not an API
+    token), and at most 3 streams per user and 20 per process (`429 rest_hook_stream_limit`).
+  - **Health probes.** `GET /health` and `GET /api/v1/health` answer from one cached database check (1 s) with the
+    readiness deadline (`WORDJS_READINESS_TIMEOUT_MS`), like `/readyz`.
 - **conference-manager 2.36.20: the cupo editor on a locality card no longer pushes «Cancelar» out of the card.**
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
   the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's

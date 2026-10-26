@@ -641,8 +641,34 @@ function setRole(slug: string, roleData: any, opts: PluginRoleOptions = {}) {
     return withRolesWriteLock(() => setRoleUnlocked(slug, roleData, opts));
 }
 
+/** The bounds of a role written through setRole: its name and its list of capability names. */
+const MAX_ROLE_NAME = 100;
+const MAX_ROLE_CAPABILITIES = 500;
+const MAX_CAPABILITY_NAME = 100;
+
 async function setRoleUnlocked(slug: string, roleData: any, opts: PluginRoleOptions) {
     if (!isSafeRoleSlug(slug)) throw roleWriteError('rest_invalid_param', `Invalid role slug: ${JSON.stringify(slug)}`);
+    // THE SHAPE IS CHECKED BEFORE ANYTHING IS STORED: every reader of the roles map (can(), the
+    // capabilities list, the Roles screen) iterates `capabilities` as a list of names, so a stored role
+    // whose list is an object or a number broke them on every later request, not only this one.
+    const name = roleData ? roleData.name : undefined;
+    if (typeof name !== 'string' || !name.trim() || name.length > MAX_ROLE_NAME) {
+        throw roleWriteError('rest_invalid_param', `A role name is text of 1 to ${MAX_ROLE_NAME} characters.`);
+    }
+    // A list of names, or WordPress's map form `{ name: true }` (the names set to true), stored as a list.
+    let caps = roleData.capabilities;
+    if (caps && typeof caps === 'object' && !Array.isArray(caps)) {
+        const entries = Object.entries(caps);
+        caps = entries.length <= MAX_ROLE_CAPABILITIES && entries.every(([, v]) => typeof v === 'boolean')
+            ? entries.filter(([, v]) => v === true).map(([k]) => k)
+            : null;
+        if (caps === null) throw roleWriteError('rest_invalid_param', 'A capabilities map gives each capability name true or false.');
+    }
+    if (caps !== undefined && caps !== null && (!Array.isArray(caps) || caps.length > MAX_ROLE_CAPABILITIES
+        || !caps.every((c: unknown) => typeof c === 'string' && c.length > 0 && c.length <= MAX_CAPABILITY_NAME))) {
+        throw roleWriteError('rest_invalid_param', `capabilities is a list of at most ${MAX_ROLE_CAPABILITIES} capability names (text of 1 to ${MAX_CAPABILITY_NAME} characters).`);
+    }
+    roleData = { ...roleData, capabilities: caps };
 
     // Decided on the STORED map (writeRoles): whether `slug` is a plugin's role, and what it holds, is what
     // the database says now, not what this node's cache last heard.
@@ -720,8 +746,9 @@ function getAllAvailableCapabilities() {
     const roles = getRoles();
     const caps = new Set();
     Object.values(roles).forEach((role: any) => {
-        if (role.capabilities) {
-            role.capabilities.forEach((cap: any) => caps.add(cap));
+        // A role stored before setRole checked the shape may hold anything: only a list of names counts.
+        if (role && Array.isArray(role.capabilities)) {
+            role.capabilities.forEach((cap: any) => { if (typeof cap === 'string') caps.add(cap); });
         }
     });
 

@@ -1206,7 +1206,8 @@ const PROBE_CHILD_SOURCE = [
     "var fs=require('fs'),path=require('path');",
     "var out={ipc:!!process.send,connect:null,read:null,write:null,exec:null};",
     "try{fs.readdirSync(process.env.WJS_PROBE_OUTSIDE);out.read='OPEN'}catch(e){out.read=(e&&e.code)||String(e)}",
-    "try{fs.writeFileSync(path.join(__dirname,'probe-write.tmp'),'ok');out.write='OK'}catch(e){out.write=(e&&e.code)||String(e)}",
+    // Named per pid: the two contained shapes run at the same time and must not share one file.
+    "try{fs.writeFileSync(path.join(__dirname,'probe-write-'+process.pid+'.tmp'),'ok');out.write='OK'}catch(e){out.write=(e&&e.code)||String(e)}",
     // The relay has already made a second suspended AppContainer process hit the Job limit before this
     // child was resumed. Calling child_process from inside this one-process job is deliberately avoided:
     // Node's synchronous uv_spawn setup can block after Windows rejects CreateProcess.
@@ -1241,6 +1242,24 @@ function runProbeControl(zoneDir: string, outsideDir: string): Promise<any | nul
     });
 }
 
+/** Wait for a contained probe child's verdict over IPC (null on exit/error/timeout), then kill its relay. */
+function awaitProbeVerdict(launched: LaunchResult): Promise<any> {
+    return new Promise((resolve) => {
+        let got: any = null, done = false;
+        const finish = () => { if (done) return; done = true; try { launched.child.kill(); } catch { /* */ } resolve(got); };
+        launched.child.on('message', (m: any) => { got = m; finish(); });
+        launched.child.on('error', () => finish());
+        launched.child.on('exit', () => setTimeout(finish, 50));
+        const t = setTimeout(finish, 30000); if (t.unref) t.unref();
+    });
+}
+
+// The probe is a chain of separate powershell.exe helpers (profile API, icacls, relay), each a cold
+// PowerShell start plus, for most, an Add-Type compile. Measured on GitHub's windows-latest runner: ~20 s
+// apiece, and the 13 of them ran strictly one after another, ~280 s of every Sandbox parity run (the same
+// 13 take ~15 s on a warm desktop). Most of them do not depend on each other, so the probe runs them in
+// dependency rounds: the two profiles and the uncontained control together; then the grants; then BOTH
+// contained shapes; then all of the cleanup. Every verdict is the one the serial probe required.
 let acProbe: Promise<'active' | 'degraded' | 'unsupported' | 'disabled'> | undefined;
 function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'disabled'> {
     if (acProbe) return acProbe;
@@ -1253,22 +1272,11 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
         const appRoot = path.resolve(__dirname, '..', '..');
         const probeProfileA = appContainerProfileNameForPlugin(appRoot, '__wordjs_probe_a__');
         const probeProfileB = appContainerProfileNameForPlugin(appRoot, '__wordjs_probe_b__');
-        const sid = await ensureAppContainerProfile(probeProfileA);
-        const siblingSid = await ensureAppContainerProfile(probeProfileB);
-        if (!sid || !siblingSid || sid === siblingSid) {
-            appContainerState = 'degraded';
-            try { if (sid) await deleteAppContainerProfile(probeProfileA); } catch { /* */ }
-            try { if (siblingSid) await deleteAppContainerProfile(probeProfileB); } catch { /* */ }
-            log.warn('[Sandbox] AppContainer requested but distinct per-plugin profiles could not be created or derived - isolated plugins keep the standard Windows launch.');
-            return 'degraded';
-        }
-        appContainerSid = sid;
-
-        // Everything the probe touches lives in a throwaway mkdtemp zone, and the ACEs on it die with it.
+        // Everything the probe touches lives in throwaway mkdtemp zones, and the ACEs on them die with them.
+        // They exist before the profiles so the uncontained control can run while the profiles are created.
         let zone: string | null = null;
         let outside: string | null = null;
-        let launched: LaunchResult | null = null;
-        let allowedLaunched: LaunchResult | null = null;
+        let controlRun: Promise<any | null> | null;
         try {
             const zoneDir: string = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-ac-zone-'));
             zone = zoneDir;
@@ -1278,8 +1286,40 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             const outsideDir: string = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-ac-outside-'));
             outside = outsideDir;
             fs.writeFileSync(path.join(outsideDir, 'canary.txt'), 'canary');
+            controlRun = runProbeControl(zoneDir, outsideDir);
+        } catch (e: any) {
+            controlRun = null;
+            log.warn({ err: e }, `[Sandbox] AppContainer probe could not create its temporary zones: ${logSafe(e && e.message)}`);
+        }
+        const removeZones = () => {
+            try { if (zone) fs.rmSync(zone, { recursive: true, force: true }); } catch { /* */ }
+            try { if (outside) fs.rmSync(outside, { recursive: true, force: true }); } catch { /* */ }
+        };
+        const [sid, siblingSid] = await Promise.all([
+            ensureAppContainerProfile(probeProfileA),
+            ensureAppContainerProfile(probeProfileB),
+        ]);
+        if (!sid || !siblingSid || sid === siblingSid) {
+            appContainerState = 'degraded';
+            try { if (controlRun) await controlRun; } catch { /* */ }
+            removeZones();
+            await Promise.all([
+                sid ? deleteAppContainerProfile(probeProfileA).catch(() => false) : false,
+                siblingSid ? deleteAppContainerProfile(probeProfileB).catch(() => false) : false,
+            ]);
+            log.warn('[Sandbox] AppContainer requested but distinct per-plugin profiles could not be created or derived - isolated plugins keep the standard Windows launch.');
+            return 'degraded';
+        }
+        appContainerSid = sid;
 
-            const control = await runProbeControl(zoneDir, outsideDir);
+        // Filled in by each launch as it returns (a holder, because the launches assign it from closures).
+        const runs: { denied: LaunchResult | null; allowed: LaunchResult | null } = { denied: null, allowed: null };
+        try {
+            if (!zone || !outside || !controlRun) throw new Error('the probe zones could not be created');
+            const zoneDir: string = zone;
+            const outsideDir: string = outside;
+
+            const control = await controlRun;
             if (!control || control.read !== 'OPEN' || control.write !== 'OK' || control.exec !== 'OK' || control.connect !== 'CONNECTED') {
                 appContainerState = 'degraded';
                 log.warn(`[Sandbox] AppContainer probe ABORTED: the uncontained control was not clean (read=${logSafe(control && control.read)}, write=${logSafe(control && control.write)}, connect=${logSafe(control && control.connect)}).`);
@@ -1287,13 +1327,23 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             }
 
             // Use a user-owned runtime copy: an MSI Node under Program Files cannot receive a package-SID
-            // ACE without elevation and dies during DLL initialisation inside the lowbox token.
-            const runtimeExe = await ensureAppContainerRuntime(sid);
-            await grantAppContainerAccess(sid, [zoneDir], 'full');
-            // Model a real sibling plugin: its own SID can read this zone, while sid A must still be denied.
-            await grantAppContainerAccess(siblingSid, [outsideDir], 'full');
+            // ACE without elevation and dies during DLL initialisation inside the lowbox token. sid A's two
+            // grants share its ACL-cache lock and run in turn; the sibling's grant runs beside them.
+            const [runtimeExe] = await Promise.all([
+                ensureAppContainerRuntime(sid).then(async (exe) => { await grantAppContainerAccess(sid, [zoneDir], 'full'); return exe; }),
+                // Model a real sibling plugin: its own SID can read this zone, while sid A must still be denied.
+                grantAppContainerAccess(siblingSid, [outsideDir], 'full'),
+            ]);
 
-            launched = await launchInAppContainer({
+            // Both contained shapes at once: each has its own relay, Job Object and IPC channel, and the
+            // child names its in-zone write file by pid, so neither can see or disturb the other.
+            // The verdict listener is attached the moment each launch returns, never after the other one.
+            const contained = async ({ allowNetwork }: { allowNetwork: boolean }): Promise<any> => {
+                const run = await launchContained(allowNetwork);
+                if (allowNetwork) runs.allowed = run; else runs.denied = run;
+                return awaitProbeVerdict(run);
+            };
+            const launchContained = (allowNetwork: boolean) => launchInAppContainer({
                 sid,
                 exe: runtimeExe,
                 // -e carries no main module, so --preserve-symlinks-main has nothing to skip here; the flags
@@ -1304,18 +1354,18 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
                 env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir },
                 memoryBytes: 256 * 1024 * 1024,
                 cpuPercent: 0,
-                allowNetwork: false,
+                allowNetwork,
                 verifyProcessLimit: true,
             });
-
-            const verdict: any = await new Promise((resolve) => {
-                let got: any = null, done = false;
-                const finish = () => { if (done) return; done = true; try { launched!.child.kill(); } catch { /* */ } resolve(got); };
-                launched!.child.on('message', (m: any) => { got = m; finish(); });
-                launched!.child.on('error', () => finish());
-                launched!.child.on('exit', () => setTimeout(finish, 50));
-                const t = setTimeout(finish, 30000); if (t.unref) t.unref();
-            });
+            // allSettled, so a launch that throws never leaves the other one running past the cleanup below.
+            const [deniedRun, allowedRun] = await Promise.allSettled([
+                contained({ allowNetwork: false }),
+                contained({ allowNetwork: true }),
+            ]);
+            if (deniedRun.status === 'rejected') throw deniedRun.reason;
+            if (allowedRun.status === 'rejected') throw allowedRun.reason;
+            const verdict: any = deniedRun.value;
+            const allowedVerdict: any = allowedRun.value;
 
             if (!verdict || !verdict.ipc) {
                 appContainerState = 'degraded';
@@ -1333,23 +1383,8 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
                 log.warn(`[Sandbox] AppContainer probe FAILED (connect=${logSafe(verdict.connect)}, read=${logSafe(verdict.read)}, exec=${logSafe(verdict.exec)}, write=${logSafe(verdict.write)}).`);
                 return 'degraded';
             }
-            // Certify the network-GRANTED shape independently. internetClient may enable sockets, but it
+            // The network-GRANTED shape, certified independently. internetClient may enable sockets, but it
             // must not widen the package SID's filesystem or process authority.
-            allowedLaunched = await launchInAppContainer({
-                sid, exe: runtimeExe, args: ['-e', PROBE_CHILD_SOURCE], cwd: zoneDir,
-                env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir },
-                memoryBytes: 256 * 1024 * 1024, cpuPercent: 0,
-                allowNetwork: true,
-                verifyProcessLimit: true,
-            });
-            const allowedVerdict: any = await new Promise((resolve) => {
-                let got: any = null, done = false;
-                const finish = () => { if (done) return; done = true; try { allowedLaunched!.child.kill(); } catch { /* */ } resolve(got); };
-                allowedLaunched!.child.on('message', (m: any) => { got = m; finish(); });
-                allowedLaunched!.child.on('error', () => finish());
-                allowedLaunched!.child.on('exit', () => setTimeout(finish, 50));
-                const t = setTimeout(finish, 30000); if (t.unref) t.unref();
-            });
             const allowedShape = !!allowedVerdict && allowedVerdict.ipc === true
                 && (allowedVerdict.read === 'EPERM' || allowedVerdict.read === 'EACCES')
                 && allowedVerdict.exec === 'JOB_OBJECT'
@@ -1367,19 +1402,21 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             log.warn({ err: e }, `[Sandbox] AppContainer probe errored: ${logSafe(e && e.message)} - the layer stays OFF.`);
             return 'degraded';
         } finally {
-            try { if (launched && launched.child) launched.child.kill(); } catch { /* */ }
-            try { if (allowedLaunched && allowedLaunched.child) allowedLaunched.child.kill(); } catch { /* */ }
-            try { if (launched && launched.pidFileDir) fs.rmSync(launched.pidFileDir, { recursive: true, force: true }); } catch { /* */ }
-            try { if (allowedLaunched && allowedLaunched.pidFileDir) fs.rmSync(allowedLaunched.pidFileDir, { recursive: true, force: true }); } catch { /* */ }
+            for (const run of [runs.denied, runs.allowed]) {
+                try { if (run && run.child) run.child.kill(); } catch { /* */ }
+                try { if (run && run.pidFileDir) fs.rmSync(run.pidFileDir, { recursive: true, force: true }); } catch { /* */ }
+            }
             // Remove the ACEs this probe added to its own throwaway zone BEFORE deleting it, so nothing is
             // left behind even if the rmSync loses a race with a still-dying child.
-            try { if (zone) await revokeAppContainerAccess(sid, [zone]); } catch { /* */ }
-            try { if (outside) await revokeAppContainerAccess(siblingSid, [outside]); } catch { /* */ }
-            try { await revokeAppContainerAccess(sid, [path.dirname(getAppContainerRuntimePath())]); } catch { /* */ }
-            try { await deleteAppContainerProfile(probeProfileA); } catch { /* */ }
-            try { await deleteAppContainerProfile(probeProfileB); } catch { /* */ }
-            try { if (zone) fs.rmSync(zone, { recursive: true, force: true }); } catch { /* */ }
-            try { if (outside) fs.rmSync(outside, { recursive: true, force: true }); } catch { /* */ }
+            // One helper per SID and one per profile, all at once: an ACE names the SID itself, so its
+            // removal does not depend on the profile still being registered.
+            await Promise.all([
+                revokeAppContainerAccess(sid, [...(zone ? [zone] : []), path.dirname(getAppContainerRuntimePath())]).catch(() => false),
+                outside ? revokeAppContainerAccess(siblingSid, [outside]).catch(() => false) : false,
+                deleteAppContainerProfile(probeProfileA).catch(() => false),
+                deleteAppContainerProfile(probeProfileB).catch(() => false),
+            ]);
+            removeZones();
         }
     })();
     return acProbe;

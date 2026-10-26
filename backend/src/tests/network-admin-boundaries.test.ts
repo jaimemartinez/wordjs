@@ -10,7 +10,7 @@
  *      administrator can; everyone keeps managing ordinary accounts exactly as before.
  *   2. NETWORK-WIDE ACTIONS on the main site take a network administrator: plugin and theme code,
  *      marketplace, backups, the database migration tool, the site's addresses, certificates, the hooks
- *      registry and the object-cache switch. Activation, grants and the other site-level actions stay
+ *      registry, the detailed health reports and the object-cache switch. Activation, grants and the other site-level actions stay
  *      with the main site's administrators.
  *
  * Plus the bookkeeping: deleting an account removes it from the network administrators, and every row
@@ -210,6 +210,8 @@ describe('network-wide actions on the main site take a network administrator', (
         ['get', '/site-address'],
         ['get', '/system/certs/config'],
         ['get', '/hooks'],
+        ['get', '/health/details'],
+        ['get', '/health/site'],
         ['get', '/marketplace/sources'],
         ['post', '/plugins/upload'],
         ['delete', '/plugins/no-such-plugin'],

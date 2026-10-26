@@ -66,7 +66,7 @@ One backend + one frontend per gateway needs **no** shared database or filesyste
 
 WordJS ships **downloadable, pre-compiled bundles** so an operator can deploy without cloning the repo or building anything locally. If you just want to run WordJS, grab a release ZIP instead of following the from-source installation steps below.
 
-> **Latest release:** [v2.11.7](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
+> **Latest release:** [v2.11.10](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
 
 ### Versioning policy
 
@@ -94,8 +94,8 @@ tag examples on this page, and the supported-versions table in `SECURITY.md`.
 Push a version tag and the release pipeline does the rest:
 
 ```bash
-git tag v2.11.7
-git push origin v2.11.7
+git tag v2.11.10
+git push origin v2.11.10
 ```
 
 A `v*` tag triggers **`.github/workflows/release.yml`**. It runs a **`verify`** job first — `npm run ci:all` (the parallel workspace installer, root `scripts/ci-install.mjs`), then the dependency-audit gate (`scripts/ci-audit.mjs`, which wraps `npm audit --omit=dev --audit-level=high` and blocks on any high/critical advisory in production dependencies) in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, and a strict backend type check (`npx tsc --noEmit`), plus the frontend, gateway and `create-wordjs` tests; the backend unit suite runs beside it in **`verify-backend-tests`**, four parallel shards (`npm test -- --test-shard=N/4`). Nothing is built or published unless `verify` and all four shards are green. The **`build-release`** job (`needs: [verify, verify-backend-tests]`) then runs `npm run ci:all` again followed by `npm run bundle-release` (root `scripts/make-release.js`). The packager:
@@ -143,7 +143,7 @@ Publish this way only when the plugins at that ref run on the core of the latest
 > ```bash
 > npx create-wordjs@latest my-site
 > ```
-> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset installs with a warning that it was not verified; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
+> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset is refused unless you pass `--allow-unverified`; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
 
 1. Download `wordjs-<tag>.zip` **and** `wordjs-<tag>.zip.sha256` from the GitHub Release, verify the download with `sha256sum -c wordjs-<tag>.zip.sha256` (releases published before the checksum asset was introduced do not have one), and unzip it.
 2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
@@ -535,10 +535,10 @@ Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 2
 A minimal chart lives at **[`deploy/helm/wordjs`](../deploy/helm/wordjs)**.
 
 ```bash
-docker build -t <registry>/wordjs:2.11.7 . && docker push <registry>/wordjs:2.11.7
+docker build -t <registry>/wordjs:2.11.10 . && docker push <registry>/wordjs:2.11.10
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
-  --set image.repository=<registry>/wordjs --set image.tag=2.11.7 \
+  --set image.repository=<registry>/wordjs --set image.tag=2.11.10 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 kubectl -n wordjs port-forward deployment/wordjs 3000:3000   # then browse /install
@@ -810,10 +810,12 @@ Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAS
 
 **From the admin panel:** **Admin → Updates** lists the newer releases with their notes and installs one
 with a click (the password, and a two-factor code when the account has two-factor authentication): a backup, the `create-wordjs upgrade` below with
-`--version <tag>`, an automatic restart, and the previous version put back if the update fails or the new
+`--version <tag>` — run from the copy of the CLI the installed release ships (`packages/create-wordjs/index.js`, by the
+server's own Node binary, with no shell), never a package fetched from the registry at update time — an automatic restart, and the previous version put back if the update fails or the new
 version does not start (`backend/data/update-state.json`, read by the monolith's supervisor). It is offered
 on a release install running as the monolith under its supervisor, whose files the service account can
-write (the `--systemd` layout). In a container, a git checkout, split or separate mode, or when the code
+write (the `--systemd` layout). A release that publishes no checksum for its bundle is listed with a notice and
+not installed (`409 update_unverified_release`). In a container, a git checkout, split or separate mode, or when the code
 belongs to another account, the screen says so and gives the command below instead. A container is
 recognised by `/.dockerenv` (Docker), `/run/.containerenv` (podman), `WORDJS_DOCKER=1` (set by the image and
 the Helm chart) or, on Kubernetes, the `KUBERNETES_SERVICE_HOST` every pod gets (containerd and CRI-O write no
@@ -830,7 +832,7 @@ It downloads the latest release (`--version <tag>` for another one, which is als
 Without access to GitHub (or to pin the exact bundle), download `wordjs-<tag>.zip` and its `.sha256` from the releases page and point the upgrade at the file:
 
 ```bash
-npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.11.7.zip --sha256 <hex> --yes --force
+npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.11.10.zip --sha256 <hex> --yes --force
 ```
 
 `--force` is needed only when the site already reports that version (re-applying a release). Run it with `sudo` when the site belongs to the service account: the upgraded files are given back to the site's owner. Then `sudo systemctl restart wordjs`.

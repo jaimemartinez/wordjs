@@ -42,7 +42,17 @@ const EXPORT_FLAG_FIELDS: readonly string[] = Object.freeze([
  */
 const upload = multer({
     dest: path.resolve('./data/imports'),
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
+    // Every busboy bound, not only the file: field count, field size and the header table are
+    // otherwise unbounded or library defaults, and each field is buffered in memory.
+    limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB max
+        files: 1,
+        fields: 5,          // data, updateExisting, importUsers
+        fieldSize: 1024 * 1024,
+        fieldNameSize: 100,
+        parts: 6,
+        headerPairs: 200,
+    }
 });
 
 /**

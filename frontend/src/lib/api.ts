@@ -1605,7 +1605,7 @@ export const importApi = {
     analyze: (file: File) => {
         const fd = new FormData();
         fd.append("file", file);
-        return api<{ success: boolean; analysis: WxrAnalysis }>("/import/wordpress/analyze", {
+        return api<{ success: boolean; analysis: WxrAnalysis; privateSourceAllowed?: boolean }>("/import/wordpress/analyze", {
             method: "POST",
             body: fd,
             headers: {}, // let the browser set the multipart boundary

@@ -727,8 +727,8 @@ The rest of phase 2, as built.
   keeps every write attributable to the network administrator, on the site's own records, and adds no
   standing access: it is marked (`user_meta.network_handoff_of` = `"<id>:<login>"`, a key no request
   writes), has a random password and an `.invalid` address, is refused by the password sign-in, cannot be
-  edited or have its second factor reset by the site's administrators (they may cut its sessions or delete
-  it; the next handoff creates it again), and a session for it without a live `hof` claim is no session.
+  edited, have its second factor reset, be deleted or be rewritten by a site import by the site's
+  administrators (they may cut its sessions), and a session for it without a live `hof` claim is no session.
   A handoff session mints nothing that outlives it: no API token, agent connection, second-factor
   enrolment or profile write of its own account (`refuseHandoffSession`). The site's two-factor policy
   does not apply to the account: its person signed in on the main site under the main site's policy, and
