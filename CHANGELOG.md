@@ -7,6 +7,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Added
+- **conference-manager 2.36.20: «Cierre de inscripciones».**
+  - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the
+    coordinators' portal registers nobody: «Registrar Nuevo» is disabled and the portal says when registration
+    closed. The administration can still register people. Without a date, nothing changes.
+  - **A date per locality.** Each card in «Localidades» shows the date in force for that locality. «Cambiar» gives
+    the locality its own date, earlier or later than the general one, and «Usar la general» drops it again.
 - **conference-manager 2.36.19: filters in «Localidades».**
   - **Search:** by the locality or its coordinator (name, phone, e-mail). Accents are ignored, every word must match,
     and a number matches the phone's digits.
@@ -23,6 +29,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     reaches the phone.
 
 ### Fixed
+- **conference-manager 2.36.20: the cupo editor on a locality card no longer pushes «Cancelar» out of the card.**
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
   the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's
   `lg:table` lost to the site's `hidden`, and the site's own `lg:hidden` hid the cards. Which of the two is drawn is

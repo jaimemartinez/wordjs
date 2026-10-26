@@ -1242,3 +1242,39 @@ describe('conference-manager 2.36.19 — «Localidades» filters', () => {
             expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
     });
 });
+
+describe('conference-manager 2.36.20 — «Cierre de inscripciones»', () => {
+    const tx = (_k: string, fb: string, vars?: Record<string, unknown>) => fb.replace(/\{(\w+)\}/g, (_m, k) => String(vars?.[k] ?? ''));
+    it('each locality card shows the date in force — its own, else the general one — and offers to change it', async () => {
+        const { LocationRegistrationCloses, shownDateTime } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/RegistrationCloses');
+        const card = (loc: any, general: string | null) => renderToStaticMarkup(<LocationRegistrationCloses loc={loc} general={general} canEdit tx={tx} addToast={() => {}} onSaved={() => {}} />);
+        expect(shownDateTime('2030-01-05T18:30')).toBe('05/01/2030 18:30');
+        const own = card({ id: 1, registration_closes: '2030-01-05T18:30' }, '2030-01-08T12:00');
+        expect(own).toContain('data-location-regclose-state="own"');
+        expect(own).toContain('Propia: 05/01/2030 18:30');
+        expect(own).toContain('data-location-regclose-edit=""');
+        const general = card({ id: 2, registration_closes: null }, '2030-01-08T12:00');
+        expect(general).toContain('data-location-regclose-state="general"');
+        expect(general).toContain('General: 08/01/2030 12:00');
+        const past = card({ id: 3, registration_closes: '2001-01-01T00:00' }, null);
+        expect(past).toContain('cerradas');
+        expect(card({ id: 4 }, null)).toContain('data-location-regclose-state="none"');
+        expect(renderToStaticMarkup(<LocationRegistrationCloses loc={{ id: 5 }} general={null} canEdit={false} tx={tx} addToast={() => {}} onSaved={() => {}} />)).not.toContain('data-location-regclose-edit');
+    });
+    it('the general one lives in «Configurar registro»; the portal says registration closed and stops «Registrar Nuevo»', () => {
+        const page = src('client/admin/page.tsx');
+        expect(page).toContain('<RegistrationClosesSetting conferenceId={conferenceId}');
+        expect(page).toContain('<LocationRegistrationCloses loc={loc}');
+        const portal = src('client/portal/CoordinatorPortal.tsx');
+        expect(portal).toContain('disabled={isLocationFull(myLocation) || registrationClosed}');
+        expect(portal).toContain('data-testid="registration-closed"');
+        const comp = src('client/admin/RegistrationCloses.tsx');
+        expect(comp.slice(comp.indexOf('export function LocationRegistrationCloses'))).not.toMatch(/\b(sm|md|lg|xl):(hidden|block|flex|grid|inline)\b/);
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of ['regclose.title', 'regclose.label', 'regclose.clear', 'regclose.state.none', 'regclose.state.open', 'regclose.state.closed', 'regclose.help', 'regclose.loc.own', 'regclose.loc.from.general', 'regclose.loc.none', 'regclose.loc.change', 'regclose.loc.use.general', 'regclose.loc.hint', 'regclose.loc.saved', 'regclose.loc.general', 'regclose.loc.closed'])
+            expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+    it('the cupo editor on a locality card wraps instead of pushing «Cancelar» out of it', () => {
+        const page = src('client/admin/page.tsx');
+        expect(page).toContain('<div className="flex flex-wrap items-center gap-2 mt-1" data-capacity-edit={loc.id}>');
+    });
+});

@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.19',
+    version: '2.36.20',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -335,6 +335,16 @@ exports.init = async function (wordjs) {
         if (!m) return NaN;
         return zoneDayStart(+m[1], +m[2], +m[3], tz) + ((+m[4]) * 60 + (+m[5])) * 60000;
     }
+    // 2.36.20: «Cierre de inscripciones» — from that instant the coordinators' portal registers nobody (the admin still
+    // can). The general date is the conference's; a locality may have its own, which wins (null = the general one).
+    // { closes, own, general, open }: closes = the date in force (null = no date: open, as before).
+    const registrationWindow = (conf, loc) => {
+        const general = conf && conf.registration_closes ? String(conf.registration_closes) : null;
+        const ownDate = loc && loc.registration_closes ? String(loc.registration_closes) : null;
+        const closes = ownDate || general;
+        const end = closes ? withdrawEnd(closes, lodgingZone(conf && conf.lodging_tz)) : NaN;
+        return { closes, own: !!ownDate, general, open: !closes || !Number.isFinite(end) || Date.now() < end };
+    };
     const withdrawWindow = (conf) => {
         const until = conf && conf.withdraw_until ? String(conf.withdraw_until) : null;
         const end = until ? withdrawEnd(until, lodgingZone(conf.lodging_tz)) : NaN;
@@ -1047,6 +1057,10 @@ exports.init = async function (wordjs) {
         // NULL = coordinators cannot withdraw. A withdrawal is a cancellation that says who, when and why (withdrawn_*),
         // so every list, count, room, meal, badge and export that leaves cancelled people out leaves it out too.
         await addColumnIfMissing(T.conferences, 'withdraw_until', 'TEXT');
+        // 2.36.20: «Cierre de inscripciones» — a date-time in the conference's zone; null = no date (as before).
+        await addColumnIfMissing(T.conferences, 'registration_closes', 'TEXT');
+        // A locality's own closing (null = the general one).
+        await addColumnIfMissing(T.locations, 'registration_closes', 'TEXT');
         await addColumnIfMissing(T.inscriptions, 'withdrawn_at', 'VARCHAR(19)');
         await addColumnIfMissing(T.inscriptions, 'withdrawn_by', 'TEXT');
         await addColumnIfMissing(T.inscriptions, 'withdraw_reason', 'TEXT');
@@ -2691,7 +2705,7 @@ exports.init = async function (wordjs) {
     http.route('put', '/:id', { auth: true }, async (req, res) => {
         // Only the lodging dates (the «fechas» of Localidades) → locations:manage suffices too.
         const LODGING_DATE_KEYS = ['lodging_opens', 'lodging_deadline', 'lodging_tz', 'withdraw_until'];
-        const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', 'phone_country', ...LODGING_DATE_KEYS].filter(k => (req.body || {})[k] !== undefined);
+        const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', 'phone_country', 'registration_closes', ...LODGING_DATE_KEYS].filter(k => (req.body || {})[k] !== undefined);
         const datesOnly = editKeys.length > 0 && editKeys.every(k => LODGING_DATE_KEYS.includes(k));
         if (!await (datesOnly ? allowAny(req, res, [['settings', 'manage'], ['locations', 'manage']]) : allow(req, res, 'settings', 'manage'))) return;
         const { name, slug, date_start, date_end, fee_default, description, status, lodging_opens, lodging_deadline, lodging_tz } = req.body;
@@ -2742,6 +2756,13 @@ exports.init = async function (wordjs) {
                 const v = withdrawUntil == null || withdrawUntil === '' ? null : String(withdrawUntil).trim();
                 if (v != null && !Number.isFinite(withdrawEnd(v, tz))) return res.status(400).json({ error: 'Fecha y hora inválidas (retiro de inscripciones).', field: 'withdraw_until' });
                 sets.push('withdraw_until = ?'); params.push(v == null ? null : v.slice(0, 16));
+            }
+            // 2.36.20: «Cierre de inscripciones» — '' / null = no date (settings:manage: it is not a lodging date).
+            const regCloses = (req.body || {}).registration_closes;
+            if (regCloses !== undefined) {
+                const v = regCloses == null || regCloses === '' ? null : String(regCloses).trim();
+                if (v != null && !Number.isFinite(withdrawEnd(v, tz))) return res.status(400).json({ error: 'Fecha y hora inválidas (cierre de inscripciones).', field: 'registration_closes' });
+                sets.push('registration_closes = ?'); params.push(v == null ? null : v.slice(0, 16));
             }
             // «Indicativo por defecto» (2.33.2): the country national phone numbers belong to.
             const phoneCountry = (req.body || {}).phone_country;
@@ -3564,7 +3585,7 @@ exports.init = async function (wordjs) {
 
     http.route('put', '/locations/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'locations', 'manage')) return;
-        const { name, responsible_name, responsible_phone, responsible_email, rotate_code, capacity, payment_methods, lodging_opens, lodging_permission, lodging_permission_until, lodging_tz } = req.body;
+        const { name, responsible_name, responsible_phone, responsible_email, rotate_code, capacity, payment_methods, lodging_opens, lodging_permission, lodging_permission_until, lodging_tz, registration_closes } = req.body;
         let { lodging_closes } = req.body;
         try {
             const loc = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [req.params.id]);
@@ -3619,6 +3640,12 @@ exports.init = async function (wordjs) {
                     return res.status(400).json({ error: `Con esas fechas la localidad nunca podría acomodar: la apertura (${fmtDeadline(win.opens)}) es posterior al cierre (${fmtDeadline(win.closes)}).` });
                 }
                 sets.push('lodging_opens = ?', 'lodging_closes = ?'); params.push(opens, closes);
+            }
+            // 2.36.20: its own «Cierre de inscripciones» ('' / null = the general one of the conference).
+            if (registration_closes !== undefined) {
+                const v = registration_closes == null || registration_closes === '' ? null : String(registration_closes).trim();
+                if (v != null && !Number.isFinite(withdrawEnd(v, lodgingZone(null)))) return res.status(400).json({ error: 'Fecha y hora inválidas (cierre de inscripciones).', field: 'registration_closes' });
+                sets.push('registration_closes = ?'); params.push(v == null ? null : v.slice(0, 16));
             }
             let newCode = null;
             if (rotate_code) { newCode = await genAccessCode(); sets.push('code = ?'); params.push(newCode); }
@@ -9062,8 +9089,11 @@ exports.init = async function (wordjs) {
 
             // `features.fee_payments` (2.18.0) tells a core portal that «Pagos de cuotas» exists here (an older
             // plugin sends no flag and the portal keeps its previous payment flow); `fees` = the badge counters.
-            const withdraw = withdrawWindow(await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
-            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, withdraw, conference_id: location.conference_id, conference_name: await conferenceNameOf(location.conference_id), capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) } });
+            const confDates = await db.get(`SELECT withdraw_until, registration_closes, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]);
+            const withdraw = withdrawWindow(confDates);
+            // 2.36.20: «Cierre de inscripciones» — the portal says it and stops offering «Registrar nuevo».
+            const registration = registrationWindow(confDates, location);
+            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, withdraw, registration, conference_id: location.conference_id, conference_name: await conferenceNameOf(location.conference_id), capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) } });
         } catch (e) { sendError(res, e); }
     });
 
@@ -9085,9 +9115,12 @@ exports.init = async function (wordjs) {
             lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes,
             welcome_sent_s, welcome_sent_by, welcome_sent_to, ...safe } = location;
         try {
-            const withdraw = withdrawWindow(await db.get(`SELECT withdraw_until, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
+            const confDates = await db.get(`SELECT withdraw_until, registration_closes, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]);
+            const withdraw = withdrawWindow(confDates);
+            // 2.36.20: «Cierre de inscripciones» — the portal says it and stops offering «Registrar nuevo».
+            const registration = registrationWindow(confDates, location);
             // 2.36.10: «Registrar nuevo» asks for the verbal authorization of the personal data while consent is on.
-            res.json({ ...safe, withdraw, consent_verbal_general: await consent.isEnabled(location.conference_id), conference_name: await conferenceNameOf(location.conference_id), inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
+            res.json({ ...safe, withdraw, registration, consent_verbal_general: await consent.isEnabled(location.conference_id), conference_name: await conferenceNameOf(location.conference_id), inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
         } catch (e) { sendError(res, e); }
     });
 
@@ -9244,9 +9277,16 @@ exports.init = async function (wordjs) {
         const conference_id = location.conference_id;
 
         try {
-            const conf = await db.get(`SELECT is_form_published, fee_default, date_end, phone_country FROM ${T.conferences} WHERE id = ?`, [conference_id]);
+            const conf = await db.get(`SELECT is_form_published, fee_default, date_end, phone_country, registration_closes, lodging_tz FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf || !conf.is_form_published) {
                 return res.status(403).json({ error: 'El formulario no está publicado.' });
+            }
+            // 2.36.20: «Cierre de inscripciones» (the locality's own date, else the general one) — after it, the portal
+            // registers nobody.
+            const regWin = registrationWindow(conf, location);
+            if (!regWin.open) {
+                const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(regWin.closes);
+                return res.status(403).json({ error: `Las inscripciones cerraron el ${m ? `${m[3]}/${m[2]}/${m[1]} a las ${m[4]}:${m[5]}` : regWin.closes}. Si necesitas inscribir a alguien, pídeselo a la administración.`, code: 'registration_closed' });
             }
             // Registration window: once the event's end date has passed, the public form closes.
             // (date_end is the gate by design — one calendar day of grace.)

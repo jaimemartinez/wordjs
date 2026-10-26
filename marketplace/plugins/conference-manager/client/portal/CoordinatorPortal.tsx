@@ -697,6 +697,10 @@ function LocationPortalContent() {
     const cancelledCount = inscriptions.filter((i) => isCancelled(i)).length;
     const activeCount = inscriptions.length - cancelledCount;
     const locationFull = isLocationFull(myLocation);
+    // 2.36.20: «Cierre de inscripciones» — the admin's date has passed: no new registrations from the portal.
+    const regWindow = (myLocation as any)?.registration;
+    const registrationClosed = !!(regWindow && regWindow.closes && regWindow.open === false);
+    const closedOn = (() => { const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec((regWindow && regWindow.closes) || ''); return m ? `${m[3]}/${m[2]}/${m[1]} a las ${m[4]}:${m[5]}` : ''; })();
     const methods = paymentMethodsOf(myLocation);
     // «Pagos de cuotas» only when the plugin has it (an older one keeps the bulk flow — version skew).
     const feesOn = hasFeePayments(myLocation);
@@ -857,8 +861,9 @@ function LocationPortalContent() {
                                     block
                                     className="sm:w-auto"
                                     onClick={() => setView('add')}
-                                    disabled={isLocationFull(myLocation)}
-                                    title={isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
+                                    disabled={isLocationFull(myLocation) || registrationClosed}
+                                    title={registrationClosed ? 'Las inscripciones están cerradas.' : isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
+                                    data-action="register-new"
                                 >
                                     Registrar Nuevo
                                 </Button>
@@ -878,6 +883,11 @@ function LocationPortalContent() {
                         )}
                     />
 
+                    {registrationClosed && (
+                        <Notice tone="rose" icon="fa-calendar-xmark" className="mx-4 sm:mx-6 mt-4" data-testid="registration-closed">
+                            <span>Las inscripciones cerraron{closedOn ? ` el ${closedOn}` : ''}. Ya no puedes registrar personas; si necesitas inscribir a alguien, pídeselo a la administración.</span>
+                        </Notice>
+                    )}
                     {view === 'list' && <WithdrawDeadlineNote window={(myLocation as any)?.withdraw} />}
                     {view === 'list' && consentOn && paperOpen && (
                         <PortalPaperConsent authHeaders={portalAuthHeaders} onChanged={loadInscriptions} onClose={() => setPaperOpen(false)} />
