@@ -44,6 +44,8 @@ interface Boot {
     verify?: (transportOptions: any) => Promise<any>;
     siteDomain?: string;
     smtpListen?: (handlers: any, opts: any) => Promise<any>;
+    dns?: Record<string, (name: string) => Promise<any>>;
+    interfaces?: Record<string, any[]>;
 }
 
 async function boot(cfg: Boot) {
@@ -65,6 +67,7 @@ async function boot(cfg: Boot) {
         if (spec === 'smtp-server') return { SMTPServer: FakeSMTPServer };
         if (spec === 'nodemailer') return nodemailer;
         if (spec === 'dns') return dnsDouble;
+        if (spec === 'os' && cfg.interfaces) return { ...require('os'), networkInterfaces: () => cfg.interfaces };
         if (spec.startsWith('.')) return require(path.resolve(PLUGIN_DIR, spec));
         return require(spec);
     };
@@ -93,7 +96,7 @@ async function boot(cfg: Boot) {
         adminMenu: { add() { /* not under test */ } },
         provideMail() { /* not under test */ },
         notify: Object.assign(async () => { /* not under test */ }, { registerTransport() { } }),
-        dns: { resolveMx: dnsBridge('MX'), resolveTxt: dnsBridge('TXT'), resolve4: dnsBridge('A'), resolve6: dnsBridge('AAAA'), resolve: dnsBridge('ANY') },
+        dns: { resolveMx: dnsBridge('MX'), resolveTxt: dnsBridge('TXT'), resolve4: dnsBridge('A'), resolve6: dnsBridge('AAAA'), resolve: dnsBridge('ANY'), ...(cfg.dns || {}) },
         ...(cfg.smtpListen ? { smtp: { listen: cfg.smtpListen } } : {}),
     };
     await plugin.init(bridge);
@@ -293,5 +296,62 @@ test('a relay configured by another process is used at the next delivery', async
         assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
         assert.strictEqual(r.body.delivered[0].via, 'relay');
         assert.strictEqual(b.relaySends.length, 1);
+    } finally { b.plugin.deactivate(); }
+});
+
+test('the DNS tab covers every public address mail leaves from, IPv4 and IPv6', async () => {
+    const V4 = '93.184.215.14';
+    const V6 = '2606:2800:21f:cb07::25';
+    const none = async () => { throw Object.assign(new Error('queryAaaa ENODATA'), { code: 'ENODATA' }); };
+    const answers: Record<string, string[]> = { 'mail.acme.example': [V4], 'acme.example': [V4] };
+    const b = await boot({
+        interfaces: {
+            eth0: [
+                { address: V4, family: 'IPv4', internal: false },
+                // Written in full: the check must compare it with DNS answers in their short form.
+                { address: '2606:2800:021f:cb07:0000:0000:0000:0025', family: 'IPv6', internal: false },
+                { address: 'fe80::1', family: 'IPv6', internal: false },
+            ],
+        },
+        dns: {
+            resolveMx: async () => [{ exchange: 'mail.acme.example', priority: 10 }],
+            resolveTxt: async (name: string) => (name === 'acme.example' ? [[`v=spf1 a mx ip4:${V4} ~all`]] : name === '_dmarc.acme.example' ? [['v=DMARC1; p=none']] : []),
+            resolve4: async (name: string) => answers[name] || [],
+            resolve6: none,
+            resolve: async (name: string) => answers[name] || [],
+        },
+    });
+    try {
+        const records = (await b.call('get', '/security/dns-records')).body.records;
+        assert.strictEqual(records.a.value, V4);
+        assert.strictEqual(records.aaaa.type, 'AAAA');
+        assert.strictEqual(records.aaaa.value, V6, 'detected, in its short form');
+        assert.ok(records.spf.value.includes(`ip4:${V4}`) && /ip6:2606:2800/.test(records.spf.value), records.spf.value);
+        assert.strictEqual(records.ptr.addresses.length, 2, 'a reverse record for each address; link-local is not one');
+
+        const check = (await b.call('get', '/security/dns-check')).body.results;
+        assert.strictEqual(check.aaaa.status, 'missing', 'the mail host has no AAAA yet');
+        const [v4, v6] = check.senders;
+        assert.deepStrictEqual({ host: v4.host, spf: v4.spf, helo: v4.helo }, { host: 'ok', spf: 'pass', helo: 'ok' });
+        assert.strictEqual(v6.family, 6);
+        assert.deepStrictEqual({ host: v6.host, spf: v6.spf, helo: v6.helo }, { host: 'missing', spf: 'softfail', helo: 'mismatch' },
+            'the IPv6 address is not covered: no AAAA, SPF does not name it, the HELO name does not point back');
+
+        answers['mail.acme.example'] = [V4];
+        const withV6 = await boot({
+            interfaces: { eth0: [{ address: V6, family: 'IPv6', internal: false }] },
+            dns: {
+                resolveMx: async () => [{ exchange: 'mail.acme.example', priority: 10 }],
+                resolveTxt: async (name: string) => (name === 'acme.example' ? [[`v=spf1 mx ip6:${V6} ~all`]] : []),
+                resolve4: async () => [],
+                resolve6: async (name: string) => (name === 'mail.acme.example' || name === 'acme.example' ? ['2606:2800:21f:cb07::25'] : []),
+                resolve: async () => [],
+            },
+        });
+        try {
+            const r = (await withV6.call('get', '/security/dns-check')).body.results;
+            assert.strictEqual(r.aaaa.status, 'ok');
+            assert.deepStrictEqual(r.senders.map((x: any) => [x.host, x.spf, x.helo]), [['ok', 'pass', 'ok']]);
+        } finally { withV6.plugin.deactivate(); }
     } finally { b.plugin.deactivate(); }
 });
