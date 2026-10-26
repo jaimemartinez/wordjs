@@ -761,7 +761,7 @@ export default function LodgingExplorer({
                         {otherHotelWhy ? blockText(tx, otherHotelWhy) : tx('explorer.drop.other.hotel', 'Soltar en otro hotel')}
                     </div>
                 ) : level > 1 && (
-                    <span className="hidden md:inline text-[10px] text-gray-400 font-bold">
+                    <span className="hidden sm:inline text-[10px] text-gray-400 font-bold">
                         {level === 3 ? tx('explorer.keys.room', '← → cambian de habitación · Esc vuelve atrás') : tx('explorer.keys.hotel', 'Esc vuelve a los hoteles')}
                     </span>
                 )}
