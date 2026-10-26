@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.10] - 2026-10-26
+
 ### Security
 - **Untrusted input, downloads and the updater, hardened.**
   - **URLs in shortcodes.** `escUrl` percent-encodes quotes, angle brackets and backticks in every scheme, and the
