@@ -991,7 +991,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                                 <i className={cx('fa-solid mt-0.5 text-lg', email.delivery_status === 'failed' ? 'fa-circle-exclamation text-red-500' : 'fa-rotate text-amber-500')}></i>
                                 <div className="min-w-0 flex-1">
                                     <p className={cx('text-sm font-semibold', email.delivery_status === 'failed' ? 'text-red-800' : 'text-amber-800')}>{email.delivery_status === 'failed' ? t('read.deliveryFailed') : t('read.deliveryRetry')}</p>
-                                    <p className="mt-1 break-words font-mono text-xs text-slate-600">{email.last_error || t('read.deliveryFailedTo', { to: email.to_address })}</p>
+                                    <p className="mt-1 wrap-anywhere font-mono text-xs text-slate-600">{email.last_error || t('read.deliveryFailedTo', { to: email.to_address })}</p>
                                 </div>
                                 <Button size="sm" variant={email.delivery_status === 'failed' ? 'danger' : 'secondary'} icon="fa-solid fa-paper-plane" onClick={() => retryDelivery(email)}>{t('read.retryNow')}</Button>
                             </div>

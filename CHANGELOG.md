@@ -40,6 +40,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     identity skips verification.
 
 ### Fixed
+- **mail-server 3.3.3: the queue fits a phone.** A delivery error with an address glued to a colon («name@gmail.com:
+  Direct delivery … Connection timeout») could not wrap, and widened *Email Center → Server → Queue* past the screen on a
+  phone. Such errors now wrap inside their card, in the queue and on a message in *Sent*, and the queue's buttons wrap
+  under the message when there is no room beside it.
+- **The inbound mail listener reports the server's IPv6 addresses too.** A mail plugin runs sandboxed and cannot
+  list the network interfaces, so it relies on the addresses WordJS reports with the listener status. Those were
+  IPv4 only. Now the global IPv6 addresses travel with them, so mail-server's DNS tab lists and checks the IPv6
+  address mail also leaves from. Link-local, private (ULA) and documentation addresses are left out.
 - **mail-server 3.3.2: direct delivery tries the other IP family when one cannot reach the recipient's server.**
   Some VPS providers filter or rate-limit outgoing port 25 on IPv4 while IPv6 still works, or the reverse. Each
   delivery waited out a connection timeout on every mail server of the recipient and then gave up with
