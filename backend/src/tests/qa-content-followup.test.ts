@@ -501,16 +501,28 @@ test('the automatic excerpt keeps a space between blocks (FALLOS 142)', () => {
 });
 
 test('Admin › Auditoría sets how long the audit log is kept, and only to a window the screen offers', async () => {
+    // The window has its own API: keeping the log for a SHORTER time re-authenticates (routes/audit.ts).
+    const putAudit = (body: any) => request(app).put(`${B}/audit/settings`).set(bearer('admin')).send(body);
     for (const ok of ['90', '180', '365', '730', '0']) {
-        assert.strictEqual((await putSettings({ audit_retention_days: ok })).status, 200, `${ok} is offered`);
+        assert.strictEqual((await putAudit({ retentionDays: ok, currentPassword: PASSWORD })).status, 200, `${ok} is offered`);
         assert.strictEqual(String(await require('../core/options').getOption('audit_retention_days')), ok);
     }
     for (const bad of ['30', '-1', 'forever', '365.5', '']) {
-        assert.strictEqual((await putSettings({ audit_retention_days: bad })).status, 400, `${JSON.stringify(bad)} is refused`);
+        assert.strictEqual((await putAudit({ retentionDays: bad, currentPassword: PASSWORD })).status, 400, `${JSON.stringify(bad)} is refused`);
     }
+    // Shortening it without the password is refused; keeping it longer needs none.
+    assert.strictEqual((await putAudit({ retentionDays: '365', currentPassword: PASSWORD })).status, 200);
+    assert.strictEqual((await putAudit({ retentionDays: '90' })).status, 403, 'a shorter window asks for the password');
+    assert.strictEqual(String(await require('../core/options').getOption('audit_retention_days')), '365');
+    assert.strictEqual((await putAudit({ retentionDays: '730' })).status, 200, 'a longer window does not');
+    assert.strictEqual((await putAudit({ retentionDays: '0' })).status, 200, 'and neither does keeping it for ever');
+    // The generic settings writers no longer change it.
+    assert.strictEqual((await request(app).put(`${B}/settings/audit_retention_days`).set(bearer('admin')).send({ value: '90' })).status, 400);
+    await putSettings({ audit_retention_days: '90' });
+    assert.strictEqual(String(await require('../core/options').getOption('audit_retention_days')), '0', 'the bulk save skips it');
     const all = await request(app).get(`${B}/settings/all`).set(bearer('admin'));
     assert.strictEqual(String(all.body.audit_retention_days), '0', 'the admin payload carries it back to the screen');
     const pub = await request(app).get(`${B}/settings`);
     assert.strictEqual(pub.body.audit_retention_days, undefined, 'never in the public settings');
-    await putSettings({ audit_retention_days: '365' });
+    await putAudit({ retentionDays: '365', currentPassword: PASSWORD });
 });

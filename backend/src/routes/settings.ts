@@ -150,12 +150,15 @@ const DEDICATED_WRITE_API = new Set([
     'site_chrome_header', 'site_chrome_footer', 'site_chrome_announcement',
     'template', 'stylesheet', 'active_theme_layout',
     'siteurl', 'home',
+    // Shortening how long the audit log is kept re-authenticates (routes/audit.ts PUT /audit/settings).
+    'audit_retention_days',
 ]);
 
 /** Where a key that refuses the generic writers is changed instead, for the 400 that names it. */
 function dedicatedApiFor(key: string): string {
     if (key.startsWith('site_chrome_')) return 'PUT /api/v1/chrome/:part';
     if (key === 'siteurl' || key === 'home') return 'PUT /api/v1/site-address/canonical (Settings → Site address)';
+    if (key === 'audit_retention_days') return 'PUT /api/v1/audit/settings (Admin → Audit)';
     return 'POST /api/v1/themes/:slug/activate';
 }
 

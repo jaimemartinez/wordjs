@@ -217,8 +217,15 @@ const AUDIT_ACTIONS = Object.freeze({
     EMAIL_TEMPLATE_RESET: 'email_template.reset',
     EMAIL_LAYOUT_UPDATE: 'email_layout.update',
 
+    // ── Admin → Site Health → Duplicate records (routes/database-integrity) ─────────────────────────
+    // One duplicated value was resolved: {rule, keptId, changedIds, fields, reauth} — ids only, never the
+    // logins, emails or slugs themselves.
+    DATABASE_DUPLICATES_RESOLVE: 'database.duplicates.resolve',
+
     // ── The log about the log ───────────────────────────────────────────────────────────────────────
-    AUDIT_PRUNE: 'audit.prune'
+    AUDIT_PRUNE: 'audit.prune',
+    // Admin → Audit settings changed (retention, external copy): {retentionDays, exportMode, reauth}.
+    AUDIT_SETTINGS_UPDATE: 'audit.settings.update'
 } as const);
 
 type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];
@@ -352,6 +359,15 @@ async function recordAudit(actorId: any, action: AuditAction, targetType: string
         // change its outcome.
         log.warn({ action, err: e }, `[audit] failed to record '${action}'`);
     }
+    // TAMPER EVIDENCE (core/audit-chain): the row gets its place in the hash chain once it is committed —
+    // after COMMIT inside a transaction (a rolled-back row is never sealed), right away otherwise. Never
+    // throws, and a failure only leaves the row pending for the next pass.
+    if (event) {
+        const seal = () => require('./audit-chain').sealPending();
+        let deferred = false;
+        try { deferred = require('../config/database').afterCommit(seal); } catch { /* bootstrapping */ }
+        if (!deferred) await seal();
+    }
     // The mutation happened whether or not its row could be written, so observers hear about it either
     // way. Inside a pinned transaction they run only after COMMIT (the same rule as hooks.doAction): an
     // outgoing webhook must never announce a write that is then rolled back.
@@ -459,6 +475,9 @@ function safeParse(s: any): any {
 const AUDIT_PRUNE_HOOK = 'wordjs_audit_prune';
 /** A year of history by default — long enough to investigate an incident nobody noticed for months. */
 const DEFAULT_AUDIT_RETENTION_DAYS = 365;
+/** The shortest window the prune ever uses, whatever is stored (the panel offers 90, 180, 365, 730 or 0). */
+const MIN_AUDIT_RETENTION_DAYS = 90;
+const AUDIT_RETENTION_CHOICES = [0, 90, 180, 365, 730];
 /** Rows removed per statement: bounded so a long-neglected table drains over several passes instead of
  *  one transaction that holds SQLite's global write lock. */
 const PRUNE_BATCH = 1000;
@@ -490,7 +509,17 @@ async function auditRetentionDays(): Promise<number> {
     const raw = await getOption('audit_retention_days', DEFAULT_AUDIT_RETENTION_DAYS);
     const n = Number(raw);
     if (!Number.isFinite(n) || n < 0) return DEFAULT_AUDIT_RETENTION_DAYS;
+    // A value written around the screen (a raw option write, an old import) can never make the prune
+    // erase recent evidence: anything between 0 and the floor counts as the floor.
+    if (n > 0 && n < MIN_AUDIT_RETENTION_DAYS) return MIN_AUDIT_RETENTION_DAYS;
     return Math.floor(n);
+}
+
+/** Does going from `fromDays` to `toDays` keep LESS history than before? (0 = for ever.) */
+function retentionShortens(fromDays: number, toDays: number): boolean {
+    if (toDays === 0) return false;
+    if (fromDays === 0) return true;
+    return toDays < fromDays;
 }
 
 /**
@@ -520,6 +549,12 @@ async function pruneAuditLog(
     const reference = typeof now === 'number' ? now : await databaseNowMs(Date.now());
     const cutoff = dbTimestamp(reference - days * 86400000);
 
+    // The prune keeps the hash chain verifiable (core/audit-chain): BEFORE it deletes a batch it records
+    // the hash of each removed row whose successor stays, so the gaps it leaves are accounted for and
+    // any other gap is not. Rows not sealed yet are sealed first: an unsealed row is never removed.
+    const chain = require('./audit-chain');
+    await chain.sealPending();
+
     let removed = 0;
     let cappedOut = false;
     for (;;) {
@@ -527,11 +562,9 @@ async function pruneAuditLog(
         if (room <= 0) { cappedOut = true; break; }
         if (Date.now() - startedAt > maxMs) { cappedOut = true; break; }
         const want = Math.min(batch, room);
-        const doomed = await dbAsync.all(
-            `SELECT id FROM audit_log WHERE created_at < ? ORDER BY id ASC LIMIT ?`,
-            [cutoff, want]
-        );
+        const doomed = await chain.prunableRows(cutoff, want);
         if (!doomed || doomed.length === 0) break;
+        if (!(await chain.recordRemoval(doomed))) { cappedOut = true; break; }
         const placeholders = doomed.map(() => '?').join(',');
         await dbAsync.run(`DELETE FROM audit_log WHERE id IN (${placeholders})`, doomed.map((r: any) => r.id));
         removed += doomed.length;
@@ -540,7 +573,7 @@ async function pruneAuditLog(
 
     // Stopping at a cap is not finishing: ask the table whether anything outside the window survived.
     if (cappedOut) {
-        const leftover = await dbAsync.all(`SELECT id FROM audit_log WHERE created_at < ? LIMIT 1`, [cutoff]);
+        const leftover = await chain.prunableRows(cutoff, 1);
         cappedOut = !!(leftover && leftover.length);
     }
 
@@ -564,8 +597,9 @@ async function runAuditRetention(): Promise<number> {
             log.info({ removed }, `⏰ audit: pruned ${removed} row(s) past the retention window`);
             // The prune is the ONE thing that removes evidence, so it leaves evidence of itself: an
             // operator reading a thin log must be able to tell "nothing happened" from "it was pruned".
+            const anchor = await require('./audit-chain').readAnchor();
             await recordAudit(null, AUDIT_ACTIONS.AUDIT_PRUNE, 'audit_log', '', {
-                removed, retentionDays: await auditRetentionDays()
+                removed, retentionDays: await auditRetentionDays(), throughSeq: anchor.seq
             });
         }
         if (pruneState.behind) {
@@ -584,6 +618,6 @@ module.exports = {
     recordAudit, listAudit, listAuditForTarget, sanitizeDetail, onAuditRecorded,
     AUDIT_ACTIONS,
     pruneAuditLog, runAuditRetention, auditRetentionState, auditRetentionDays,
-    AUDIT_PRUNE_HOOK, DEFAULT_AUDIT_RETENTION_DAYS,
+    AUDIT_PRUNE_HOOK, DEFAULT_AUDIT_RETENTION_DAYS, MIN_AUDIT_RETENTION_DAYS, AUDIT_RETENTION_CHOICES, retentionShortens,
     MAX_DETAIL_STRING, MAX_DETAIL_ARRAY, MAX_DETAIL_KEYS
 };

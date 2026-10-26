@@ -78,6 +78,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     hooks: '/hooks',
     webhooks: '/webhooks',
     audit: '/audit',
+    databaseIntegrity: '/database-integrity',
     agents: '/agents',
     mcp: '/mcp',
     ai: '/ai',
@@ -215,6 +216,8 @@ router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
 router.use('/audit', require('./audit'));
+// Admin → Site Health → Duplicate records: the unique rules the database enforces, and resolving what blocks them.
+router.use('/database-integrity', require('./database-integrity'));
 // AI agents: the connections an administrator grants (routes/agents.ts) and the MCP endpoint they use
 // (routes/mcp.ts). See core/agent-capabilities for the request/grant/narrow model.
 router.use('/agents', require('./agents'));

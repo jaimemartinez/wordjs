@@ -113,6 +113,10 @@ const PROTECTED_OPTION_NAMES = new Set([
     // API-token enforcement on by default (core/mfa). Written by a plugin or carried in by a site import it
     // would flip that default on a site that was upgraded, not installed.
     'mfa_policy_fresh_install',
+    // The audit log's retention, its hash chain's anchor and its external copy (core/audit, audit-chain,
+    // audit-export): a plugin rewriting them could shorten the log, break its verification or redirect
+    // the copy that keeps it honest. Written only through PUT /audit/settings, which re-authenticates.
+    'audit_retention_days', 'audit_chain_anchor', 'audit_export', 'audit_export_cursor',
     // 'author_legacy_slugs' turns on resolving retired, login-derived author slugs on the public site
     // (core/author-aliases) — an administrator's informed choice, never a plugin's.
     'author_legacy_slugs',
