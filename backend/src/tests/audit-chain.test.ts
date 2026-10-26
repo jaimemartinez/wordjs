@@ -298,7 +298,7 @@ describe('Audit log hash chain', () => {
             const all = tcpLines.join('');
             const m = /^(\d+) (<109>1 .*)$/s.exec(all);
             assert.ok(m, `octet counted: ${all.slice(0, 120)}`);
-            assert.ok(/ wordjs - audit - \{/.test(m[2]));
+            assert.ok(/ wordjs - audit - \{/.test((m as RegExpExecArray)[2]));
             assert.ok(all.includes('"targetId":"tcp-1"'));
 
             const udpCfg = { mode: 'syslog', host: '127.0.0.1', port: udp.address().port, transport: 'udp', allowPrivate: true };
@@ -308,9 +308,15 @@ describe('Audit log hash chain', () => {
             for (let i = 0; i < 20 && !udpMsgs.length; i++) await new Promise((r) => setTimeout(r, 25));
             assert.ok(udpMsgs.some((x) => x.startsWith('<109>1 ') && x.includes('"targetId":"udp-1"')), JSON.stringify(udpMsgs));
 
+            // The test goes where the SAVED copy goes, never to an address in the request.
+            const ok = await post('/audit/export/test', { export: { mode: 'webhook', url: 'https://elsewhere.example/x' } });
+            assert.strictEqual(ok.body.ok, true, JSON.stringify(ok.body));
+            for (let i = 0; i < 20 && !udpMsgs.some((x) => x.includes('audit.export.test')); i++) await new Promise((r) => setTimeout(r, 25));
+            assert.ok(udpMsgs.some((x) => x.includes('"action":"audit.export.test"')), 'the test event reached the saved receiver');
             // Without the private-network tick, a private receiver is refused.
-            const t = await post('/audit/export/test', { export: { ...tcpCfg, allowPrivate: false } });
-            assert.strictEqual(t.body.ok, false);
+            assert.strictEqual((await put('/audit/settings', { export: { ...tcpCfg, allowPrivate: false }, currentPassword: PASSWORD })).status, 200);
+            const t = await post('/audit/export/test');
+            assert.strictEqual(t.body.ok, false, 'a private address without the tick is not contacted');
         } finally {
             tcp.close();
             udp.close();

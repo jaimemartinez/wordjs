@@ -261,10 +261,10 @@ function scheduleRetry(): void {
     retryDelay = Math.min(retryDelay * 2, 10 * 60_000);
 }
 
-/** Send one test event to a config (saved or not), without touching the cursor. */
-async function sendTest(c: ExportConfig, secret?: string): Promise<void> {
+/** Send one test event through a saved config, without touching the cursor. */
+async function sendTest(c: ExportConfig): Promise<void> {
     const ev = { seq: 0, id: 0, createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '), actorId: null, action: 'audit.export.test', targetType: 'audit_log', targetId: '', detail: {}, prevHash: '', rowHash: '' };
-    if (c.mode === 'webhook') return sendWebhook(c, [ev], secret !== undefined ? secret : await getSecret());
+    if (c.mode === 'webhook') return sendWebhook(c, [ev], await getSecret());
     if (c.mode === 'syslog') return sendSyslog(c, [ev]);
     throw new Error('The external copy is off.');
 }

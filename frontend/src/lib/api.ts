@@ -2076,8 +2076,8 @@ export const auditApi = {
     /** Shortening retention or changing the copy needs currentPassword (+ mfaCode with 2FA). */
     saveSettings: (body: { retentionDays?: number; export?: AuditExportConfig & { secret?: string }; currentPassword?: string; mfaCode?: string }) =>
         apiPut<AuditSettings>("/audit/settings", body),
-    testExport: (exportConfig?: AuditExportConfig & { secret?: string }) =>
-        apiPost<{ ok: boolean; error?: string }>("/audit/export/test", exportConfig ? { export: exportConfig } : {}),
+    /** One test event through the SAVED copy (the backend never takes an address from the request). */
+    testExport: () => apiPost<{ ok: boolean; error?: string }>("/audit/export/test", {}),
     flushExport: () => apiPost<{ delivered: number; export: AuditExportStatus }>("/audit/export/flush", {}),
 };
 

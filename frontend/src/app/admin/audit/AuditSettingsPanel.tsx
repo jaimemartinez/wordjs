@@ -253,7 +253,7 @@ export default function AuditSettingsPanel() {
         if (!draft) return;
         setSaving("test");
         try {
-            const r = await auditApi.testExport({ ...draft, ...(secret ? { secret } : {}) });
+            const r = await auditApi.testExport();
             addToast(r.ok ? t("auditx.testOk") : fill(t("auditx.testFailed"), { error: r.error || "" }), r.ok ? "success" : "error");
         } catch (e: any) {
             addToast(fill(t("auditx.testFailed"), { error: e?.message || "" }), "error");
@@ -391,7 +391,7 @@ export default function AuditSettingsPanel() {
                     {dirty && <div className="mt-4">{passwordFields}</div>}
                     <div className="flex flex-wrap gap-2 mt-4">
                         <Button size="sm" onClick={saveExport} disabled={!dirty} pending={saving === "export"} icon="fa-floppy-disk">{t("auditx.save")}</Button>
-                        {draft.mode !== "off" && <Button size="sm" variant="secondary" onClick={testExport} pending={saving === "test"} icon="fa-paper-plane">{t("auditx.test")}</Button>}
+                        {ex.config.mode !== "off" && !dirty && <Button size="sm" variant="secondary" onClick={testExport} pending={saving === "test"} icon="fa-paper-plane">{t("auditx.test")}</Button>}
                     </div>
                 </Card>
             )}

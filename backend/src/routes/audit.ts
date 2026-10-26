@@ -177,22 +177,24 @@ router.put('/settings', authenticate, isAdmin, asyncHandler(async (req: Request,
  * @swagger
  * /audit/export/test:
  *   post:
- *     summary: Send one test event to an external copy configuration (admin only)
- *     description: Uses the configuration in the body (not saved) or, without one, the saved configuration. The delivery position is not moved.
+ *     summary: Send one test event through the SAVED external copy (admin only)
+ *     description: Uses the configuration saved with PUT /audit/settings — never an address from the request — and does not move the delivery position.
  *     tags: [Audit]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: "{ ok: true } or { ok: false, error }"
+ *       400:
+ *         description: The external copy is off (rest_invalid_param)
  */
-router.post('/export/test', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const b = req.body || {};
-    const c = b.export && typeof b.export === 'object' ? auditExport.parseConfig(b.export) : await auditExport.getConfig();
-    const problem = c.mode === 'off' ? 'The external copy is off.' : auditExport.configProblem(c);
-    if (problem) return invalid(res, problem, 'export');
+router.post('/export/test', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
+    // Only where an administrator already pointed the copy (with the password): a test that took the
+    // address from the request would be a way to make the server connect anywhere without re-authenticating.
+    const c = await auditExport.getConfig();
+    if (c.mode === 'off') return invalid(res, 'The external copy is off.', 'export');
     try {
-        await auditExport.sendTest(c, b.export && typeof b.export.secret === 'string' ? b.export.secret : undefined);
+        await auditExport.sendTest(c);
         res.json({ ok: true });
     } catch (e: any) {
         res.json({ ok: false, error: String((e && e.message) || e) });
