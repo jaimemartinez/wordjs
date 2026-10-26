@@ -723,7 +723,7 @@ Base path: `/api/v1/hooks` (`backend/src/routes/hooks.ts`). Both routes are `aut
 | Method | Endpoint   | Auth  | Description                                              |
 | :----- | :--------- | :---- | :-------------------------------------------------------- |
 | `GET`  | `/`        | Admin | Every registered action/filter with its callbacks         |
-| `GET`  | `/stream`  | Admin | SSE stream of hook activity (`text/event-stream`)         |
+| `GET`  | `/stream`  | Admin, interactive session | SSE stream of hook activity (`text/event-stream`). An API token is refused (`403 rest_token_management_forbidden`); at most 3 open streams per user and 20 per process (`429 rest_hook_stream_limit`) |
 
 ### 6.19 Notifications 🔔
 Base path: `/api/v1/notifications` (`backend/src/routes/notifications.ts`). All routes require a session; the single-item mutators are **owner-scoped** (a uuid is not a capability), so a caller can only touch their own rows — plus broadcasts (`user_id = 0`), which any user may dismiss.

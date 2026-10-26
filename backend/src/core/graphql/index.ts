@@ -61,6 +61,8 @@ export function limitOptions(): LimitOptions & { maxTokens: number } {
         maxCost: g.maxCost || 1000,
         maxTokens: g.maxTokens || 5000,
         maxMutations: g.maxMutations || 10,
+        maxFields: g.maxFields || 1000,
+        maxAliases: g.maxAliases || 50,
         maxPageSize: MAX_PAGE_SIZE,
     };
 }

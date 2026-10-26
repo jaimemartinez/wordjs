@@ -19,7 +19,10 @@
  *
  * WHAT IT DOES NOT RE-RUN. The app-level middleware in front of the API router (host gate, CORS, CSRF,
  * the install funnel, the MFA compliance gate, the API rate limiter) already ran ONCE for the GraphQL
- * request itself, under the same identity; the sub-requests only re-enter the router.
+ * request itself, under the same identity; the sub-requests only re-enter the router. The limiter is the
+ * exception in one respect: it counted the GraphQL request once, so every sub-request after the first is
+ * charged to the same bucket here (chargeSubRequest) — a query costs the API budget what the REST calls it
+ * stands for would have cost.
  *
  * WRITES (mutations) use the same door: `restWrite` dispatches POST/PUT/PATCH/DELETE with a JSON body, or a
  * real multipart body (a GraphQL multipart upload re-streamed to POST /media), so multer, the route's
@@ -202,14 +205,44 @@ function multipartBody(file: DispatchFile, fields: Record<string, string | undef
     return { boundary, body: Buffer.concat(parts) };
 }
 
-function routerDispatch(router: any, mountPrefix: string, req: Request, method: 'GET' | WriteMethod, path: string, opts: WriteOptions): Promise<RestResult> {
+const RATE_LIMITED = { code: 'rest_rate_limited', message: 'Too many requests, please try again later.', data: { status: 429 } };
+
+/** Sub-requests dispatched so far for each incoming request, and the requests that are not charged. */
+const dispatchedFor = new WeakMap<object, number>();
+const unchargedRequests = new WeakSet<object>();
+
+/**
+ * Stop (or resume) charging `req`'s sub-requests to the API limiter. A subscription stream is charged
+ * while it opens (the entries it names, the events it replays) and not for the live events that follow:
+ * those are the feed's work, one read per event, whatever the subscriber sent.
+ */
+export function setDispatchCharged(req: Request, charged: boolean): void {
+    if (charged) unchargedRequests.delete(req as object);
+    else unchargedRequests.add(req as object);
+}
+
+/**
+ * The API limiter counted the incoming request once at its mount; each REST sub-request after the first
+ * is a REST request it did not see, so it is counted now (core/limiter-charge). Past the limit the
+ * sub-request is answered 429 like a direct REST call, and the field it serves resolves to that error.
+ */
+async function chargeSubRequest(req: Request): Promise<boolean> {
+    const key = req as object;
+    const n = (dispatchedFor.get(key) || 0) + 1;
+    dispatchedFor.set(key, n);
+    if (n === 1 || unchargedRequests.has(key)) return true;
+    return require('../limiter-charge').chargeLimiter('api', req, 1);
+}
+
+async function routerDispatch(router: any, mountPrefix: string, req: Request, method: 'GET' | WriteMethod, path: string, opts: WriteOptions): Promise<RestResult> {
     const query = opts.query;
     // Callers interpolate only integers and encodeURIComponent()-ed strings, which can contain neither `/`
     // nor `?`; a literal dot segment is the one thing that could still re-aim the path, so refuse it.
     if (!path.startsWith('/') || path.includes('?') || path.split('/').some(seg => seg === '.' || seg === '..')) {
         // Answer what the router answers for a path it does not serve, so `slug: ".."` resolves to null.
-        return Promise.resolve({ status: 404, body: NO_ROUTE, headers: {} });
+        return { status: 404, body: NO_ROUTE, headers: {} };
     }
+    if (!(await chargeSubRequest(req))) return { status: 429, body: RATE_LIMITED, headers: {} };
     const url = buildUrl(path, query);
     const queryObject: Record<string, string> = {};
     for (const [k, v] of new URLSearchParams(url.split('?')[1] || '')) queryObject[k] = v;

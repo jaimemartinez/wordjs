@@ -155,6 +155,13 @@ The file is re-streamed to `POST /media`, so multer's size limit, the type allow
 SVG rules, private uploads (`visibility: PRIVATE`), the site's storage quota and the upload rate limiter all
 apply as for a direct upload. One file part per mapped variable; an `Upload` cannot be written inline.
 
+Before the body is read, the request passes `POST /media`'s own authentication and `upload_files` check
+(an anonymous caller gets `401 rest_not_logged_in`, a caller without the capability `403 rest_forbidden`, a
+token without media write scope the REST scope error). Each file may be as large as the site's upload limit
+(Settings → Media → «Maximum upload size»), and all the files of one request together as large as that same
+limit (`413 rest_upload_too_large`); send larger batches as several requests. Every file after the first
+counts once more against the upload rate limiter.
+
 ## Subscriptions: GraphQL over Server-Sent Events
 
 ```graphql
@@ -205,9 +212,12 @@ fresh, never cached — so the subscriber sees exactly what REST would show it a
   signed-out or expired session closes it with an error frame.
 
 **Resuming.** Every frame carries its cursor as the SSE `id`. A client that reconnects with
-`Last-Event-ID: <cursor>` receives what was committed after it (up to 500 events), each authorized as above.
-A stream ends after an hour; reconnect with the last cursor. Streams are capped per process and per caller
-(see the limits table), answered `429 graphql_stream_limit` beyond.
+`Last-Event-ID: <cursor>` receives what was committed after it (up to 500 events, 50 for a stream opened
+without a credential), each authorized as above. A stream ends after an hour; reconnect with the last
+cursor. Streams are capped per process and per caller — a signed-in user, else the client address (an IPv6
+client is its /64) — see the limits table, answered `429 graphql_stream_limit` beyond. The reads a stream
+makes while it opens (one per entry named in `ids:`, one per replayed event) count against the API rate
+limiter like any GraphQL read; the live events after it do not.
 
 `backend/src/tests/graphql-subscriptions.test.ts` drives real streams over a socket: anonymous vs author
 visibility, `DELETED` on trash/unpublish, a revoked token closing its stream, held comments, the transport
@@ -288,16 +298,29 @@ behind it). `after` takes an opaque cursor from a previous page; pass `pageInfo.
 | Max parser tokens     | 5000    | `WORDJS_GRAPHQL_MAX_TOKENS` (100–100000)                       |
 | Max page size         | 100     | fixed (the REST page cap)                                       |
 | Max mutations / document | 10   | `WORDJS_GRAPHQL_MAX_MUTATIONS` (1–100)                          |
+| Max selected fields / operation | 1000 (fragments expanded) | `WORDJS_GRAPHQL_MAX_FIELDS` (50–100000)      |
+| Max aliased fields / selection set | 50 | `WORDJS_GRAPHQL_MAX_ALIASES` (1–10000)                     |
+| Max response size     | 16 MiB  | `WORDJS_GRAPHQL_MAX_RESPONSE_BYTES` (64 KiB–512 MiB)            |
 | Open subscription streams | 500 per process, 5 per caller | `WORDJS_GRAPHQL_MAX_STREAMS`, `WORDJS_GRAPHQL_MAX_STREAMS_PER_CLIENT` |
 | Introspection         | on in development, **off in production** | `graphql_introspection` setting (`"1"` / `"0"`, admin-only, `PUT /api/v1/settings`) |
-| Rate limit            | the global API limiter (`WORDJS_API_RATELIMIT_MAX` / `_WINDOW_MS`) | — |
+| Rate limit            | the global API limiter (`WORDJS_API_RATELIMIT_MAX` / `_WINDOW_MS`), charged per REST read | — |
 
-Depth and cost are checked at **validation**, before any resolver (or REST sub-request) runs, and are
-measured with fragments expanded. The cost model (`backend/src/core/graphql/limits.ts`): a field that
-returns an object costs 1, a scalar costs 0, a field backed by a REST read costs 5 more, and a paginated
-field multiplies its subtree by its `first` (the default when absent, the maximum when it is a variable).
-Aliases are counted one by one. A refusal is an error with `extensions.code` `GRAPHQL_DEPTH_LIMIT` or
-`GRAPHQL_COST_LIMIT` and the measured value.
+Depth, cost, fields and aliases are checked at **validation**, before any resolver (or REST sub-request)
+runs, and are measured with fragments expanded. The cost model (`backend/src/core/graphql/limits.ts`): a
+field that returns an object costs 1, a scalar costs 0.1, a field backed by a REST read costs 5 more, and a
+paginated field multiplies its subtree — leaves included — by its `first` (the default when absent, the
+maximum when it is a variable). Aliases are counted one by one. An operation may select at most 1000 fields
+once its fragments are expanded, and one selection set may hold at most 50 aliased fields, counting the
+fragments spread into it. A refusal is an error with `extensions.code` `GRAPHQL_DEPTH_LIMIT`,
+`GRAPHQL_COST_LIMIT`, `GRAPHQL_FIELD_LIMIT` or `GRAPHQL_ALIAS_LIMIT` and the measured value.
+
+A result is measured before it is serialized: one larger than the response cap is answered with a single
+`GRAPHQL_RESPONSE_TOO_LARGE` error and no data (a subscription event that large is replaced by that error).
+Ask for fewer fields or a smaller page.
+
+The API rate limiter counts the GraphQL request once, and each REST read after the first that the query
+dispatches counts once more, so a query costs the budget what the REST calls behind it would. Past the
+limit the remaining fields resolve to the REST `429` (`rest_rate_limited`).
 
 Mutations count too: a mutation field costs 20 more than the same selection as a read (on top of the REST
 read cost), and a document may hold at most **10** mutation fields (`WORDJS_GRAPHQL_MAX_MUTATIONS`, 1–100),
