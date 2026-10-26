@@ -21,6 +21,7 @@ import { FaPlug, FaCheck, FaExclamationTriangle, FaSlidersH, FaShieldAlt, FaBan,
 import { PageHeader, Button, Checkbox, EmptyState, FileButton, IconButton, Input, SegmentedControl, UnstyledButton } from "@/components/ui";
 import FreedServicesNotice from "./FreedServicesNotice";
 import MarketplaceTab from "./MarketplaceTab";
+import ExistingDataDialog, { existingDataFrom, type ExistingDataChoice, type ExistingDataPrompt } from "./ExistingDataDialog";
 
 // ---------------------------------------------------------------------------
 // Small presentational helpers (kept in-file to avoid touching shared components)
@@ -265,6 +266,10 @@ export default function PluginsPage() {
     // (e.g. Postfix on 25). Set → modal explaining the PERMANENT disable, admin confirms or cancels.
     const [portConflictPrompt, setPortConflictPrompt] = useState<{ plugin: Plugin; conflict: PluginPortConflict } | null>(null);
     const [freeingPort, setFreeingPort] = useState(false);
+    // The zip's slug has data a previous uninstall kept (409 existing_plugin_data): the admin chooses
+    // to keep it or start clean, and the same zip is uploaded again with that choice.
+    const [existingDataPrompt, setExistingDataPrompt] = useState<(ExistingDataPrompt & { file: File }) | null>(null);
+    const [existingDataPending, setExistingDataPending] = useState<ExistingDataChoice | null>(null);
     const [pluginToDelete, setPluginToDelete] = useState<Plugin | null>(null);
     const [pluginToActivate, setPluginToActivate] = useState<Plugin | null>(null);
     const [password, setPassword] = useState("");
@@ -703,6 +708,33 @@ export default function PluginsPage() {
         }
     };
 
+    // Upload one zip. `existingData` is the admin's answer to a 409 existing_plugin_data (keep the data a
+    // previous uninstall left, or discard it); the first attempt sends none, so the backend asks.
+    const uploadZip = async (file: File, existingData?: ExistingDataChoice) => {
+        const formData = new FormData();
+        formData.append('plugin', file);
+        if (existingData) formData.append('existingData', existingData);
+
+        try {
+            await pluginsApi.upload(formData);
+            addToast(t('plugins.upload.success'), "success");
+            loadPlugins();
+            refreshMenus();
+        } catch (error: any) {
+            const leftovers = existingDataFrom(error);
+            // 409 plugin_exists: the zip is a version of an installed plugin. Offer the in-place update
+            // (POST /plugins/:slug/update) instead of the old dead end ("deactivate", then "uninstall").
+            if (error?.status === 409 && error?.code === 'plugin_exists') {
+                await offerPluginUpdate(file, error);
+            } else if (leftovers && !existingData) {
+                setExistingDataPrompt({ ...leftovers, file });
+            } else {
+                console.error("Upload failed:", error);
+                addToast(t('plugins.upload.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error");
+            }
+        }
+    };
+
     const handleUpload = async (files: File[]) => {
         const file = files[0];
         if (!file) return;
@@ -713,24 +745,22 @@ export default function PluginsPage() {
         }
 
         setUploading(true);
-        const formData = new FormData();
-        formData.append('plugin', file);
-
         try {
-            await pluginsApi.upload(formData);
-            addToast(t('plugins.upload.success'), "success");
-            loadPlugins();
-            refreshMenus();
-        } catch (error: any) {
-            // 409 plugin_exists: the zip is a version of an installed plugin. Offer the in-place update
-            // (POST /plugins/:slug/update) instead of the old dead end ("deactivate", then "uninstall").
-            if (error?.status === 409 && error?.code === 'plugin_exists') {
-                await offerPluginUpdate(file, error);
-            } else {
-                console.error("Upload failed:", error);
-                addToast(t('plugins.upload.failed') + ": " + (error.message || t('plugins.broken.unknownError')), "error");
-            }
+            await uploadZip(file);
         } finally {
+            setUploading(false);
+        }
+    };
+
+    const chooseExistingData = async (choice: ExistingDataChoice) => {
+        if (!existingDataPrompt || existingDataPending) return;
+        setExistingDataPending(choice);
+        setUploading(true);
+        try {
+            await uploadZip(existingDataPrompt.file, choice);
+        } finally {
+            setExistingDataPending(null);
+            setExistingDataPrompt(null);
             setUploading(false);
         }
     };
@@ -820,6 +850,16 @@ export default function PluginsPage() {
                         </div>
                     </div>
                 </DialogLayer>
+            )}
+
+            {existingDataPrompt && (
+                <ExistingDataDialog
+                    prompt={existingDataPrompt}
+                    pending={existingDataPending}
+                    onChoose={chooseExistingData}
+                    onCancel={() => setExistingDataPrompt(null)}
+                    t={t}
+                />
             )}
 
             {/* Companion-theme installed: offer the optional one-click switch (option B). */}

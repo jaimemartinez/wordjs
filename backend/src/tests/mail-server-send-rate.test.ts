@@ -222,10 +222,10 @@ describe('the general queue respects the per-minute cap', () => {
         try {
             let s = await call(b, 'post /settings', { mail_queue_per_minute: '2' });
             assert.strictEqual(s.status, 200, JSON.stringify(s.body));
-            assert.strictEqual(b.options.mail_queue_per_minute, '2');
+            assert.strictEqual(b.options.mail_server_mail_queue_per_minute, '2');
             assert.strictEqual((await call(b, 'get /settings')).body.mail_queue_per_minute, '2');
             s = await call(b, 'post /settings', { mail_queue_per_minute: '-4' });
-            assert.strictEqual(b.options.mail_queue_per_minute, '0', 'an invalid value is stored as no cap');
+            assert.strictEqual(b.options.mail_server_mail_queue_per_minute, '0', 'an invalid value is stored as no cap');
             await call(b, 'post /settings', { mail_queue_per_minute: '2' });
 
             for (let i = 1; i <= 7; i++) await b.provider(siteMail(i));

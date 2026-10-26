@@ -7,7 +7,7 @@
  * integration pass against the REAL ../core/theme-derive and self-skips until it lands.
  */
 
-const { describe, it, after } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
@@ -695,5 +695,54 @@ describe('compileTheme (declarative theme compiler)', () => {
         const r = compile(slug, { derive: STUB_DERIVE });
         assert.ok(r.stats.errors > 0, JSON.stringify(r.diagnostics));
         assert.match(JSON.stringify(r.diagnostics), /rowz/);
+    });
+});
+
+// A declaration value reaches every visitor's browser: each way a value could name an address or a
+// function the validator did not read the way the browser does is refused.
+describe('compileTheme: values are read the way the browser reads them', () => {
+    // The suite above removes the fixture root when it ends; this one brings its own.
+    before(() => {
+        fs.mkdirSync(THEMES_DIR, { recursive: true });
+        fs.writeFileSync(MANIFEST_PATH, JSON.stringify(MANIFEST, null, 2));
+    });
+    after(() => { try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const one = (decl: any) => { const slug = writeTheme({ styles: { card: decl } }); return { slug, r: compile(slug) }; };
+    const refused = (r: any) => r.stats.errors > 0 && !/evil|attacker/.test(r.css);
+
+    it('a CSS escape is refused, so an escaped function name cannot hide url()', () => {
+        const { r } = one({ 'background-image': String.raw`\75 rl("https://attacker.example/evil.png"), linear-gradient(var(--wjs-color-primary), white)` });
+        assert.ok(refused(r), JSON.stringify(r.diagnostics));
+        assert.strictEqual(errsOf(r, 'VALUE_INVALID').length, 1);
+    });
+
+    it('next to a token reference only allowlisted functions pass (the property matcher is skipped there)', () => {
+        const bad = one({ 'background-image': 'image-set(url(https://attacker.example/evil.png) 1x), var(--wjs-color-primary)' });
+        assert.ok(refused(bad.r), JSON.stringify(bad.r.diagnostics));
+        const bad2 = one({ 'background': 'var(--wjs-color-primary) element(#evil)' });
+        assert.ok(refused(bad2.r), JSON.stringify(bad2.r.diagnostics));
+        const ok = one({ color: 'color-mix(in srgb, var(--wjs-color-primary) 80%, white)' });
+        assert.strictEqual(ok.r.stats.errors, 0, JSON.stringify(ok.r.diagnostics));
+    });
+
+    it('image-set() / cross-fade() with a bare string address is refused', () => {
+        for (const v of ['image-set("https://attacker.example/evil.png" 1x)', 'cross-fade("https://attacker.example/evil.png", url(/themes/x/a.png) 50%)']) {
+            const { r } = one({ 'background-image': v });
+            assert.ok(refused(r), `${v}: ${JSON.stringify(r.diagnostics)}`);
+        }
+    });
+
+    it('percent-encoded dot segments cannot climb out of the theme directory', () => {
+        for (const tail of ['%2e%2e/OTRO/evil.png', '%2E%2e/%2e%2e/uploads/evil.png', 'a/%2f/evil.png']) {
+            const slug = writeTheme({ styles: { card: { 'background-image': 'url(/themes/PLACEHOLDER/x)' } } });
+            fs.writeFileSync(path.join(THEMES_DIR, slug, 'theme.json'),
+                JSON.stringify({ name: slug, generator: 'wordjs', styles: { card: { 'background-image': `url(/themes/${slug}/${tail})` } } }));
+            const r = compile(slug);
+            assert.strictEqual(errsOf(r, 'URL_FORBIDDEN').length, 1, `${tail}: ${JSON.stringify(r.diagnostics)}`);
+        }
+        const slug = writeTheme({ styles: { card: { 'background-image': 'url(/themes/PLACEHOLDER/x)' } } });
+        fs.writeFileSync(path.join(THEMES_DIR, slug, 'theme.json'),
+            JSON.stringify({ name: slug, generator: 'wordjs', styles: { card: { 'background-image': `url(/themes/${slug}/img/bg%20one.png)` } } }));
+        assert.strictEqual(compile(slug).stats.errors, 0, 'an ordinary encoded space in an own asset still works');
     });
 });

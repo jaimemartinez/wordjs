@@ -98,3 +98,55 @@ async function cleanup(driver: any) {
     for (const tbl of [OWN, OTHER, CORE]) { try { await driver.exec(`DROP TABLE IF EXISTS "${tbl}"`); } catch { /* */ } }
     try { await driver.close(); } catch { /* */ }
 }
+
+// A plugin's DDL runs AS its user (plugin-db-isolation runDdl), granted beforehand exactly the objects the SQL
+// guard proved it owns: its own CREATE/ALTER/INDEX/DROP work, while a view over a table it was not granted is
+// refused by MySQL itself — and a view it does create carries the plugin user, not the admin, as DEFINER.
+test('plugin DDL as the MySQL user: own objects yes, a view over a core table no', async (t: any) => {
+    const DDL_USER = 'wjp_isotest_ddl';
+    const DDL_PW = crypto.randomBytes(16).toString('hex');
+    const NEW = 'wjp_isotest_ddl_new';
+    const VIEW = 'wjp_isotest_ddl_v';
+    const SECRET = 'iso_core_ddl_secrets';
+    let driver: any;
+    try { driver = require('../drivers/mysql'); } catch (e: any) { return skipOrFail(t, `mysql2 driver not loadable: ${e && e.message}`); }
+    driver.config = {
+        host: process.env.MYSQL_HOST || '127.0.0.1',
+        port: Number(process.env.MYSQL_PORT) || 3306,
+        user: process.env.MYSQL_USER || 'root',
+        password: process.env.MYSQL_PASSWORD ?? 'password',
+        name: process.env.MYSQL_DB || 'wordjs',
+    };
+    try { await withTimeout(driver.connect(), 5000, 'mysql connect'); } catch (e: any) { return skipOrFail(t, `no reachable MySQL: ${e && e.message}`); }
+    const drop = async () => {
+        try { await driver.exec(`DROP VIEW IF EXISTS "${VIEW}"`); } catch { /* */ }
+        for (const tbl of [NEW, SECRET]) { try { await driver.exec(`DROP TABLE IF EXISTS "${tbl}"`); } catch { /* */ } }
+        try { await driver.dropPluginUser(DDL_USER); } catch { /* */ }
+    };
+    await drop();
+    await driver.exec(`CREATE TABLE "${SECRET}" (id INTEGER PRIMARY KEY AUTOINCREMENT, secret TEXT)`);
+    try {
+        await driver.ensurePluginUser(DDL_USER, DDL_PW);
+        await driver.grantPluginDdlToUser(DDL_USER, [NEW, VIEW]);
+    } catch (e: any) {
+        await drop();
+        try { await driver.close(); } catch { /* */ }
+        return t.skip(`user provisioning needs CREATE USER + GRANT OPTION (graceful fallback to text-guard): ${e && e.message}`);
+    }
+    try {
+        await driver.runDdlAsUser(DDL_USER, DDL_PW, `CREATE TABLE IF NOT EXISTS "${NEW}" (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)`);
+        await driver.runDdlAsUser(DDL_USER, DDL_PW, `ALTER TABLE "${NEW}" ADD COLUMN note TEXT`);
+        await driver.runDdlAsUser(DDL_USER, DDL_PW, `CREATE INDEX wjp_isotest_ddl_idx ON "${NEW}" (id)`);
+        await assert.rejects(() => driver.runDdlAsUser(DDL_USER, DDL_PW, `CREATE VIEW "${VIEW}" AS SELECT secret FROM "${SECRET}"`),
+            DENIED, 'a view over a table the user was not granted is refused by MySQL');
+        await assert.rejects(() => driver.runDdlAsUser(DDL_USER, DDL_PW, `DROP TABLE "${SECRET}"`), DENIED);
+        await driver.runDdlAsUser(DDL_USER, DDL_PW, `CREATE VIEW "${VIEW}" AS SELECT body FROM "${NEW}"`);
+        const def = await driver.get(`SELECT DEFINER AS d FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = ?`, [VIEW]);
+        assert.match(String(def && (def.d || def.DEFINER)), new RegExp(`^${DDL_USER}@`), 'the view runs as the plugin user');
+        await driver.runDdlAsUser(DDL_USER, DDL_PW, `DROP VIEW "${VIEW}"`);
+        await driver.runDdlAsUser(DDL_USER, DDL_PW, `DROP TABLE "${NEW}"`);
+    } finally {
+        await drop();
+        try { await driver.close(); } catch { /* */ }
+    }
+});
