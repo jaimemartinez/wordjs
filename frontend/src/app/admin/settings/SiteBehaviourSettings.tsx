@@ -17,6 +17,7 @@ export interface SiteBehaviourValues {
     page_for_posts: string;
     posts_per_rss: string;
     blog_public: string;
+    robots_txt_extra: string;
     date_format: string;
     time_format: string;
     default_category: string;
@@ -37,6 +38,7 @@ export const SITE_BEHAVIOUR_DEFAULTS: SiteBehaviourValues = {
     page_for_posts: "",
     posts_per_rss: "20",
     blog_public: "1",
+    robots_txt_extra: "",
     date_format: "",
     time_format: "",
     default_category: "",
@@ -109,7 +111,7 @@ interface Props {
     homepageId: string;
 }
 
-/** Settings → Reading: posts page, feed size, search engines. */
+/** Settings → Reading: posts page, feed size, search engines, robots.txt rules. */
 export function ReadingExtras({ values, onChange, pages, homepageId }: Props) {
     const { t } = useI18n();
     const set = (patch: Partial<SiteBehaviourValues>) => onChange({ ...values, ...patch });
@@ -141,6 +143,18 @@ export function ReadingExtras({ values, onChange, pages, homepageId }: Props) {
                     checked={values.blog_public === "0"}
                     onChange={(discourage) => set({ blog_public: discourage ? "0" : "1" })}
                 />
+            </div>
+            <div className="space-y-2">
+                <label htmlFor="settings-robots-extra" className="text-sm font-bold text-gray-700">{t("settings.robotsExtra")}</label>
+                <textarea id="settings-robots-extra" rows={5} maxLength={5000} spellCheck={false}
+                    value={values.robots_txt_extra} onChange={(e) => set({ robots_txt_extra: e.target.value })}
+                    placeholder={"User-agent: GPTBot\nDisallow: /"}
+                    disabled={values.blog_public === "0"}
+                    className={`${inputCls} font-mono text-sm disabled:opacity-50`} />
+                <p className="text-xs text-gray-500">
+                    {values.blog_public === "0" ? t("settings.robotsExtra.discouraged") : t("settings.robotsExtra.help")}{" "}
+                    <a href="/robots.txt" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">/robots.txt</a>
+                </p>
             </div>
         </div>
     );

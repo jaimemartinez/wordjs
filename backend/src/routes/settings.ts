@@ -83,6 +83,7 @@ const ALL_SETTINGS = [
     'show_on_front',
     'page_on_front',
     'posts_per_rss',        // items in the RSS / Atom / JSON feeds (core/feeds)
+    'robots_txt_extra',     // Settings → Reading: the admin's own robots.txt rules (core/seo-helper)
 
     'default_comment_status', // 'open' | 'closed' for new entries
     'comments_notify',
@@ -402,6 +403,7 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     // Admin › Auditoría offers exactly these windows; anything else would be a value no screen can show.
     audit_retention_days: (v: any) => ['0', '90', '180', '365', '730'].includes(typeof v === 'number' ? String(v) : (typeof v === 'string' ? v.trim() : '')) ? null : 'audit_retention_days must be 0, 90, 180, 365 or 730.',
     posts_per_rss: (v: any) => integerSettingProblem('posts_per_rss', v, 1, 100),
+    robots_txt_extra: (v: any) => require('../core/seo-helper').robotsExtraProblem(v),
     date_format: (v: any) => (v === '' || DATE_FORMATS.includes(v)) ? null : 'date_format must be one of: ' + DATE_FORMATS.join(', ') + '.',
     time_format: (v: any) => (v === '' || TIME_FORMATS.includes(v)) ? null : 'time_format must be one of: ' + TIME_FORMATS.join(', ') + '.',
     thumbnail_size_w: (v: any) => integerSettingProblem('thumbnail_size_w', v, 0, 4000),
@@ -537,6 +539,7 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     require_name_email: (v: any) => booleanishSetting(v) ?? '1',
     comment_max_links: (v: any) => String(Number(String(v).trim())),
     posts_per_rss: (v: any) => String(Number(String(v).trim())),
+    robots_txt_extra: (v: any) => (typeof v === 'string' ? v.replace(/\r\n?/g, '\n').trim() : ''),
     thumbnail_size_w: (v: any) => String(Number(String(v).trim())),
     thumbnail_size_h: (v: any) => String(Number(String(v).trim())),
     medium_size_w: (v: any) => String(Number(String(v).trim())),

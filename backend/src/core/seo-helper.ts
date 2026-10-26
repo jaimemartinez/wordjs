@@ -217,14 +217,22 @@ async function generateSitemap(posts: any[], options: SeoOptions = {}) {
  * ONE place (`publicSeoUrl` in core/feeds.ts), and this file printing its own second spelling of it
  * is exactly how the advertisement and the document that answers it come apart. The default keeps
  * the string this function has always emitted for any caller that supplies only the site URL.
+ *
+ * `/_next/` is NOT disallowed: it holds the CSS and JS every public page is rendered with, and a
+ * crawler that may not fetch them renders the page unstyled (Google asks sites not to block
+ * rendering resources). `extra` is the admin's own rules (Settings → Reading, `robots_txt_extra`),
+ * already checked by robotsExtraProblem and appended after the built-in ones. A bare `Disallow:` line
+ * there extends the `User-agent: *` group; a `User-agent:` line opens a group of its own.
  */
-function generateRobotsTxt(siteUrl = '', sitemapUrl = `${siteUrl}/sitemap.xml`, discourage = false) {
-    // Settings → Reading «Discourage search engines» (blog_public = '0'): the whole site is off limits.
+function generateRobotsTxt(siteUrl = '', sitemapUrl = `${siteUrl}/sitemap.xml`, discourage = false, extra = '') {
+    // Settings → Reading «Discourage search engines» (blog_public = '0'): the whole site is off limits,
+    // and no custom rule may reopen any of it.
     if (discourage) {
         return `User-agent: *
 Disallow: /
 `;
     }
+    const custom = normalizeRobotsExtra(extra);
     return `User-agent: *
 Allow: /
 
@@ -234,8 +242,43 @@ Sitemap: ${sitemapUrl}
 # Blocked paths
 Disallow: /api/
 Disallow: /admin/
-Disallow: /_next/
-`;
+` + (custom ? `\n# Custom rules (Settings → Reading)\n${custom}\n` : '');
+}
+
+/** Ceilings for `robots_txt_extra`: a robots.txt is read in full by every crawler on every visit. */
+const ROBOTS_EXTRA_MAX_CHARS = 5000;
+const ROBOTS_EXTRA_MAX_LINES = 200;
+/** The fields crawlers act on (RFC 9309 plus the widely honoured extensions). Anything else is a typo. */
+const ROBOTS_FIELDS = ['user-agent', 'allow', 'disallow', 'sitemap', 'crawl-delay', 'host', 'clean-param'];
+
+/** The stored value as the lines that will be served: newlines unified, trailing blanks trimmed. */
+function normalizeRobotsExtra(raw: unknown): string {
+    if (typeof raw !== 'string') return '';
+    return raw.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trimEnd()).join('\n').trim();
+}
+
+/**
+ * Why `robots_txt_extra` cannot be stored, or null. Each non-blank line is a `# comment` or a
+ * `Field: value` with a known field — a misspelt field is silently ignored by crawlers, so it is
+ * refused here where the admin can still see it. Control characters are refused outright.
+ */
+function robotsExtraProblem(raw: unknown): string | null {
+    if (raw === null || raw === undefined || raw === '') return null;
+    if (typeof raw !== 'string') return 'robots_txt_extra must be text.';
+    if (raw.length > ROBOTS_EXTRA_MAX_CHARS) return `robots_txt_extra must be at most ${ROBOTS_EXTRA_MAX_CHARS} characters.`;
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(raw)) return 'robots_txt_extra may not contain control characters.';
+    const lines = normalizeRobotsExtra(raw).split('\n');
+    if (lines.length > ROBOTS_EXTRA_MAX_LINES) return `robots_txt_extra must be at most ${ROBOTS_EXTRA_MAX_LINES} lines.`;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line || line.startsWith('#')) continue;
+        const m = /^([A-Za-z-]+)\s*:(.*)$/.exec(line);
+        if (!m || !ROBOTS_FIELDS.includes(m[1].toLowerCase())) {
+            return `robots_txt_extra line ${i + 1} is not a robots.txt rule (expected "Field: value" with one of: ${ROBOTS_FIELDS.join(', ')}).`;
+        }
+    }
+    return null;
 }
 
 /**
@@ -326,6 +369,7 @@ module.exports = {
     generateBreadcrumbSchema,
     generateSitemap,
     generateRobotsTxt,
+    robotsExtraProblem,
     generateRssFeed,
     escapeHtml
 };

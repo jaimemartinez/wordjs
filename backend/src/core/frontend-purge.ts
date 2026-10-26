@@ -699,6 +699,8 @@ const SETTINGS_OPTIONS = new Set([
     // Settings → Reading: the posts page, date/time formats and search-engine visibility all change how
     // already-rendered public pages look or what their <head> says.
     'page_for_posts', 'date_format', 'time_format', 'blog_public',
+    // The admin's own robots.txt rules: the public /robots.txt route caches on the 'settings' tag.
+    'robots_txt_extra',
     'site_chrome_header', 'site_chrome_footer', 'site_chrome_announcement',
     // These two land on <html> itself, so a change repaints every cached page — and being absent here
     // is worse than it sounds: switching a site to Arabic would have left every already-rendered page

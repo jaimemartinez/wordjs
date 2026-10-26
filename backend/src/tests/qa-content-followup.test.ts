@@ -221,6 +221,33 @@ test('the reading/writing/discussion settings are validated, and the dead keys a
     }
 });
 
+test('robots.txt leaves /_next/ crawlable and serves the admin\'s own rules, validated', async () => {
+    const before = (await request(app).get(`${B}/seo/robots.txt`)).text;
+    assert.doesNotMatch(before, /_next/, 'the CSS/JS the pages render with must stay fetchable');
+    assert.match(before, /Disallow: \/api\//);
+    assert.doesNotMatch(before, /Custom rules/, 'nothing extra until an admin writes some');
+
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'User-agent: GPTBot\r\nDisallow: /\r\n\r\n# drafts\nDisallow: /borradores/' })).status, 200);
+    const robots = (await request(app).get(`${B}/seo/robots.txt`)).text;
+    assert.match(robots, /# Custom rules[^\n]*\nUser-agent: GPTBot\nDisallow: \/\n\n# drafts\nDisallow: \/borradores\/\n$/);
+    assert.match(robots, /Sitemap: /, 'the built-in lines stay');
+
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'Dissalow: /x' })).status, 400, 'a misspelt field is refused');
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'just some text' })).status, 400);
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'Disallow: /a\u0007' })).status, 400, 'no control characters');
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'Disallow: /x\n'.repeat(201) })).status, 400, 'line ceiling');
+    assert.strictEqual((await putSettings({ robots_txt_extra: 5 })).status, 400);
+
+    await putSettings({ blog_public: '0' });
+    assert.match((await request(app).get(`${B}/seo/robots.txt`)).text, /^User-agent: \*\nDisallow: \/\n$/, '«discourage» wins over every custom rule');
+    await putSettings({ blog_public: '1' });
+
+    assert.ok(!('robots_txt_extra' in (await request(app).get(`${B}/settings`)).body), 'admin-only: not in the public settings');
+    assert.strictEqual((await request(app).get(`${B}/settings/all`).set(bearer('admin'))).body.robots_txt_extra, 'User-agent: GPTBot\nDisallow: /\n\n# drafts\nDisallow: /borradores/');
+    assert.strictEqual((await putSettings({ robots_txt_extra: '' })).status, 200);
+    assert.doesNotMatch((await request(app).get(`${B}/seo/robots.txt`)).text, /Custom rules/);
+});
+
 test('the posts page must be a published page other than the front page', async () => {
     const home = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Front', status: 'publish' });
     const blog = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Blog', status: 'publish' });

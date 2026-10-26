@@ -29,6 +29,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     reaches the phone.
 
 ### Fixed
+- **robots.txt no longer blocks `/_next/`, and it can be edited.** That folder holds the CSS and JS every public
+  page is rendered with; crawlers that may not fetch them render the page unstyled. **Settings → Reading** has a new
+  «Your own robots.txt rules» field: the lines are added after the built-in rules (one rule per line — `User-agent`,
+  `Allow`, `Disallow`, `Sitemap`, `Crawl-delay`, `Host`, `Clean-param` — or a `# comment`; anything else is refused
+  on save). While search engines are discouraged the whole site stays blocked and these rules are not served.
 - **conference-manager 2.36.20: the cupo editor on a locality card no longer pushes «Cancelar» out of the card.**
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
   the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's
