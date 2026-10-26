@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.9] - 2026-10-26
+
 ### Security
 - **Content authorization follows the record it touches.**
   - **A trashed entry is read-only until it is restored.** Editing it in place (content, meta, language,
