@@ -144,7 +144,8 @@ describe("the editor on a trashed entry", () => {
             const src = fs.readFileSync(path.resolve(__dirname, file), "utf8");
             const notice = src.indexOf("<EditorTrashedNotice");
             expect(notice, file).toBeGreaterThan(0);
-            expect(src.slice(notice - 200, notice), file).toContain('lastServerStatusRef.current === "trash"');
+            expect(src.slice(notice - 200, notice), file).toContain("if (trashed &&");
+            expect(src, file).toContain('setTrashed(');
             expect(src.slice(notice, notice + 200), file).toContain(`onRestored={${load}}`);
             expect(notice, file).toBeLessThan(src.indexOf("<VersoEditor"));
         }
