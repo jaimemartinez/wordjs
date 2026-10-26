@@ -6,6 +6,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **mail-server 3.3.2: direct delivery tries the other IP family when one cannot reach the recipient's server.**
+  Some VPS providers filter or rate-limit outgoing port 25 on IPv4 while IPv6 still works, or the reverse. Each
+  delivery waited out a connection timeout on every mail server of the recipient and then gave up with
+  «Connection timeout».
+  - **When an address does not answer**, the message is sent to the same mail server over its other address
+    (IPv6 or IPv4).
+  - **The family that got through is tried first** for the following messages, so they no longer wait for the
+    timeout.
+  - **When a server refuses IPv6 senders it cannot verify** (no reverse DNS, as Gmail does), the message is
+    tried over IPv4 before it counts as failed.
+  - **The DNS tab covers every public address mail leaves from, IPv4 and IPv6.**
+    - **Records:** it proposes an AAAA record for the mail host when the server has a public IPv6, and an SPF
+      value that names both addresses.
+    - **Checks:** for each address, it checks that the mail host points to it, that the SPF authorizes it, and
+      that the name the server announces (HELO) resolves back to it.
+    - **Reverse DNS (PTR):** WordJS cannot look it up, so it is shown per address, with the exact value to ask
+      the hosting provider for.
+
 ## [2.11.11] - 2026-10-26
 
 ### Fixed

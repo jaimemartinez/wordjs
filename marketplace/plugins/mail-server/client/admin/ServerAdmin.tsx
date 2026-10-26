@@ -906,6 +906,57 @@ function DnsRow({ step, title, record, check, note, t }: any) {
     );
 }
 
+/**
+ * Every public address mail can leave from (IPv4 and IPv6): what the last check found for each, and the
+ * reverse-DNS value to ask the provider for — WordJS cannot look a PTR up, so that one is an instruction.
+ */
+function SenderAddresses({ t, dnsInfo, check }: any) {
+    const ptr = dnsInfo?.records?.ptr;
+    const addresses: string[] = ptr?.addresses || [];
+    if (!addresses.length) return null;
+    const found = new Map<string, any>((check?.results?.senders || []).map((x: any) => [x.ip, x]));
+    const line = (ok: boolean | null, text: string) => (
+        <li className="flex items-start gap-2">
+            <i className={cx('fa-solid mt-0.5', ok === null ? 'fa-circle text-slate-300' : ok ? 'fa-circle-check text-emerald-500' : 'fa-triangle-exclamation text-amber-500')}></i>
+            <span className="min-w-0 break-words">{text}</span>
+        </li>
+    );
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+                <i className="fa-solid fa-network-wired text-violet-500"></i>
+                <span className="text-sm font-bold text-slate-800">{t('srv.dnsx.senders')}</span>
+            </div>
+            <p className="mb-3 text-[11px] leading-relaxed text-slate-500">{t('srv.dnsx.sendersHint')}</p>
+            <div className="grid gap-3">
+                {addresses.map((ip) => {
+                    const r = found.get(ip);
+                    const v6 = ip.includes(':');
+                    const helo = r?.heloHost || dnsInfo?.heloHost || ptr?.value;
+                    return (
+                        <div key={ip} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <Pill tone="slate">{v6 ? 'IPv6' : 'IPv4'}</Pill>
+                                <code className="min-w-0 break-all font-mono text-xs text-slate-800">{ip}</code>
+                            </div>
+                            <ul className="grid gap-1.5 text-xs text-slate-600">
+                                {line(r ? r.host === 'ok' : null, t('srv.dnsx.chk.host', { type: v6 ? 'AAAA' : 'A', host: dnsInfo?.records?.mx?.value || '' }))}
+                                {line(r ? r.spf === 'pass' : null, r && r.spf !== 'pass' ? t('srv.dnsx.chk.spfNot', { result: r.spf }) : t('srv.dnsx.chk.spf'))}
+                                {line(r ? r.helo === 'ok' : null, t('srv.dnsx.chk.helo', { helo }))}
+                            </ul>
+                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600 sm:flex-nowrap">
+                                <span className="min-w-0 flex-1 break-words">{t('srv.dnsx.chk.ptr')} <code className="break-all font-mono text-slate-800">{ip} → {helo}</code></span>
+                                <CopyBtn value={helo} t={t} />
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            {!check?.results?.senders && <p className="mt-3 text-[11px] text-slate-500">{t('srv.dnsx.sendersVerify')}</p>}
+        </div>
+    );
+}
+
 function Dns({ t, locale, dnsInfo, loading, reload }: any) {
     const [provider, setProvider] = useState('generic');
     const [check, setCheck] = useState<any>(null);
@@ -933,12 +984,20 @@ function Dns({ t, locale, dnsInfo, loading, reload }: any) {
                 {check?.checkedAt && <p className="text-xs text-slate-500">{fullDate(check.checkedAt, locale)}</p>}
                 {!dnsInfo ? <div className="py-16 text-center"><Spinner className="text-2xl" /></div> : (
                     <>
-                        <DnsRow step={1} title="MX" record={dnsInfo.records?.mx} note={note('mx')} check={check?.results?.mx} t={t} />
-                        <DnsRow step={2} title="A" record={dnsInfo.records?.a} note={note('a')} check={check?.results?.a} t={t} />
-                        <DnsRow step={3} title="SPF" record={dnsInfo.records?.spf} note={note('spf')} check={check?.results?.spf} t={t} />
-                        <DnsRow step={4} title="DKIM" record={dnsInfo.records?.dkim} note={note('dkim')} check={check?.results?.dkim} t={t} />
-                        <DnsRow step={5} title="DMARC" record={dnsInfo.records?.dmarc} check={check?.results?.dmarc} t={t} />
-                        <DnsRow step={6} title="PTR" record={dnsInfo.records?.ptr} note={note('ptr')} t={t} />
+                        {(() => {
+                            // AAAA only when this server has a public IPv6; the steps number what is shown.
+                            const rows = [
+                                { title: 'MX', record: dnsInfo.records?.mx, note: note('mx'), check: check?.results?.mx },
+                                { title: 'A', record: dnsInfo.records?.a, note: note('a'), check: check?.results?.a },
+                                { title: 'AAAA', record: dnsInfo.records?.aaaa, note: note('aaaa'), check: check?.results?.aaaa },
+                                { title: 'SPF', record: dnsInfo.records?.spf, note: note('spf'), check: check?.results?.spf },
+                                { title: 'DKIM', record: dnsInfo.records?.dkim, note: note('dkim'), check: check?.results?.dkim },
+                                { title: 'DMARC', record: dnsInfo.records?.dmarc, check: check?.results?.dmarc },
+                                { title: 'PTR', record: dnsInfo.records?.ptr, note: note('ptr') },
+                            ].filter(r => r.record);
+                            return rows.map((r, i) => <DnsRow key={r.title} step={i + 1} title={r.title} record={r.record} note={r.note} check={r.check} t={t} />);
+                        })()}
+                        <SenderAddresses t={t} dnsInfo={dnsInfo} check={check} />
                     </>
                 )}
             </div>
