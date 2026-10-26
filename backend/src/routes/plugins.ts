@@ -183,7 +183,8 @@ function regenerateRegistry() {
  */
 function removePluginDirPreservingData(dir: string) {
     const dataDir = path.join(dir, 'data');
-    if (!fs.existsSync(dataDir)) {
+    // `data` is a link to the plugin's own data directory (core/plugin-own-data); an empty one is no data.
+    if (!fs.existsSync(dataDir) || require('../core/plugin-own-data').discardIfEmpty(dataDir)) {
         fs.rmSync(dir, { recursive: true, force: true });
         return;
     }

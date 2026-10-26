@@ -613,11 +613,14 @@ describe('plugin AST scan: grants, not declarations', () => {
         const GRANTED = `rtgrant${process.pid}`;   // declares and was granted — must keep working
         let secureFs: any, runWithContext: any, io: any, secureRequire: any;
         const dirOf = (slug: string) => path.join(PLUGINS_DIR, slug);
+        // Where a plugin keeps state: its `data/` folder, a link out of its read-only code folder.
+        const dataOf = (slug: string) => path.join(dirOf(slug), 'data');
 
         const seed = async (slug: string, permissions: any[], grants: string[]) => {
             const d = dirOf(slug);
             fs.mkdirSync(d, { recursive: true });
             fs.writeFileSync(path.join(d, 'manifest.json'), JSON.stringify({ name: slug, version: '1.0.0', permissions }));
+            require('../core/plugin-own-data').prepareOwnDataLink(path.dirname(PLUGINS_DIR), slug);
             io.forgetDeclaredPermissions(slug);   // the manifest cache outlives an install that rewrites it
             await perms.setGrants(slug, grants);
             return d;
@@ -734,19 +737,19 @@ describe('plugin AST scan: grants, not declarations', () => {
         // around. A plugin that never asked for the capability keeps its private storage, and a plugin
         // the admin GRANTED keeps working.
         it('a plugin that never declared filesystem keeps its own private storage (control)', () => {
-            const f = path.join(dirOf(NEVER), 'cache.txt');
+            const f = path.join(dataOf(NEVER), 'cache.txt');
             assert.strictEqual(callAs(NEVER, 'writeFileSync', [f, 'hello']), null);
             assert.strictEqual(String(fs.readFileSync(f, 'utf8')), 'hello');
         });
 
         it('a plugin the administrator GRANTED writes normally (control)', () => {
-            const f = path.join(dirOf(GRANTED), 'cache.txt');
+            const f = path.join(dataOf(GRANTED), 'cache.txt');
             assert.strictEqual(callAs(GRANTED, 'writeFileSync', [f, 'hello']), null);
             assert.strictEqual(String(fs.readFileSync(f, 'utf8')), 'hello');
         });
 
         it('flipping the switch takes effect on the NEXT CALL — no reload, no re-scan', async () => {
-            const f = path.join(dirOf(GRANTED), 'live.txt');
+            const f = path.join(dataOf(GRANTED), 'live.txt');
             assert.strictEqual(callAs(GRANTED, 'writeFileSync', [f, 'before']), null, 'granted plugin must be able to write');
             await perms.setGrants(GRANTED, []);           // exactly what POST /plugins/:slug/permissions writes
             const e = callAs(GRANTED, 'writeFileSync', [f, 'after']);

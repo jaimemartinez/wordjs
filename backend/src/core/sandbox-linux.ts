@@ -216,6 +216,12 @@ export type ShimArgsOptions = {
     readRoot?: string | string[];
     /** Literal executable(s) needed for the initial launch. Read roots never imply FS_EXECUTE. */
     execRoot?: string | string[];
+    /**
+     * For a network-GRANTED child: the TCP ports it may connect to. On Landlock ABI >= 4 the kernel refuses
+     * every other TCP connect (and every TCP bind); below it the egress guard alone decides. Ignored when
+     * denyNetwork is set. Invalid entries are dropped.
+     */
+    tcpPorts?: number[];
     /** The command to run once confined - normally [nodePath, ...execArgv, worker, cfg]. */
     nodeArgs?: string[];
 };
@@ -253,10 +259,14 @@ function shimArgs(opts: ShimArgsOptions): string[] {
         .map((r) => shimPath(r))
         .filter((r): r is string => r !== null));
     const nodeArgs = Array.isArray(opts && opts.nodeArgs) ? (opts.nodeArgs as string[]) : [];
+    const ports = (opts && !opts.denyNetwork && Array.isArray(opts.tcpPorts))
+        ? Array.from(new Set(opts.tcpPorts.filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535))).sort((a, b) => a - b)
+        : [];
     return [
         SHIM_PATH,
         ...roots.map((r) => `--read-root=${r}`),
         ...execRoots.map((r) => `--exec-root=${r}`),
+        ...ports.map((n) => `--tcp-port=${n}`),
         ...zones,
         opts && opts.denyNetwork ? '1' : '0',
         '--',
@@ -289,6 +299,20 @@ function getLinuxZeroConfNote(): string { return zeroConfNote; }
  */
 let zeroConfShimFailure: string | null = null;
 function getLinuxZeroConfShimFailure(): string | null { return zeroConfShimFailure; }
+/**
+ * Whether the kernel bounds a network-granted plugin's TCP destination ports here: 'kernel' when the
+ * probe saw a connect to a port outside the list refused (Landlock ABI >= 4), 'unavailable' when this
+ * kernel has no TCP rules (the egress guard alone decides), 'unknown' before the probe ran.
+ */
+let zeroConfEgressPorts: 'kernel' | 'unavailable' | 'unknown' = 'unknown';
+function getLinuxEgressPortEnforcement(): 'kernel' | 'unavailable' | 'unknown' { return zeroConfEgressPorts; }
+
+/**
+ * The TCP ports every network-granted plugin may connect to: DNS over TCP and the web. A plugin's manifest
+ * adds the ports it declares on its `network` permission (`ports`), and an approved private destination adds
+ * its own port. Shared with the macOS profile so both kernels enforce the same list.
+ */
+const DEFAULT_EGRESS_TCP_PORTS = [53, 80, 443];
 
 /**
  * The probe child, as one `node -e` program. ASCII only, no regular expressions and no backslashes, so
@@ -320,9 +344,14 @@ function getLinuxZeroConfShimFailure(): string | null { return zeroConfShimFailu
  *   sent       - implicit: that the message arrived AT ALL is the fork-IPC round-trip.
  */
 const PROBE_SRC = [
-    'var fs=require("fs");var net=require("net");var cp=require("child_process");',
-    'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP"};',
-    'var inside=process.argv[1];var outside=process.argv[2];var denyNet=process.argv[3]==="1";var unixPath=process.argv[4];var exactFile=process.argv[5];var siblingFile=process.argv[6];',
+    'var fs=require("fs");var net=require("net");var cp=require("child_process");var os=require("os");',
+    'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP",portCode:"SKIP",prioCode:"NONE",selfPrioCode:"NONE",truncCode:"NONE",chmodCode:"NONE",fdCode:"NONE"};',
+    'var inside=process.argv[1];var outside=process.argv[2];var denyNet=process.argv[3]==="1";var unixPath=process.argv[4];var exactFile=process.argv[5];var siblingFile=process.argv[6];var portTarget=Number(process.argv[7]||0);var victim=Number(process.argv[8]||0);var truncFile=process.argv[9]||"";',
+    'function sysCode(e){return (e&&e.info&&e.info.code)||(e&&e.code)||"THROW";}',
+    'try{os.setPriority(victim,19);out.prioCode="OPEN";}catch(e){out.prioCode=sysCode(e);}',
+    'try{os.setPriority(0,os.getPriority(0));out.selfPrioCode="OPEN";}catch(e){out.selfPrioCode=sysCode(e);}',
+    'try{var tf=fs.openSync(truncFile,fs.constants.O_RDONLY|fs.constants.O_TRUNC);fs.closeSync(tf);out.truncCode="OPEN";}catch(e){out.truncCode=sysCode(e);}',
+    'try{fs.fstatSync(4);out.fdCode="OPEN";}catch(e){out.fdCode=sysCode(e);}',
     'try{fs.writeFileSync(inside,"wjs");out.wrote=fs.readFileSync(inside,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}',
     'try{fs.readFileSync(process.execPath);out.readSystem=true;}catch(e){out.readSystem=false;}',
     'try{out.exactRead=fs.readFileSync(exactFile,"utf8")==="exact";}catch(e){out.exactRead=false;}',
@@ -331,14 +360,16 @@ const PROBE_SRC = [
     'try{fs.writeFileSync(outside,"wjs");out.outCode="OPEN";}catch(e){out.outCode=(e&&e.code)||"THROW";}',
     'try{process.kill(process.ppid,0);out.signalCode="OPEN";}catch(e){out.signalCode=(e&&e.code)||"THROW";}',
     'try{var q=cp.spawnSync(process.execPath,["-e","process.exit(0)"]);out.processCode=q.error?((q.error&&q.error.code)||"THROW"):(q.status===0?"OPEN":"FAIL");}catch(e){out.processCode=(e&&e.code)||"THROW";}',
-    'try{var payload=inside+".sh";fs.writeFileSync(payload,"#!/bin/sh\\nexit 0\\n");fs.chmodSync(payload,448);var x=cp.spawnSync(payload,[],{encoding:"utf8"});out.execCode=x.error?((x.error&&x.error.code)||"THROW"):(x.status===0?"OPEN":"FAIL");}catch(e){out.execCode=(e&&e.code)||"THROW";}',
+    'try{var payload=inside+".sh";fs.writeFileSync(payload,"#!/bin/sh\\nexit 0\\n");var pfd=fs.openSync(payload,"r+");fs.fchmodSync(pfd,448);fs.closeSync(pfd);var x=cp.spawnSync(payload,[],{encoding:"utf8"});out.execCode=x.error?((x.error&&x.error.code)||"THROW"):(x.status===0?"OPEN":"FAIL");}catch(e){out.execCode=(e&&e.code)||"THROW";}',
+    'try{fs.chmodSync(inside,384);out.chmodCode="OPEN";}catch(e){out.chmodCode=sysCode(e);}',
     'try{var st=fs.readFileSync("/proc/self/status","utf8");var bad=[];for(var k of ["CapInh","CapPrm","CapEff","CapAmb"]){var m=st.match(new RegExp("^"+k+":\\\\s*([0-9a-f]+)","mi"));if(!m||!/^0+$/.test(m[1]))bad.push(k);}out.capsCode=bad.length?"OPEN:"+bad.join(","):"ZERO";var b=st.match(/^CapBnd:\\s*([0-9a-f]+)/mi);out.bndCode=!b?"MISSING":(/^0+$/.test(b[1])?"ZERO":"SET");out.euid=process.geteuid?process.geteuid():-1;}catch(e){out.capsCode=(e&&e.code)||"THROW";}',
     'function finish(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
     '{',
-    'var pending=2;var done={};var settle=function(k,c,s){if(done[k])return;done[k]=true;out[k]=c;try{if(s)s.destroy();}catch(e){}if(--pending===0)finish();};',
+    'var pending=portTarget?3:2;var done={};var settle=function(k,c,s){if(done[k])return;done[k]=true;out[k]=c;try{if(s)s.destroy();}catch(e){}if(--pending===0)finish();};',
     'try{var s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle("netCode",(e&&e.code)||"THROW",s);});s.on("connect",function(){settle("netCode","CONNECTED",s);});setTimeout(function(){settle("netCode","TIMEOUT",s);},4000);}catch(e){settle("netCode",(e&&e.code)||"THROW",null);}',
+    'if(portTarget){try{var pt=net.connect(portTarget,"127.0.0.1");pt.on("error",function(e){settle("portCode",(e&&e.code)||"THROW",pt);});pt.on("connect",function(){settle("portCode","CONNECTED",pt);});setTimeout(function(){settle("portCode","TIMEOUT",pt);},4000);}catch(e){settle("portCode",(e&&e.code)||"THROW",null);}}',
     'try{var u=net.connect(unixPath);u.on("error",function(e){settle("unixCode",(e&&e.code)||"THROW",u);});u.on("connect",function(){settle("unixCode","CONNECTED",u);});setTimeout(function(){settle("unixCode","TIMEOUT",u);},4000);}catch(e){settle("unixCode",(e&&e.code)||"THROW",null);}',
     '}',
 ].join('');
@@ -356,7 +387,9 @@ const PROBE_SRC = [
  */
 const REFUSAL_CODES = new Set(['EPERM', 'EACCES']);
 
-type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; bndCode?: string; euid?: number; netCode?: string; unixCode?: string };
+type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; bndCode?: string; euid?: number; netCode?: string; unixCode?: string; portCode?: string; prioCode?: string; selfPrioCode?: string; truncCode?: string; chmodCode?: string; fdCode?: string };
+/** Extra probe inputs: a loopback port outside the egress list, a sacrificial process, and a read-only file. */
+type ProbeExtra = { port: number; victimPid: number; truncFile: string };
 type ProbeRun = { msg: ProbeMsg | null; code: number | null; stderr: string };
 
 /**
@@ -393,11 +426,11 @@ function capabilitiesShed(msg: ProbeMsg | null, shimStderr: string): boolean {
  * confined run is not a control - it is a second experiment whose difference from the first is exactly
  * the thing nobody measured.
  */
-function runProbeChild(pre: string[], inside: string, outside: string, denyNet: boolean, unixPath: string, exactFile: string, siblingFile: string, timeoutMs: number): Promise<ProbeRun> {
+function runProbeChild(pre: string[], inside: string, outside: string, denyNet: boolean, unixPath: string, exactFile: string, siblingFile: string, timeoutMs: number, extra: ProbeExtra = { port: 0, victimPid: 0, truncFile: '' }): Promise<ProbeRun> {
     return new Promise<ProbeRun>((res) => {
         // ONE argv, built once, with `pre` in front. The control leg passes pre = [] and therefore runs
         // the byte-identical tail; that is what makes it a control rather than a second experiment.
-        const full = [...pre, process.execPath, '-e', PROBE_SRC, inside, outside, denyNet ? '1' : '0', unixPath, exactFile, siblingFile];
+        const full = [...pre, process.execPath, '-e', PROBE_SRC, inside, outside, denyNet ? '1' : '0', unixPath, exactFile, siblingFile, String(extra.port || 0), String(extra.victimPid || 0), extra.truncFile || ''];
         const exe = full[0];
         const args = full.slice(1);
         let proc: any = null, msg: ProbeMsg | null = null, stderr = '', done = false;
@@ -413,7 +446,8 @@ function runProbeChild(pre: string[], inside: string, outside: string, denyNet: 
         if ((overall as any).unref) (overall as any).unref();
         try {
             proc = spawnl(exe, args, {
-                stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+                // fd 4 is an extra pipe nobody asked the child to keep: the shim must close it before exec.
+                stdio: ['ignore', 'ignore', 'pipe', 'ipc', 'pipe'],
                 serialization: 'advanced',
                 timeout: Math.max(1000, timeoutMs - 3000),
             });
@@ -511,6 +545,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
         let zone: string;
         let coreRoot: string;
         let unixServer: any = null;
+        let portServer: any = null;
+        let victim: any = null;
         try {
             probeRoot = fsl.mkdtempSync(pathl.join(osl.tmpdir(), 'wjs-zeroconf-root-'));
             zone = pathl.join(probeRoot, 'plugins', 'probe');
@@ -537,6 +573,11 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
         fsl.writeFileSync(outside, 'probe-secret');
         fsl.writeFileSync(exactFile, 'exact');
         fsl.writeFileSync(siblingFile, 'sibling-secret');
+        // A file the child may READ but not write (it sits in a read root): opening it with O_TRUNC must be
+        // refused, by Landlock from ABI 3 and by the seccomp filter below it.
+        const truncFile = pathl.join(coreRoot as string, 'read-only.js');
+        const resetTruncFile = () => { try { fsl.writeFileSync(truncFile, 'module.exports = 1;\n'); } catch { /* the control reports it */ } };
+        resetTruncFile();
         // The Node runtime prefix is a read root in its own right and NOT an optional nicety: the shim
         // deliberately does not grant /home, so an nvm/asdf/fnm install (…/versions/node/vX/bin/node)
         // would be unreadable and the child would never boot. `dirname(dirname(execPath))` is that
@@ -550,21 +591,37 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 unixServer.once('error', reject);
                 unixServer.listen(unixPath, resolve);
             });
+            // A loopback TCP listener on a port outside the egress list: the network-granted child must be
+            // refused by the kernel (Landlock TCP rules), the control must connect.
+            portServer = require('net').createServer((socket: any) => socket.end());
+            await new Promise<void>((resolve, reject) => {
+                portServer.once('error', reject);
+                portServer.listen(0, '127.0.0.1', resolve);
+            });
+            const port = Number(portServer.address().port);
+            // A sacrificial process of the same user: changing ITS priority succeeds in the control and
+            // must be refused in the confined legs (seccomp: setpriority/prlimit/sched_* on another pid).
+            victim = spawnl(process.execPath, ['-e', 'setInterval(function(){},1000)'], { stdio: 'ignore' });
+            const extra: ProbeExtra = { port, victimPid: Number(victim.pid || 0), truncFile };
             // ── 1. THE UNCONFINED CONTROL, FIRST ────────────────────────────────────────────────────
             // Identical child, identical argv tail, no shim. If THIS is already refused, nothing the
             // confined leg reports can be attributed to the confinement.
-            const control = await runProbeChild([], inside, outside, true, unixPath, exactFile, siblingFile, 25000);
+            const control = await runProbeChild([], inside, outside, true, unixPath, exactFile, siblingFile, 25000, extra);
+            resetTruncFile();
             const controlOk = !!(control.msg && control.msg.wrote === true && control.msg.readSystem === true
                 && control.msg.exactRead === true && control.msg.siblingCode === 'OPEN'
                 && control.msg.readCode === 'OPEN' && control.msg.outCode === 'OPEN'
                 && control.msg.signalCode === 'OPEN' && control.msg.processCode === 'OPEN'
                 && control.msg.execCode === 'OPEN' && control.msg.netCode === 'CONNECTED'
-                && control.msg.unixCode === 'CONNECTED');
+                && control.msg.unixCode === 'CONNECTED' && control.msg.portCode === 'CONNECTED'
+                && control.msg.prioCode === 'OPEN' && control.msg.selfPrioCode === 'OPEN'
+                && control.msg.truncCode === 'OPEN' && control.msg.chmodCode === 'OPEN' && control.msg.fdCode === 'OPEN');
             if (!controlOk) {
                 zeroConfState = 'degraded';
                 zeroConfNote = 'the probe ABORTED: an UNCONFINED control child was itself refused, so a refusal from the confined child would prove nothing (an offline or read-only host does this)';
                 log.warn('[Sandbox] Linux zero-config probe ABORTED: the negative control failed - an UNCONFINED child could not do what the confined child must be refused. '
-                    + `write=${control.msg && control.msg.wrote ? 'ok' : 'FAILED'} readSystem=${control.msg && control.msg.readSystem ? 'ok' : 'FAILED'} outOfZoneRead=${logSafe((control.msg && control.msg.readCode) || 'unknown')} outOfZoneWrite=${logSafe((control.msg && control.msg.outCode) || 'unknown')} signal=${logSafe((control.msg && control.msg.signalCode) || 'unknown')} rawIpConnect=${logSafe((control.msg && control.msg.netCode) || 'unknown')}. `
+                    + `write=${control.msg && control.msg.wrote ? 'ok' : 'FAILED'} readSystem=${control.msg && control.msg.readSystem ? 'ok' : 'FAILED'} outOfZoneRead=${logSafe((control.msg && control.msg.readCode) || 'unknown')} outOfZoneWrite=${logSafe((control.msg && control.msg.outCode) || 'unknown')} signal=${logSafe((control.msg && control.msg.signalCode) || 'unknown')} rawIpConnect=${logSafe((control.msg && control.msg.netCode) || 'unknown')} `
+                    + `loopbackPort=${logSafe((control.msg && control.msg.portCode) || 'unknown')} otherPriority=${logSafe((control.msg && control.msg.prioCode) || 'unknown')} truncate=${logSafe((control.msg && control.msg.truncCode) || 'unknown')} chmod=${logSafe((control.msg && control.msg.chmodCode) || 'unknown')} extraFd=${logSafe((control.msg && control.msg.fdCode) || 'unknown')}. `
                     + 'Without that control a "refused" verdict is uninterpretable, so the layer stays OFF.');
                 return 'degraded';
             }
@@ -576,7 +633,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 execRoot: [process.execPath, PERL_BIN],
                 nodeArgs: [],
             })];
-            const confined = await runProbeChild(pre, inside, outside, true, unixPath, exactFile, siblingFile, 25000);
+            const confined = await runProbeChild(pre, inside, outside, true, unixPath, exactFile, siblingFile, 25000, extra);
+            resetTruncFile();
 
             // The shim's own verdict comes FIRST, because 'this kernel cannot' and 'this kernel could and
             // it failed' are different answers that demand different operator actions, and only the exit
@@ -604,6 +662,11 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             const capsDropped = capabilitiesShed(confined.msg, confined.stderr);
             const netRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.netCode)));
             const unixRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.unixCode)));
+            // The syscall surface beyond Landlock: another process's priority, truncating a read-only file,
+            // changing a file's mode, and a descriptor the launcher did not mean to hand over.
+            const surfaceOk = (m: ProbeMsg | null) => !!(m && REFUSAL_CODES.has(String(m.prioCode)) && m.selfPrioCode === 'OPEN'
+                && REFUSAL_CODES.has(String(m.truncCode)) && REFUSAL_CODES.has(String(m.chmodCode)) && m.fdCode === 'EBADF');
+            const confinedSurface = surfaceOk(confined.msg);
 
             // Certify the network-GRANTED shape too. Landlock and the dangerous-syscall filter must stay
             // active; only the IP-socket rule changes. This prevents granting network from accidentally
@@ -612,8 +675,18 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 zone: [zone as string], denyNetwork: false,
                 readRoot: [zone as string, coreRoot as string, exactFile, ...(nodePrefix.split(pathl.sep).filter(Boolean).length >= 2 ? [nodePrefix] : [])],
                 execRoot: [process.execPath, PERL_BIN], nodeArgs: [],
+                tcpPorts: DEFAULT_EGRESS_TCP_PORTS,
             })];
-            const allowed = await runProbeChild(allowPre, inside, outside, false, unixPath, exactFile, siblingFile, 25000);
+            const allowed = await runProbeChild(allowPre, inside, outside, false, unixPath, exactFile, siblingFile, 25000, extra);
+            // The kernel's TCP port rules exist from Landlock ABI 4. With them a connect to a port outside the
+            // list must be refused; without them the shim says so (landlock-net=unavailable) and the port is
+            // the egress guard's to refuse - reported, never certified as kernel-enforced.
+            const allowedShim = String(allowed.stderr || '').split(/\r?\n/).find((l) => l.startsWith('SHIM: ')) || '';
+            const portsByKernel = / landlock-net=ports:\d+/.test(allowedShim);
+            const portsUnavailable = / landlock-net=unavailable/.test(allowedShim);
+            const allowedPortOk = !!(allowed.msg && (portsByKernel
+                ? REFUSAL_CODES.has(String(allowed.msg.portCode))
+                : (portsUnavailable && allowed.msg.portCode === 'CONNECTED')));
             const allowedOk = !!(allowed.msg && allowed.msg.wrote === true && allowed.msg.readSystem === true
                 && allowed.msg.exactRead === true && REFUSAL_CODES.has(String(allowed.msg.siblingCode))
                 && REFUSAL_CODES.has(String(allowed.msg.readCode))
@@ -623,11 +696,14 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 && REFUSAL_CODES.has(String(allowed.msg.execCode))
                 && capabilitiesShed(allowed.msg, allowed.stderr)
                 && REFUSAL_CODES.has(String(allowed.msg.unixCode))
-                && allowed.msg.netCode === 'CONNECTED');
+                && allowed.msg.netCode === 'CONNECTED'
+                && surfaceOk(allowed.msg) && allowedPortOk);
             if (ipcOk && positiveWrite && positiveRead && exactRead && siblingRefused && readRefused && outRefused && signalRefused
-                && processRefused && execRefused && capsDropped && netRefused && unixRefused && allowedOk) {
+                && processRefused && execRefused && capsDropped && netRefused && unixRefused && confinedSurface && allowedOk) {
                 zeroConfState = 'active';
                 zeroConfShimFailure = null;
+                zeroConfEgressPorts = portsByKernel ? 'kernel' : 'unavailable';
+                if (!portsByKernel) log.warn('[Sandbox] This Linux kernel has no Landlock TCP rules (ABI < 4): the destination ports of network-granted plugins are bounded by the in-process egress guard only. A kernel >= 6.7 enforces them natively.');
                 zeroConfNote = 'Landlock + seccomp-bpf certified with no host configuration for both network policies: reads/writes are scoped, process creation and dangerous syscalls are refused, all sockets are denied without a grant, and only IP client sockets are admitted with it';
                 log.info('[Sandbox] Linux kernel confinement ACTIVE (Landlock scopes reads/writes and cross-process access; seccomp-bpf refuses process creation and dangerous syscalls, denies all new sockets without a grant, and admits only AF_INET/AF_INET6 clients with it while preserving IPC).');
                 return 'active';
@@ -652,6 +728,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 + `capabilities=${capsDropped ? 'zero' : logSafe(`${(confined.msg && confined.msg.capsCode) || 'unknown'}/bounding=${(confined.msg && confined.msg.bndCode) || 'unknown'}`)} `
                 + `rawIpConnect=${netRefused ? 'refused' : logSafe((confined.msg && confined.msg.netCode) || 'unknown')} `
                 + `unixConnect=${unixRefused ? 'refused' : logSafe((confined.msg && confined.msg.unixCode) || 'unknown')} `
+                + `syscallSurface=${confinedSurface ? 'refused' : logSafe(`prio:${(confined.msg && confined.msg.prioCode) || '?'}/self:${(confined.msg && confined.msg.selfPrioCode) || '?'}/trunc:${(confined.msg && confined.msg.truncCode) || '?'}/chmod:${(confined.msg && confined.msg.chmodCode) || '?'}/fd:${(confined.msg && confined.msg.fdCode) || '?'}`)} `
+                + `egressPorts=${allowedPortOk ? (portsByKernel ? 'kernel' : 'unavailable') : logSafe((allowed.msg && allowed.msg.portCode) || 'unknown')} `
                 + `networkGrantedShape=${allowedOk ? 'ok' : 'FAILED'} `
                 + `shimExit=${logSafe(confined.code)} shimSays=${logSafe(confined.stderr.trim().slice(0, 200))}`);
             return 'degraded';
@@ -665,6 +743,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             // exactly the class of probe-temp leak this module must avoid.
             try { if (unixServer) unixServer.close(); } catch { /* */ }
             try { if (probeRoot) fsl.rmSync(probeRoot, { recursive: true, force: true }); } catch { /* */ }
+            try { if (portServer) portServer.close(); } catch { /* */ }
+            try { if (victim) victim.kill('SIGKILL'); } catch { /* */ }
         }
     })();
     return zeroConfProbe;
@@ -679,6 +759,8 @@ module.exports = {
     getLinuxZeroConfState,
     getLinuxZeroConfNote,
     getLinuxZeroConfShimFailure,
+    getLinuxEgressPortEnforcement,
+    DEFAULT_EGRESS_TCP_PORTS,
     // The probe's capability verdict, exported so its rule is pinned by a unit test on every host.
     capabilitiesShed,
     // The attribution rule for a child that died during startup: read by plugin-isolate.ts to decide

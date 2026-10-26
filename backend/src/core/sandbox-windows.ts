@@ -118,15 +118,78 @@ function sandboxConfig(): any {
  * ACL authority is isolated per plugin rather than accumulated by one installation-wide identity.
  */
 const DEFAULT_PROFILE_NAME = 'WordJSPluginSandbox';
+/**
+ * The install root as the KERNEL names it: a junction, a `subst` drive or an 8.3 short name all resolve to
+ * the same directory, so they must resolve to the same profile, or one install would own several SIDs and
+ * every ACE granted under one spelling would outlive a retirement made under another.
+ */
+function canonicalInstallRoot(root: string): string {
+    const resolved = path.resolve(String(root || '.'));
+    try { return fs.realpathSync.native(resolved).toLowerCase(); } catch { return resolved.toLowerCase(); }
+}
 function appContainerProfileNameForRoot(root: string): string {
-    const canonical = path.resolve(String(root || '.')).toLowerCase();
+    const canonical = canonicalInstallRoot(root);
     const digest = crypto.createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 20);
     return `${DEFAULT_PROFILE_NAME}.${digest}`;
 }
-function appContainerProfileNameForPlugin(root: string, slug: string): string {
+/**
+ * `generation` is a random value recorded when a worker's profile is first used (see profileGeneration):
+ * uninstalling a plugin forgets it, so reinstalling the same slug gets a NEW package SID and can never
+ * inherit an ACE the old one left behind. Without one (the probe's throwaway profiles) the name is the
+ * plain digest of root and slug.
+ */
+function appContainerProfileNameForPlugin(root: string, slug: string, generation: string = ''): string {
+    const canonical = canonicalInstallRoot(root);
+    const seed = generation ? `${canonical}\0${String(slug)}\0${generation}` : `${canonical}\0${String(slug)}`;
+    const digest = crypto.createHash('sha256').update(seed, 'utf8').digest('hex').slice(0, 32);
+    return `${DEFAULT_PROFILE_NAME}.${digest}`;
+}
+/** The name releases before the per-install generation used: lexical root, no realpath, no generation. */
+function legacyProfileNameForPlugin(root: string, slug: string): string {
     const canonical = path.resolve(String(root || '.')).toLowerCase();
     const digest = crypto.createHash('sha256').update(`${canonical}\0${String(slug)}`, 'utf8').digest('hex').slice(0, 32);
     return `${DEFAULT_PROFILE_NAME}.${digest}`;
+}
+
+/**
+ * The per-install generation of each worker's profile, host-only state under data/ (no plugin can read
+ * it: data/ is never a plugin zone). Keyed by the worker key (`<slug>`, `s<id>:<slug>`, `theme:<slug>`).
+ */
+function generationsFile(root: string): string {
+    return path.join(path.resolve(String(root || '.')), 'data', 'sandbox', 'appcontainer-generations.json');
+}
+function readGenerations(root: string): Record<string, string> {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(generationsFile(root), 'utf8'));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch { return {}; }
+}
+function writeGenerations(root: string, map: Record<string, string>): void {
+    const file = generationsFile(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(map, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, file);
+}
+/** The worker's generation; with `create`, a new random one is recorded when there is none. */
+function profileGeneration(root: string, workerKey: string, create: boolean): string | null {
+    const map = readGenerations(root);
+    const have = map[workerKey];
+    if (typeof have === 'string' && /^[0-9a-f]{16,64}$/.test(have)) return have;
+    if (!create) return null;
+    const gen = crypto.randomBytes(16).toString('hex');
+    writeGenerations(root, { ...readGenerations(root), [workerKey]: gen });
+    return gen;
+}
+function forgetProfileGeneration(root: string, workerKey: string): void {
+    const map = readGenerations(root);
+    if (!(workerKey in map)) return;
+    delete map[workerKey];
+    try { writeGenerations(root, map); } catch { /* a stale entry only reuses a SID nothing grants any more */ }
+}
+/** Every worker key with a recorded generation (the retire-all path walks them). */
+function listProfileGenerations(root: string): string[] {
+    return Object.keys(readGenerations(root));
 }
 function defaultAppContainerProfileName(): string {
     return appContainerProfileNameForRoot(path.resolve(__dirname, '..', '..'));
@@ -286,6 +349,9 @@ function runPowerShellWithEnv(script: string, extra: Record<string, string>, tim
         let done = false;
         const finish = (code: number) => { if (done) return; done = true; resolve({ code, out }); };
         const t = setTimeout(() => {
+            // The WHOLE tree: killing powershell.exe alone left a running icacls.exe behind, whose late
+            // grant could land after the next launch had already granted the new shape.
+            killProcessTree(ps && ps.pid);
             try { ps.kill(); } catch { /* */ }
             out += `${out && !out.endsWith('\n') ? '\n' : ''}TIMEOUT after ${timeoutMs} ms`;
             finish(-2);
@@ -294,6 +360,12 @@ function runPowerShellWithEnv(script: string, extra: Record<string, string>, tim
         ps.on('error', () => { clearTimeout(t); finish(-1); });
         ps.on('exit', (code: number) => { clearTimeout(t); finish(code == null ? -1 : code); });
     });
+}
+
+/** taskkill /T /F: the process and every descendant. Synchronous and bounded; a missing pid is a no-op. */
+function killProcessTree(pid: number | undefined | null): void {
+    if (!pid || process.platform !== 'win32') return;
+    try { spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 15000 }); } catch { /* already gone */ }
 }
 
 /**
@@ -328,6 +400,12 @@ function launcherEnv(): Record<string, string> {
 // grant stamped an EXPLICIT ACE on every sub-folder (see the revoke below). Only retirement uses it.
 type AclMode = 'traverse' | 'rx' | 'full' | 'revoke' | 'revoke-deep';
 type GrantMode = Exclude<AclMode, 'revoke' | 'revoke-deep'>;
+/** The PowerShell line that verifies a batch entry after icacls ran (see the read-back in buildIcaclsScript). */
+function aclReadbackCheck(mode: AclMode): string {
+    return (mode === 'revoke' || mode === 'revoke-deep')
+        ? "      if (@($rules | Where-Object { -not $_.IsInherited }).Count -gt 0) { $fail++ }"
+        : "      if ($rules.Count -eq 0) { $fail++ }";
+}
 function buildIcaclsScript(mode: AclMode): string {
     // The SID and the directory list travel in the environment (base64 for the list); nothing here is
     // interpolated into script text, so a path can never become PowerShell source.
@@ -378,6 +456,11 @@ function buildIcaclsScript(mode: AclMode): string {
                     "  $null = & icacls $d /remove:d \"*${sid}\" /T /C /Q",
                     "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
                     "  $null = & icacls $d /grant:r \"*${sid}:(CI)(M)\" \"*${sid}:(OI)(CI)(IO)(RD,WD,AD,REA,WEA,RA,WA,DE,RC,S)\" /C /Q",
+                    // OWNER RIGHTS (S-1-3-4) on what is created below the root: the owner of a file the child
+                    // creates gets these rights INSTEAD of the implicit READ_CONTROL + WRITE_DAC, so being
+                    // the owner never lets anyone rewrite that file's DACL (to open it to other containers).
+                    "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
+                    "  $null = & icacls $d /grant \"*S-1-3-4:(OI)(CI)(IO)(M)\" /C /Q",
                 ];
     const script = [
         "$ErrorActionPreference='Continue'",
@@ -391,8 +474,19 @@ function buildIcaclsScript(mode: AclMode): string {
         // ${sid} braces are load-bearing: in a PowerShell double-quoted string `$sid:` parses as a
         // scope/drive qualifier ("$env:PATH" is the same syntax), so `"*$sid:(OI)..."` would NOT expand to
         // the SID -- it would silently produce a malformed principal and icacls would grant nothing.
+        "  $before = $fail",
         ...operation,
         "  if ($LASTEXITCODE -ne 0) { $fail++ }",
+        // READ THE ACL BACK. An exit code says icacls ran; this says the ACE is (or is no longer) there.
+        // For a revoke only EXPLICIT entries count - an inherited (I) one is the parent's, not ours to remove.
+        "  if ($fail -eq $before) {",
+        "    $rules = $null",
+        "    try { $rules = @((Get-Acl -LiteralPath $d).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -eq $sid }) } catch { $fail++ }",
+        "    if ($rules -ne $null) {",
+        aclReadbackCheck(mode),
+        "    }",
+        "  }",
+        "  if ($fail -ne $before) { Write-Output ('FAILDIR ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($d))) }",
         "}",
         "Write-Output (\"ICACLS fail=$fail skip=$skip total=\" + $dirs.Count)",
     ].join("\n");
@@ -480,8 +574,15 @@ function legacyMarkerPaths(sid: string, dir: string, mode: GrantMode): string[] 
 }
 
 /** Was `dir` granted to `sid` by an earlier release's recursive rx/full grant (explicit ACEs on sub-folders)? */
+/** A v3 marker: keyed on the lexical path alone, and every v3 rx/full grant was recursive (/T). */
+function v3MarkerPath(sid: string, dir: string, mode: GrantMode): string {
+    const canonical = path.resolve(String(dir)).toLowerCase();
+    const key = crypto.createHash('sha256').update(`${sid}\0${canonical}\0${mode}`, 'utf8').digest('hex');
+    return path.join(appContainerAclCacheRoot('v3'), `${key}.ok`);
+}
 function aclLegacyDeepGrant(sid: string, dir: string): boolean {
-    return (['rx', 'full'] as const).some((mode) => legacyMarkerPaths(sid, dir, mode).some((m) => fs.existsSync(m)));
+    return (['rx', 'full'] as const).some((mode) => legacyMarkerPaths(sid, dir, mode).some((m) => fs.existsSync(m))
+        || fs.existsSync(v3MarkerPath(sid, dir, mode)));
 }
 
 function aclGrantIsCached(sid: string, dir: string, mode: GrantMode): boolean {
@@ -512,7 +613,7 @@ function removeAclMarkers(sid: string, dir: string, versions: string[] = [ACL_CA
             // Markers for the directory's CURRENT identity. A directory that is already gone has no current
             // identity and therefore no reachable marker: anything left in the cache is keyed on an identity
             // that can never recur, so it is inert rather than stale. Missing is a no-op, never a throw.
-            const markers = version === LEGACY_DEEP_ACL_CACHE_VERSION ? legacyMarkerPaths(sid, dir, mode) : [aclMarkerPath(sid, dir, mode, version)];
+            const markers = version === LEGACY_DEEP_ACL_CACHE_VERSION ? [...legacyMarkerPaths(sid, dir, mode), v3MarkerPath(sid, dir, mode)] : [aclMarkerPath(sid, dir, mode, version)];
             for (const marker of markers) {
                 if (marker === null) continue;
                 try { fs.rmSync(marker, { force: true }); } catch { /* cache is optional */ }
@@ -575,6 +676,7 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
     if (list.length === 0) return true;
     let release: (() => void) | null = null;
     let cacheAvailable = true;
+    const failedDirs = new Set<string>();
     try {
         release = await acquireAclCacheLock(sid);
     } catch (e: any) {
@@ -602,7 +704,17 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
         // and walks the whole tree: on a large node_modules it needs minutes, and it runs only at retirement.
         }, mode === 'revoke-deep' ? 600000 : 120000);
         const m = /ICACLS fail=(\d+) skip=(\d+) total=(\d+)/.exec(r.out);
-        if (!m) { log.warn({ mode: logSafe(mode) }, `[Sandbox] AppContainer ${logSafe(mode)} failed to run: ${logSafe(r.out.trim().slice(0, 200))}`); return false; }
+        // Which directories did NOT end in the requested state. A batch that never reported counts as all
+        // of them: a revoke whose outcome is unknown must keep the markers that let a later one find it.
+        for (const line of r.out.split(/\r?\n/)) {
+            const fm = /^FAILDIR ([A-Za-z0-9+/=]+)\s*$/.exec(line.trim());
+            if (fm) { try { failedDirs.add(Buffer.from(fm[1], 'base64').toString('utf8').toLowerCase()); } catch { /* */ } }
+        }
+        if (!m) {
+            for (const d of pending) failedDirs.add(d.toLowerCase());
+            log.warn({ mode: logSafe(mode) }, `[Sandbox] AppContainer ${logSafe(mode)} failed to run: ${logSafe(r.out.trim().slice(0, 200))}`);
+            return false;
+        }
         const failed = Number(m[1]);
         // A failure here is reported, never fatal by itself. MEASURED on this host: granting
         // C:\Program Files\nodejs is refused for a non-admin account (the directory is owned by
@@ -627,8 +739,11 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
         }
         return failed === 0;
     } finally {
-        if (mode === 'revoke') for (const dir of list) removeAclMarkers(sid, dir);
-        if (mode === 'revoke-deep') for (const dir of list) removeAclMarkers(sid, dir, [ACL_CACHE_VERSION, LEGACY_DEEP_ACL_CACHE_VERSION]);
+        // Forget a revoked grant only where the revoke is CONFIRMED: a marker is how the next retirement
+        // knows there is an ACE left to remove.
+        const revoked = list.filter((dir) => !failedDirs.has(dir.toLowerCase()));
+        if (mode === 'revoke') for (const dir of revoked) removeAclMarkers(sid, dir);
+        if (mode === 'revoke-deep') for (const dir of revoked) removeAclMarkers(sid, dir, [ACL_CACHE_VERSION, LEGACY_DEEP_ACL_CACHE_VERSION]);
         if (release) release();
     }
 }
@@ -735,10 +850,15 @@ function buildRelayScript(): string {
         // confinement come from the package SID/token and are unchanged by this one network capability.
         "SECCAPS caps = new SECCAPS(); caps.Sid = sid; caps.Caps = IntPtr.Zero; caps.CapCount = 0; caps.Reserved = 0;",
         "if (Env(\"WJS_AC_INTERNET_CLIENT\") == \"1\") {",
+        // S-1-15-3-3 (privateNetworkClientServer) is added ONLY for a plugin an administrator approved a
+        // private destination for: without it the container cannot reach the private ranges at all (see
+        // the network-isolation policy below), and the egress guard narrows it to the approved host:port.
+        "bool privNet = Env(\"WJS_AC_PRIVATE_NETWORK\") == \"1\"; int capN = privNet ? 2 : 1; int ssz = Marshal.SizeOf(typeof(SIDATTR));",
         "if (!ConvertStringSidToSidW(\"S-1-15-3-1\", out capSid)) { Console.Error.WriteLine(\"WJSAC FAIL internetclientsid\"); return 121; }",
-        "SIDATTR sa = new SIDATTR(); sa.Sid = capSid; sa.Attributes = 4;",
-        "capArray = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SIDATTR))); Marshal.StructureToPtr(sa, capArray, false);",
-        "caps.Caps = capArray; caps.CapCount = 1;",
+        "capArray = Marshal.AllocHGlobal(ssz * capN);",
+        "SIDATTR sa = new SIDATTR(); sa.Sid = capSid; sa.Attributes = 4; Marshal.StructureToPtr(sa, capArray, false);",
+        "if (privNet) { IntPtr capSid2 = IntPtr.Zero; if (!ConvertStringSidToSidW(\"S-1-15-3-3\", out capSid2)) { Console.Error.WriteLine(\"WJSAC FAIL privatenetworksid\"); return 121; } SIDATTR sb = new SIDATTR(); sb.Sid = capSid2; sb.Attributes = 4; Marshal.StructureToPtr(sb, new IntPtr(capArray.ToInt64() + ssz), false); }",
+        "caps.Caps = capArray; caps.CapCount = (uint)capN;",
         "}",
         "capsPtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SECCAPS))); Marshal.StructureToPtr(caps, capsPtr, false);",
         // The attribute list is sized for exactly the attributes we are about to add: InitializeProcThreadAttributeList
@@ -947,6 +1067,7 @@ type LaunchOpts = {
     cpuPercent?: number;
     addNodeFlags?: boolean; // default true; the caller can opt out if it already inserted them
     allowNetwork?: boolean; // adds only internetClient; all other AppContainer restrictions remain
+    allowPrivateNetwork?: boolean; // with allowNetwork: adds privateNetworkClientServer (an approved private destination)
     verifyProcessLimit?: boolean; // native probe only: tries and must fail to add a second suspended process
 };
 
@@ -1014,6 +1135,7 @@ async function launchInAppContainer(opts: LaunchOpts): Promise<LaunchResult> {
         WJS_AC_ACTIVE_PROCS: '1',
         WJS_AC_CPU_PERCENT: String(Math.max(0, Math.floor(opts.cpuPercent ?? (Number(cfg.cpuQuotaPercent) > 0 ? Number(cfg.cpuQuotaPercent) : 0)))),
         WJS_AC_INTERNET_CLIENT: opts.allowNetwork ? '1' : '0',
+        WJS_AC_PRIVATE_NETWORK: (opts.allowNetwork && opts.allowPrivateNetwork) ? '1' : '0',
         WJS_AC_VERIFY_JOB_LIMIT: opts.verifyProcessLimit ? '1' : '0',
     };
 
@@ -1204,8 +1326,9 @@ function getAppContainerSid() { return appContainerSid; }
  */
 const PROBE_CHILD_SOURCE = [
     "var fs=require('fs'),path=require('path');",
-    "var out={ipc:!!process.send,connect:null,read:null,write:null,exec:null};",
+    "var out={ipc:!!process.send,connect:null,read:null,write:null,exec:null,secret:null};",
     "try{fs.readdirSync(process.env.WJS_PROBE_OUTSIDE);out.read='OPEN'}catch(e){out.read=(e&&e.code)||String(e)}",
+    "out.secret='SKIP';if(process.env.WJS_PROBE_SECRET){try{fs.readFileSync(process.env.WJS_PROBE_SECRET);out.secret='OPEN'}catch(e){out.secret=(e&&e.code)||String(e)}}",
     "try{fs.writeFileSync(path.join(__dirname,'probe-write.tmp'),'ok');out.write='OK'}catch(e){out.write=(e&&e.code)||String(e)}",
     // The relay has already made a second suspended AppContainer process hit the Job limit before this
     // child was resumed. Calling child_process from inside this one-process job is deliberately avoided:
@@ -1221,7 +1344,7 @@ const PROBE_CHILD_SOURCE = [
 
 /** Run the probe child OUTSIDE any container. The negative control: it proves the read we require to be
  *  refused is a read that is normally ALLOWED, so a 'refused' verdict can only come from the sandbox. */
-function runProbeControl(zoneDir: string, outsideDir: string): Promise<any | null> {
+function runProbeControl(zoneDir: string, outsideDir: string, secret: string | null = null): Promise<any | null> {
     const execProbe = spawnSync(process.execPath, ['-e', 'process.exit(0)'], { windowsHide: true, timeout: 10000 });
     const execVerdict = execProbe && !execProbe.error && execProbe.status === 0 ? 'OK' : 'FAIL';
     return new Promise((resolve) => {
@@ -1229,7 +1352,7 @@ function runProbeControl(zoneDir: string, outsideDir: string): Promise<any | nul
         try {
             p = spawn(process.execPath, ['-e', PROBE_CHILD_SOURCE], {
                 cwd: zoneDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], serialization: 'advanced',
-                env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir },
+                env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir, ...(secret ? { WJS_PROBE_SECRET: secret } : {}) },
             });
         } catch { return resolve(null); }
         let got: any = null;
@@ -1239,6 +1362,154 @@ function runProbeControl(zoneDir: string, outsideDir: string): Promise<any | nul
         p.on('exit', () => finish());
         const t = setTimeout(finish, 20000); if (t.unref) t.unref();
     });
+}
+
+// ── ALL APPLICATION PACKAGES and the secret paths ─────────────────────────────────────────────────
+//
+// Every AppContainer token carries S-1-15-2-1 (ALL APPLICATION PACKAGES) and S-1-15-2-2 (ALL RESTRICTED
+// APPLICATION PACKAGES). An install under C:\Program Files, or in any tree whose ACL names either group,
+// therefore lets EVERY container - each plugin's - read whatever inherits that ACE: the configuration, the
+// database, the logs and every other plugin's storage. The package-SID model cannot see this, because the
+// read is granted to a group the token is in, not to the plugin. So the paths that hold secrets are
+// checked at probe time and, where either group can read them, those groups' entries are REMOVED: the
+// path's inherited entries become explicit copies (/inheritance:d) and the two groups' are dropped. An
+// explicit DENY for the groups is not enough - measured: the AppContainer check still granted the read
+// past a deny entry that preceded the allow. Each plugin's own zone keeps its explicit package-SID entry.
+// A path the host cannot re-ACL keeps the probe 'degraded', so the fail-closed policy refuses plugins
+// rather than starting them next to readable secrets.
+const ALL_APP_PACKAGES = ['S-1-15-2-1', 'S-1-15-2-2'];
+/** The paths under the install root that hold secrets or other parties' state, as they exist on disk. */
+function secretPathsFor(appRoot: string): string[] {
+    const root = path.resolve(appRoot);
+    const names = ['wordjs-config.json', 'wordjs-config.backup.json', '.env', '.env.local', '.env.production', 'data', 'logs', 'os-tmp', 'certs', 'backups', 'plugins', 'themes'];
+    return names.map((n) => path.join(root, n)).filter((p) => { try { return fs.existsSync(p); } catch { return false; } });
+}
+function buildSecretAclScript(): string {
+    const script = [
+        "$ErrorActionPreference='Continue'",
+        "$paths = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:WJS_AC_DIRS_B64)) -split \"`n\" | Where-Object { $_.Length -gt 0 }",
+        "$groups = @('S-1-15-2-1', 'S-1-15-2-2')",
+        "function Exposed($p) {",
+        "  try { $rules = @((Get-Acl -LiteralPath $p).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) } catch { return $true }",
+        "  foreach ($g in $groups) {",
+        "    $mine = @($rules | Where-Object { $_.IdentityReference.Value -eq $g })",
+        // Any ALLOW entry with read-data counts, a deny entry beside it or not (see above).
+        "    $read = @($mine | Where-Object { $_.AccessControlType -eq 'Allow' -and (([int]$_.FileSystemRights) -band 1) -ne 0 })",
+        "    if ($read.Count -gt 0) { return $true }",
+        "  }",
+        "  return $false",
+        "}",
+        "foreach ($p in $paths) {",
+        "  if (-not (Exposed $p)) { continue }",
+        "  if ($env:WJS_AC_PROTECT -eq '1') {",
+        // Inherited entries become explicit copies on this path, then both groups' entries are removed;
+        // Windows re-propagates the result to everything below that inherits from it.
+        "    $null = & icacls $p /inheritance:d /C /Q",
+        "    $null = & icacls $p /remove:g *S-1-15-2-1 *S-1-15-2-2 /C /Q",
+        "    if (-not (Exposed $p)) { Write-Output ('PROTECTED ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p))); continue }",
+        "  }",
+        "  Write-Output ('EXPOSED ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p)))",
+        "}",
+        "Write-Output 'SECRETS-DONE'",
+    ].join("\n");
+    assertAscii(script, 'secret ACL script');
+    return script;
+}
+type SecretExposure = { checked: boolean; protectedPaths: string[]; exposed: string[] };
+let secretExposure: SecretExposure = { checked: false, protectedPaths: [], exposed: [] };
+/**
+ * Find the secret paths ALL APPLICATION PACKAGES (or ALL RESTRICTED APPLICATION PACKAGES) can read and
+ * DENY both groups there. Returns what was protected and what is still exposed (the host could not change
+ * that ACL). `protect: false` only reports.
+ */
+async function protectSecretsFromAllAppContainers(appRoot: string, protect: boolean = true): Promise<SecretExposure> {
+    if (process.platform !== 'win32') return { checked: false, protectedPaths: [], exposed: [] };
+    const paths = secretPathsFor(appRoot);
+    if (paths.length === 0) return (secretExposure = { checked: true, protectedPaths: [], exposed: [] });
+    const r = await runPowerShellWithEnv(buildSecretAclScript(), {
+        WJS_AC_DIRS_B64: Buffer.from(paths.join('\n'), 'utf8').toString('base64'),
+        WJS_AC_PROTECT: protect ? '1' : '0',
+    }, 120000);
+    const decode = (b: string) => { try { return Buffer.from(b, 'base64').toString('utf8'); } catch { return ''; } };
+    const lines = r.out.split(/\r?\n/).map((l) => l.trim());
+    if (!lines.includes('SECRETS-DONE')) {
+        // Unknown is not safe: every secret path counts as exposed until a check completes.
+        return (secretExposure = { checked: true, protectedPaths: [], exposed: paths });
+    }
+    const protectedPaths = lines.filter((l) => l.startsWith('PROTECTED ')).map((l) => decode(l.slice(10))).filter(Boolean);
+    const exposed = lines.filter((l) => l.startsWith('EXPOSED ')).map((l) => decode(l.slice(8))).filter(Boolean);
+    if (protectedPaths.length) log.warn({ count: protectedPaths.length }, `[Sandbox] ${protectedPaths.length} secret path(s) of this install were readable by every AppContainer (ALL APPLICATION PACKAGES); the entries of both application-package groups were removed from them.`);
+    if (exposed.length) log.warn({ count: exposed.length }, `[Sandbox] ${exposed.length} secret path(s) of this install are readable by every AppContainer and this account cannot change their ACL. Run once, elevated, for each: icacls "<path>" /inheritance:d, then icacls "<path>" /remove:g *S-1-15-2-1 *S-1-15-2-2`);
+    return (secretExposure = { checked: true, protectedPaths, exposed });
+}
+
+// ── Private destinations: the Windows network-isolation ranges ─────────────────────────────────────
+//
+// A container with only `internetClient` is kept from the PRIVATE network, but Windows decides what is
+// private from the local subnets of interfaces on a Private/Domain network. A routed LAN, a VPN, the
+// 100.64/10 shared range or 169.254 (cloud metadata) on a Public-profile host count as "Internet", and
+// the plugin reaches them past every kernel check, with only the egress guard in the way. The machine
+// policy "Private network ranges for apps" (HKLM\SOFTWARE\Policies\Microsoft\Windows\NetworkIsolation,
+// DomainSubnets) makes these ranges private for every AppContainer. It is machine-wide and needs an
+// administrator ONCE; Site Health shows whether it is set and applies it from the panel (a UAC prompt on
+// the server). A plugin an administrator approved a private destination for gets
+// privateNetworkClientServer, and the egress guard narrows that to the approved host:port.
+const PRIVATE_NETWORK_RANGES = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', 'fc00::/7', 'fe80::/10'];
+const NETWORK_ISOLATION_KEY = 'HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkIsolation';
+type NetworkIsolationState = { platform: boolean; configured: boolean; missing: string[] };
+let networkIsolationState: NetworkIsolationState = { platform: process.platform === 'win32', configured: false, missing: PRIVATE_NETWORK_RANGES.slice() };
+/** Read the policy (no elevation needed to READ it). */
+function readNetworkIsolationPolicy(): NetworkIsolationState {
+    if (process.platform !== 'win32') return (networkIsolationState = { platform: false, configured: false, missing: [] });
+    let value: string;
+    try {
+        const q = spawnSync('reg.exe', ['query', NETWORK_ISOLATION_KEY, '/v', 'DomainSubnets'], { windowsHide: true, encoding: 'utf8', timeout: 10000 });
+        const m = /DomainSubnets\s+REG_SZ\s+(.*)$/m.exec(String(q.stdout || ''));
+        value = m ? m[1].trim() : '';
+    } catch { value = ''; }
+    const have = new Set(value.split(/[,;\s]+/).map((v) => v.trim().toLowerCase()).filter(Boolean));
+    const missing = PRIVATE_NETWORK_RANGES.filter((r) => !have.has(r.toLowerCase()));
+    return (networkIsolationState = { platform: true, configured: missing.length === 0, missing });
+}
+/** The script that sets the policy (merging any ranges already there). Run elevated. */
+function networkIsolationScript(): string {
+    const ranges = PRIVATE_NETWORK_RANGES.join(',');
+    const script = [
+        "$ErrorActionPreference='Stop'",
+        "$key = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkIsolation'",
+        "if (-not (Test-Path $key)) { $null = New-Item -Path $key -Force }",
+        "$old = (Get-ItemProperty -Path $key -Name DomainSubnets -ErrorAction SilentlyContinue).DomainSubnets",
+        `$want = '${ranges}' -split ','`,
+        "$all = @(); if ($old) { $all += ($old -split '[,; ]+' | Where-Object { $_ }) }",
+        "foreach ($r in $want) { if ($all -notcontains $r) { $all += $r } }",
+        "Set-ItemProperty -Path $key -Name DomainSubnets -Value ($all -join ',') -Type String",
+        "$null = & gpupdate.exe /target:computer /force",
+        "Write-Output 'NETISO-OK'",
+    ].join("\n");
+    assertAscii(script, 'network isolation script');
+    return script;
+}
+/**
+ * Apply the policy from the panel: an elevated PowerShell (UAC on the server's desktop). Without an
+ * interactive administrator there is no prompt to answer, and the result says so with the command to run.
+ */
+async function applyNetworkIsolationPolicy(): Promise<{ ok: boolean; reason?: string; command: string }> {
+    const encoded = Buffer.from(networkIsolationScript(), 'utf16le').toString('base64');
+    const command = `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
+    if (process.platform !== 'win32') return { ok: false, reason: 'not a Windows server', command };
+    if (readNetworkIsolationPolicy().configured) return { ok: true, command };
+    const launcher = [
+        "$ErrorActionPreference='Stop'",
+        "try {",
+        "$p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$env:WJS_NETISO_B64)",
+        "Write-Output ('ELEVATED-EXIT ' + $p.ExitCode)",
+        "} catch { Write-Output ('ELEVATED-FAIL ' + $_.Exception.Message) }",
+    ].join("\n");
+    const r = await runPowerShellWithEnv(launcher, { WJS_NETISO_B64: encoded }, 180000);
+    const state = readNetworkIsolationPolicy();
+    if (state.configured) return { ok: true, command };
+    const fail = /ELEVATED-FAIL (.*)/.exec(r.out);
+    return { ok: false, reason: fail ? logSafe(fail[1]).slice(0, 200) : 'the administrator prompt was not accepted', command };
 }
 
 let acProbe: Promise<'active' | 'degraded' | 'unsupported' | 'disabled'> | undefined;
@@ -1269,6 +1540,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
         let outside: string | null = null;
         let launched: LaunchResult | null = null;
         let allowedLaunched: LaunchResult | null = null;
+        let secretCanary: string | null = null;
         try {
             const zoneDir: string = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-ac-zone-'));
             zone = zoneDir;
@@ -1278,9 +1550,16 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             const outsideDir: string = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-ac-outside-'));
             outside = outsideDir;
             fs.writeFileSync(path.join(outsideDir, 'canary.txt'), 'canary');
+            // THE INSTALL ROOT, not just the temp dir: a canary where the secrets live. Every container
+            // must be refused it, whatever ACL the install tree inherited (see secretPathsFor).
+            await protectSecretsFromAllAppContainers(appRoot);
+            const canaryHome = fs.existsSync(path.join(appRoot, 'data')) ? path.join(appRoot, 'data') : appRoot;
+            secretCanary = path.join(canaryHome, `.wjs-ac-canary-${crypto.randomBytes(8).toString('hex')}.txt`);
+            try { fs.writeFileSync(secretCanary, 'install-root-canary', { mode: 0o600 }); } catch { secretCanary = null; }
+            readNetworkIsolationPolicy();
 
-            const control = await runProbeControl(zoneDir, outsideDir);
-            if (!control || control.read !== 'OPEN' || control.write !== 'OK' || control.exec !== 'OK' || control.connect !== 'CONNECTED') {
+            const control = await runProbeControl(zoneDir, outsideDir, secretCanary);
+            if (!control || control.read !== 'OPEN' || control.write !== 'OK' || control.exec !== 'OK' || control.connect !== 'CONNECTED' || (secretCanary && control.secret !== 'OPEN')) {
                 appContainerState = 'degraded';
                 log.warn(`[Sandbox] AppContainer probe ABORTED: the uncontained control was not clean (read=${logSafe(control && control.read)}, write=${logSafe(control && control.write)}, connect=${logSafe(control && control.connect)}).`);
                 return 'degraded';
@@ -1301,7 +1580,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
                 // plugin-isolate.ts: a probe that does not mirror the launch green-lights a launch that fails).
                 args: ['-e', PROBE_CHILD_SOURCE],
                 cwd: zoneDir,
-                env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir },
+                env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir, ...(secretCanary ? { WJS_PROBE_SECRET: secretCanary } : {}) },
                 memoryBytes: 256 * 1024 * 1024,
                 cpuPercent: 0,
                 allowNetwork: false,
@@ -1328,16 +1607,19 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             const readDenied = verdict.read === 'EPERM' || verdict.read === 'EACCES';
             const execDenied = verdict.exec === 'JOB_OBJECT';
             const canWork = verdict.write === 'OK';
-            if (!netDenied || !readDenied || !execDenied || !canWork) {
+            // The install-root canary: refused, or no sandbox is certified next to readable secrets.
+            const secretDenied = !secretCanary || verdict.secret === 'EPERM' || verdict.secret === 'EACCES';
+            if (!netDenied || !readDenied || !execDenied || !canWork || !secretDenied) {
                 appContainerState = 'degraded';
-                log.warn(`[Sandbox] AppContainer probe FAILED (connect=${logSafe(verdict.connect)}, read=${logSafe(verdict.read)}, exec=${logSafe(verdict.exec)}, write=${logSafe(verdict.write)}).`);
+                log.warn(`[Sandbox] AppContainer probe FAILED (connect=${logSafe(verdict.connect)}, read=${logSafe(verdict.read)}, exec=${logSafe(verdict.exec)}, write=${logSafe(verdict.write)}, installRootSecret=${logSafe(verdict.secret)}).`
+                    + (secretDenied ? '' : ' Every AppContainer can read this install\'s secret paths (ALL APPLICATION PACKAGES) and their ACL could not be changed by this account; see the warning above for the one-time elevated fix.'));
                 return 'degraded';
             }
             // Certify the network-GRANTED shape independently. internetClient may enable sockets, but it
             // must not widen the package SID's filesystem or process authority.
             allowedLaunched = await launchInAppContainer({
                 sid, exe: runtimeExe, args: ['-e', PROBE_CHILD_SOURCE], cwd: zoneDir,
-                env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir },
+                env: { ...launcherEnv(), WJS_PROBE_OUTSIDE: outsideDir, ...(secretCanary ? { WJS_PROBE_SECRET: secretCanary } : {}) },
                 memoryBytes: 256 * 1024 * 1024, cpuPercent: 0,
                 allowNetwork: true,
                 verifyProcessLimit: true,
@@ -1352,6 +1634,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             });
             const allowedShape = !!allowedVerdict && allowedVerdict.ipc === true
                 && (allowedVerdict.read === 'EPERM' || allowedVerdict.read === 'EACCES')
+                && (!secretCanary || allowedVerdict.secret === 'EPERM' || allowedVerdict.secret === 'EACCES')
                 && allowedVerdict.exec === 'JOB_OBJECT'
                 && allowedVerdict.write === 'OK' && allowedVerdict.connect === 'CONNECTED';
             if (!allowedShape) {
@@ -1380,6 +1663,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             try { await deleteAppContainerProfile(probeProfileB); } catch { /* */ }
             try { if (zone) fs.rmSync(zone, { recursive: true, force: true }); } catch { /* */ }
             try { if (outside) fs.rmSync(outside, { recursive: true, force: true }); } catch { /* */ }
+            try { if (secretCanary) fs.rmSync(secretCanary, { force: true }); } catch { /* */ }
         }
     })();
     return acProbe;
@@ -1407,7 +1691,25 @@ function appContainerZones(appRoot: string, slug: string, coreDir: string = __di
  * `theme:<slug>` / `s<id>:theme:<slug>` for a theme — which is sandbox-paths' siteStorageSlug.
  */
 function appContainerProfileNameForSite(appRoot: string, slug: string, siteId: number = 1): string {
-    return appContainerProfileNameForPlugin(appRoot, siteStorageSlug(slug, siteId));
+    const key = siteStorageSlug(slug, siteId);
+    return appContainerProfileNameForPlugin(appRoot, key, profileGeneration(appRoot, key, false) || '');
+}
+
+/**
+ * Every (directory, access) pair a worker's SID may have been granted, from the one path declaration.
+ * Retirement revokes all of them and the launch revokes the ones its policy no longer includes, so this
+ * is the list both must agree on. The own code folder is listed `full` too: releases before it became
+ * read-only granted it writable.
+ */
+function workerZoneCandidates(appRoot: string, slug: string, siteId: number = 1): Array<{ dir: string; mode: GrantMode }> {
+    const p = sandboxPaths(appRoot, slug, __dirname, siteId);
+    return [
+        ...p.traverse.map((dir: string) => ({ dir, mode: 'traverse' as const })),
+        ...p.readOnly.map((dir: string) => ({ dir, mode: 'rx' as const })),
+        { dir: p.own, mode: 'full' as const },
+        // Private storage is granted rx (readable) or full (writable), depending on the plugin's grants.
+        ...[...p.writable, ...p.storage].flatMap((dir: string) => [{ dir, mode: 'rx' as const }, { dir, mode: 'full' as const }]),
+    ];
 }
 
 /**
@@ -1423,6 +1725,9 @@ const profileApi = {
     legacyDeepGrant: (sid: string, dir: string): boolean => aclLegacyDeepGrant(sid, dir),
     grantIsCached: (sid: string, dir: string, mode: GrantMode): boolean => aclGrantIsCached(sid, dir, mode),
     forgetGrants: (sid: string, dir: string): void => removeAclMarkers(sid, dir, [ACL_CACHE_VERSION, LEGACY_DEEP_ACL_CACHE_VERSION]),
+    exists: (dir: string): boolean => fs.existsSync(dir),
+    generation: (appRoot: string, key: string): string | null => profileGeneration(appRoot, key, false),
+    forgetGeneration: (appRoot: string, key: string): void => forgetProfileGeneration(appRoot, key),
 };
 
 /**
@@ -1434,33 +1739,92 @@ const profileApi = {
  */
 async function retireAppContainerPlugin(appRoot: string, slug: string, siteId: number = 1): Promise<boolean> {
     if (profileApi.platform() !== 'win32') return false;
-    const profile = appContainerProfileNameForSite(appRoot, slug, siteId);
-    // Never CREATE a profile while uninstalling a plugin that was never isolated. Derivation is pure.
-    const sid = await profileApi.deriveSid(profile);
-    if (!sid) return false;
-    const zones = appContainerZones(appRoot, slug, __dirname, siteId);
-    const candidates: Array<{ dir: string; mode: GrantMode }> = [
-        ...zones.traverse.map((dir) => ({ dir, mode: 'traverse' as const })),
-        ...zones.readExec.map((dir) => ({ dir, mode: 'rx' as const })),
-        // Private storage is granted rx (readable) or full (writable), depending on the plugin's grants.
-        ...zones.write.map((dir) => ({ dir, mode: 'rx' as const })),
-        ...zones.write.map((dir) => ({ dir, mode: 'full' as const })),
-        { dir: path.dirname(getAppContainerRuntimePath()), mode: 'rx' as const },
+    const key = siteStorageSlug(slug, siteId);
+    // Every name this worker may have run under: the current generation's (it exists only once the worker
+    // was launched in a container), and the names releases before it derived (lexical root, no
+    // generation), which are retired when any grant of theirs is on record. A retirement that misses one
+    // leaves that SID's ACEs alive; one that walks a worker never contained costs minutes for nothing.
+    const generation = profileApi.generation(appRoot, key);
+    const names: Array<{ profile: string; always: boolean }> = [
+        ...(generation ? [{ profile: appContainerProfileNameForPlugin(appRoot, key, generation), always: true }] : []),
+        ...Array.from(new Set([legacyProfileNameForPlugin(appRoot, key), appContainerProfileNameForPlugin(appRoot, key)])).map((profile) => ({ profile, always: false })),
     ];
-    // Only revoke on paths whose successful grant marker proves this SID was actually installed there.
-    // Deleting the profile still retires the SID if a crash happened in the tiny ACL-before-marker window.
+    let ok = true;
+    let any = false;
+    for (const { profile, always } of names) {
+        // Never CREATE a profile while uninstalling a plugin that was never isolated. Derivation is pure.
+        const sid = await profileApi.deriveSid(profile);
+        if (!sid) continue;
+        if (!always && !workerZoneCandidates(appRoot, slug, siteId).some(({ dir, mode }) => profileApi.grantIsCached(sid, dir, mode) || profileApi.legacyDeepGrant(sid, dir))) continue;
+        any = true;
+        if (!(await retireSid(appRoot, slug, siteId, sid))) ok = false;
+        if (!(await profileApi.deleteProfile(profile))) ok = false;
+    }
+    // The next install of this slug gets a new generation, so a new SID: nothing granted to this one,
+    // even an ACE a failed revoke left behind, can ever apply to it.
+    profileApi.forgetGeneration(appRoot, key);
+    return any && ok;
+}
+
+/** Revoke one SID from EVERY candidate zone that exists - not only where a marker proves a grant. */
+async function retireSid(appRoot: string, slug: string, siteId: number, sid: string): Promise<boolean> {
+    const candidates = [...workerZoneCandidates(appRoot, slug, siteId), { dir: path.dirname(getAppContainerRuntimePath()), mode: 'rx' as const }];
     const unique = (dirs: string[]) => Array.from(new Map(dirs.map((d) => [path.resolve(d).toLowerCase(), path.resolve(d)] as const)).values());
     // A zone an earlier release granted recursively carries explicit ACEs on its sub-folders: only a deep
     // revoke removes them (once — its markers go with it). Everything granted since is root-only.
     const legacy = unique(candidates.map(({ dir }) => dir).filter((dir) => profileApi.legacyDeepGrant(sid, dir)));
     const legacyKeys = new Set(legacy.map((d) => d.toLowerCase()));
-    const touched = unique(candidates
-        .filter(({ dir, mode }) => profileApi.grantIsCached(sid, dir, mode))
-        .map(({ dir }) => dir)).filter((d) => !legacyKeys.has(d.toLowerCase()));
+    // A marker is no longer the condition: a crash between the ACL and its marker, or a marker removed by
+    // an earlier release after a failed revoke, must not leave an ACE nobody looks for. A root-only revoke
+    // of a directory that never held the SID costs one icacls call and changes nothing.
+    const touched = unique(candidates.map(({ dir }) => dir).filter((d) => profileApi.exists(d)))
+        .filter((d) => !legacyKeys.has(d.toLowerCase()));
     const deepRevoked = legacy.length === 0 || await profileApi.revokeDeep(sid, legacy);
     const revoked = touched.length === 0 || await profileApi.revoke(sid, touched);
-    const deleted = await profileApi.deleteProfile(profile);
-    return deepRevoked && revoked && deleted;
+    return deepRevoked && revoked;
+}
+
+/**
+ * The profile a worker LAUNCHES under, with its generation created on first use. When the worker ran
+ * before generations existed, its old profile is retired first (all its zones revoked, the profile
+ * deleted), so the switch to the new SID leaves no ACE of the old one behind.
+ */
+async function launchProfileNameFor(appRoot: string, slug: string, siteId: number = 1): Promise<string> {
+    const key = siteStorageSlug(slug, siteId);
+    if (profileGeneration(appRoot, key, false) === null && process.platform === 'win32') {
+        for (const legacy of Array.from(new Set([legacyProfileNameForPlugin(appRoot, key), appContainerProfileNameForPlugin(appRoot, key)]))) {
+            const sid = await profileApi.deriveSid(legacy);
+            if (!sid) continue;
+            const touched = workerZoneCandidates(appRoot, slug, siteId).some(({ dir, mode }) => profileApi.grantIsCached(sid, dir, mode) || profileApi.legacyDeepGrant(sid, dir));
+            if (!touched) continue;
+            const ok = await retireSid(appRoot, slug, siteId, sid);
+            if (ok) await profileApi.deleteProfile(legacy);
+            else log.warn({ key: logSafe(key) }, `[Sandbox] the previous AppContainer profile of '${logSafe(key)}' could not be fully revoked; it is retried at the next uninstall`);
+        }
+    }
+    return appContainerProfileNameForPlugin(appRoot, key, profileGeneration(appRoot, key, true) as string);
+}
+
+/**
+ * Before a launch: revoke every zone this SID holds a grant for that the CURRENT policy no longer
+ * includes - the private storage of a plugin whose filesystem grant was withdrawn, a writable shape that
+ * became read-only. Without it a narrowed policy only narrowed the JavaScript guard.
+ */
+async function revokeZonesOutsidePolicy(sid: string, appRoot: string, slug: string, siteId: number, current: { traverse: string[]; readExec: string[]; write: string[] }): Promise<string[]> {
+    if (profileApi.platform() !== 'win32') return [];
+    const want = new Set<string>([
+        ...current.traverse.map((d) => `traverse\0${aclTarget(d).toLowerCase()}`),
+        ...current.readExec.map((d) => `rx\0${aclTarget(d).toLowerCase()}`),
+        ...current.write.map((d) => `full\0${aclTarget(d).toLowerCase()}`),
+    ]);
+    const stale = Array.from(new Map(workerZoneCandidates(appRoot, slug, siteId)
+        .filter(({ dir, mode }) => !want.has(`${mode}\0${aclTarget(dir).toLowerCase()}`) && profileApi.grantIsCached(sid, dir, mode))
+        .map(({ dir }) => [aclTarget(dir).toLowerCase(), dir] as const)).values());
+    if (stale.length === 0) return [];
+    // Root-only revoke removes every ACE of this SID on those roots; the grants that follow re-add the
+    // shapes the current policy still wants on the same directory.
+    if (!(await profileApi.revoke(sid, stale))) throw new Error(`could not revoke the AppContainer access this plugin no longer holds (${stale.length} zone(s))`);
+    return stale;
 }
 
 /**
@@ -1477,6 +1841,9 @@ async function retireAppContainerPlugin(appRoot: string, slug: string, siteId: n
  * this costs well under a second. Returns how many workers' markers were forgotten. No-op off Windows.
  */
 async function refreshPluginDirGrants(appRoot: string, slug: string, siteIds: number[] = [1]): Promise<number> {
+    // On every platform: the code was replaced by the host, so the fingerprint is taken again at the next
+    // launch (core/plugin-integrity) instead of refusing the new version as tampered.
+    try { require('./plugin-integrity').forgetPluginIntegrity(appRoot, slug); } catch { /* recorded again at launch */ }
     if (profileApi.platform() !== 'win32') return 0;
     let forgotten = 0;
     for (const siteId of Array.from(new Set(siteIds))) {
@@ -1490,6 +1857,19 @@ async function refreshPluginDirGrants(appRoot: string, slug: string, siteIds: nu
 
 module.exports = {
     refreshPluginDirGrants,
+    launchProfileNameFor,
+    revokeZonesOutsidePolicy,
+    listProfileGenerations,
+    legacyProfileNameForPlugin,
+    canonicalInstallRoot,
+    secretPathsFor,
+    protectSecretsFromAllAppContainers,
+    readNetworkIsolationPolicy,
+    applyNetworkIsolationPolicy,
+    networkIsolationScript,
+    PRIVATE_NETWORK_RANGES,
+    getSecretExposure: () => secretExposure,
+    getNetworkIsolationState: () => networkIsolationState,
     ensureAppContainerProfile,
     deleteAppContainerProfile,
     grantAppContainerAccess,
@@ -1523,6 +1903,9 @@ module.exports = {
     __buildProfileScript: buildProfileScript,
     __profileApi: profileApi,
     __buildIcaclsScript: buildIcaclsScript,
+    __workerZoneCandidates: workerZoneCandidates,
+    __killProcessTree: killProcessTree,
+    __v3MarkerPath: v3MarkerPath,
     __aclCacheKey: appContainerAclCacheKey,
     __aclCacheRoot: appContainerAclCacheRoot,
     __aclGrantIsCached: aclGrantIsCached,

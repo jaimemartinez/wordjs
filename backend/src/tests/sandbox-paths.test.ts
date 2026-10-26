@@ -44,7 +44,8 @@ describe('shared native sandbox filesystem authority', () => {
         const two = sandboxPaths(root, 'alpha', core, 2);
         const three = sandboxPaths(root, 'alpha', core, 3);
         assert.strictEqual(main.ownWritable, true);
-        assert.ok(main.writable.includes(main.own), 'site 1 keeps its historical write floor');
+        assert.ok(!main.writable.includes(main.own), 'the code directory is read-only on every site');
+        assert.ok(main.writable.includes(main.ownData), 'site 1 writes its own data directory instead');
         assert.deepStrictEqual(sandboxPaths(root, 'alpha', core, 1), main, 'site 1 is exactly the single-site answer');
         assert.strictEqual(two.own, main.own, 'the code is shared');
         assert.ok(two.readOnly.includes(two.own), 'and readable');

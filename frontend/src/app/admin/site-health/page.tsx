@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural, registerTranslations } from "@/lib/i18n";
 import { PageHeader, Button, Card } from "@/components/ui";
@@ -18,6 +18,8 @@ type Status = "ok" | "warn" | "fail" | "info";
 interface Check {
     id: string; group: string; status: Status; title: string; message: string;
     fix?: { href: string; label: string; labelKey?: string };
+    /** A one-click fix: POST `endpoint` with `body`, then run the checks again. */
+    action?: { endpoint: string; label: string; labelKey?: string; body?: Record<string, string> };
     /** Catalogue keys from core/site-health; absent (older backend, plugin-added check) → the English text. */
     titleKey?: string; messageKey?: string; vars?: Record<string, string>;
 }
@@ -85,6 +87,17 @@ registerTranslations({
         "siteHealth.check.background.plugins.title": "Aislamiento de plugins",
         "siteHealth.check.background.plugins.degraded": "Los plugins funcionan, pero sin el confinamiento adicional del sistema operativo en este servidor. Puede que tu hosting necesite un kernel más reciente o activar el sandbox de la plataforma.",
         "siteHealth.check.background.plugins.ok": "Los plugins se ejecutan aislados del sitio y entre sí.",
+        "siteHealth.check.security.pluginNetwork.title": "Plugins y redes privadas",
+        "siteHealth.check.security.pluginNetwork.ok": "Los plugins no pueden llegar a redes privadas (locales, VPN, metadatos de la nube) salvo a un destino que hayas aprobado.",
+        "siteHealth.check.security.pluginNetwork.missing": "Windows trata algunas redes privadas (una VPN, una LAN enrutada, los metadatos de la nube en 169.254.169.254) como Internet, así que un plugin con acceso a la red podría llegar a ellas sin pasar por el sandbox del sistema. Aplica los rangos de red privada una vez; Windows pedirá un administrador en este servidor.",
+        "siteHealth.check.security.pluginSecrets.title": "Acceso de los plugins a secretos",
+        "siteHealth.check.security.pluginSecrets.exposed": "Todos los sandbox de plugins de este servidor pueden leer {count} carpeta(s) o archivo(s) con secretos por cómo están los permisos de la carpeta de instalación, y WordJS no ha podido cambiarlos. Los plugins no se inician hasta que se corrija: ejecuta como administrador icacls <ruta> /inheritance:d y después icacls <ruta> /remove:g *S-1-15-2-1 *S-1-15-2-2 en cada una, o mueve WordJS fuera de C:\\Program Files.",
+        "siteHealth.check.background.pluginFiles.title": "Archivos de plugins",
+        "siteHealth.check.background.pluginFiles.changed": "Los archivos del plugin {slug} han cambiado desde que WordJS lo instaló, así que no se ha iniciado. Actualízalo o reinstálalo desde Plugins; si los cambiaste tú, acéptalos.",
+        "siteHealth.check.security.pluginPorts.title": "Puertos de red de los plugins",
+        "siteHealth.check.security.pluginPorts.unavailable": "Este kernel de Linux no puede limitar a qué puertos se conecta un plugin con acceso a la red (hace falta el kernel 6.7 o posterior), así que solo los limita WordJS.",
+        "siteHealth.action.applyWindowsNetwork": "Aplicar (administrador)",
+        "siteHealth.action.acceptPluginFiles": "Aceptar estos archivos",
         "siteHealth.check.background.outbox.title": "Eventos de contenido",
         "siteHealth.check.background.outbox.dead": "{count} evento(s) de contenido no se han podido entregar (webhooks, búsqueda, caché).",
         "siteHealth.check.background.outbox.ok": "Los webhooks y las actualizaciones de caché se entregan.",
@@ -158,6 +171,17 @@ registerTranslations({
         "siteHealth.check.background.plugins.title": "Plugin isolation",
         "siteHealth.check.background.plugins.degraded": "Plugins run, but without the operating system’s extra confinement on this host. Your host may need a newer kernel or the platform’s sandbox enabled.",
         "siteHealth.check.background.plugins.ok": "Plugins run isolated from the site and from each other.",
+        "siteHealth.check.security.pluginNetwork.title": "Plugins and private networks",
+        "siteHealth.check.security.pluginNetwork.ok": "Plugins cannot reach private networks (local, VPN, cloud metadata) unless you approved a destination for them.",
+        "siteHealth.check.security.pluginNetwork.missing": "Windows treats some private networks (a VPN, a routed LAN, cloud metadata at 169.254.169.254) as the Internet, so a plugin with network access could reach them past the system sandbox. Apply the private network ranges once; Windows asks for an administrator on this server.",
+        "siteHealth.check.security.pluginSecrets.title": "Plugin access to secrets",
+        "siteHealth.check.security.pluginSecrets.exposed": "Every plugin sandbox on this server can read {count} folder(s) or file(s) that hold secrets, because of how the install folder's permissions are set, and WordJS could not change them. Plugins are not started until this is fixed: run, as an administrator, icacls <path> /inheritance:d and then icacls <path> /remove:g *S-1-15-2-1 *S-1-15-2-2 for each one, or move WordJS out of C:\\Program Files.",
+        "siteHealth.check.background.pluginFiles.title": "Plugin files",
+        "siteHealth.check.background.pluginFiles.changed": "The files of the plugin {slug} changed since WordJS installed it, so it was not started. Update or reinstall it from Plugins; if you changed them yourself, accept them.",
+        "siteHealth.check.security.pluginPorts.title": "Plugin network ports",
+        "siteHealth.check.security.pluginPorts.unavailable": "This Linux kernel cannot limit which ports a plugin with network access connects to (that needs kernel 6.7 or later), so only WordJS itself limits them.",
+        "siteHealth.action.applyWindowsNetwork": "Apply (administrator)",
+        "siteHealth.action.acceptPluginFiles": "Accept these files",
         "siteHealth.check.background.outbox.title": "Content events",
         "siteHealth.check.background.outbox.dead": "{count} content event(s) could not be delivered (webhooks, search, cache).",
         "siteHealth.check.background.outbox.ok": "Webhooks and cache updates are delivered.",
@@ -231,6 +255,17 @@ registerTranslations({
         "siteHealth.check.background.plugins.title": "Isolamento de plugins",
         "siteHealth.check.background.plugins.degraded": "Os plugins funcionam, mas sem o confinamento extra do sistema operacional neste servidor. Sua hospedagem pode precisar de um kernel mais novo ou ativar o sandbox da plataforma.",
         "siteHealth.check.background.plugins.ok": "Os plugins rodam isolados do site e uns dos outros.",
+        "siteHealth.check.security.pluginNetwork.title": "Plugins e redes privadas",
+        "siteHealth.check.security.pluginNetwork.ok": "Os plugins não conseguem alcançar redes privadas (locais, VPN, metadados da nuvem), exceto um destino que você aprovou.",
+        "siteHealth.check.security.pluginNetwork.missing": "O Windows trata algumas redes privadas (uma VPN, uma LAN roteada, os metadados da nuvem em 169.254.169.254) como Internet, então um plugin com acesso à rede poderia alcançá-las sem passar pelo sandbox do sistema. Aplique os intervalos de rede privada uma vez; o Windows pedirá um administrador neste servidor.",
+        "siteHealth.check.security.pluginSecrets.title": "Acesso dos plugins a segredos",
+        "siteHealth.check.security.pluginSecrets.exposed": "Todos os sandboxes de plugins deste servidor podem ler {count} pasta(s) ou arquivo(s) com segredos por causa das permissões da pasta de instalação, e o WordJS não conseguiu alterá-las. Os plugins não são iniciados até que isso seja corrigido: execute como administrador icacls <caminho> /inheritance:d e depois icacls <caminho> /remove:g *S-1-15-2-1 *S-1-15-2-2 em cada um, ou mova o WordJS para fora de C:\\Program Files.",
+        "siteHealth.check.background.pluginFiles.title": "Arquivos de plugins",
+        "siteHealth.check.background.pluginFiles.changed": "Os arquivos do plugin {slug} mudaram desde que o WordJS o instalou, então ele não foi iniciado. Atualize ou reinstale-o em Plugins; se você mesmo os alterou, aceite-os.",
+        "siteHealth.check.security.pluginPorts.title": "Portas de rede dos plugins",
+        "siteHealth.check.security.pluginPorts.unavailable": "Este kernel Linux não consegue limitar a quais portas um plugin com acesso à rede se conecta (isso exige o kernel 6.7 ou posterior), então só o WordJS as limita.",
+        "siteHealth.action.applyWindowsNetwork": "Aplicar (administrador)",
+        "siteHealth.action.acceptPluginFiles": "Aceitar estes arquivos",
         "siteHealth.check.background.outbox.title": "Eventos de conteúdo",
         "siteHealth.check.background.outbox.dead": "{count} evento(s) de conteúdo não puderam ser entregues (webhooks, busca, cache).",
         "siteHealth.check.background.outbox.ok": "Os webhooks e as atualizações de cache são entregues.",
@@ -258,6 +293,7 @@ export default function SiteHealthPage() {
     const [report, setReport] = useState<Report | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [running, setRunning] = useState(false);
+    const [acting, setActing] = useState<string | null>(null);
 
     const run = async () => {
         setRunning(true);
@@ -268,6 +304,17 @@ export default function SiteHealthPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => { run(); }, []);
+
+    /** A check's one-click fix, then the report again so the result shows. */
+    const act = async (c: Check, key: string) => {
+        if (!c.action) return;
+        setActing(key);
+        setError(null);
+        try { await apiPost(c.action.endpoint, c.action.body || {}); }
+        catch (e: any) { setError(e?.message || t("siteHealth.failed")); }
+        finally { setActing(null); }
+        await run();
+    };
 
     /** The check's text in the panel's language when the catalogue has its key, else the backend's English. */
     const tr = (key: string | undefined, fallback: string, vars?: Record<string, string>): string => {
@@ -306,8 +353,8 @@ export default function SiteHealthPage() {
                         <Card key={g} variant="default" padding="lg">
                             <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-2">{t(`siteHealth.group.${g}`)}</h2>
                             <ul className="divide-y divide-gray-100">
-                                {items.map((c) => (
-                                    <li key={c.id} data-check={c.id} data-status={c.status} className="flex items-start gap-3 py-4">
+                                {items.map((c, i) => (
+                                    <li key={`${c.id}-${i}`} data-check={c.id} data-status={c.status} className="flex items-start gap-3 py-4">
                                         <i className={`fa-solid ${ICON[c.status]} mt-0.5`} aria-hidden="true"></i>
                                         <div className="min-w-0 flex-1">
                                             <p className="text-sm font-bold text-gray-900">{tr(c.titleKey, c.title, c.vars)}</p>
@@ -316,6 +363,13 @@ export default function SiteHealthPage() {
                                                 <Link href={c.fix.href} className="mt-1 inline-flex items-center gap-2 text-sm font-bold text-blue-600 underline">
                                                     {t("siteHealth.fix").replace("{where}", tr(c.fix.labelKey, c.fix.label))} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
                                                 </Link>
+                                            )}
+                                            {c.action && c.status !== "ok" && (
+                                                <div className="mt-2">
+                                                    <Button size="sm" onClick={() => act(c, `${c.id}-${i}`)} pending={acting === `${c.id}-${i}`} disabled={acting !== null} data-testid={`site-health-action-${c.id}`}>
+                                                        {tr(c.action.labelKey, c.action.label)}
+                                                    </Button>
+                                                </div>
                                             )}
                                         </div>
                                     </li>

@@ -837,6 +837,12 @@ function validateManifestPermissions(permissions: any): string[] {
             return;
         }
         const allowed = KNOWN_PERMISSIONS[p.scope];
+        // The network permission may name the TCP ports the plugin connects to beyond DNS and the web
+        // (the kernel sandbox refuses every other port): at most 16 integers 1-65535.
+        if (p.scope === 'network' && p.ports !== undefined) {
+            const ok = Array.isArray(p.ports) && p.ports.length <= 16 && p.ports.every((n: any) => Number.isInteger(n) && n >= 1 && n <= 65535);
+            if (!ok) problems.push(`permissions[${i}].ports must be an array of at most 16 TCP port numbers (1-65535).`);
+        }
         if (allowed.length === 0) return; // scope-only (network)
         if (!allowed.includes(p.access)) {
             problems.push(`Permission "${p.scope}" has invalid access "${p.access}" (valid: ${allowed.join(', ')}).`);
@@ -3283,6 +3289,14 @@ async function purgePluginSiteData(slug: string, accountCapabilities: string[], 
         try { siteIds = siteIds.concat(require('./network').listSites().map((s: any) => Number(s.id)).filter((id: number) => id !== siteContext.PRIMARY_SITE_ID)); }
         catch { /* single site */ }
     }
+    // The plugin's own data folder (what used to be its code dir's data/; core/plugin-own-data).
+    try {
+        const ownData = require('./sandbox-paths').ownDataDir(appRoot, slug);
+        if (fs.existsSync(ownData)) {
+            require('./plugin-context').runAsHost(() => fs.rmSync(ownData, { recursive: true, force: true }));
+            out.storageRemoved.push(path.relative(appRoot, ownData));
+        }
+    } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] could not remove its data folder`); }
     for (const siteId of siteIds) {
         for (const dir of privateStorageDirs(appRoot, slug, siteId)) {
             try {
@@ -3347,6 +3361,8 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
     catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] db role drop failed`); }
+    // The code goes (or is replaced): its fingerprint is taken again at the next install's first launch.
+    try { require('./plugin-integrity').forgetPluginIntegrity(path.resolve(__dirname, '..', '..'), slug); } catch { /* recorded again at launch */ }
     if (process.platform === 'win32' && retireSandbox) {
         try {
             const appRoot = path.resolve(__dirname, '..', '..');

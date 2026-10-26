@@ -236,7 +236,7 @@ async function main() {
     const run = (cmd, cwd) => execFileSync('npm', cmd, { cwd, stdio: 'inherit', shell: true });
     if (args.install) { console.log('📦 npm install...'); run(['install'], roleDir); }
     if (args.build && role === 'frontend') { console.log('🏗️  next build...'); run(['run', 'build'], roleDir); }
-    if (args.build && role === 'backend') { console.log('🏗️  tsc build...'); try { run(['run', 'build'], roleDir); } catch { console.warn('   (build failed — server.js will fall back to ts-node)'); } }
+    if (args.build && role === 'backend') { console.log('🏗️  tsc build...'); try { run(['run', 'build'], roleDir); } catch { console.warn('   (build failed — server.js refuses to start without dist/; run npm run build in backend/)'); } }
     if (args.start) {
         const logFile = path.join(roleDir, 'cluster-start.log');
         const out = fs.openSync(logFile, 'a');

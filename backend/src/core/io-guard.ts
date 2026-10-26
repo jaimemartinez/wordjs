@@ -651,14 +651,40 @@ function fsCapabilityRevoked(pluginSlug: string, access: 'read' | 'write'): bool
  * secure-require.guardFsCall) must apply the SAME one, or a require() resolves on one fs surface and
  * EACCESes on the other.
  */
-function isModuleLoaderRead(targetPath: unknown, isWrite: boolean): boolean {
+function isModuleLoaderRead(targetPath: unknown, isWrite: boolean, ownDir?: string): boolean {
     if (isWrite) return false;
     let resolved: string;
     try { resolved = path.resolve(String(targetPath)); } catch { return false; }
     const base = path.basename(resolved);
     if (base === 'package.json') return true;
-    if (resolved.split(path.sep).includes('node_modules')) return true;
+    if (inResolutionNodeModules(resolved, ownDir)) return true;
     return EXECUTABLE_CODE_EXT.test(base);
+}
+
+/**
+ * Is `resolved` inside a node_modules folder Node's resolver can reach from this plugin: `<a>/node_modules`
+ * for `a` the plugin's own directory or one of its ancestors (the lookup paths of require()), or the
+ * backend's own? A `node_modules` segment anywhere else - inside the plugin's data, under another site's
+ * tree, in a directory the plugin created - is just a folder name, and grants nothing. Case-folded like
+ * every comparison here.
+ */
+function inResolutionNodeModules(resolved: string, ownDir?: string): boolean {
+    const roots: string[] = [path.join(ROOT_DIR, 'node_modules')];
+    if (ownDir) {
+        let cur = path.resolve(ownDir);
+        for (let i = 0; i < 64; i++) {
+            roots.push(path.join(cur, 'node_modules'));
+            const up = path.dirname(cur);
+            if (up === cur) break;
+            cur = up;
+        }
+    }
+    return roots.some((r) => under(resolved, r));
+}
+
+/** A read the module resolver makes: a package.json, or a file in a reachable node_modules (see above). */
+function isModuleResolutionRead(resolved: string, ownDir: string): boolean {
+    return path.basename(resolved).toLowerCase() === 'package.json' || inResolutionNodeModules(resolved, ownDir);
 }
 
 /** Test/host hook: drop the cached manifest declaration for a slug (install/update rewrites it). */
@@ -779,10 +805,13 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     const SAFE_READ_DIRS = [...nativePaths.readOnly, ...nativePaths.storage];
     const SAFE_WRITE_DIRS = [...nativePaths.storage];
 
-    // A plugin may always read+write within its OWN dir (plugins/<slug> or themes/<slug>) — that's its
-    // private storage (data files, caches, attachments). It's still subject to the file-name blocks
-    // above (manifest.json / DB-in-child / secret-named) and to the per-plugin disk quota at the bridge.
+    // A plugin always READS its own code dir (plugins/<slug> or themes/<slug>), and never writes it: its
+    // private storage is its own data directory (sandbox-paths ownDataDir), reached through the `data`
+    // link in the code dir (core/plugin-own-data). Both stay subject to the file-name blocks above
+    // (manifest.json / DB-in-child / secret-named) and to the per-plugin disk quota at the bridge.
     const ownDir = nativePaths.own;
+    const ownData = nativePaths.ownData;
+    const viaDataLink = under(resolved, nativePaths.ownDataLink);
 
     // ── THE REVOCATION IS ENFORCED HERE, AT THE CALL, NOT BY A STATIC SCANNER ────────────────────────
     //
@@ -816,7 +845,7 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     //     before any plugin code existed. Data files in the own dir stay refused, which is what a read
     //     revocation is actually about.
     // Outside the own dir the grant was, and remains, required outright (secure-require guardFsCall).
-    if (!isModuleLoaderRead(resolved, isWrite) && under(resolved, ownDir) && fsCapabilityRevoked(pluginSlug, isWrite ? 'write' : 'read')) {
+    if (!isModuleLoaderRead(resolved, isWrite, ownDir) && (under(resolved, ownDir) || under(resolved, ownData)) && fsCapabilityRevoked(pluginSlug, isWrite ? 'write' : 'read')) {
         throttledWarn(`${pluginSlug}:fs-revoked`,
             `[Security Block] Plugin '${pluginSlug}' declared filesystem:${isWrite ? 'write' : 'read'} but the administrator has not granted it — refusing: ${resolved}`);
         return false;
@@ -853,17 +882,28 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
         const publishedInOwn = isThemeCtx
             ? (isThemePublishedPath(ownDir, resolved) || isThemePublishedPath(ownReal, canon))
             : (isPluginPublishedPath(ownDir, resolved) || isPluginPublishedPath(ownReal, canon));
-        if (!withinOwn || publishedInOwn) {
+        // The `data` link leads out of the served tree into the own data directory, which nothing publishes.
+        const linkedData = viaDataLink && under(canon, canonicalize(ownData));
+        if (!linkedData && (!withinOwn || publishedInOwn)) {
             throttledWarn(`${pluginSlug}:published-write`, `[Security Block] Plugin '${pluginSlug}' tried to write into a PUBLICLY SERVED path: ${resolved}`);
             return false;
         }
     }
 
-    // Another site's worker of a plugin reads its own code but never writes there (sandbox-paths ownWritable).
-    const dirsToCheck = (isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS).concat(!isWrite || nativePaths.ownWritable ? [ownDir] : []);
+    // The own data directory is site 1's worker's (sandbox-paths ownWritable); the code dir is read-only.
+    const dirsToCheck = (isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS).concat(nativePaths.ownWritable ? [ownData] : []);
     // Exact-match or trailing-separator prefix so safe dir 'foo' does not also whitelist
     // a sibling 'foo-bar' that merely shares a string prefix.
     let isAllowed = dirsToCheck.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));
+    // `<code dir>/data/...` is the own data directory by another name - but only while the link really
+    // leads there (the path the syscall reaches is what is checked), and only for site 1's worker.
+    if (viaDataLink) {
+        isAllowed = nativePaths.ownWritable && under(canonicalize(resolved), canonicalize(ownData));
+    }
+    if (!isAllowed && isWrite && under(resolved, ownDir)) {
+        throttledWarn(`${pluginSlug}:code-dir-write`, `[Security Block] Plugin '${pluginSlug}' tried to WRITE its own code folder, which is read-only (keep data under its data/ folder): ${resolved}`);
+        return false;
+    }
 
     // The host DB driver legitimately runs under runWithContext(slug) while serving a scoped bridge
     // query. It may open ONLY the configured database file and its sidecars — never the former broad
@@ -899,21 +939,18 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     // read safe-zone (that would expose another plugin's private files like an encryption key), allow
     // READS of any package.json and anything under a node_modules/ dir so require()/import resolution
     // keeps working — without re-opening cross-plugin reads of source/data/secrets.
-    if (!isAllowed && !isWrite) {
-        const base = path.basename(resolved);
-        if (base === 'package.json' || resolved.split(path.sep).includes('node_modules')) {
-            // ...but NEVER inside a SIBLING plugin's dir. Module resolution only reads the plugin's OWN
-            // tree + shared ancestors (plugins/package.json, backend/, root node_modules) — never a sibling
-            // plugin's package.json/node_modules — so deny those to keep cross-plugin reads closed. (IO-1)
-            const pluginsRoot = path.join(ROOT_DIR, 'plugins');
-            let underSibling = false;
-            if (resolved.startsWith(pluginsRoot + path.sep)) {
-                const after = resolved.slice(pluginsRoot.length + 1);
-                const firstSeg = after.split(path.sep)[0];
-                if (after.includes(path.sep) && firstSeg && firstSeg !== pluginSlug) underSibling = true;
-            }
-            if (!underSibling) isAllowed = true;
+    if (!isAllowed && !isWrite && isModuleResolutionRead(resolved, ownDir)) {
+        // ...but NEVER inside a SIBLING plugin's dir. Module resolution only reads the plugin's OWN
+        // tree + shared ancestors (plugins/package.json, backend/, root node_modules) — never a sibling
+        // plugin's package.json/node_modules — so deny those to keep cross-plugin reads closed. (IO-1)
+        // Compared case-folded (under()): on Windows and macOS a differently-cased name IS the same folder.
+        const pluginsRoot = path.join(ROOT_DIR, 'plugins');
+        let underSibling = false;
+        if (under(resolved, pluginsRoot) && !under(resolved, ownDir)) {
+            const after = path.relative(pluginsRoot, resolved);
+            if (after.includes(path.sep)) underSibling = true;
         }
+        if (!underSibling) isAllowed = true;
     }
 
     // MONOLITH-mode carve-out: Next.js runs in-process and flushes its own dev log

@@ -550,7 +550,10 @@ function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, al
         try { return fs.realpathSync(candidate); } catch { return candidate; }
     })();
     const ok = (dir: string) => real === dir || real.startsWith(dir + path.sep);
-    if (!ok(base) && !(allowUploads && ok(UPLOADS_DIR))) {
+    // `<plugin dir>/data` is a link to the plugin's own data directory (core/plugin-own-data): its target is
+    // the plugin's own storage, so a path that resolves there is inside the plugin's own space.
+    const ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug);
+    if (!ok(base) && !ok(ownData) && !(allowUploads && ok(UPLOADS_DIR))) {
         throw new Error(`🛡️ Plugin path denied: '${relPath}' is outside the plugin dir${allowUploads ? ' and uploads' : ''}.`);
     }
     if (mustExist && !fs.existsSync(real)) throw new Error(`File not found: ${relPath}`);

@@ -419,10 +419,12 @@ describe('the shim script, read as text — the network denial', () => {
         assert.match(SHIM_SRC, /deny the complete x32 ABI range/);
     });
 
-    test('Landlock ABI 4 adds a SECOND, independent TCP denial, and only when the network is denied', () => {
-        assert.ok(/\$handle_net = \(\$denyNet eq '1' && \$abi >= 4\) \? 1 : 0;/.test(SHIM_SRC),
-            'a network-GRANTED plugin must not get the Landlock net restriction');
+    test('Landlock ABI 4 adds a SECOND, independent TCP denial, and bounds a granted plugin to its ports', () => {
+        assert.ok(/\$handle_net = \(\$abi >= 4 && \(\$denyNet eq '1' \|\| @tcp_ports\)\) \? 1 : 0;/.test(SHIM_SRC),
+            'TCP is handled for a denied plugin and for a granted one that was given its port list');
         assert.ok(/\$NET_BIND_TCP \| \$NET_CONNECT_TCP/.test(SHIM_SRC));
+        assert.match(SHIM_SRC, /syscall\(\$NR_ll_add, \$rfd, 2, pack\("QQ", \$NET_CONNECT_TCP, \$port\), 0\)/,
+            'each granted port is a CONNECT-only rule; no port is ever granted BIND');
         // And seccomp must still be there, because Landlock's network hook is SOCK_STREAM only — it does
         // not see UDP, and therefore does not see DNS.
         assert.ok(/SOCK_STREAM only/.test(SHIM_SRC), 'the reason seccomp is still needed must stay written down');

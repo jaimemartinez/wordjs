@@ -53,7 +53,11 @@
 # >= 4 Landlock's TCP restriction is ALSO applied as an independent denial (see below).
 #
 # USAGE
-#   landlock-seccomp-shim.pl [--read-root=PATH]... <zone>... <denyNetwork:0|1> -- <argv...>
+#   landlock-seccomp-shim.pl [--read-root=PATH]... [--exec-root=PATH]... [--tcp-port=N]... <zone>... <denyNetwork:0|1> -- <argv...>
+#
+# --tcp-port names a TCP port a network-granted child may CONNECT to. On Landlock ABI >= 4 every other TCP
+# connect and every TCP bind is refused by the kernel; the in-process egress guard still decides which
+# hosts. Ignored when the network is denied (no socket can be created at all).
 #
 # The pre-`--` grammar is "every option first, then one or more writable zones, then the network flag",
 # and it is unambiguous because the flag is the LAST pre-`--` token and is required to be exactly 0 or 1.
@@ -102,9 +106,23 @@ sub fail        { print STDERR "SHIM-FAIL: $_[0]\n";        exit $EX_FAIL; }
 my $arch = `uname -m`; chomp $arch;
 my ($NR_prctl, $NR_seccomp, $NR_socket, $NR_socketpair, $NR_clone, $NR_clone3, $NR_capset, $NR_setgroups,
     $NR_setresuid, $AUDIT_ARCH, $X32_ABI, @BLOCKED);
+# Calls refused only when they name ANOTHER process ([nr, index of the pid argument]): a process may still
+# set its own limits, nice value, I/O priority and scheduling (pid 0 - glibc's setrlimit is prlimit64(0)).
+# Calls refused for one command value ([nr, argument index, values...]): fcntl F_SETOWN / F_SETOWN_EX and
+# ioctl FIOSETOWN / SIOCSPGRP direct SIGIO/SIGURG at a process of the caller's choosing.
+# Calls that would truncate a file the child may only READ (Landlock handles truncation from ABI 3 on):
+# truncate(2) itself and open/openat with O_TRUNC on a read-only open. openat2 hides its flags behind a
+# pointer, so it answers ENOSYS on those kernels (callers fall back to openat).
+my ($NR_close, @PID_ARG, @CMD_ARG, $NR_truncate, @OPEN_FLAGS_ARG, $NR_openat2);
 if ($arch eq 'x86_64') {
     ($NR_prctl, $NR_seccomp, $NR_socket, $NR_socketpair, $NR_clone, $NR_clone3, $NR_capset, $NR_setgroups,
         $NR_setresuid, $AUDIT_ARCH, $X32_ABI) = (157, 317, 41, 53, 56, 435, 126, 116, 117, 0xc000003e, 1);
+    $NR_close = 3;
+    # prlimit64, setpriority (who), ioprio_set (who), sched_setparam, sched_setscheduler, sched_setaffinity, sched_setattr.
+    @PID_ARG = ([302, 0], [141, 1], [251, 1], [142, 0], [144, 0], [203, 0], [314, 0]);
+    @CMD_ARG = ([72, 1, 8, 15], [16, 1, 0x8901, 0x8902]);
+    ($NR_truncate, $NR_openat2) = (76, 437);
+    @OPEN_FLAGS_ARG = ([2, 1], [257, 2]);  # open(path, flags), openat(dirfd, path, flags)
     @BLOCKED = (
         # ptrace, kexec, modules, legacy kernel-control entry points, bpf/perf/userfaultfd,
         # cross-process memory, keyrings, mount/swap/reboot/setns/handle APIs.
@@ -124,11 +142,24 @@ if ($arch eq 'x86_64') {
         43, 49, 50, 288,
         # Anonymous executable creation / alternate exec, io_uring and the modern mount API.
         319, 322, 447, 425, 426, 427, 428, 429, 430, 431, 432, 433,
+        # semtimedop (the SysV call the list above missed), mount_setattr, quotactl_fd, statmount,
+        # listmount and lsm_set_self_attr.
+        220, 442, 443, 457, 458, 460,
+        # Ownership, mode, timestamp and extended-attribute changes: Landlock governs none of them at any
+        # ABI, so without this a child could re-mode or re-stamp files it may only read. fchmod (91) stays:
+        # it needs an open descriptor, and libuv's copyFile sets the copy's mode with it.
+        90, 268, 452, 92, 93, 94, 260, 132, 235, 261, 280,
+        188, 189, 190, 197, 198, 199, 463, 466,
     );
 }
 elsif ($arch eq 'aarch64') {
     ($NR_prctl, $NR_seccomp, $NR_socket, $NR_socketpair, $NR_clone, $NR_clone3, $NR_capset, $NR_setgroups,
         $NR_setresuid, $AUDIT_ARCH, $X32_ABI) = (167, 277, 198, 199, 220, 435, 91, 159, 147, 0xc00000b7, 0);
+    $NR_close = 57;
+    @PID_ARG = ([261, 0], [140, 1], [30, 1], [118, 0], [119, 0], [122, 0], [274, 0]);
+    @CMD_ARG = ([25, 1, 8, 15], [29, 1, 0x8901, 0x8902]);
+    ($NR_truncate, $NR_openat2) = (45, 437);
+    @OPEN_FLAGS_ARG = ([56, 2]);
     @BLOCKED = (
         117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219,
         40, 39, 41, 224, 225, 142, 97, 268, 265, 264, 262, 263,
@@ -137,6 +168,9 @@ elsif ($arch eq 'aarch64') {
         143, 144, 145, 146, 147, 149, 151, 152, 159, 91, 33,
         200, 201, 202, 242,
         279, 281, 447, 425, 426, 427, 428, 429, 430, 431, 432, 433,
+        442, 443, 457, 458, 460,
+        53, 452, 54, 55, 88,
+        5, 6, 7, 14, 15, 16, 463, 466,
     );
 }
 else { unsupported("architecture $arch has no verified syscall table here"); }
@@ -177,11 +211,17 @@ for my $a (@ARGV) {
 fail("expected `--` before the command") unless $saw_sep;
 fail("no command given after `--`")      unless @cmd;
 
-my (@read_roots, @exec_roots);
-while (@pre && $pre[0] =~ /^--(read|exec)-root=(.*)$/s) {
+my (@read_roots, @exec_roots, @tcp_ports);
+while (@pre && $pre[0] =~ /^--(read-root|exec-root|tcp-port)=(.*)$/s) {
     my ($kind, $value) = ($1, $2); shift @pre;
-    $kind eq 'read' ? push(@read_roots, $value) : push(@exec_roots, $value);
+    if ($kind eq 'tcp-port') {
+        fail("--tcp-port must be a port number 1-65535 (got '$value')") unless $value =~ /^[1-9][0-9]{0,4}$/ && $value <= 65535;
+        push @tcp_ports, 0 + $value;
+        next;
+    }
+    $kind eq 'read-root' ? push(@read_roots, $value) : push(@exec_roots, $value);
 }
+{ my %seen; @tcp_ports = grep { !$seen{$_}++ } @tcp_ports; }
 push @read_roots, $ENV{WORDJS_READ_ROOT} if defined $ENV{WORDJS_READ_ROOT} && length $ENV{WORDJS_READ_ROOT};
 
 my $denyNet = @pre ? pop @pre : '';
@@ -284,7 +324,10 @@ my $HANDLED = $abi >= 5 ? 0xffff : ($abi >= 3 ? 0x7fff : ($abi >= 2 ? 0x3fff : 0
 # it does not see UDP, and therefore does not see DNS - while the seccomp filter refuses socket() by
 # address family and so covers TCP and UDP alike. Two independent mechanisms denying the same thing is
 # the whole reason to pay for the second one: a bug in either still leaves a denial standing.
-my $handle_net = ($denyNet eq '1' && $abi >= 4) ? 1 : 0;
+# With the network GRANTED the same subsystem bounds the destination PORT: TCP connect is handled and only
+# the --tcp-port list gets a rule, and TCP bind (never needed by a client) gets none. Below ABI 4 the
+# kernel has no TCP rules and the egress guard alone decides; the SHIM: line says which (landlock-net=).
+my $handle_net = ($abi >= 4 && ($denyNet eq '1' || @tcp_ports)) ? 1 : 0;
 # ABI 6 can scope abstract AF_UNIX sockets and signals to this Landlock domain. The inherited IPC
 # socketpair remains usable because it is already connected; new connections to a host D-Bus/X11-style
 # abstract socket and signals aimed at the backend do not. On older ABIs seccomp still refuses the
@@ -347,6 +390,15 @@ my $ZONE_ACC = $FS_READ_FILE | $FS_READ_DIR | $FS_WRITE_FILE | $FS_REMOVE_DIR | 
     | ($abi >= 3 ? $FS_TRUNCATE : 0);
 for my $z (@zones) {
     $grant->($z, $ZONE_ACC) or fail("cannot grant the writable zone $z");
+}
+
+# The destination ports a network-granted child may connect to (struct landlock_net_port_attr
+# { __u64 allowed_access; __u64 port; } with LANDLOCK_RULE_NET_PORT = 2).
+if ($handle_net && $denyNet eq '0') {
+    for my $port (@tcp_ports) {
+        my $r = syscall($NR_ll_add, $rfd, 2, pack("QQ", $NET_CONNECT_TCP, $port), 0);
+        fail("landlock_add_rule(tcp port $port): $!") unless defined($r) && $r == 0;
+    }
 }
 
 # --- privilege: nothing the service was started with may reach the plugin --------------------------
@@ -544,6 +596,41 @@ for my $nr (sort { $a <=> $b } @BLOCKED) {
     push @deny_jumps, scalar(@p);
     push @p, [0x15, 0, 0, $nr];
 }
+# Another process's limits, priority or scheduling: refused unless the pid argument is 0 (this process).
+for my $c (@PID_ARG) {
+    my ($nr, $idx) = @$c;
+    push @p, [0x15, 0, 3, $nr];          # other syscalls skip to the reload below
+    push @p, [0x20, 0, 0, 16 + 8 * $idx]; # the pid argument, low 32 bits
+    push @p, [0x15, 1, 0, 0];            # pid 0 (self) skips the denial
+    push @deny_jumps, scalar(@p);
+    push @p, [0x05, 0, 0, 0];            # another pid -> EPERM
+    push @p, [0x20, 0, 0, 0];            # restore A = seccomp_data.nr
+}
+# Owner/signal-target commands of fcntl and ioctl.
+for my $c (@CMD_ARG) {
+    my ($nr, $idx, @vals) = @$c;
+    push @p, [0x15, 0, 1 + scalar(@vals), $nr];
+    push @p, [0x20, 0, 0, 16 + 8 * $idx];
+    for my $v (@vals) { push @deny_jumps, scalar(@p); push @p, [0x15, 0, 0, $v]; }
+    push @p, [0x20, 0, 0, 0];
+}
+# Below Landlock ABI 3 truncation is not a filesystem right, so it is taken away here instead.
+my $trunc_cover = $abi < 3 ? 1 : 0;
+if ($trunc_cover) {
+    push @deny_jumps, scalar(@p);
+    push @p, [0x15, 0, 0, $NR_truncate];
+    push @enosys_jumps, scalar(@p);
+    push @p, [0x15, 0, 0, $NR_openat2];
+    for my $c (@OPEN_FLAGS_ARG) {
+        my ($nr, $idx) = @$c;
+        push @p, [0x15, 0, 3, $nr];
+        push @p, [0x20, 0, 0, 16 + 8 * $idx];
+        push @p, [0x54, 0, 0, 01003];     # A &= O_ACCMODE | O_TRUNC
+        push @deny_jumps, scalar(@p);
+        push @p, [0x15, 0, 0, 01000];     # O_RDONLY | O_TRUNC -> EPERM
+        push @p, [0x20, 0, 0, 0];
+    }
+}
 
 my (@network_jumps, @allow_jumps);
 if ($denyNet eq '1') {
@@ -568,6 +655,11 @@ push @p, [0x06, 0, 0, 0x0005000d];       # ERRNO(EACCES) for forbidden socket cr
 my $enosys_idx = scalar(@p);
 push @p, [0x06, 0, 0, 0x00050026];       # ERRNO(ENOSYS) for clone3
 
+# A conditional jump offset is 8 bits: a filter that outgrew it would jump somewhere else entirely.
+for my $i (@deny_jumps, @network_jumps, @allow_jumps, @enosys_jumps) {
+    my $far = $enosys_idx - ($i + 1);
+    fail("seccomp filter too long for its jumps ($far)") if $p[$i]->[0] != 0x05 && $far > 255;
+}
 for my $i (@deny_jumps) {
     if ($p[$i]->[0] == 0x05) { $p[$i]->[3] = $deny_idx - ($i + 1); }
     else { $p[$i]->[1] = $deny_idx - ($i + 1); }
@@ -592,9 +684,20 @@ my $prog = pack("Sx6J", scalar(@p), unpack("J", pack("P", $filter)));
 syscall($NR_seccomp, 1, 1, $prog) == 0 or fail("seccomp(SET_MODE_FILTER): $!");
 
 # One line, on stderr, with a stable prefix the caller can grep and the log limiter can rate-limit.
-print STDERR "SHIM: landlock=abi$abi/$granted landlock-net=" . ($handle_net ? 'on' : 'off')
+# Nothing but stdio and the IPC channel crosses into the child: an fd a caller leaked without CLOEXEC would
+# otherwise reach plugin code still open. And the child starts in `/`, whatever directory launched it.
+{
+    my $chan = (defined $ENV{NODE_CHANNEL_FD} && $ENV{NODE_CHANNEL_FD} =~ /^\d+$/) ? 0 + $ENV{NODE_CHANNEL_FD} : -1;
+    my @fds;
+    if (opendir(my $dh, '/proc/self/fd')) { @fds = grep { /^\d+$/ } readdir($dh); closedir($dh); }
+    else { fail("cannot list /proc/self/fd to close inherited descriptors"); }
+    for my $fd (@fds) { syscall($NR_close, 0 + $fd) if $fd > 2 && $fd != $chan; }
+    chdir('/') or fail("chdir /: $!");
+}
+
+print STDERR "SHIM: landlock=abi$abi/$granted landlock-net=" . ($handle_net ? ($denyNet eq '1' ? 'deny' : 'ports:' . scalar(@tcp_ports)) : ($denyNet eq '1' ? 'off' : 'unavailable'))
     . " scoped=" . ($scoped ? 'unix+signal' : 'legacy')
-    . " seccomp=on/" . scalar(@BLOCKED) . " network=" . ($denyNet eq '1' ? 'deny' : 'allow')
+    . " seccomp=on/" . scalar(@BLOCKED) . ($trunc_cover ? '+trunc' : '') . " network=" . ($denyNet eq '1' ? 'deny' : 'allow')
     . " arch=$arch zones=" . scalar(@zones) . " privdrop=$privdrop\n";
 
 # The block form pins argv[0] as the FILE to execute. `exec @cmd` with a single-element list is checked

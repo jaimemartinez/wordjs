@@ -93,7 +93,7 @@ before(async () => {
         "const fs = require('fs');\nconst path = require('path');\n" +
         "module.exports = (wordjs) => {\n" +
         "  wordjs.hooks.addFilter('zz_theme_fs_probe', () => {\n" +
-        "    try { fs.writeFileSync(path.join(__dirname, 'probe.txt'), 'x'); return 'wrote'; } catch (e) { return 'denied'; }\n" +
+        "    try { fs.writeFileSync(path.join(__dirname, 'data', 'probe.txt'), 'x'); return 'wrote'; } catch (e) { return 'denied'; }\n" +
         "  });\n" +
         "};\n");
     writeTheme(PLAIN, {}, null);
@@ -185,7 +185,7 @@ test('filesystem: declared and not granted is denied in the theme child; granted
     // refuses the write: in both cases the theme does not get to write.
     if (state === 'running') assert.strictEqual(await fsProbe(), 'denied');
     else assert.strictEqual(state, 'blocked');
-    assert.strictEqual(fs.existsSync(path.join(THEMES_DIR, FS_PROBE, 'probe.txt')), false);
+    assert.strictEqual(fs.existsSync(path.join(THEMES_DIR, FS_PROBE, 'data', 'probe.txt')), false);
 
     const granted = await request(app).put(`/api/v1/themes/${FS_PROBE}/permissions`).set(auth()).send({ granted: ['filesystem:write'] });
     assert.strictEqual(granted.status, 200, JSON.stringify(granted.body));

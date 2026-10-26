@@ -395,6 +395,77 @@ router.get('/site', authenticate, isAdmin, async (req: Request, res: Response) =
     res.json(await require('../core/site-health').runSiteHealth(req));
 });
 
+/**
+ * Site Health one-click fixes for the plugin sandbox (core/site-health pluginSandboxChecks).
+ *   · windows-network: set the Windows private network ranges for apps. Windows asks for an administrator
+ *     on this server (UAC); without one there is nothing to answer, and the reply carries the command.
+ *   · plugin-files/accept: record a refused plugin's current files as its own.
+ */
+/**
+ * @swagger
+ * /health/sandbox/windows-network:
+ *   post:
+ *     summary: Site Health - apply the Windows private network ranges for apps (plugin sandbox)
+ *     description: >
+ *       Windows only. Sets the machine policy that makes the private ranges (RFC 1918, link-local,
+ *       shared address space, unique-local IPv6) private for every AppContainer, so a network-granted
+ *       plugin cannot reach them unless an administrator approved a private destination for it. Windows
+ *       asks for an administrator on the server; when nobody can answer, the reply names the command to
+ *       run once in an administrator PowerShell. Administrators.
+ *     tags: [System]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ ok: true } - the ranges are set"
+ *       403:
+ *         description: Not an administrator
+ *       409:
+ *         description: "{ ok: false, error } - not applied; the error carries the elevated command"
+ */
+router.post('/sandbox/windows-network', authenticate, isAdmin, async (req: Request, res: Response) => {
+    const r = await require('../core/sandbox-windows').applyNetworkIsolationPolicy();
+    if (r.ok) return res.json({ ok: true });
+    res.status(409).json({ ok: false, error: `The private network ranges were not applied: ${r.reason}. Run this once in an administrator PowerShell on the server: ${r.command}` });
+});
+
+/**
+ * @swagger
+ * /health/sandbox/plugin-files/accept:
+ *   post:
+ *     summary: Site Health - accept the current files of a plugin refused for changed files
+ *     description: >
+ *       An isolated plugin whose code or manifest changed since WordJS installed it is not started.
+ *       This records its current files as its own, so its next start goes ahead. Only a plugin that is
+ *       listed as refused can be accepted. Administrators.
+ *     tags: [System]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [slug]
+ *             properties:
+ *               slug: { type: string }
+ *     responses:
+ *       200:
+ *         description: "{ ok: true }"
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: No plugin with changed files has that name
+ */
+router.post('/sandbox/plugin-files/accept', authenticate, isAdmin, async (req: Request, res: Response) => {
+    const slug = String((req.body && req.body.slug) || '');
+    const integrity = require('../core/plugin-integrity');
+    if (!integrity.listIntegrityMismatches().includes(slug)) return res.status(404).json({ error: 'No plugin with changed files has that name.' });
+    integrity.acceptPluginIntegrity(require('path').resolve(__dirname, '..', '..'), slug);
+    res.json({ ok: true });
+});
+
 router.get('/details', authenticate, isAdmin, async (req: Request, res: Response) => {
     try {
         const fullStatus = await SystemHealth.getFullStatus();

@@ -184,6 +184,26 @@ jobs:
         working-directory: backend
         run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-posture-truthfulness.test.ts src/tests/host-executes-no-foreign-code.test.ts
 
+      # THE CONFINEMENT OF A REAL PLUGIN, ON EVERY PLATFORM. A real isolate on each kernel: its code folder
+      # is read-only and its data/ folder (moved out of the code, behind a link - a junction on Windows,
+      # a symlink elsewhere) is writable and kept intact; the IPC frame nonce reaches it over the channel,
+      # never on the command line.
+      - name: Certify a real plugin's code and data confinement (all platforms)
+        working-directory: backend
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-own-code-readonly.test.ts src/tests/sandbox-ipc-nonce-channel.test.ts
+
+      # WINDOWS, ON THE REAL ACLs AND THE REAL FIREWALL. The runner is an administrator, so these run here
+      # and nowhere else: a contained child must be refused a secret its install tree exposes to ALL
+      # APPLICATION PACKAGES once the probe protected it (and read it before - the control); with the
+      # private network ranges for apps set, internetClient alone must not reach the cloud metadata service
+      # while privateNetworkClientServer does; owner rights and the AppContainer launch itself on real ACLs.
+      - name: Certify the Windows host settings (AppContainer, ACLs, private networks)
+        if: runner.os == 'Windows'
+        working-directory: backend
+        env:
+          WORDJS_TEST_APPCONTAINER: '1'
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-windows-aap-secrets.test.ts src/tests/sandbox-windows-network-isolation.test.ts src/tests/sandbox-windows-retirement.test.ts src/tests/sandbox-windows-appcontainer.test.ts
+
       # WHICH LAYER WOULD KILL IT — kept AFTER the fix, deliberately.
       #
       # This is what found the cause, and it stays because the next regression in this area will present

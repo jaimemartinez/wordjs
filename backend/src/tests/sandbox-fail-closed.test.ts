@@ -31,7 +31,8 @@ test('only an explicit false permits the unsafe compatibility fallback', () => {
 
 test('the source-only Windows worker has a narrow development carve-out', () => {
     const isolate = require('../core/plugin-isolate');
-    assert.strictEqual(isolate.__nativeSandboxRequired({ configured: true, platform: 'win32', tsNode: true }), false);
-    assert.strictEqual(isolate.__nativeSandboxRequired({ configured: true, platform: 'linux', tsNode: true }), true);
-    assert.strictEqual(isolate.__nativeSandboxRequired({ configured: true, platform: 'darwin', tsNode: true }), true);
+    const dev = { WORDJS_DEV_SANDBOX_EXEMPT: '1' };
+    assert.strictEqual(isolate.__nativeSandboxRequired({ configured: true, platform: 'win32', tsNode: true, env: dev }), false);
+    assert.strictEqual(isolate.__nativeSandboxRequired({ configured: true, platform: 'linux', tsNode: true, env: dev }), true);
+    assert.strictEqual(isolate.__nativeSandboxRequired({ configured: true, platform: 'darwin', tsNode: true, env: dev }), true);
 });

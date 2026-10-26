@@ -1437,9 +1437,9 @@ const KERNEL_MECHANISM_BY_PLATFORM: Record<string, ConfinementMechanism> = {
     linux: 'landlock', win32: 'appcontainer', darwin: 'seatbelt',
 };
 const NETWORK_MECHANISM_BY_PLATFORM: Record<string, string> = {
-    linux: 'seccomp-bpf all-socket denial without a grant; AF_INET/AF_INET6 clients only with a grant, plus Landlock TCP rules where supported',
-    win32: 'AppContainer without internetClient unless the plugin holds the network grant',
-    darwin: 'Seatbelt deny network* unless the plugin holds the network grant',
+    linux: 'seccomp-bpf all-socket denial without a grant; with a grant AF_INET/AF_INET6 clients only, and Landlock TCP rules (ABI >= 4) limit connects to the ports of the plugin',
+    win32: 'AppContainer without internetClient unless the plugin holds the network grant; the private ranges also need privateNetworkClientServer, given only for an approved private destination',
+    darwin: 'Seatbelt deny network* unless the plugin holds the network grant; with it, only the TCP ports of the plugin and never loopback',
 };
 function platformKernelMechanism(platform: string = process.platform): ConfinementMechanism {
     return KERNEL_MECHANISM_BY_PLATFORM[platform] || 'none';
@@ -1619,19 +1619,36 @@ function nativeGateRefusal(slug: string, mech: ConfinementMechanism, state: Conf
     return sandboxUnavailable(slug, { mechanism: mech, state, reason, failure });
 }
 
-function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
+function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean; env?: Record<string, string | undefined> }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
     const mechanism = platformKernelMechanism(o.platform);
     if (mechanism === 'none') return { mechanism, use: false, reason: 'no kernel confinement mechanism exists for this platform' };
     if (o.state !== 'active') return { mechanism, use: false, reason: `the ${mechanism} probe did not certify this host (state '${o.state}')` };
-    if (mechanism === 'appcontainer' && o.tsNode) return { mechanism, use: false, reason: 'AppContainer applies to compiled production; recursively provisioning the ts-node development dependency tree exceeds development test deadlines' };
+    if (mechanism === 'appcontainer' && sourceWorkerExempt({ platform: o.platform, tsNode: o.tsNode, env: o.env })) return { mechanism, use: false, reason: 'the source-only development worker is exempt from AppContainer by an explicit development opt-in' };
     return { mechanism, use: true, reason: `${mechanism} confinement certified; network=${o.netGranted ? 'granted' : 'denied'} changes only the network rule` };
 }
 
-/** Production is fail-closed. The sole exception is the source-only Windows development worker: its
- * TypeScript dependency tree makes first-run recursive ACL provisioning exceed development test deadlines;
- * compiled production has a bounded runtime tree and no exception. */
-function nativeSandboxRequired(o: { configured: boolean; platform: string; tsNode: boolean }): boolean {
-    return o.configured && !(o.platform === 'win32' && o.tsNode);
+/**
+ * The ONE exemption from the native sandbox: the source-only (ts-node) worker on Windows, whose TypeScript
+ * dependency tree makes first-run ACL provisioning exceed development test deadlines. It applies only when
+ * the process says it is a development or test run: `npm run dev` / the dev monolith set
+ * WORDJS_DEV_SANDBOX_EXEMPT=1 (never honoured with NODE_ENV=production), and node:test marks the processes
+ * it runs with NODE_TEST_CONTEXT (a test may set NODE_ENV=production to exercise production code paths; it
+ * is still a test). Running the sources is not by itself a reason: a production install whose build
+ * failed must refuse plugins rather than start them without AppContainer.
+ */
+function isTestRun(env: Record<string, string | undefined>): boolean {
+    return typeof env.NODE_TEST_CONTEXT === 'string' && env.NODE_TEST_CONTEXT.length > 0;
+}
+function sourceWorkerExempt(o: { platform: string; tsNode: boolean; env?: Record<string, string | undefined> }): boolean {
+    const env = o.env || process.env;
+    if (o.platform !== 'win32' || !o.tsNode) return false;
+    if (isTestRun(env)) return true;
+    return env.NODE_ENV !== 'production' && env.WORDJS_DEV_SANDBOX_EXEMPT === '1';
+}
+
+/** Production is fail-closed; the only exception is sourceWorkerExempt(). Compiled code has none. */
+function nativeSandboxRequired(o: { configured: boolean; platform: string; tsNode: boolean; env?: Record<string, string | undefined> }): boolean {
+    return o.configured && !sourceWorkerExempt(o);
 }
 
 let platformConfinementProbe: Promise<ConfinementState> | undefined;
@@ -1664,7 +1681,9 @@ function probePlatformConfinement(): Promise<ConfinementState> {
         if (mech === 'appcontainer' && __filename.endsWith('.ts')) {
             sandboxPlatformState = sandboxHardeningState = 'disabled';
             sandboxPlatformNetworkState = 'disabled';
-            sandboxPlatformNote = 'AppContainer applies to compiled production; the source-only ts-node development worker is exempt because first-run recursive ACL provisioning exceeds development test deadlines';
+            sandboxPlatformNote = sourceWorkerExempt({ platform: process.platform, tsNode: true })
+                ? 'AppContainer applies to compiled production; this source-only development worker is exempt by an explicit development opt-in'
+                : 'AppContainer applies to the compiled build only, and this server is running the TypeScript sources without a development opt-in: run `npm run build` and start the compiled build';
             return sandboxPlatformState;
         }
         try {
@@ -1695,18 +1714,21 @@ function probePlatformConfinement(): Promise<ConfinementState> {
  * them from the same `sandbox.*` knobs the Linux cgroup path uses, so an operator sets one number and both
  * operating systems obey it, and there is no second place for the defaults to drift.
  */
-async function launchAppContainerChild(slug: string, appRoot: string, io: {
-    args: string[]; env: Record<string, string>; stdio: any; allowNetwork: boolean;
+async function launchAppContainerChild(slug: string, siteId: number, appRoot: string, io: {
+    args: string[]; env: Record<string, string>; stdio: any; allowNetwork: boolean; allowPrivateNetwork: boolean;
     zones: { traverse: string[]; readExec: string[]; write: string[] };
 }): Promise<{ child: any; containedPid: number | null }> {
     const win = require('./sandbox-windows');
-    // A SID is derived from BOTH the install and the slug. Sharing one package SID across plugins makes
-    // every recursive ACL ever granted to that SID cumulative, which destroys native cross-plugin
-    // separation even though the JavaScript guards still look correct.
-    const profile = win.appContainerProfileNameForPlugin(appRoot, slug);
+    // A SID is derived from the install, the worker (site + slug) and a per-install generation. Sharing
+    // one package SID across plugins makes every ACL ever granted to it cumulative, which destroys native
+    // cross-plugin separation; reusing one across reinstalls would hand a new install the old one's ACEs.
+    const profile = await win.launchProfileNameFor(appRoot, slug, siteId);
     const sid = await win.ensureAppContainerProfile(profile);
     if (!sid) throw new Error('the AppContainer probe reported ACTIVE but no package SID is available');
-    const zones = io.zones;
+    const zones = appContainerLaunchZones(io.zones);
+    // What the policy no longer includes is taken back FIRST (a withdrawn filesystem grant, a folder that
+    // became read-only); the grants below then add exactly the current shapes.
+    await win.revokeZonesOutsidePolicy(sid, appRoot, slug, siteId, zones);
     const grant = async (dirs: string[], mode: 'traverse' | 'rx' | 'full') => {
         const ok = await win.grantAppContainerAccess(sid, dirs, mode);
         if (!ok) throw new Error(`could not grant AppContainer ${mode} access to ${dirs.join(', ')}`);
@@ -1715,9 +1737,21 @@ async function launchAppContainerChild(slug: string, appRoot: string, io: {
     await grant(zones.readExec, 'rx');
     await grant(zones.write, 'full');
     const runtimeExe = await win.ensureAppContainerRuntime(sid);
-    const r = await win.launchInAppContainer({ sid, exe: runtimeExe, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio, allowNetwork: io.allowNetwork });
+    const r = await win.launchInAppContainer({ sid, exe: runtimeExe, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio, allowNetwork: io.allowNetwork, allowPrivateNetwork: io.allowPrivateNetwork });
     if (!r || !r.child) throw new Error('the AppContainer relay produced no child process');
     return { child: r.child, containedPid: r.containedPid ?? null };
+}
+
+/**
+ * One ACL shape per directory. A writable zone is also READABLE (the kernel layers list it in both sets),
+ * but on Windows granting it `rx` and then `full` replaced one ACE with the other on every launch - each
+ * shape's cache marker invalidated the other's, so both were redone, launch after launch. The writable
+ * shape already includes read, so a write zone is granted `full` only.
+ */
+function appContainerLaunchZones(z: { traverse: string[]; readExec: string[]; write: string[] }): { traverse: string[]; readExec: string[]; write: string[] } {
+    const key = (d: string) => path.resolve(d).toLowerCase();
+    const writes = new Set(z.write.map(key));
+    return { traverse: z.traverse, readExec: z.readExec.filter((d) => !writes.has(key(d))), write: z.write };
 }
 
 // Per-plugin permission grant check (Android-style, default-deny). No plugin bypasses the sandbox:
@@ -1762,6 +1796,32 @@ function getEgressAllowlistFor(slug: string): string[] {
     let priv: string[];
     try { const l = require('./plugin-permissions').getPrivateDestinations(slug); priv = Array.isArray(l) ? l : []; } catch { priv = []; }
     return [...hosts, ...priv];
+}
+/**
+ * The TCP ports a network-granted plugin may connect to at the KERNEL level (Landlock TCP rules on Linux,
+ * Seatbelt `remote tcp` filters on macOS): DNS over TCP and the web, the ports its manifest declares on its
+ * `network` permission (`"ports": [25, 587]`), and the port of each private destination an administrator
+ * approved. The egress guard still decides which HOSTS; this bounds the ports even if that guard is defeated.
+ */
+function egressTcpPortsFor(slug: string): number[] {
+    const ports = new Set<number>(require('./sandbox-linux').DEFAULT_EGRESS_TCP_PORTS);
+    const add = (n: unknown) => { if (Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 65535 && ports.size < 48) ports.add(n as number); };
+    try {
+        for (const perm of require('./io-guard').declaredPermissionsOf(slug)) {
+            if (perm && perm.scope === 'network' && Array.isArray(perm.ports)) perm.ports.forEach(add);
+        }
+    } catch { /* no manifest: the defaults */ }
+    try {
+        for (const dest of require('./plugin-permissions').getPrivateDestinations(slug) || []) {
+            const m = /:(\d{1,5})$/.exec(String(dest));
+            if (m) add(Number(m[1]));
+        }
+    } catch { /* no approved destinations */ }
+    return Array.from(ports).sort((a, b) => a - b);
+}
+/** Did an administrator approve at least one private destination for this plugin? */
+function egressTcpPortsHasPrivate(slug: string): boolean {
+    try { const l = require('./plugin-permissions').getPrivateDestinations(slug); return Array.isArray(l) && l.length > 0; } catch { return false; }
 }
 // Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
 // permissions module can't be required at all), the spawn path below fails egress CLOSED for a
@@ -1885,6 +1945,16 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         platform: process.platform,
         tsNode: __filename.endsWith('.ts'),
     });
+    // The source-mode worker is launched without the production flags (permission model, code-generation
+    // block), so it never starts a plugin on a server that says it is production, whatever the platform.
+    if (__filename.endsWith('.ts') && process.env.NODE_ENV === 'production' && !isTestRun(process.env)) {
+        log.warn({ slug: logSafe(slug) }, `[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': NODE_ENV=production but the server runs the TypeScript sources. Run \`npm run build\` and start the compiled build.`);
+        throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+            mechanism: platformKernelMechanism(), state: sandboxPlatformState,
+            reason: 'This production server is running the TypeScript sources instead of the compiled build, so isolated plugins cannot be started with their production confinement. Run `npm run build` and restart WordJS.',
+            failure: null,
+        });
+    }
     // FAIL-CLOSED: if the operator requires the OS backstop, REFUSE to launch when it isn't actually ACTIVE
     // (no such mechanism here, disabled, or the probe failed) instead of silently degrading to
     // JS-guards-only isolation.
@@ -2034,8 +2104,35 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // site 1's floor — the code directory — always exists); what plugin code may actually write there is
     // still decided by io-guard and the filesystem grant, exactly as for site 1's private storage.
     if (!nativePaths.ownWritable) fs.mkdirSync(nativePaths.storage[0], { recursive: true, mode: 0o700 });
+    // The code and manifest about to run must be the ones the host installed (core/plugin-integrity).
+    const integrity = require('./plugin-context').runAsHost(() => require('./plugin-integrity').verifyPluginIntegrity(APP_ROOT, slug));
+    if (!integrity.ok) {
+        log.warn({ slug: logSafe(slug) }, `[Sandbox] refusing to launch '${logSafe(slug)}': ${logSafe(integrity.reason)}. Update or reinstall it from Plugins, or accept its current files in Site Health.`);
+        throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+            mechanism: platformKernelMechanism(), state: sandboxPlatformState,
+            reason: 'The files of this plugin changed since WordJS installed it, so it was not started. Update or reinstall it from Plugins, or, if you changed them yourself, accept its current files in Site Health.',
+            failure: null,
+        });
+    }
+    if (integrity.recorded) log.info({ slug: logSafe(slug) }, `[Sandbox] '${logSafe(slug)}': recorded the fingerprint of its code and manifest.`);
+    // Site 1: the code directory is read-only, and its `data` folder is a link to the plugin's own data
+    // directory (core/plugin-own-data), migrated there on first launch. Failing that, the plugin is not
+    // started at all: without its data it would start empty (mail-server would mint a new key).
+    if (nativePaths.ownWritable) {
+        try {
+            const outcome = require('./plugin-context').runAsHost(() => require('./plugin-own-data').prepareOwnDataLink(APP_ROOT, slug));
+            if (outcome === 'migrated' || outcome === 'merged') log.info({ slug: logSafe(slug), outcome }, `[Sandbox] '${logSafe(slug)}': its data/ folder now lives in its private data directory (the code folder is read-only).`);
+        } catch (e: any) {
+            log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] refusing to launch '${logSafe(slug)}': its data folder could not be linked (${logSafe(e && e.message)}).`);
+            throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+                mechanism: platformKernelMechanism(), state: sandboxPlatformState,
+                reason: 'The data folder of this plugin could not be moved out of its code folder, so it was not started (its data is untouched). Check that WordJS can write the plugin folder and data/plugin-own/.',
+                failure: e && e.message, cause: e,
+            });
+        }
+    }
     const sandboxWritable = nativePaths.ownWritable
-        ? [nativePaths.own, ...(fsGrant.write ? nativePaths.storage : [])]
+        ? [nativePaths.ownData, ...(fsGrant.write ? nativePaths.storage : [])]
         : Array.from(new Set([nativePaths.storage[0], ...(fsGrant.write ? nativePaths.storage : [])]));
     const sandboxReadable = Array.from(new Set([
         ...nativePaths.readOnly,
@@ -2057,8 +2154,12 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // stamps every frame it emits with this secret, the host drops any inbound frame that lacks it, and the
     // worker scrubs the secret out of process.argv before plugin code runs, so a forged frame written
     // straight to fd 3 by plugin code can never carry it. Closes the frame-forge class regardless of vector.
+    // The secret is NOT part of the command line: argv is what the kernel shows in `ps` and in
+    // /proc/<pid>/cmdline, and rewriting process.argv inside the child does not change that copy. It is the
+    // FIRST message the host sends on the channel (see 'wjs-frame-nonce' below), which the worker reads
+    // before it loads a single line of plugin code.
     const frameNonce = require('crypto').randomBytes(24).toString('base64url');
-    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, site: siteId, envAllow: SAFE_ENV_KEYS, frameNonce });
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, site: siteId, envAllow: SAFE_ENV_KEYS });
     const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
     // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
     // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -2087,7 +2188,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // plugin holding the network grant. The flag is all-or-nothing; the JS egress guard remains the
     // authority on where a granted plugin may connect, and the native sandbox on whether IP sockets exist.
     if (permFlag && !__filename.endsWith('.ts')) {
-        execArgv.push(...permissionModelArgv({ permFlag, readable: sandboxReadable, writable: sandboxWritable, netGranted, netFlags: netPermFlags }));
+        // Node's permission model checks the path AS WRITTEN (it does not resolve links), so the `data` link
+        // is named as well; every kernel layer checks its target, which is the own data directory above.
+        const nodeWritable = nativePaths.ownWritable ? [...sandboxWritable, nativePaths.ownDataLink] : sandboxWritable;
+        execArgv.push(...permissionModelArgv({ permFlag, readable: sandboxReadable, writable: nodeWritable, netGranted, netFlags: netPermFlags }));
     }
     const childStdio: any = IPC_STDIO;
     // -- LINUX ZERO-CONFIGURATION CONFINEMENT (Landlock + seccomp-bpf) -----------------------------
@@ -2147,6 +2251,8 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // anyway — harmless where redundant, load-bearing where it is not.
                 readRoot: roots,
                 execRoot: [process.execPath],
+                // A network-granted plugin connects only to these TCP ports (Landlock ABI >= 4).
+                tcpPorts: netGranted ? egressTcpPortsFor(slug) : [],
                 nodeArgs: [],
             })];
         } catch (e: any) {
@@ -2189,6 +2295,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 readOnlyDirs: sandboxReadable,
                 readOnlyFiles: tsNodeProjectFiles,
                 denyNetwork: !netGranted,
+                egressTcpPorts: netGranted ? egressTcpPortsFor(slug) : [],
                 appRoot: APP_ROOT,
                 nodePath: process.execPath,
             });
@@ -2225,7 +2332,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     let acLaunch: { child: any; containedPid: number | null } | null = null;
     if (platformLaunch.use && platformLaunch.mechanism === 'appcontainer') {
         try {
-            acLaunch = await launchAppContainerChild(key, APP_ROOT, {
+            acLaunch = await launchAppContainerChild(slug, siteId, APP_ROOT, {
                 args: [...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 // No cwd here: launchAppContainerChild takes a typed options object and sets the
                 // container's working directory itself. The blanket insertion that gave the four real
@@ -2233,6 +2340,8 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 env: workerEnv,
                 stdio: childStdio,
                 allowNetwork: netGranted,
+                // privateNetworkClientServer only where an administrator approved a private destination.
+                allowPrivateNetwork: netGranted && egressTcpPortsHasPrivate(slug),
                 zones: { traverse: nativePaths.traverse, readExec: sandboxReadable, write: sandboxWritable },
             });
         } catch (e: any) {
@@ -2349,6 +2458,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 serialization: 'advanced',
             });
         }
+        // The frame nonce, as the first message on the channel (it is not in argv; see childCfg). Queued by
+        // Node until the child attaches its channel, so it always precedes any other host message.
+        try { child.send({ kind: 'wjs-frame-nonce', nonce: frameNonce }); } catch { /* child already gone: the load fails on its own */ }
         // Record the pid as OURS-and-alive from the moment it exists (see livePids): the registry entry
         // below is not evidence of a running process, and every teardown path needs an answer that is.
         const spawnedPid: number | undefined = child.pid;
@@ -3706,6 +3818,9 @@ module.exports = {
     // layers can never be active.
     __platformLaunchDecision: platformLaunchDecision,
     __nativeSandboxRequired: nativeSandboxRequired,
+    __sourceWorkerExempt: sourceWorkerExempt,
+    __egressTcpPortsFor: egressTcpPortsFor,
+    __appContainerLaunchZones: appContainerLaunchZones,
     // The reactive CPU watchdog's DECISION, exported as a PURE function for exactly the reason
     // __platformLaunchDecision is: the property that matters — an unbroken 60 s burn kills, a shorter
     // burst does not, one quiet tick resets — cannot be asserted by actually pegging a core for a minute
