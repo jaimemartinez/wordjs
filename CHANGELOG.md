@@ -6,6 +6,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
+  the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's
+  `lg:table` lost to the site's `hidden`, and the site's own `lg:hidden` hid the cards. Which of the two is drawn is
+  now decided by the screen's width in the page itself, so it no longer depends on which classes the site compiled.
+  The status summary wraps without a breakpoint class.
+  A search of every CM screen for the same pattern found one more: the keyboard hint in the lodging explorer
+  used a breakpoint class only the plugin had, so it never showed on a computer. It now uses one the site compiles.
+  The plugin README explains the rule for future screens.
+
 ### Added
 - **conference-manager 2.36.16: «Autorizaciones», redesigned.**
   - **Three tabs:** «Personas» first, then «Hoja en papel» and «Configuración». The 20-field settings form no

@@ -143,3 +143,22 @@ In the print window:
 
 Label printers print in black, so design in black and white. The meal group letter appears once «Turnos de
 comida» is on and groups are assigned; a person without a group shows nothing there.
+
+## Building the plugin's UI: showing and hiding by screen width (2.36.17)
+
+The admin and portal screens run on hosts of every version. On a host, the plugin's own Tailwind classes are
+compiled into a stylesheet one sub-layer **below** the host's (see `backend/scripts/plugin-stylesheet.js`). A class the
+host also compiled keeps the host's rule. A class only the plugin uses applies, but a plugin-only breakpoint
+variant **loses** to a host base class on the same element.
+
+So never decide what is visible with a breakpoint class that the host may not have, especially `hidden lg:table` /
+`lg:hidden`. In 2.36.16 that left «Autorizaciones» with no list at all on a computer: the plugin's `lg:table` lost
+to the host's `hidden`, and the host's own `lg:hidden` hid the cards.
+
+- To switch between two layouts (table and cards), pick one in code and render only that one. Use the screen
+  width with `matchMedia`; see `useWide` in `client/admin/ConsentPeopleList.tsx`.
+- Responsive tweaks that only change spacing or columns are fine: if the variant is missing, the element just keeps
+  its base look.
+- For a small show/hide (a hint, a label), use a breakpoint variant the host's own code uses (`sm:inline`,
+  `sm:flex`, `lg:block`…). A variant only the plugin uses may not exist on the host.
+

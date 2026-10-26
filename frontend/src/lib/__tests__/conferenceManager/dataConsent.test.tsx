@@ -1137,9 +1137,10 @@ describe('conference-manager 2.36.16 — «Autorizaciones» redesigned', () => {
         const long = { ...PEOPLE[0], location: 'Localidad con un nombre larguísimo de prueba' };
         const st = { 1: { ...ST[1], email_masked: 'juan.sebastian.delatorre.rodriguez.coordinacion@correo-institucional-muy-largo.example.org' } };
         const html = renderToStaticMarkup(<ConsentPeopleList rows={[long]} states={st} noEmail={new Set()} t={t} nameOf={(p: any) => `${p.first_name} ${p.last_name}`}
-            enabled canManage selectable selected={new Set([1])} onToggle={() => {}} onToggleAll={() => {}} onOpen={() => {}} onSend={() => {}} onCopy={() => {}} busyId={null} />);
-        expect(html).toContain('hidden lg:table');
-        expect(html).toContain('lg:hidden');
+            enabled canManage selectable selected={new Set([1])} onToggle={() => {}} onToggleAll={() => {}} onOpen={() => {}} onSend={() => {}} onCopy={() => {}} busyId={null} wide />);
+        // 2.36.17: the screen's width picks ONE layout (no `hidden lg:table` that a host's own `hidden` can beat).
+        expect(html).toContain('data-consent-layout="table"');
+        expect(html).not.toContain('data-consent-layout="cards"');
         expect(html).toContain('overflow-wrap:anywhere');
         expect(html).not.toContain('overflow-x-auto');
         expect(html).toContain('data-consent-select="1"');
@@ -1181,5 +1182,27 @@ describe('conference-manager 2.36.16 — «Autorizaciones» redesigned', () => {
             'ux.explain.verbal', 'ux.explain.overdue', 'ux.overdue.hint', 'paper.only', 'paper.only.clear', 'ux.act.view.short', 'ux.act.resend.short'];
         for (const l of ['es', 'en', 'pt']) for (const k of keys) expect(consentT(l)(k), `${l} ${k}`).not.toBe(k);
         expect(consentT('es')('ux.bulk.sent', { ok: 3, total: 4 })).toBe('Solicitud enviada a 3 de 4.');
+    });
+});
+
+describe('conference-manager 2.36.17 — «Autorizaciones» shows its list on a computer on any host', () => {
+    it('the width picks the table or the cards — never both hidden by host classes', async () => {
+        const { ConsentPeopleList, WIDE_QUERY } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/ConsentPeopleList');
+        const t = consentT('es');
+        const props = { rows: [{ id: 1, first_name: 'Ana', last_name: 'Pérez', location: 'Norte' }], states: {}, noEmail: new Set(), t, nameOf: (p: any) => p.first_name,
+            enabled: true, canManage: true, selectable: true, selected: new Set(), onToggle: () => {}, onToggleAll: () => {}, onOpen: () => {}, onSend: () => {}, onCopy: () => {}, busyId: null };
+        const table = renderToStaticMarkup(<ConsentPeopleList {...props} wide />);
+        const cards = renderToStaticMarkup(<ConsentPeopleList {...props} wide={false} />);
+        expect(table).toContain('<table');
+        expect(table).toContain('data-consent-row="1"');
+        expect(table).not.toContain('data-consent-card=');
+        expect(cards).not.toContain('<table');
+        expect(cards).toContain('data-consent-card="1"');
+        for (const html of [table, cards]) expect(html).not.toMatch(/class="(?:[^"]*\s)?(hidden|lg:hidden|lg:table)(?:\s[^"]*)?"/);
+        expect(WIDE_QUERY).toBe('(min-width: 1024px)');
+        // No breakpoint class decides what is visible in the list or the status summary.
+        const list = src('client/admin/ConsentPeopleList.tsx');
+        expect(list).not.toMatch(/className="[^"]*(hidden lg:table|lg:hidden)/);
+        expect(src('client/admin/ConsentAdmin.tsx')).toContain('<div className="flex flex-wrap gap-2" role="group" aria-label={t("ux.summary")} data-consent-summary="">');
     });
 });

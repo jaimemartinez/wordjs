@@ -258,7 +258,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                         </div>
                     )}
                     {enabled && (
-                        <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2" role="group" aria-label={t("ux.summary")} data-consent-summary="">
+                        <div className="flex flex-wrap gap-2" role="group" aria-label={t("ux.summary")} data-consent-summary="">
                             {(["all", ...STATUS_ORDER] as const).map((k) => {
                                 const look = k === "all" ? { tone: "bg-white text-gray-800 border-gray-200", icon: "fa-users" } : STATUS_LOOK[k];
                                 const on = statusFilter === k;
@@ -266,7 +266,7 @@ export default function ConsentAdmin({ conferenceId }: { conferenceId: number })
                                     <button key={k} type="button" aria-pressed={on} onClick={() => setStatusFilter(k)} data-consent-filter={k}
                                         className={`min-h-[44px] px-3 rounded-xl border-2 text-sm font-bold inline-flex items-center gap-2 min-w-0 text-left ${look.tone} ${on ? "ring-2 ring-blue-500 ring-offset-1" : "opacity-90 hover:opacity-100"}`}>
                                         <i className={`fa-solid ${look.icon}`} aria-hidden="true"></i>
-                                        <span className="min-w-0 flex-1 sm:flex-none leading-tight">{k === "all" ? t("ux.status.all") : t(`ux.status.${k}`)}</span>
+                                        <span className="min-w-0 leading-tight">{k === "all" ? t("ux.status.all") : t(`ux.status.${k}`)}</span>
                                         <span className="tabular-nums bg-white/70 rounded-md px-1.5">{counts[k]}</span>
                                     </button>
                                 );
