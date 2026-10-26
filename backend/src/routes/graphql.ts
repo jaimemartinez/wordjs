@@ -161,6 +161,9 @@ function multipartFor(limitBytes: number) {
             files: (config.api.graphql && config.api.graphql.maxMutations) || 10,
             fields: 2,
             fieldSize: 1024 * 1024,
+            fieldNameSize: 100,
+            parts: ((config.api.graphql && config.api.graphql.maxMutations) || 10) + 2,
+            headerPairs: 200,
         },
     });
 }

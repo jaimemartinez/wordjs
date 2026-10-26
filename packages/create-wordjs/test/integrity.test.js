@@ -142,3 +142,37 @@ test('the removed --insecure-skip-ca-verify flag is an unknown option', () => {
     assert.strictEqual(r.status, 1);
     assert.ok(!fs.existsSync(path.join(scratch, 'node-c')), 'join must stop before scaffolding');
 });
+
+test('the release signature: a published signature must verify under an embedded key', () => {
+    const { verifyChecksumSignature, signatureVerdict, pickSignatureAsset } = require('../index.js');
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+    const other = crypto.generateKeyPairSync('ed25519');
+    const pem = publicKey.export({ type: 'spki', format: 'pem' });
+    const checksumText = `${HEX}  wordjs-v2.12.0.zip\n`;
+    const sig = crypto.sign(null, Buffer.from(checksumText), privateKey).toString('base64');
+    const forged = crypto.sign(null, Buffer.from(checksumText), other.privateKey).toString('base64');
+
+    assert.strictEqual(verifyChecksumSignature(checksumText, sig, [pem]), true);
+    assert.strictEqual(verifyChecksumSignature(checksumText, `${sig}\n`, [pem]), true, 'a trailing newline is fine');
+    assert.strictEqual(verifyChecksumSignature(checksumText, forged, [pem]), false, 'another key');
+    assert.strictEqual(verifyChecksumSignature(checksumText.replace('ab', 'cd'), sig, [pem]), false, 'another checksum');
+    assert.strictEqual(verifyChecksumSignature(checksumText, 'not base64 !', [pem]), false);
+    assert.strictEqual(verifyChecksumSignature(checksumText, sig, ['not a key']), false, 'an unusable key never throws');
+
+    assert.deepStrictEqual(signatureVerdict({ tag: 'v2.12.0', checksumText, signatureText: sig, keys: [pem] }), { ok: true, state: 'verified' });
+    assert.strictEqual(signatureVerdict({ tag: 'v2.12.0', checksumText, signatureText: forged, keys: [pem] }).ok, false);
+    // Required from a version on: an unsigned release at or above it is refused, an older one is not.
+    assert.strictEqual(signatureVerdict({ tag: 'v2.12.0', checksumText, signatureText: null, keys: [pem], requiredSince: 'v2.12.0' }).ok, false);
+    assert.strictEqual(signatureVerdict({ tag: 'v2.11.7', checksumText, signatureText: null, keys: [pem], requiredSince: 'v2.12.0' }).ok, true);
+    // Without an embedded key nothing can be checked, and nothing is refused on that ground.
+    assert.strictEqual(signatureVerdict({ tag: 'v2.12.0', checksumText, signatureText: sig, keys: [] }).state, 'unchecked');
+
+    assert.strictEqual(pickSignatureAsset([{ name: 'wordjs-v2.12.0.zip.sha256' }, { name: 'wordjs-v2.12.0.zip.sha256.sig' }], 'wordjs-v2.12.0.zip').name, 'wordjs-v2.12.0.zip.sha256.sig');
+    assert.strictEqual(pickSignatureAsset([{ name: 'wordjs-x.zip.sha256.sig' }], 'wordjs-v2.12.0.zip'), null);
+});
+
+test('installing a release without a checksum needs the explicit --allow-unverified flag', () => {
+    const { parseArgs } = require('../index.js');
+    assert.strictEqual(parseArgs(['upgrade', '.', '--yes']).allowUnverified, false);
+    assert.strictEqual(parseArgs(['upgrade', '.', '--yes', '--allow-unverified']).allowUnverified, true);
+});

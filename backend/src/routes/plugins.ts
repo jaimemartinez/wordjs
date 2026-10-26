@@ -101,7 +101,10 @@ const upload = multer({
         // SECURITY: Prevent CVE-2025-47935/47944 DoS
         files: 1,           // Only 1 plugin zip per request
         fields: 10,         // Minimal fields needed
-        parts: 15           // Limited total parts
+        fieldSize: 16 * 1024,
+        fieldNameSize: 100,
+        parts: 15,          // Limited total parts
+        headerPairs: 200
     },
     fileFilter: (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {

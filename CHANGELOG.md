@@ -6,6 +6,47 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+- **Untrusted input, downloads and the updater, hardened.**
+  - **URLs in shortcodes.** `escUrl` percent-encodes quotes, angle brackets and backticks in every scheme, and the
+    `[embed]`, `[button]`, `[audio]` and `[video]` shortcodes escape each URL for its attribute. Media sources accept
+    `http(s)` only.
+  - **SVG uploads and imports.** URL attributes (`href`, `xlink:href`) are scheme-checked explicitly, `style` keeps
+    presentation properties with plain values or a same-document `url(#id)`, `<image>` no longer accepts `data:`
+    URLs, and camelCase SVG elements (`linearGradient`, `clipPath`, filters) are kept instead of being dropped.
+  - **WordPress import, private source.** "Allow downloads from this site's private address" is offered and honoured
+    on the primary site only (or anywhere with `WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1`; elsewhere `403
+    private_source_not_allowed`). Loopback is refused in every numeric spelling, and from a private source only files
+    whose content signature confirms their type are stored.
+  - **Download deadlines.** WordPress-import attachments (`deadlineMs`, default 5 minutes) and marketplace downloads
+    (2 minutes) now have an absolute time limit besides the idle timeout; the update check closes its socket at 10 s.
+  - **Inbound SMTP (`smtp:inbound`).** The host listener reserves every in-progress message from one in-flight byte
+    budget and answers `452` when it is spent; one client address may hold a limited number of connections (`421`
+    beyond it). New listen options: `maxInflightBytes`, `maxClientsPerIp`.
+  - **Admin → Updates.** The panel runs the upgrade CLI shipped inside the installed release with the server's own
+    Node binary and no shell, instead of fetching `create-wordjs@latest`, and refuses a release that publishes no
+    checksum (`409 update_unverified_release`, shown on the screen). The supervisor's rollback does the same.
+  - **`create-wordjs`.** A release without a checksum is refused unless `--allow-unverified` is passed. The release
+    workflow signs the checksum file (`wordjs-<tag>.zip.sha256.sig`, Ed25519) when its signing key is configured, and
+    the CLI verifies a published signature against the public keys embedded in the package.
+  - **Site import.** Custom tables are limited to the `wjp_<slug>_` tables of plugins and themes installed on the
+    site; the export carries plugin and theme tables only.
+  - **Egress guard.** `198.18.0.0/15` and the local-use NAT64 prefix `64:ff9b:1::/48` are treated as internal.
+  - **Removed** the unused JSON-LD and meta-tag builders from `core/seo-helper` (the frontend renders structured
+    data with its own escaping).
+  - **Author ids and names.** Every `id` in post, comment and block HTML is namespaced as `user-content-<id>` (stored
+    by the backend, applied again by both frontend sanitizer paths), and `name` survives only on form controls, so
+    author markup cannot shadow properties the page relies on. In-page links to the plain fragment (`#intro`) still
+    land on the prefixed target.
+  - **Embeds.** Every embedded `<iframe>` gets the site's own `sandbox` and `allow` values, replacing the author's.
+  - **WordPress import.** Entities in text nodes are decoded (titles and attachment URLs come out as WordPress showed
+    them); a file with a `<!DOCTYPE` is refused; a form option sent more than once is refused with `400
+    rest_invalid_param`.
+  - **Multipart limits.** Every upload route (site import, fonts, WordPress import, plugins, themes, media, GraphQL)
+    bounds field count, field and field-name size, parts and header pairs.
+  - **Inbound SMTP.** No reverse-DNS lookup per connection (`clientHostname` is the address literal), a 5-second
+    shutdown grace and a cap on unauthenticated commands.
+
 ### Added
 - **conference-manager 2.36.21: rename a locality.** The pencil next to its name on the «Localidades» card edits it in
   place (Enter saves, Escape cancels). An empty name, or one another locality of the conference already has, is

@@ -90,8 +90,15 @@ const fileFilter = (req: Request, file: any, cb: any) => {
 const upload = multer({
     storage,
     fileFilter,
+    // Every busboy bound, not only the file: this route reads no text field at all.
     limits: {
-        fileSize: 10 * 1024 * 1024 // 10MB limit
+        fileSize: 10 * 1024 * 1024, // 10MB limit
+        files: 1,
+        fields: 5,
+        fieldSize: 16 * 1024,
+        fieldNameSize: 100,
+        parts: 6,
+        headerPairs: 200,
     }
 });
 

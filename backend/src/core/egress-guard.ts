@@ -58,6 +58,7 @@ function isBlockedV4(a: string): boolean {
     if (x === 192 && y === 168) return true;           // 192.168.0.0/16 private
     if (x === 100 && y >= 64 && y <= 127) return true; // 100.64.0.0/10 CGNAT
     if (x === 192 && y === 0 && p[2] === 0) return true; // 192.0.0.0/24 IETF protocol assignments
+    if (x === 198 && (y === 18 || y === 19)) return true; // 198.18.0.0/15 benchmarking (RFC 2544), used inside labs/VPCs
     if (x >= 224) return true;                         // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved
     return false;
 }
@@ -121,6 +122,11 @@ function embeddedIpv4(b: number[]): string[] | null {
     if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
         return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
     }
+    // Local-use NAT64 prefix 64:ff9b:1::/48 (RFC 8215): an operator's own translator, typically with a
+    // /96 inside it, so the embedded IPv4 sits in the last 32 bits like the well-known prefix above.
+    if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0x00 && b[5] === 0x01) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
     // 6to4 prefix 2002::/16 (RFC 3056) embeds the site's IPv4 in bytes 2-5 (2002:V4V4:V4V4::/48) which
     // a 6to4 relay routes to that v4 address — so a 6to4 address wrapping an RFC1918/loopback/link-local
     // v4 reaches the internal host the same way NAT64 does. Extract + classify the embedded v4; block only
@@ -160,6 +166,9 @@ export function isBlockedIp(ip: string): boolean {
     if (fam === 6) {
         const b = ipv6ToBytes(a);
         if (!b) return true;                                       // unparseable → fail closed
+        // 64:ff9b:1::/48 is a LOCAL translator (RFC 8215): whatever IPv4 it embeds, and wherever in the
+        // /48 the operator placed it, it routes into the operator's own network — never a public target.
+        if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0x00 && b[5] === 0x01) return true;
         const embedded = embeddedIpv4(b);
         if (embedded) return embedded.some((v4) => isBlockedV4(v4));
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
@@ -233,6 +242,32 @@ interface PrivateDestination { host: string; ip: string | null; port: number }
 let privateDestinations: PrivateDestination[] = [];
 // canonIp|port pairs this module resolved for a hostname entry (bounded; refreshed on every resolution).
 const resolvedPrivate = new Set<string>();
+
+/**
+ * True when an IP literal reaches THIS machine: 127.0.0.0/8, 0.0.0.0/8 (connects to the local host), ::1
+ * and :: in every spelling, and every IPv6 form that embeds one of those IPv4s (mapped, compatible, NAT64,
+ * 6to4, ISATAP, Teredo). Judged on the numeric bytes, never the text. Unparseable input counts as loopback
+ * (fail closed).
+ */
+export function isLoopbackIp(ip: string): boolean {
+    let a = String(ip || '').replace(/^\[|\]$/g, '');
+    const z = a.indexOf('%'); if (z >= 0) a = a.slice(0, z);
+    const v4 = (s: string) => {
+        const p = s.split('.').map((n) => parseInt(n, 10));
+        if (p.length !== 4 || p.some((n) => isNaN(n) || n < 0 || n > 255)) return true;
+        return p[0] === 127 || p[0] === 0;
+    };
+    const fam = realIsIP(a);
+    if (fam === 4) return v4(a);
+    if (fam === 6) {
+        const b = ipv6ToBytes(a);
+        if (!b) return true;
+        if (b.slice(0, 15).every((x) => x === 0) && (b[15] === 1 || b[15] === 0)) return true; // ::1, ::
+        const embedded = embeddedIpv4(b);
+        return !!embedded && embedded.some((x) => v4(x));
+    }
+    return true;
+}
 
 /** True for an address no approval can open: unspecified, link-local (incl. cloud metadata), multicast/reserved. */
 export function isNeverExemptIp(ip: string): boolean {

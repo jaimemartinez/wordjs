@@ -3,7 +3,7 @@
  * Equivalent to wp-includes/shortcodes.php
  */
 
-const { escAttr, escUrl } = require('./formatting');
+const { escAttr, escUrl, escMediaUrl } = require('./formatting');
 const log = require('./module-logger').moduleLogger('core/shortcodes');
 
 // Registered shortcodes. Core tags (owner null) are one table shared by every site. A plugin's or theme's
@@ -369,10 +369,23 @@ addShortcode('caption', (attrs: any, content: string) => {
     return `<figure id="${escAttr(id)}" class="wp-caption ${escAttr(align)}" style="width:${width}px">${content}<figcaption class="wp-caption-text">${escAttr(attrs.caption || '')}</figcaption></figure>`;
 });
 
+/**
+ * A URL as written in post content. The content is stored HTML-escaped (`&` as `&amp;`, a quote as
+ * `&quot;`), so the entities are decoded before the URL is validated; escUrl then percent-encodes what
+ * could leave an attribute and each sink escapes the result for its attribute, so nothing is escaped twice.
+ */
+function contentUrl(value: any): string {
+    return String(value == null ? '' : value)
+        .replace(/&#x([0-9a-f]{1,6});/gi, (_m, h) => String.fromCodePoint(Math.min(parseInt(h, 16), 0x10ffff)))
+        .replace(/&#(\d{1,7});/g, (_m, d) => String.fromCodePoint(Math.min(parseInt(d, 10), 0x10ffff)))
+        .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
+}
+
 // [embed]url[/embed]
 addShortcode('embed', (attrs: any, content: string) => {
-    const url = content.trim();
-    const safeUrl = escUrl(url);
+    const url = contentUrl(content.trim());
+    const safeUrl = escAttr(escUrl(url));
     return `<div class="wp-embed" data-url="${safeUrl}"><a href="${safeUrl}">${escAttr(url)}</a></div>`;
 });
 
@@ -382,7 +395,7 @@ addShortcode('audio', (attrs: any) => {
     const loop = attrs.loop === 'on' ? 'loop' : '';
     const autoplay = attrs.autoplay === 'on' ? 'autoplay' : '';
 
-    return `<audio controls ${loop} ${autoplay}><source src="${escUrl(src)}">Your browser does not support audio.</audio>`;
+    return `<audio controls ${loop} ${autoplay}><source src="${escAttr(escMediaUrl(contentUrl(src)))}">Your browser does not support audio.</audio>`;
 });
 
 // [video src="url"]
@@ -392,13 +405,13 @@ addShortcode('video', (attrs: any) => {
     const height = attrs.height || 'auto';
     const poster = attrs.poster || '';
 
-    return `<video controls width="${escAttr(width)}" height="${escAttr(height)}" poster="${escUrl(poster)}"><source src="${escUrl(src)}">Your browser does not support video.</video>`;
+    return `<video controls width="${escAttr(width)}" height="${escAttr(height)}" poster="${escAttr(escMediaUrl(contentUrl(poster)))}"><source src="${escAttr(escMediaUrl(contentUrl(src)))}">Your browser does not support video.</video>`;
 });
 
 // [button]text[/button]
 addShortcode('button', (attrs: any, content: string) => {
     const url = attrs.url || attrs.href || '#';
-    const safeUrl = escUrl(url) || '#';
+    const safeUrl = escAttr(escUrl(contentUrl(url)) || '#');
     const target = attrs.target || '_self';
     const className = attrs.class || 'wp-button';
 

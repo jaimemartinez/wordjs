@@ -143,7 +143,7 @@ Publish this way only when the plugins at that ref run on the core of the latest
 > ```bash
 > npx create-wordjs@latest my-site
 > ```
-> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset installs with a warning that it was not verified; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
+> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset is refused unless you pass `--allow-unverified`; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
 
 1. Download `wordjs-<tag>.zip` **and** `wordjs-<tag>.zip.sha256` from the GitHub Release, verify the download with `sha256sum -c wordjs-<tag>.zip.sha256` (releases published before the checksum asset was introduced do not have one), and unzip it.
 2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
@@ -810,10 +810,12 @@ Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAS
 
 **From the admin panel:** **Admin → Updates** lists the newer releases with their notes and installs one
 with a click (the password, and a two-factor code when the account has two-factor authentication): a backup, the `create-wordjs upgrade` below with
-`--version <tag>`, an automatic restart, and the previous version put back if the update fails or the new
+`--version <tag>` — run from the copy of the CLI the installed release ships (`packages/create-wordjs/index.js`, by the
+server's own Node binary, with no shell), never a package fetched from the registry at update time — an automatic restart, and the previous version put back if the update fails or the new
 version does not start (`backend/data/update-state.json`, read by the monolith's supervisor). It is offered
 on a release install running as the monolith under its supervisor, whose files the service account can
-write (the `--systemd` layout). In a container, a git checkout, split or separate mode, or when the code
+write (the `--systemd` layout). A release that publishes no checksum for its bundle is listed with a notice and
+not installed (`409 update_unverified_release`). In a container, a git checkout, split or separate mode, or when the code
 belongs to another account, the screen says so and gives the command below instead. A container is
 recognised by `/.dockerenv` (Docker), `/run/.containerenv` (podman), `WORDJS_DOCKER=1` (set by the image and
 the Helm chart) or, on Kubernetes, the `KUBERNETES_SERVICE_HOST` every pod gets (containerd and CRI-O write no

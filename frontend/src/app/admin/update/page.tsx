@@ -147,20 +147,25 @@ export default function UpdatePage() {
                     </div>
                 )}
                 <ul className="mt-6 space-y-6">
-                    {data.newer.map((r, i) => (
+                    {data.newer.map((r) => (
                         <li key={r.tag} className="border-t border-gray-100 pt-4 first:border-t-0 first:pt-0">
                             <div className="flex flex-wrap items-center justify-between gap-3">
                                 <div>
                                     <p className="font-bold text-gray-900">{r.name || r.tag}</p>
                                     <p className="text-xs text-gray-500">{r.tag}{r.publishedAt ? ` · ${new Date(r.publishedAt).toLocaleDateString()}` : ""}{r.hasChecksum ? ` · ${t("update.verified")}` : ""} · <a href={r.url} target="_blank" rel="noopener noreferrer" className="underline">GitHub</a></p>
                                 </div>
-                                {data.environment.canUpdate && i === 0 && (
+                                {data.environment.canUpdate && r === data.newer.find((n) => n.hasChecksum) && (
                                     <Button icon="fa-cloud-arrow-down" loading={busy} disabled={!password || (!!mfaEnrolled && !code.trim())} onClick={() => install(r)} data-testid="update-install">
                                         {t("update.install").replace("{version}", r.version)}
                                     </Button>
                                 )}
                             </div>
-                            {r.notes && <pre className="mt-3 max-h-80 overflow-auto rounded-lg bg-gray-50 border border-gray-100 px-3 py-2 text-xs text-gray-700 whitespace-pre-wrap font-sans">{r.notes}</pre>}
+                            {!r.hasChecksum && (
+                                <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800" data-testid="update-unverified">
+                                    <i className="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>{t("update.unverified")}
+                                </p>
+                            )}
+                            {r.notes &&<pre className="mt-3 max-h-80 overflow-auto rounded-lg bg-gray-50 border border-gray-100 px-3 py-2 text-xs text-gray-700 whitespace-pre-wrap font-sans">{r.notes}</pre>}
                         </li>
                     ))}
                 </ul>
