@@ -1939,6 +1939,8 @@ router.delete('/:id', isAdmin, asyncHandler(async (req: Request, res: Response) 
         });
     }
     if (protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
+    // A network administrator's handoff account is the network's, like every other write to it.
+    if (networkHandoff.isHandoffAccount(user)) return networkHandoff.refuseHandoffAccountTarget(res);
 
     // `?reassign=<user id>`: the deleted account's content (every entry, any type and status) is
     // attributed to that user first, as WordPress offers. Without it the entries stay, credited to an

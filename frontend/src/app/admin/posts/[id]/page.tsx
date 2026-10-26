@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import EditorBootFallback from "@/components/verso/editor/EditorBootFallback";
 import { postsApi, categoriesApi, tagsApi, apiGet, Category, Tag, PostTermRef } from "@/lib/api";
 import EditorLoadError from "@/components/EditorLoadError";
+import EditorTrashedNotice from "@/components/EditorTrashedNotice";
 import VersoEditor from "@/components/verso/editor/VersoEditor";
 import { rootFieldsPost } from "@/lib/verso/coreBlocks";
 import { serializeContentFallback } from "@/lib/verso/contentFallback";
@@ -82,6 +83,8 @@ export default function PostEditorPage() {
     // que mandar date=now, o el modelo re-evaluaría la fecha futura ALMACENADA y re-programaría) de un
     // publish normal, que no debe tocar post_date.
     const lastServerStatusRef = useRef("draft");
+    // The loaded entry is in the trash: the Restore screen replaces the editor (EditorTrashedNotice).
+    const [trashed, setTrashed] = useState(false);
     const [commentStatus, setCommentStatus] = useState("open");
     // The author's per-page theme-template pick (`_wjs_template` meta). State (not just a root prop
     // read at save time) because the canvas preview re-wraps on it live — VersoThemeTemplate reads the
@@ -216,6 +219,7 @@ export default function PostEditorPage() {
             baseModifiedRef.current = typeof (post as any).modified === "string" ? (post as any).modified : "";
             setStatus(post.status);
             lastServerStatusRef.current = post.status;
+            setTrashed(post.status === "trash");
             // La fecha del registro, SIEMPRE (no sólo programando) — ver el state de arriba.
             setScheduleDate(dbDateToLocalInput(post.dateGmt, post.date));
             dateEditedRef.current = false;
@@ -589,6 +593,11 @@ export default function PostEditorPage() {
     // silently overwrite the real post on the next save/autosave.
     if (loadError) {
         return <EditorLoadError onRetry={loadPost} onBack={() => router.back()} />;
+    }
+
+    // In the trash → no editor: the server refuses edits there until the entry is restored.
+    if (trashed && postId) {
+        return <EditorTrashedNotice postId={Number(postId)} onRestored={loadPost} onBack={() => router.push("/admin/posts")} />;
     }
 
     return (
