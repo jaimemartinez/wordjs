@@ -47,6 +47,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Inbound SMTP.** No reverse-DNS lookup per connection (`clientHostname` is the address literal), a 5-second
     shutdown grace and a cap on unauthenticated commands.
 
+### Added
+- **conference-manager 2.36.21: rename a locality.** The pencil next to its name on the «Localidades» card edits it in
+  place (Enter saves, Escape cancels). An empty name, or one another locality of the conference already has, is
+  refused with the reason; the new name also reaches that locality's registrations.
+
 ## [2.11.9] - 2026-10-26
 
 ### Security
