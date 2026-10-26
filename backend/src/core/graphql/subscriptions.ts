@@ -26,6 +26,12 @@
  * (trashed, unpublished, made private) is reported as DELETED with no body — and only to a subscriber that
  * had seen it in this stream (or named it in `ids:` and could read it then). An authenticated stream is
  * re-checked every RECHECK_MS (GET /users/me): a revoked token or an ended session closes it.
+ *
+ * WHAT OPENING A STREAM COSTS. The reads a subscription makes while it opens — one per entry named in
+ * `ids:`, one per event replayed after a Last-Event-ID — are REST reads the caller asked for, so each is
+ * charged to the API limiter like any GraphQL sub-request (core/graphql/dispatch). An anonymous resume
+ * replays at most `maxAnonymousReplay` events. The live events that follow are the feed's work, not the
+ * caller's, and are not charged.
  */
 
 import {
@@ -66,6 +72,8 @@ const tuning = {
     batch: 200,
     /** Most events replayed for a Last-Event-ID resume. */
     maxReplay: 500,
+    /** The same, for a stream opened without a credential. */
+    maxAnonymousReplay: 50,
     /** How often an authenticated stream re-proves its credential. */
     recheckMs: 30_000,
 };
@@ -216,8 +224,8 @@ class SiteFeed {
         }
     }
 
-    /** Events committed after `cursor` and up to the feed's current mark (a Last-Event-ID resume). */
-    async replay(cursor: string): Promise<FeedEvent[]> {
+    /** At most `limit` events committed after `cursor`, up to the feed's current mark (a Last-Event-ID resume). */
+    async replay(cursor: string, limit: number): Promise<FeedEvent[]> {
         const m = /^(\d{1,15})\.(\d{1,15})$/.exec(String(cursor || ''));
         if (!m) return [];
         const fromContent = Number(m[1]);
@@ -226,13 +234,14 @@ class SiteFeed {
         await this.inSite(async () => {
             let c = fromContent;
             let k = fromComment;
-            for (const row of await contentRowsAfter(fromContent, tuning.maxReplay)) {
+            for (const row of await contentRowsAfter(fromContent, limit)) {
                 const id = Number(row.id);
                 if (id > this.contentMark) break;
                 c = id;
                 out.push({ cursor: `${c}.${k}`, source: 'content', kind: kindOf(String(row.event_type)), id: Number(row.aggregate_id), previousStatus: parsePrevious(row.payload) });
             }
-            for (const row of await commentRowsAfter(fromComment, tuning.maxReplay)) {
+            const commentLimit = limit - out.length;
+            for (const row of commentLimit > 0 ? await commentRowsAfter(fromComment, commentLimit) : []) {
                 const id = Number(row.comment_id);
                 if (id > this.commentMark) break;
                 k = id;
@@ -320,10 +329,19 @@ function subscriberStream<T>(
         }
     };
 
+    const { setDispatchCharged } = require('./dispatch');
+    // Reads still charged to the caller: the replayed events. Once they are through, the stream is live.
+    let replayLeft = 0;
+
     async function* run(): AsyncGenerator<T> {
         feed = await feedForCurrentSite();
         await feed.add(listener);
-        if (opts.lastEventId) for (const e of await feed.replay(opts.lastEventId)) queue.push(e);
+        if (opts.lastEventId) {
+            const replayed = await feed.replay(opts.lastEventId, authenticated ? tuning.maxReplay : tuning.maxAnonymousReplay);
+            for (const e of replayed) queue.push(e);
+            replayLeft = replayed.length;
+        }
+        if (!replayLeft) setDispatchCharged(ctx.req, false);
         if (authenticated) {
             recheck = setInterval(() => { ensureCredential().catch(() => stop()); }, tuning.recheckMs);
             if (recheck.unref) recheck.unref();
@@ -336,6 +354,7 @@ function subscriberStream<T>(
                     continue;
                 }
                 const payload = await authorize(e);
+                if (replayLeft > 0 && --replayLeft === 0) setDispatchCharged(ctx.req, false);
                 if (payload !== null && !closed) {
                     // The transport sends this as the SSE id, whether or not the client selected `cursor`.
                     (ctx as any).lastCursor = e.cursor;
@@ -428,6 +447,8 @@ export function buildSubscriptionFields(): Record<string, Field> {
                 if (ids) {
                     const { restGet } = require('./dispatch');
                     for (const id of ids) {
+                        // A caller who hung up is not watching anything: stop reading on its behalf.
+                        if (ctx.req.socket && ctx.req.socket.destroyed) break;
                         const r = await restGet(ctx.req, `/posts/${id}`);
                         if (r.status === 200 && (!types || types.has(r.body && r.body.type))) visible.add(id);
                     }
@@ -471,6 +492,9 @@ export function buildSubscriptionFields(): Record<string, Field> {
                 const authorize = async (e: FeedEvent) => {
                     if (e.source !== 'comment') return null;
                     const r = await readAs(ctx, `/comments/${e.id}`);
+                    if (r.status === 429) {
+                        throw new GraphQLError('Too many requests, please try again later.', { extensions: { code: 'rest_rate_limited', status: 429 } });
+                    }
                     if (r.status !== 200) return null;
                     if (args.postId != null && Number(r.body && r.body.postId) !== args.postId) return null;
                     return { comment: r.body, cursor: e.cursor };
